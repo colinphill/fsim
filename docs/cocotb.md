@@ -104,6 +104,10 @@ uses the test directory, where `make` runs. The runner flow uses
   combinational block assigns (`always @(a) y = a;`) lasts until something
   that block is sensitive to changes, also when other logic fused with the
   block runs (IEEE 1800-2023 38.34). The block keeps running as native code.
+- **Writes to nets with per-source SDF delays:** a deposit, force or release
+  of a net whose load has per-source `INTERCONNECT` delays reaches the load
+  after the smallest delay of the sources for each bit's transition
+  (`docs/sdf.md`), not at once.
 - **Mixed-language designs:** both interfaces are served, whichever one the
   toplevel uses. cocotb's VPI library loads its VHPI layer, or the other way
   round. Each interface answers calls while the other's routines and
@@ -171,6 +175,13 @@ uses the test directory, where `make` runs. The runner flow uses
   string literal (NATURAL indexes start at 0). For a SystemVerilog parameter
   it takes an integer, a real literal or a quoted string. Arrays of other
   element types and records cannot be overridden.
+- **SDF on VITAL cells:** the timing generics of a VHDL (VITAL) cell are
+  annotated when the design is elaborated (IEEE 1076.4-2000 5.1.1), so give
+  such an SDF file to the elaborate step: `ELAB_ARGS += --sdf cells.sdf` in
+  the Makefile flow, `elab_args=["--sdf", "cells.sdf"]` with the runner. An
+  SDF file in `SIM_ARGS` or `test_args` that names VHDL cells is rejected
+  with `FSIM-SDF-VITAL-008` (see [SDF](sdf.md)); Verilog and SystemVerilog
+  cells can be annotated at either step.
 - **Simulator selection by name:** cocotb's `Makefile.sim` and its pytest
   plug-in (`--cocotb-simulator fsim`) know only the simulators cocotb lists.
   Use the include form or `import fsim_cocotb` instead.

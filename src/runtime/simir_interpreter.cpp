@@ -196,8 +196,13 @@ SignalId Interpreter::add_signal(Signal signal)
     if (impl_->started || impl_->start_in_progress) {
         throw std::logic_error("cannot add a SimIR signal after start");
     }
-    const auto id = static_cast<SignalId>(impl_->signals.size());
-    if (static_cast<std::size_t>(id) != impl_->signals.size()) {
+    return impl_->push_signal_late(std::move(signal));
+}
+
+SignalId Interpreter::Impl::push_signal_late(Signal signal)
+{
+    const auto id = static_cast<SignalId>(signals.size());
+    if (static_cast<std::size_t>(id) != signals.size()) {
         throw std::length_error("too many SimIR signals");
     }
     const auto valid_strength = [](const StrengthRank rank) {
@@ -246,94 +251,94 @@ SignalId Interpreter::add_signal(Signal signal)
         && !signal.initial_value.is_logic9()) {
         for (std::size_t bit = 0; bit < signal.initial_value.width(); ++bit) {
             if (signal.initial_value.get(bit) == Logic4::x) {
-                impl_->delayed_net_initial_values.emplace(
+                delayed_net_initial_values.emplace(
                     id, signal.initial_value);
                 break;
             }
         }
     }
-    impl_->driven_values.push_back(signal.initial_value);
-    impl_->driver_values.emplace_back();
-    impl_->direct_single_driver_routes.emplace_back();
-    impl_->direct_single_driver_word_scratch.emplace_back();
-    impl_->direct_single_driver_logic9_word_scratch.emplace_back();
-    impl_->native_word_update_signals.emplace_back();
-    impl_->native_logic9_word_update_signals.emplace_back();
-    impl_->direct_single_driver_processes.push_back(
+    driven_values.push_back(signal.initial_value);
+    driver_values.emplace_back();
+    direct_single_driver_routes.emplace_back();
+    direct_single_driver_word_scratch.emplace_back();
+    direct_single_driver_logic9_word_scratch.emplace_back();
+    native_word_update_signals.emplace_back();
+    native_logic9_word_update_signals.emplace_back();
+    direct_single_driver_processes.push_back(
         std::numeric_limits<ProcessId>::max());
-    impl_->stable_single_writer_processes.push_back(
+    stable_single_writer_processes.push_back(
         std::numeric_limits<ProcessId>::max());
-    impl_->signal_transaction_observed.push_back(false);
-    impl_->signal_writer_counts.push_back(0U);
-    impl_->forced_driver_values.emplace_back();
-    impl_->forced_driver_masks.emplace_back();
-    impl_->external_driver_values.emplace_back();
-    impl_->charge_decay_handles.emplace_back();
-    impl_->charge_values.push_back(
+    signal_transaction_observed.push_back(false);
+    signal_writer_counts.push_back(0U);
+    forced_driver_values.emplace_back();
+    forced_driver_masks.emplace_back();
+    external_driver_values.emplace_back();
+    charge_decay_handles.emplace_back();
+    charge_values.push_back(
         signal.charge_strength
             ? std::make_unique<PackedLogic4>(signal.initial_value)
             : nullptr);
-    impl_->signal_last_values.push_back(signal.initial_value);
-    impl_->signal_selection_histories.emplace_back();
-    impl_->signal_selection_transaction_region_pending.push_back(0U);
-    impl_->signal_selection_transaction_pending_listed.push_back(0U);
-    impl_->signal_container_aggregate_aliases.emplace_back(std::nullopt);
-    impl_->aggregate_signal_current_projection.emplace_back(std::nullopt);
-    impl_->aggregate_signal_stored_projection.emplace_back(std::nullopt);
-    impl_->aggregate_signal_batches.emplace_back();
-    impl_->aggregate_signal_current_projection_revisions.push_back(0U);
-    impl_->aggregate_signal_stored_projection_revisions.push_back(0U);
-    impl_->aggregate_signal_last_changes.emplace_back(std::nullopt);
-    impl_->aggregate_signal_last_projection_revisions.push_back(0U);
-    impl_->forced_values.emplace_back();
-    impl_->forced_masks.emplace_back();
+    signal_last_values.push_back(signal.initial_value);
+    signal_selection_histories.emplace_back();
+    signal_selection_transaction_region_pending.push_back(0U);
+    signal_selection_transaction_pending_listed.push_back(0U);
+    signal_container_aggregate_aliases.emplace_back(std::nullopt);
+    aggregate_signal_current_projection.emplace_back(std::nullopt);
+    aggregate_signal_stored_projection.emplace_back(std::nullopt);
+    aggregate_signal_batches.emplace_back();
+    aggregate_signal_current_projection_revisions.push_back(0U);
+    aggregate_signal_stored_projection_revisions.push_back(0U);
+    aggregate_signal_last_changes.emplace_back(std::nullopt);
+    aggregate_signal_last_projection_revisions.push_back(0U);
+    forced_values.emplace_back();
+    forced_masks.emplace_back();
     if (!signal.initial_value.is_logic9()
         && signal.initial_value.width() <= 64U) {
         const auto word = signal.initial_value.unchecked_low_word();
-        impl_->direct_signal_aval.push_back(word.aval);
-        impl_->direct_signal_bval.push_back(word.bval);
-        impl_->direct_signal_last_aval.push_back(word.aval);
-        impl_->direct_signal_last_bval.push_back(word.bval);
+        direct_signal_aval.push_back(word.aval);
+        direct_signal_bval.push_back(word.bval);
+        direct_signal_last_aval.push_back(word.aval);
+        direct_signal_last_bval.push_back(word.bval);
     } else {
-        impl_->direct_signal_aval.push_back(0U);
-        impl_->direct_signal_bval.push_back(0U);
-        impl_->direct_signal_last_aval.push_back(0U);
-        impl_->direct_signal_last_bval.push_back(0U);
+        direct_signal_aval.push_back(0U);
+        direct_signal_bval.push_back(0U);
+        direct_signal_last_aval.push_back(0U);
+        direct_signal_last_bval.push_back(0U);
     }
     if (signal.initial_value.is_logic9()
         && signal.initial_value.width() != 0U
         && signal.initial_value.width() <= 64U) {
-        impl_->direct_signal_logic9_plane0.resize(id, 0U);
-        impl_->direct_signal_logic9_plane1.resize(id, 0U);
-        impl_->direct_signal_logic9_plane2.resize(id, 0U);
-        impl_->direct_signal_logic9_plane3.resize(id, 0U);
-        impl_->direct_signal_last_logic9_plane0.resize(id, 0U);
-        impl_->direct_signal_last_logic9_plane1.resize(id, 0U);
-        impl_->direct_signal_last_logic9_plane2.resize(id, 0U);
-        impl_->direct_signal_last_logic9_plane3.resize(id, 0U);
+        direct_signal_logic9_plane0.resize(id, 0U);
+        direct_signal_logic9_plane1.resize(id, 0U);
+        direct_signal_logic9_plane2.resize(id, 0U);
+        direct_signal_logic9_plane3.resize(id, 0U);
+        direct_signal_last_logic9_plane0.resize(id, 0U);
+        direct_signal_last_logic9_plane1.resize(id, 0U);
+        direct_signal_last_logic9_plane2.resize(id, 0U);
+        direct_signal_last_logic9_plane3.resize(id, 0U);
         const auto word = signal.initial_value.logic9_low_word();
-        impl_->direct_signal_logic9_plane0.push_back(word.planes[0]);
-        impl_->direct_signal_logic9_plane1.push_back(word.planes[1]);
-        impl_->direct_signal_logic9_plane2.push_back(word.planes[2]);
-        impl_->direct_signal_logic9_plane3.push_back(word.planes[3]);
-        impl_->direct_signal_last_logic9_plane0.push_back(word.planes[0]);
-        impl_->direct_signal_last_logic9_plane1.push_back(word.planes[1]);
-        impl_->direct_signal_last_logic9_plane2.push_back(word.planes[2]);
-        impl_->direct_signal_last_logic9_plane3.push_back(word.planes[3]);
+        direct_signal_logic9_plane0.push_back(word.planes[0]);
+        direct_signal_logic9_plane1.push_back(word.planes[1]);
+        direct_signal_logic9_plane2.push_back(word.planes[2]);
+        direct_signal_logic9_plane3.push_back(word.planes[3]);
+        direct_signal_last_logic9_plane0.push_back(word.planes[0]);
+        direct_signal_last_logic9_plane1.push_back(word.planes[1]);
+        direct_signal_last_logic9_plane2.push_back(word.planes[2]);
+        direct_signal_last_logic9_plane3.push_back(word.planes[3]);
     }
-    impl_->direct_signal_materialization_pending.push_back(0U);
-    if (impl_->direct_wide_signal_aval.size()
+    direct_signal_materialization_pending.push_back(0U);
+    if (direct_wide_signal_aval.size()
         > std::numeric_limits<std::uint32_t>::max()) {
         throw std::length_error {
             "SimIR direct signal plane exceeds its native offset range"
         };
     }
     const auto wide_offset = static_cast<std::uint32_t>(
-        impl_->direct_wide_signal_aval.size());
-    impl_->direct_wide_signal_offsets.push_back(wide_offset);
+        direct_wide_signal_aval.size());
+    direct_wide_signal_offsets.push_back(wide_offset);
     const auto words = signal.initial_value.aval_words().size();
     if (words > std::numeric_limits<std::uint32_t>::max()
-            - impl_->direct_wide_signal_aval.size()) {
+            - direct_wide_signal_aval.size()) {
         throw std::length_error {
             "SimIR direct signal plane exceeds its native word range"
         };
@@ -341,40 +346,40 @@ SignalId Interpreter::add_signal(Signal signal)
     if (!signal.initial_value.is_logic9()) {
         const auto aval = signal.initial_value.aval_words();
         const auto bval = signal.initial_value.bval_words();
-        impl_->direct_wide_signal_aval.insert(
-            impl_->direct_wide_signal_aval.end(),
+        direct_wide_signal_aval.insert(
+            direct_wide_signal_aval.end(),
             aval.begin(), aval.end());
-        impl_->direct_wide_signal_bval.insert(
-            impl_->direct_wide_signal_bval.end(),
+        direct_wide_signal_bval.insert(
+            direct_wide_signal_bval.end(),
             bval.begin(), bval.end());
     } else {
         const auto plane0 = signal.initial_value.logic9_plane_words(0U);
         const auto plane1 = signal.initial_value.logic9_plane_words(1U);
         const auto plane2 = signal.initial_value.logic9_plane_words(2U);
         const auto plane3 = signal.initial_value.logic9_plane_words(3U);
-        impl_->direct_wide_signal_logic9_plane2.resize(wide_offset, 0U);
-        impl_->direct_wide_signal_logic9_plane3.resize(wide_offset, 0U);
-        impl_->direct_wide_signal_aval.insert(
-            impl_->direct_wide_signal_aval.end(),
+        direct_wide_signal_logic9_plane2.resize(wide_offset, 0U);
+        direct_wide_signal_logic9_plane3.resize(wide_offset, 0U);
+        direct_wide_signal_aval.insert(
+            direct_wide_signal_aval.end(),
             plane0.begin(), plane0.end());
-        impl_->direct_wide_signal_bval.insert(
-            impl_->direct_wide_signal_bval.end(),
+        direct_wide_signal_bval.insert(
+            direct_wide_signal_bval.end(),
             plane1.begin(), plane1.end());
-        impl_->direct_wide_signal_logic9_plane2.insert(
-            impl_->direct_wide_signal_logic9_plane2.end(),
+        direct_wide_signal_logic9_plane2.insert(
+            direct_wide_signal_logic9_plane2.end(),
             plane2.begin(), plane2.end());
-        impl_->direct_wide_signal_logic9_plane3.insert(
-            impl_->direct_wide_signal_logic9_plane3.end(),
+        direct_wide_signal_logic9_plane3.insert(
+            direct_wide_signal_logic9_plane3.end(),
             plane3.begin(), plane3.end());
     }
     if (signal.vhdl_scalar_width != 0U) {
-        impl_->vhdl_scalar_widths.emplace(id, signal.vhdl_scalar_width);
+        vhdl_scalar_widths.emplace(id, signal.vhdl_scalar_width);
     }
     if (!signal.vhdl_conversion_drivers.empty()) {
-        impl_->vhdl_stamp_origins = true;
+        vhdl_stamp_origins = true;
         for (const auto& driver : signal.vhdl_conversion_drivers) {
             for (const auto source : driver.sources) {
-                auto& dependents = impl_->vhdl_conversion_dependents[source];
+                auto& dependents = vhdl_conversion_dependents[source];
                 // Signal ids only grow, so an earlier push of this id can
                 // only be the last entry.
                 if (dependents.empty() || dependents.back() != id) {
@@ -382,18 +387,18 @@ SignalId Interpreter::add_signal(Signal signal)
                 }
             }
         }
-        impl_->vhdl_conversion_drivers.emplace(
+        vhdl_conversion_drivers.emplace(
             id, std::move(signal.vhdl_conversion_drivers));
     }
     if (signal.vhdl_resolver) {
-        impl_->vhdl_stamp_origins = true;
+        vhdl_stamp_origins = true;
         // Each driver of a resolved VHDL signal starts at the signal's
         // initial value (IEEE 1076-2008 14.7.2).
         for (const auto source : signal.vhdl_resolver->sources) {
-            impl_->vhdl_conversion_dependents[source].push_back(id);
+            vhdl_conversion_dependents[source].push_back(id);
         }
-        impl_->vhdl_resolvers.emplace(id, std::move(*signal.vhdl_resolver));
-        impl_->vhdl_driver_initial_values.emplace(id, signal.initial_value);
+        vhdl_resolvers.emplace(id, std::move(*signal.vhdl_resolver));
+        vhdl_driver_initial_values.emplace(id, signal.initial_value);
     }
     SignalHot hot {
         .initial_value = std::move(signal.initial_value),
@@ -411,33 +416,50 @@ SignalId Interpreter::add_signal(Signal signal)
         .charge_strength = std::move(signal.charge_strength),
         .charge_decay = std::move(signal.charge_decay),
     };
-    impl_->signals.push_back(std::move(hot));
+    signals.push_back(std::move(hot));
     try {
-        impl_->signal_cold.push_back(std::move(cold));
+        signal_cold.push_back(std::move(cold));
     } catch (...) {
-        impl_->signals.pop_back();
+        signals.pop_back();
         throw;
     }
-    impl_->switch_endpoint_adjacency.emplace_back();
-    impl_->switch_control_adjacency.emplace_back();
-    impl_->invalidate_switch_components();
-    impl_->event_identities.push_back(id);
-    impl_->event_identity_members.emplace_back();
-    if (impl_->signals.back().event_variable) {
-        impl_->event_identity_members.back().push_back(id);
+    switch_endpoint_adjacency.emplace_back();
+    switch_control_adjacency.emplace_back();
+    invalidate_switch_components();
+    event_identities.push_back(id);
+    event_identity_members.emplace_back();
+    if (signals.back().event_variable) {
+        event_identity_members.back().push_back(id);
     }
-    impl_->dynamic_fanout.emplace_back();
-    impl_->event_states.emplace_back();
-    impl_->signal_events.emplace_back();
-    impl_->signal_event_scheduling_stamps.emplace_back();
-    impl_->signal_transactions.emplace_back();
-    impl_->signal_transaction_systemverilog.push_back(0U);
-    impl_->signal_container_aliases.emplace_back();
-    impl_->signal_container_element_aliases.emplace_back(std::nullopt);
-    impl_->sampled_value_dependency_mask.push_back(0U);
-    impl_->monitor_signal_watch_mask.push_back(0U);
-    impl_->signal_value_revisions.push_back(1U);
-    impl_->static_fanout_dirty = true;
+    dynamic_fanout.emplace_back();
+    event_states.emplace_back();
+    signal_events.emplace_back();
+    signal_event_scheduling_stamps.emplace_back();
+    signal_transactions.emplace_back();
+    signal_transaction_systemverilog.push_back(0U);
+    signal_container_aliases.emplace_back();
+    signal_container_element_aliases.emplace_back(std::nullopt);
+    sampled_value_dependency_mask.push_back(0U);
+    monitor_signal_watch_mask.push_back(0U);
+    signal_value_revisions.push_back(1U);
+    static_fanout_dirty = true;
+    if (started) {
+        // A signal added to the running simulation extends the tables that
+        // start() sized; the others are bounds-checked or sized on use.
+        if (static_kernel_owned_signal.size() == id) {
+            static_kernel_owned_signal.push_back(static_kernel ? 1U : 0U);
+        }
+        if (native_signal_dependency_mask.size() == id) {
+            native_signal_dependency_mask.push_back(0U);
+        }
+        if (module_path_destination_mask.size() == id) {
+            module_path_destination_mask.push_back(0U);
+        }
+        if (requires_sampled_values && sampled_defaults.size() == id) {
+            sampled_defaults.emplace_back();
+            sampled_values.emplace_back();
+        }
+    }
     return id;
 }
 
@@ -1494,7 +1516,7 @@ ProcessId Interpreter::Impl::add_process_program_impl(
     const auto container_register_types
         = process_layout_detail::ProcessLayoutAccess::view(
             process.container_register_types());
-    if (started) {
+    if (started && !late_process_registration) {
         throw std::logic_error("cannot add a SimIR process after start");
     }
     const auto id = static_cast<ProcessId>(processes.size());
@@ -2022,7 +2044,7 @@ ProcessId Interpreter::Impl::add_process_program_impl(
     bool delayed_writer = false;
     if (registered_kinds != nullptr) {
         delayed_writer = has_registered_kind.template
-            operator()<WriteInertial, WriteInertialSlice>();
+            operator()<WriteInertial, WriteInertialSlice, WriteNetDelay>();
     }
     // A slotted WriteDelayed (a gate in a run with a foreign library) is
     // such a writer; the kind alone cannot tell it from a dynamic delay.
@@ -2036,6 +2058,7 @@ ProcessId Interpreter::Impl::add_process_program_impl(
             const auto* delayed = operation_get_if<WriteDelayed>(&operation);
             delayed_writer = operation_holds<WriteInertial>(operation)
                 || operation_holds<WriteInertialSlice>(operation)
+                || operation_holds<WriteNetDelay>(operation)
                 || (delayed != nullptr && delayed->slotted);
         }
     }
@@ -2071,7 +2094,11 @@ ProcessId Interpreter::Impl::add_process_program_impl(
                 has_scalar_regions
                     ? scalar_driver_regions[scalar_cursor++].second
                     : ScalarDriverRegions { },
-                delayed_writer);
+                delayed_writer,
+                // A VHDL process: the generic domain also holds fsim's own
+                // processes, which carry no language standard.
+                process.scheduling_domain() == ProcessSchedulingDomain::generic
+                    && !process.language_standard().empty());
         }
     }
 
@@ -2262,11 +2289,125 @@ ProcessId Interpreter::Impl::add_process_program_impl(
         processes.push_back(std::move(state));
     }
     static_fanout_dirty = true;
-    if (executable
+    // A member of the running static kernel is woken by the kernel: it has
+    // no sensitivity cohort and is marked as install_static_kernel marks one.
+    const bool kernel_owned = late_process_registration
+        && late_process_kernel_member;
+    if (kernel_owned) {
+        if (fusion_dormant_process.size() <= id) {
+            fusion_dormant_process.resize(
+                static_cast<std::size_t>(id) + 1U, 0U);
+        }
+        fusion_dormant_process[id] = 1U;
+        if (!processes.program_view(id).static_sensitivity().empty()) {
+            if (static_kernel_event_driven_process.size() <= id) {
+                static_kernel_event_driven_process.resize(
+                    static_cast<std::size_t>(id) + 1U, 0U);
+            }
+            static_kernel_event_driven_process[id] = 1U;
+        }
+    }
+    if (executable && !kernel_owned
         && !processes.program_view(id).static_sensitivity().empty()) {
         register_static_sensitivity_cohort(id);
     }
     return id;
+}
+
+void Interpreter::Impl::push_process_late(
+    Process process, const bool kernel_member)
+{
+    if (!started || start_in_progress || validation_only) {
+        throw std::logic_error {
+            "a late SimIR process needs a started simulation"
+        };
+    }
+    struct LateRegistrationGuard {
+        Impl& impl;
+        ~LateRegistrationGuard()
+        {
+            impl.late_process_registration = false;
+            impl.late_process_kernel_member = false;
+        }
+    };
+    // The copy starts at the net's value, so the process waits for the
+    // net's next change instead of running once at start.
+    process.initialize = false;
+    late_process_registration = true;
+    late_process_kernel_member = kernel_member;
+    const LateRegistrationGuard guard { *this };
+    (void)add_process_program_impl(
+        ProcessProgramView { process }, { }, &process, nullptr, true);
+    rebuild_static_fanout();
+}
+
+void Interpreter::Impl::rewrite_process_reads_late(const ProcessId id,
+    Process rewritten, const SignalId net, const SignalId copy)
+{
+    if (!started || start_in_progress || id >= processes.size()
+        || net >= signals.size() || copy >= signals.size()
+        || processes.has_executor(id)
+        || processes.is_compact_constant(id)) {
+        throw std::logic_error {
+            "a SimIR process cannot be rewritten in this state"
+        };
+    }
+    constexpr auto no_cohort = std::numeric_limits<std::size_t>::max();
+    auto& state = processes.promote_state(id);
+    auto& cold = state.cold();
+    // The static sensitivity leaves its cohort; the rewritten program's
+    // joins one below. A suspended static wait keeps its trigger bits: the
+    // sensitivity entries stay at their positions.
+    if (id < static_sensitivity_cohort_by_process.size()
+        && static_sensitivity_cohort_by_process[id] != no_cohort) {
+        std::erase(
+            static_sensitivity_cohorts[static_sensitivity_cohort_by_process[id]]
+                .members,
+            id);
+        static_sensitivity_cohort_by_process[id] = no_cohort;
+    }
+    // A suspended event control on the net moves to the copy with the
+    // triggers it has seen.
+    std::vector<Sensitivity> dynamic_sensitivity;
+    std::vector<bool> dynamic_triggered;
+    bool dynamic_wait_all { };
+    bool moves_dynamic_wait { };
+    if (const auto* const wait = cold.dynamic_wait_state_if_present();
+        wait != nullptr && state.waiting_on_signal
+        && std::ranges::any_of(wait->dynamic_sensitivity,
+            [&](const Sensitivity& sensitivity) {
+                return sensitivity.signal == net;
+            })) {
+        moves_dynamic_wait = true;
+        dynamic_sensitivity = wait->dynamic_sensitivity;
+        dynamic_triggered = wait->dynamic_triggered;
+        dynamic_wait_all = wait->dynamic_wait_all;
+        remove_dynamic_wait_nonempty(state);
+    }
+    // The shared template holds the layout; the instance holds the reads.
+    auto common = process_program_templates.intern(rewritten);
+    cold.program_storage().public_program_facade.reset();
+    cold.set_program(std::move(rewritten), std::move(common));
+    cold.hosted_tier = nullptr;
+    cold.hosted_tier_list = nullptr;
+    cold.hosted_tier_body = nullptr;
+    cold.hosted_tier_size = 0U;
+    if (moves_dynamic_wait) {
+        for (auto& sensitivity : dynamic_sensitivity) {
+            if (sensitivity.signal == net) {
+                sensitivity.signal = copy;
+            }
+        }
+        auto& wait = cold.ensure_dynamic_wait_state();
+        wait.dynamic_sensitivity = std::move(dynamic_sensitivity);
+        wait.dynamic_triggered = std::move(dynamic_triggered);
+        wait.dynamic_wait_all = dynamic_wait_all;
+        state.waiting_on_signal = true;
+        register_dynamic_wait_fanout(state);
+    }
+    register_static_sensitivity_cohort(id);
+    static_fanout_dirty = true;
+    rebuild_static_fanout();
 }
 
 std::uint32_t Interpreter::add_module_path(ModulePath path)
@@ -2725,6 +2866,286 @@ std::optional<TransitionDelays> Interpreter::driver_delays(
     return found == impl_->driver_delay_overrides.end()
         ? std::nullopt
         : std::optional<TransitionDelays> { found->second };
+}
+
+bool Interpreter::set_net_delay_table(
+    const ProcessId process, const NetDelayTable& table)
+{
+    // As in set_driver_delays: the static kernel's host member runs a stub,
+    // so the program to inspect is the startup program.
+    const Process* const original = impl_->static_kernel
+        ? impl_->static_kernel->startup_program(process) : nullptr;
+    const auto program = original != nullptr
+        ? ProcessProgramView { *original }
+        : impl_->get_process(process).program();
+    bool writes = false;
+    for (const auto& operation : std::as_const(program.operations())) {
+        writes = writes || operation_holds<WriteNetDelay>(operation);
+    }
+    if (!writes) {
+        return false;
+    }
+    impl_->net_delay_overrides.insert_or_assign(process, table);
+    return true;
+}
+
+std::optional<NetDelayTable> Interpreter::net_delay_table(
+    const ProcessId process) const
+{
+    const auto found = impl_->net_delay_overrides.find(process);
+    return found == impl_->net_delay_overrides.end()
+        ? std::nullopt
+        : std::optional<NetDelayTable> { found->second };
+}
+
+bool Interpreter::graft_net_delay(NetDelayGraft& graft, std::string& reason)
+{
+    auto& impl = *impl_;
+    if (!impl.started || !impl.scheduler.at_safe_point()
+        || graft.signals.empty() || graft.processes.empty()) {
+        reason = "the graft is empty or the run is not at a safe point";
+        return false;
+    }
+    // The added processes follow the run's own processes, which include fork
+    // children and foreign drivers the design does not have; the signals
+    // must follow the run's signals as planned, since the added processes
+    // name them.
+    for (std::size_t index = 0U; index < graft.processes.size(); ++index) {
+        graft.processes[index].id
+            = static_cast<ProcessId>(impl.processes.size() + index);
+    }
+    // The copies were planned as the signals that follow the design's; a
+    // run with more signals (created by a foreign interface) would make the
+    // drivers write others.
+    for (const auto& added : graft.processes) {
+        for (const auto& region : added.driver_regions) {
+            if (region.signal < impl.signals.size()) {
+                reason = "the run has signals the elaborated design does not";
+                return false;
+            }
+        }
+    }
+    // Each added driver starts as an elaboration-time split's driver is after
+    // its first run: the net's current value on its own bits of the copy, z
+    // on the others (set directly, so no resolution and no event).
+    struct Seed {
+        ProcessId process { };
+        SignalId net { };
+        std::vector<Process::DriverRegion> regions;
+    };
+    std::vector<Seed> seeds;
+    for (const auto& added : graft.processes) {
+        for (std::size_t index = 0U; index < added.operations.size(); ++index) {
+            Operation scratch;
+            if (const auto* const read = operation_get_if<ReadSignal>(
+                    &added.operations.expanded_ref(index, scratch))) {
+                seeds.push_back({ added.id, read->signal, added.driver_regions });
+                break;
+            }
+        }
+    }
+    const auto seed_drivers = [&] {
+        std::set<SignalId> touched;
+        for (const auto& each : seeds) {
+            const auto net_value = impl.logical_signal_value(each.net);
+            std::map<SignalId, PackedLogic4> driven;
+            for (const auto& region : each.regions) {
+                const auto width
+                    = impl.get_signal(region.signal).initial_value.width();
+                auto& value = driven.try_emplace(
+                    region.signal, width, Logic4::z).first->second;
+                const auto begin = region.whole ? 0U : region.offset;
+                const auto end = region.whole
+                    ? width
+                    : std::min<std::size_t>(width,
+                        static_cast<std::size_t>(region.offset) + region.width);
+                for (std::size_t bit = begin;
+                    bit < end && bit < net_value.width(); ++bit) {
+                    value.set(bit, net_value.get(bit));
+                }
+            }
+            for (auto& [signal, value] : driven) {
+                impl.driver_slot(each.process, signal) = std::move(value);
+                touched.insert(signal);
+            }
+        }
+        // Registering the drivers resolved the copy from drivers that all
+        // started at z, so it holds z; it holds what the drivers now give
+        // (the net's value), set as register_driver sets it: no event.
+        for (const auto signal : touched) {
+            impl.refresh_direct_single_driver_route(signal);
+            auto resolved = impl.resolved_driver_value(signal);
+            impl.driven_values[signal] = resolved;
+            impl.signals[signal].initial_value = resolved;
+            impl.refresh_direct_signal_planes(signal);
+            impl.signal_last_values[signal] = std::move(resolved);
+        }
+    };
+    // A compiled run asks its kernel, which owns the run (the evaluator never
+    // runs its members): it validates, then adds the signals and processes
+    // through Impl::push_signal_late and push_process_late.
+    if (impl.static_kernel) {
+        ReplanRequest request;
+        request.kind = ReplanRequest::Kind::graft_net_delay;
+        request.graft = graft;
+        auto result = impl.static_kernel->replan_at_safe_point(request);
+        if (!result.done) {
+            reason = std::move(result.reason);
+            return false;
+        }
+        seed_drivers();
+        return true;
+    }
+    // The evaluator engine: each added process reads one existing signal, the
+    // net, and writes new ones, the copy.
+    const auto first_signal = static_cast<SignalId>(impl.signals.size());
+    const auto signal_count = impl.signals.size() + graft.signals.size();
+    if (signal_count > std::numeric_limits<SignalId>::max()) {
+        reason = "the copies exceed the signal id range";
+        return false;
+    }
+    std::map<SignalId, SignalId> net_of_copy;
+    for (const auto& added : graft.processes) {
+        if (added.driver_regions.empty()) {
+            reason = "an added process drives nothing";
+            return false;
+        }
+        std::optional<SignalId> net;
+        for (std::size_t index = 0U; index < added.operations.size();
+            ++index) {
+            Operation scratch;
+            const auto& operation
+                = added.operations.expanded_ref(index, scratch);
+            if (const auto* const read = operation_get_if<ReadSignal>(&operation)) {
+                if (read->signal >= first_signal || (net && *net != read->signal)) {
+                    reason = "an added process reads more than its net";
+                    return false;
+                }
+                net = read->signal;
+            }
+        }
+        if (!net) {
+            reason = "an added process reads no net";
+            return false;
+        }
+        for (const auto& region : added.driver_regions) {
+            if (region.signal < first_signal || region.signal >= signal_count) {
+                reason = "an added process drives a signal that is not a copy";
+                return false;
+            }
+            const auto [found, inserted]
+                = net_of_copy.try_emplace(region.signal, *net);
+            if (!inserted && found->second != *net) {
+                reason = "a copy has drivers of two nets";
+                return false;
+            }
+        }
+    }
+    // The load processes: one (net, copy) pair each, the signals of their
+    // reads and sensitivity renamed in place.
+    struct Rewrite {
+        ProcessId process { };
+        SignalId net { };
+        SignalId copy { };
+    };
+    std::vector<Rewrite> rewrites;
+    for (const auto& [id, rewritten] : graft.rewritten) {
+        if (id >= impl.processes.size() || impl.processes.has_executor(id)
+            || impl.processes.is_compact_constant(id)) {
+            reason = "a load process has an executor or is a constant driver";
+            return false;
+        }
+        const auto& state = impl.processes.at(id);
+        if (state.halted || state.status == ProcessStatus::running
+            || state.status == ProcessStatus::finished
+            || state.status == ProcessStatus::killed) {
+            reason = "a load process is running, halted or done";
+            return false;
+        }
+        const auto original = impl.processes.program_view(id);
+        if (original.operations().size() != rewritten.operations.size()
+            || original.static_sensitivity().size()
+                != rewritten.static_sensitivity.size()) {
+            reason = "a rewritten load process differs in shape from the "
+                     "running one";
+            return false;
+        }
+        std::optional<std::pair<SignalId, SignalId>> pair;
+        const auto note = [&](const SignalId before, const SignalId after) {
+            if (before == after) {
+                return true;
+            }
+            if (!net_of_copy.contains(after)
+                || net_of_copy.at(after) != before
+                || (pair && *pair != std::pair { before, after })) {
+                return false;
+            }
+            pair = std::pair { before, after };
+            return true;
+        };
+        for (std::size_t index = 0U; index < original.static_sensitivity().size();
+            ++index) {
+            const auto& before = original.static_sensitivity()[index];
+            const auto& after = rewritten.static_sensitivity[index];
+            if (before.edge != after.edge || before.offset != after.offset
+                || before.width != after.width
+                || !note(before.signal, after.signal)) {
+                reason = "a load process's sensitivity is not renamed to "
+                         "one copy";
+                return false;
+            }
+        }
+        for (std::size_t index = 0U; index < original.operations().size();
+            ++index) {
+            Operation before_scratch;
+            Operation after_scratch;
+            const auto& before
+                = original.operations().expanded_ref(index, before_scratch);
+            const auto& after
+                = rewritten.operations.expanded_ref(index, after_scratch);
+            const auto* const read_before = operation_get_if<ReadSignal>(&before);
+            const auto* const read_after = operation_get_if<ReadSignal>(&after);
+            if ((read_before == nullptr) != (read_after == nullptr)) {
+                reason = "a rewritten load process differs in its operations";
+                return false;
+            }
+            if (read_before != nullptr
+                && !note(read_before->signal, read_after->signal)) {
+                reason = "a load process's reads are not renamed to one copy";
+                return false;
+            }
+        }
+        if (!pair) {
+            reason = "a load process reads no copy";
+            return false;
+        }
+        rewrites.push_back({ id, pair->first, pair->second });
+    }
+    // Growth: the copy starts at the net's current value, then its drivers
+    // and the load's rewritten reads follow.
+    for (std::size_t index = 0U; index < graft.signals.size(); ++index) {
+        auto& added = graft.signals[index];
+        const auto net = net_of_copy.find(
+            static_cast<SignalId>(first_signal + index));
+        if (net != net_of_copy.end()) {
+            const auto& value = impl.logical_signal_value(net->second);
+            if (value.width() == added.initial_value.width()) {
+                added.initial_value = value;
+            }
+        }
+        (void)impl.push_signal_late(std::move(added));
+    }
+    for (auto& added : graft.processes) {
+        impl.push_process_late(std::move(added), false);
+    }
+    for (auto& [id, rewritten] : graft.rewritten) {
+        const auto found = std::ranges::find(rewrites, id, &Rewrite::process);
+        impl.rewrite_process_reads_late(
+            id, std::move(rewritten), found->net, found->copy);
+    }
+    seed_drivers();
+    reason.clear();
+    return true;
 }
 
 bool Interpreter::set_module_timing_check_limits(
@@ -3742,6 +4163,8 @@ void Interpreter::deposit_signal(SignalId signal, PackedLogic4 value,
     if (!impl_->started) {
         impl_->vhdl_deposited_before_start.insert(signal);
     }
+    const auto delayed_before = foreign_net_delay_before(signal);
+    const auto width = value.width();
     // A net joined by bidirectional switches takes its value from the whole
     // network, so a deposit there persists as an external driver that the
     // network resolves through to every endpoint (IEEE 1800-2017 38.34).
@@ -3751,14 +4174,18 @@ void Interpreter::deposit_signal(SignalId signal, PackedLogic4 value,
             = impl_->normalize_signal_value(signal, std::move(value));
         impl_->mark_switch_network_dirty(signal);
         impl_->refresh_switch_network();
-        return;
+    } else {
+        impl_->commit(signal, std::move(value),
+            SignalChangeOrigin { origin_domain, SchedulerPhase::active });
+        if (impl_->static_kernel && impl_->started
+            && origin_domain == ProcessSchedulingDomain::generic) {
+            impl_->static_kernel->host_deposit(signal);
+        }
     }
-    impl_->commit(signal, std::move(value),
-        SignalChangeOrigin { origin_domain, SchedulerPhase::active });
-    if (impl_->static_kernel && impl_->started
-        && origin_domain == ProcessSchedulingDomain::generic) {
-        impl_->static_kernel->host_deposit(signal);
-    }
+    // A write no source of a group-mode SDF load made reaches its copies
+    // after their delay.
+    foreign_net_delay_after(
+        signal, ForeignNetDelayKind::deposit, delayed_before, 0U, width);
 }
 
 void Interpreter::schedule_host_driver_waveform(const ProcessId process,
@@ -3926,8 +4353,11 @@ void Interpreter::force_signal(SignalId signal, PackedLogic4 value,
         throw std::invalid_argument("SimIR signal force width mismatch");
     }
     note_external_signal_write(signal);
+    const auto delayed_before = foreign_net_delay_before(signal);
     impl_->force_slice(signal, std::move(value), 0,
         SignalChangeOrigin { origin_domain, SchedulerPhase::active });
+    foreign_net_delay_after(
+        signal, ForeignNetDelayKind::force, delayed_before, 0U, width);
 }
 
 void Interpreter::force_scalar_signal(
@@ -3955,8 +4385,11 @@ void Interpreter::release_signal(SignalId signal,
     }
     const auto width = impl_->get_signal(signal).initial_value.width();
     note_external_signal_write(signal);
+    const auto delayed_before = foreign_net_delay_before(signal);
     impl_->release_slice(signal, 0, width,
         SignalChangeOrigin { origin_domain, SchedulerPhase::active });
+    foreign_net_delay_after(
+        signal, ForeignNetDelayKind::release, delayed_before, 0U, width);
 }
 
 void Interpreter::assign_signal(SignalId signal, PackedLogic4 value,
@@ -4007,7 +4440,11 @@ void Interpreter::force_signal_slice(
         };
     }
     note_external_signal_write(signal);
+    const auto delayed_before = foreign_net_delay_before(signal);
+    const auto width = value.width();
     impl_->force_slice(signal, std::move(value), offset);
+    foreign_net_delay_after(
+        signal, ForeignNetDelayKind::force, delayed_before, offset, width);
 }
 
 void Interpreter::release_signal_slice(
@@ -4021,7 +4458,10 @@ void Interpreter::release_signal_slice(
         };
     }
     note_external_signal_write(signal);
+    const auto delayed_before = foreign_net_delay_before(signal);
     impl_->release_slice(signal, offset, width);
+    foreign_net_delay_after(
+        signal, ForeignNetDelayKind::release, delayed_before, offset, width);
 }
 
 bool Interpreter::signal_is_forced(const SignalId signal) const
@@ -4451,6 +4891,17 @@ const Process& Interpreter::process_program(const ProcessId process) const
         }
     }
     return impl_->processes.public_program(process);
+}
+
+const Process& Interpreter::sensitive_process_program(const ProcessId process)
+{
+    if (impl_->static_kernel) {
+        if (const auto* restored
+            = impl_->static_kernel->sensitive_program(process)) {
+            return *restored;
+        }
+    }
+    return process_program(process);
 }
 
 InstructionIndex Interpreter::process_instruction(

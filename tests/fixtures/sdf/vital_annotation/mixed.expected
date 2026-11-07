@@ -1,0 +1,3 @@
+TRACE z=0 @2
+TRACE z=1 @12
+TRACE z=0 @32

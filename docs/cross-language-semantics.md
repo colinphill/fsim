@@ -129,10 +129,40 @@ Conversion into a 2-state destination is rejected if the source may contain an
 unknown or high-impedance value. fsim does not silently coerce `X` or `Z` to
 zero.
 
+The table is the value mapping vendors document (for example AMD UG900,
+"Mixed Language Simulation"), and strength is otherwise ignored across the
+boundary. fsim adds one rule for a SystemVerilog net on a VHDL `std_logic`
+`inout` port: the VHDL driver's `L`, `H` and `W` enter the net's resolution as
+weak 0, weak 1 and weak X, and every other value as a strong one, so a VHDL
+pull-up (`sda <= 'H'`) against a SystemVerilog `0` resolves to `0`, as it does
+in `std_logic` resolution and as it would if VHDL declared the net. Code on
+either side reads the resolved net through the table: VHDL sees `'0'`, `'1'`,
+`'X'` or `'Z'`, never `'H'`. This is an fsim extension, not a vendor rule.
+The v4 kernel resolves such a net itself, in compiled code, when SystemVerilog
+and VHDL both drive it (engine-v4-semantics.md S4); the result is the same as
+the reference scheduler's.
+
+The bus resolves the same whichever side declares it, but what VHDL reads
+back does not. With a pull-up and no other driver, VHDL reads `'1'` from a
+SystemVerilog-declared net and `'H'` from its own `std_logic` signal (as
+`std_logic` resolution gives). VHDL code that tests the bus should therefore
+compare `to_x01(sda) = '1'` (or use `rising_edge`/`falling_edge`, which
+accept `'H'`/`'L'`) instead of `sda = '1'`, so that it works on either kind of
+bus.
+
+A VHDL port that drives a SystemVerilog net (an `out`, `inout` or `buffer`
+formal) is a source of it from elaboration (IEEE 1076-2019 14.7.3.2). Its
+driver starts at the port's default, so the default `'U'` makes the net `X`
+until VHDL assigns it, and a SystemVerilog `z` on the same net does not hide
+it. The net's own drivers start at `z`.
+
 ## Drivers and resolution
 
-A boundary net with one driver binds automatically. An inout or multi-driver
-boundary must state one of:
+A boundary net with one driver binds automatically. An `inout` whose actual
+resolves in its own language (a SystemVerilog `wire`/`tri`, a VHDL
+`std_logic` signal) shares that signal, and each side reads it through the
+logic mapping. Any other inout or multi-driver boundary must state one of
+(`FSIM-ELAB-BIND-030` otherwise):
 
 ```toml
 resolver = "std_logic"
@@ -181,10 +211,17 @@ the Active region, or an NBA update) wakes VHDL processes in the same delta,
 in the next round of the Active region, with the SystemVerilog processes it
 wakes and before that region's next NBA updates. The change is an event of
 that delta, so `S'EVENT` and `rising_edge` see it. A VHDL process's signal
-assignments still wait for the update phase. No standard orders zero-delay
-events across languages; this is the order Vivado gives. A SystemVerilog flop
-and a VHDL flop on one SystemVerilog clock therefore both sample the values
-from before the edge.
+assignments still wait for the update phase. A SystemVerilog flop and a VHDL
+flop on one SystemVerilog clock therefore both sample the values from before
+the edge.
+
+No standard orders zero-delay events across languages, and vendors document
+none. Beyond the rules above, the order in which the two languages' processes
+run within one time step, and the number of `#0` or delta steps after which a
+change crosses the boundary, are unspecified and may change between fsim
+releases. The contract is the values at time-step boundaries, which the LRM
+rules and the logic mapping determine; tests compare those, not the
+interleaving within a step.
 
 The mixed vertical-slice test exercises this rule: an SV testbench clock wakes
 a VHDL `rising_edge` process, the VHDL update commits `q`, and an SV continuous

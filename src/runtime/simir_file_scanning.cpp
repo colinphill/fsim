@@ -1166,6 +1166,175 @@ PackedLogic4 pack_file_text(
 
 namespace {
 
+// IEEE 1076-2019 16.7, the READ, OREAD and HREAD of the package
+// STD_LOGIC_1164 for STD_ULOGIC and STD_ULOGIC_VECTOR, step by step as the
+// package body does them. The target is assigned 'U' first and keeps that
+// value unless the read succeeds. The characters the body takes from the
+// line with its own READ (including the one that makes the read fail) are
+// consumed, and so is the white space it skips.
+InputScanResult scan_vhdl_logic9(
+    const FileScan& operation, Scanner& scanner)
+{
+    InputScanResult result;
+    result.values.resize(operation.conversions.size());
+    const auto& conversion = operation.conversions.front();
+    const std::size_t width = conversion.target.width;
+    const auto format = conversion.format;
+    const bool scalar = format == InputScanFormat::vhdl_logic9_scalar;
+    const bool octal = format == InputScanFormat::vhdl_logic9_octal;
+    const bool hexadecimal
+        = format == InputScanFormat::vhdl_logic9_hexadecimal;
+    const bool radix = octal || hexadecimal;
+    const std::string_view name = scalar
+        ? "STD_LOGIC_1164.READ(STD_ULOGIC) "
+        : octal       ? "STD_LOGIC_1164.OREAD "
+        : hexadecimal ? "STD_LOGIC_1164.HREAD "
+                      : "STD_LOGIC_1164.READ(STD_ULOGIC_VECTOR) ";
+    result.values.front() = InputScanValue {
+        PackedLogic4::from_logic9_msb_string(std::string(width, 'U')),
+        { }, false
+    };
+    const auto fail = [&](std::string message) {
+        result.diagnostic = std::move(message);
+        result.assignments = 0;
+        result.consumed = scanner.consumed();
+    };
+    const auto succeed = [&](const std::string_view elements) {
+        result.values.front() = InputScanValue {
+            PackedLogic4::from_logic9_msb_string(elements), { }, false
+        };
+        result.assignments = 1;
+        result.consumed = scanner.consumed();
+    };
+    const auto logic9_literal = [](const std::int32_t character) {
+        return character >= 0
+            && std::string_view { "UX01ZWLH-" }.find(
+                   static_cast<char>(character))
+            != std::string_view::npos;
+    };
+    const auto illegal_character = [&](const std::int32_t character) {
+        fail(std::string { name } + "Error: Character '"
+            + static_cast<char>(character)
+            + "' read, expected STD_ULOGIC literal.");
+    };
+    const auto end_of_string = [&] {
+        fail(std::string { name } + "End of string encountered");
+    };
+    (void)scanner.skip_space(true);
+    if (scalar) {
+        const auto character = scanner.read();
+        if (character < 0) {
+            end_of_string();
+        } else if (!logic9_literal(character)) {
+            illegal_character(character);
+        } else {
+            succeed(std::string_view { "UX01ZWLH-" }.substr(
+                std::string_view { "UX01ZWLH-" }.find(
+                    static_cast<char>(character)), 1U));
+        }
+        return result;
+    }
+    if (width == 0U) {
+        // A read into a null array succeeds after skipping white space.
+        result.assignments = 1;
+        result.consumed = scanner.consumed();
+        return result;
+    }
+    // The body's handling of `_` in the vector reads: not first, and not
+    // twice in a row.
+    bool previous_underscore = false;
+    const auto underscore = [&](const std::size_t index) {
+        if (index == 0U) {
+            fail(std::string { name } + "String begins with an \"_\"");
+            return false;
+        }
+        if (previous_underscore) {
+            fail(std::string { name }
+                + "Two underscores detected in input string \"__\"");
+            return false;
+        }
+        previous_underscore = true;
+        return true;
+    };
+    if (!radix) {
+        std::string elements;
+        elements.reserve(width);
+        while (elements.size() < width) {
+            const auto character = scanner.read();
+            if (character < 0) {
+                end_of_string();
+                return result;
+            }
+            if (character == '_') {
+                if (!underscore(elements.size())) {
+                    return result;
+                }
+                continue;
+            }
+            if (!logic9_literal(character)) {
+                illegal_character(character);
+                return result;
+            }
+            elements.push_back(static_cast<char>(character));
+            previous_underscore = false;
+        }
+        succeed(elements);
+        return result;
+    }
+    const std::size_t bits = octal ? 3U : 4U;
+    const std::size_t digits = (width + bits - 1U) / bits;
+    const std::size_t pad = digits * bits - width;
+    std::string elements;
+    elements.reserve(digits * bits);
+    std::size_t index = 0U;
+    while (index < digits) {
+        const auto character = scanner.read();
+        if (character < 0) {
+            end_of_string();
+            return result;
+        }
+        if (character == '_') {
+            if (!underscore(index)) {
+                return result;
+            }
+            continue;
+        }
+        // Char2TriBits and Char2QuadBits.
+        if (character == 'Z' || character == 'X') {
+            elements.append(bits, static_cast<char>(character));
+        } else {
+            std::int32_t value = -1;
+            if (character >= '0' && character <= '9') {
+                value = character - '0';
+            } else if (hexadecimal && character >= 'A' && character <= 'F') {
+                value = character - 'A' + 10;
+            } else if (hexadecimal && character >= 'a' && character <= 'f') {
+                value = character - 'a' + 10;
+            }
+            if (value < 0 || value >= (octal ? 8 : 16)) {
+                fail(std::string { name } + "Error: Read a '"
+                    + static_cast<char>(character)
+                    + (octal ? "', expected an Octal character (0-7)."
+                             : "', expected a Hex character (0-F)."));
+                return result;
+            }
+            for (std::size_t bit = bits; bit-- > 0U;) {
+                elements.push_back(
+                    ((value >> static_cast<int>(bit)) & 1) != 0 ? '1' : '0');
+            }
+        }
+        ++index;
+        previous_underscore = false;
+    }
+    // `or (sv (0 to pad-1)) = '1'`: the vector was truncated.
+    if (elements.substr(0U, pad).find('1') != std::string::npos) {
+        fail(std::string { name } + "Vector truncated");
+        return result;
+    }
+    succeed(std::string_view { elements }.substr(pad));
+    return result;
+}
+
 InputScanResult scan_formatted_input_impl(
     const FileScan& operation,
     const std::function<std::int32_t()>& read,
@@ -1173,6 +1342,9 @@ InputScanResult scan_formatted_input_impl(
     const SystemVerilogTimeFormat* const time_format)
 {
     Scanner scanner { read, unread };
+    if (vhdl_textio_logic9(operation)) {
+        return scan_vhdl_logic9(operation, scanner);
+    }
     const bool vhdl_textio_line = vhdl_textio_read(operation);
     const bool vhdl_textio_2008 = vhdl_textio_read_2008(operation);
     const bool radix_read_2008 = vhdl_textio_radix_read_2008(operation);

@@ -8,6 +8,7 @@
 #include "application_vpi_class_model.hpp"
 #include "application_vpi_frames.hpp"
 #include "application_vpi_statements.hpp"
+#include "fsim/elaboration/sdf_net_delay_split.hpp"
 #include "fsim/platform/dynamic_library.hpp"
 #include "fsim/runtime/acc_handle_bridge.h"
 #include "fsim/runtime/vpi_bridge.h"
@@ -38,6 +39,7 @@
 #include <tuple>
 #include <set>
 #include <memory>
+#include <span>
 #include <stdexcept>
 #include <string_view>
 #include <unordered_map>
@@ -4021,7 +4023,7 @@ private:
     // The turn-off delay is the smaller of the 0->z and 1->z delays (IEEE
     // 1800-2023 30.5.2).
     [[nodiscard]] std::array<runtime::SimulationTick, 3U> net_delay_triple(
-        const std::vector<runtime::SimulationTick>& table) const
+        const std::span<const runtime::SimulationTick> table) const
     {
         return { table[0], table[1], std::min(table[2], table[4]) };
     }
@@ -4034,6 +4036,21 @@ private:
         return changed != net_delay_overrides_.end()
             ? changed->second
             : net_delays()[delay].delays;
+    }
+
+    // The twelve delays and pulse limits a caller sees: a put's values first,
+    // then the SDF record's limits, none exceeding their delay (a net delay
+    // without limits rejects a pulse at its delay).
+    [[nodiscard]] runtime::simir::NetDelayTable net_delay_limits(
+        const std::uint32_t delay) const
+    {
+        const auto& declared = net_delays()[delay];
+        const auto put = net_pulse_overrides_.find(delay);
+        return put != net_pulse_overrides_.end()
+            ? elaboration::sdf_net_delay_table(
+                  net_delay_table(delay), put->second.first, put->second.second)
+            : elaboration::sdf_net_delay_table(
+                  net_delay_table(delay), declared.reject, declared.error);
     }
 
     // A delay in the requested format, scaled to the time unit of the module
@@ -4070,8 +4087,8 @@ private:
     }
 
     // The twelve transitions of an intermodule path or a module input port
-    // delay with the reject and error limits at the delay (a net delay has
-    // no pulse limits of its own).
+    // delay with the reject and error limits at the delay (a module input
+    // port delay has no pulse limits of its own).
     [[nodiscard]] DelayRows net_rows(
         const std::vector<runtime::SimulationTick>& table) const
     {
@@ -4083,6 +4100,21 @@ private:
             rows[index].applied = delay;
             rows[index].reject = { delay, delay, delay };
             rows[index].error = { delay, delay, delay };
+        }
+        return rows;
+    }
+
+    // The twelve transitions of an intermodule path with its reject and error
+    // limits: the pulse limits of the SDF record or a put (net_delay_limits).
+    [[nodiscard]] DelayRows net_limit_rows(const std::uint32_t delay) const
+    {
+        const auto limits = net_delay_limits(delay);
+        auto rows = net_rows(net_delay_table(delay));
+        for (std::size_t index = 0U; index < rows.size(); ++index) {
+            const auto reject = static_cast<std::int64_t>(limits.reject[index]);
+            const auto error = static_cast<std::int64_t>(limits.error[index]);
+            rows[index].reject = { reject, reject, reject };
+            rows[index].error = { error, error, error };
         }
         return rows;
     }
@@ -4107,7 +4139,8 @@ private:
     // turn-off) delays, each repeated for min, typ and max with mtm_flag and
     // followed by its reject and error limits with pulsere_flag (IEEE
     // 1800-2023 38.10 Table 38-2). SDF gives one value per delay, so min, typ
-    // and max are equal, and a pulse is rejected and errors at the delay.
+    // and max are equal; the limits are those of the SDF record (a pulse is
+    // rejected and errors at the delay when it gives none) or of a put.
     fsim_vpi_status_v1 net_get_delays(const std::uint32_t delay,
         const s_vpi_delay* const delays, fsim_vpi_service_result_v1& result)
     {
@@ -4120,10 +4153,14 @@ private:
         }
         const auto instance = instance_by_path(net_delays()[delay].instance);
         if (delays->no_of_delays != 2 && delays->no_of_delays != 3) {
-            fill_delays(net_rows(net_delay_table(delay)), *delays, instance);
+            fill_delays(net_limit_rows(delay), *delays, instance);
             return succeed(result);
         }
-        const auto triple = net_delay_triple(net_delay_table(delay));
+        const auto limits = net_delay_limits(delay);
+        const std::array<std::array<runtime::SimulationTick, 3U>, 3U> triples {
+            net_delay_triple(limits.delay), net_delay_triple(limits.reject),
+            net_delay_triple(limits.error)
+        };
         const std::size_t values = delays->mtm_flag != 0 ? 3U : 1U;
         const std::size_t kinds = delays->pulsere_flag != 0 ? 3U : 1U;
         for (std::size_t index = 0U;
@@ -4132,7 +4169,7 @@ private:
                 for (std::size_t value = 0U; value < values; ++value) {
                     write_scaled_delay(
                         delays->da[(index * kinds + kind) * values + value],
-                        triple[index], delays->time_type, instance);
+                        triples[kind][index], delays->time_type, instance);
                 }
             }
         }
@@ -4141,18 +4178,19 @@ private:
 
     // The annotated load port's net is a delayed copy (split_sdf_net_delays);
     // a write to the delays of an intermodule path or delay device retimes the
-    // copy's later transitions, as for a primitive's output. Several
-    // intermodule paths that end at one port map to its module input port
-    // delay by the longest (accMapToMipd "max", IEEE 1364-2005 Table 130); a
-    // port delay stands for itself. A run without a delay slot (no foreign
-    // library) has none to retime.
+    // copy's later transitions: the twelve delays and pulse limits of the
+    // driver's WriteNetDelay. Several intermodule paths that end at one port
+    // map to its module input port delay by the longest (accMapToMipd "max",
+    // IEEE 1364-2005 Table 130), transition by transition and limit by limit;
+    // a port delay stands for itself. A record on a select retimes the driver
+    // of the run of bits it names (a run has one driver).
     void retime_net_load(const std::uint32_t delay)
     {
         const auto& declared = net_delays()[delay];
         if (!declared.delayed) {
             return;
         }
-        runtime::simir::TransitionDelays applied;
+        runtime::simir::NetDelayTable applied;
         for (std::uint32_t other = 0U; other < net_delays().size(); ++other) {
             const auto& peer = net_delays()[other];
             if (!peer.delayed || peer.driver != declared.driver
@@ -4162,17 +4200,24 @@ private:
                     && peer.kind == elaboration::SdfNetDelayKind::port)) {
                 continue;
             }
-            const auto triple = net_delay_triple(net_delay_table(other));
-            applied.rise = std::max(applied.rise, triple[0]);
-            applied.fall = std::max(applied.fall, triple[1]);
-            applied.turnoff = std::max(applied.turnoff, triple[2]);
+            const auto table = net_delay_limits(other);
+            for (std::size_t index = 0U; index < applied.delay.size(); ++index) {
+                applied.delay[index]
+                    = std::max(applied.delay[index], table.delay[index]);
+                applied.reject[index]
+                    = std::max(applied.reject[index], table.reject[index]);
+                applied.error[index]
+                    = std::max(applied.error[index], table.error[index]);
+            }
         }
-        (void)simulation_.set_verilog_driver_delays(declared.driver, applied);
+        (void)simulation_.set_verilog_net_delay_table(declared.driver, applied);
     }
 
     // vpi_put_delays on an intermodule path replaces, or with append_flag adds
     // to, the rise and fall delays and, given three, the turn-off delay; the
-    // typical value of each triple is kept (IEEE 1800-2023 38.32).
+    // typical value of each triple is kept. With pulsere_flag the reject and
+    // error limits are put too, else they keep their values (IEEE 1800-2023
+    // 38.32).
     fsim_vpi_status_v1 net_put_delays(const std::uint32_t delay,
         const s_vpi_delay* const delays, fsim_vpi_service_result_v1& result)
     {
@@ -4184,9 +4229,16 @@ private:
             return FSIM_VPI_STATUS_NOT_FOUND;
         }
         const auto instance = instance_by_path(net_delays()[delay].instance);
+        // The reject and error limits as the twelve transitions, from the
+        // typical value of each limit row given.
+        const auto put_limits = [&](const std::vector<runtime::SimulationTick>& reject,
+                                    const std::vector<runtime::SimulationTick>& error) {
+            net_pulse_overrides_[delay] = { expanded_path_delays(reject),
+                expanded_path_delays(error) };
+        };
         if (delays->no_of_delays != 2 && delays->no_of_delays != 3) {
             const auto incoming = incoming_delay_rows(*delays,
-                net_rows(net_delay_table(delay)), instance);
+                net_limit_rows(delay), instance);
             const auto table = incoming ? net_table_of(*incoming) : std::nullopt;
             if (!table) {
                 error_message_ = "vpi_put_delays: the delay is not a valid "
@@ -4195,35 +4247,63 @@ private:
                 return FSIM_VPI_STATUS_NOT_FOUND;
             }
             net_delay_overrides_[delay].assign(table->begin(), table->end());
+            if (delays->pulsere_flag != 0) {
+                std::vector<runtime::SimulationTick> reject;
+                std::vector<runtime::SimulationTick> error;
+                for (const auto& row : *incoming) {
+                    reject.push_back(static_cast<runtime::SimulationTick>(
+                        std::max<std::int64_t>(row.reject[1U], 0)));
+                    error.push_back(static_cast<runtime::SimulationTick>(
+                        std::max<std::int64_t>(row.error[1U], 0)));
+                }
+                put_limits(reject, error);
+            }
             retime_net_load(delay);
             return succeed(result);
         }
         const std::size_t count = static_cast<std::size_t>(delays->no_of_delays);
         const std::size_t values = delays->mtm_flag != 0 ? 3U : 1U;
         const std::size_t kinds = delays->pulsere_flag != 0 ? 3U : 1U;
-        const auto previous = net_delay_triple(net_delay_table(delay));
-        std::vector<runtime::SimulationTick> table;
-        table.reserve(count);
-        for (std::size_t index = 0U; index < count; ++index) {
-            auto element = delays->da[index * kinds * values + values / 2U];
+        const auto before = net_delay_limits(delay);
+        const std::array<std::array<runtime::SimulationTick, 3U>, 3U> previous {
+            net_delay_triple(before.delay), net_delay_triple(before.reject),
+            net_delay_triple(before.error)
+        };
+        // The typical value of one delay (kind 0) or limit (1, 2) given.
+        const auto given = [&](const std::size_t kind, const std::size_t index)
+            -> std::optional<runtime::SimulationTick> {
+            auto element = delays->da[(index * kinds + kind) * values + values / 2U];
             element.type = delays->time_type;
             const auto converted = simulation_.systemverilog_vpi_time().convert_delay(
                 delay_of(element, instance));
             if (!converted) {
-                error_message_ = "vpi_put_delays: the delay is not a valid time";
-                error_ = true;
-                return FSIM_VPI_STATUS_NOT_FOUND;
+                return std::nullopt;
             }
-            table.push_back(delays->append_flag != 0
-                    ? previous[index] + converted.ticks
-                    : converted.ticks);
+            return delays->append_flag != 0
+                ? previous[kind][index] + converted.ticks
+                : converted.ticks;
+        };
+        std::array<std::vector<runtime::SimulationTick>, 3U> tables;
+        for (std::size_t kind = 0U; kind < kinds; ++kind) {
+            for (std::size_t index = 0U; index < count; ++index) {
+                const auto tick = given(kind, index);
+                if (!tick) {
+                    error_message_ = "vpi_put_delays: the delay is not a valid time";
+                    error_ = true;
+                    return FSIM_VPI_STATUS_NOT_FOUND;
+                }
+                tables[kind].push_back(*tick);
+            }
+            if (count == 2U) {
+                // Without a turn-off delay it follows from the other two.
+                tables[kind].push_back(std::min(tables[kind][0], tables[kind][1]));
+            }
         }
-        if (count == 2U) {
-            // Without a turn-off delay it follows from the other two.
-            table.push_back(std::min(table[0], table[1]));
-        }
-        const auto expanded = expanded_path_delays(table);
+        const auto expanded = expanded_path_delays(tables[0]);
         net_delay_overrides_[delay].assign(expanded.begin(), expanded.end());
+        if (delays->pulsere_flag != 0) {
+            put_limits(tables[1], tables[2]);
+        }
         retime_net_load(delay);
         return succeed(result);
     }
@@ -4309,6 +4389,56 @@ private:
         return succeed(result);
     }
 
+    // Asks the simulation to split the net of an input port that no SDF
+    // annotation split, so that its module input port delay delays what the
+    // instance behind the port reads (IEEE 1364-2005 16.2.4). Nothing is
+    // asked for a port whose delay is none, or one that an earlier refusal
+    // left undelayed.
+    void request_mipd_split(const std::uint32_t port,
+        const std::array<runtime::SimulationTick, 12U>& table,
+        const std::optional<std::uint32_t> bit = std::nullopt)
+    {
+        const bool delayed = std::ranges::any_of(table,
+            [](const runtime::SimulationTick tick) { return tick != 0U; });
+        if (!delayed && !simulation_.net_delay_split_pending()) {
+            return;
+        }
+        const auto object = reference_full_name(
+            simulation_.systemverilog_vpi_ports()[port]);
+        const auto signal = simulation_.design().find_signal(object);
+        if (!signal) {
+            return;
+        }
+        elaboration::SdfNetDelayInfo record;
+        record.kind = elaboration::SdfNetDelayKind::port;
+        record.identity = object;
+        const auto dot = object.rfind('.');
+        record.instance
+            = dot == std::string::npos ? std::string { } : object.substr(0U, dot);
+        record.destination.instance = record.instance;
+        record.destination.object = object;
+        record.destination.signal = *signal;
+        record.destination.port = true;
+        if (bit) {
+            // A port bit names one bit of the port (IEEE 1800-2023 37.14,
+            // 38.32; IEEE 1364-2005 23.1): a PORT record of that select,
+            // whose declared index follows the port's packed range.
+            const auto& range = simulation_.design().signals()[*signal].packed_range;
+            if (!range) {
+                return;
+            }
+            record.destination.select_width = 1U;
+            record.destination.select_left = range->descending
+                ? range->right + static_cast<std::int64_t>(*bit)
+                : range->right - static_cast<std::int64_t>(*bit);
+            record.destination.select_right = record.destination.select_left;
+            record.identity += '[' + std::to_string(record.destination.select_left) + ']';
+        }
+        record.source = record.destination;
+        record.delays.assign(table.begin(), table.end());
+        simulation_.request_net_delay_split(std::move(record));
+    }
+
     // vpi_put_delays on a module input port or one of its bits replaces, or
     // with append_flag adds to, the first no_of_delays transitions; the
     // module path rules expand them to the twelve.
@@ -4331,19 +4461,63 @@ private:
         }
         mipd_rows_[key] = net_rows(
             std::vector<runtime::SimulationTick>(table->begin(), table->end()));
-        // A whole port's delay retimes the delayed copy of its net; a bit's
-        // delay does not (the copy is the whole port).
-        if (key.bit == 0U) {
-            const auto applied = net_delay_triple(
-                std::vector<runtime::SimulationTick>(
-                    table->begin(), table->end()));
+        // A whole port's delay retimes the delayed copy of its net (the
+        // twelve delays, with the pulse limits of its SDF record); a bit's
+        // delay does not (the copy's driver writes a run of bits).
+        if (key.bit != 0U) {
+            // A bit's delay retimes the copy driver of the run of bits that
+            // names it, else asks for the split of that bit.
+            const auto offset = key.bit - 1U;
+            const auto object = reference_full_name(
+                simulation_.systemverilog_vpi_ports()[key.port]);
+            bool split { };
+            const auto signal = simulation_.design().find_signal(object);
+            const auto& range = signal
+                ? simulation_.design().signals()[*signal].packed_range
+                : std::optional<frontend::PackedRange> { };
+            if (range) {
+                const auto index = range->descending
+                    ? range->right + static_cast<std::int64_t>(offset)
+                    : range->right - static_cast<std::int64_t>(offset);
+                for (const auto& declared : net_delays()) {
+                    if (declared.delayed && declared.destination.object == object
+                        && declared.destination.select_width == 1U
+                        && declared.destination.select_left == index) {
+                        (void)simulation_.set_verilog_net_delay_table(declared.driver,
+                            elaboration::sdf_net_delay_table(
+                                *table, declared.reject, declared.error));
+                        split = true;
+                        break;
+                    }
+                }
+                const bool whole_split = std::ranges::any_of(net_delays(),
+                    [&](const auto& declared) {
+                        return declared.delayed
+                            && declared.destination.select_width == 0U
+                            && net_terminal_port(declared.destination) == key.port;
+                    });
+                if (!split && !whole_split) {
+                    request_mipd_split(key.port, *table, offset);
+                }
+            }
+        } else if (key.bit == 0U) {
+            bool split { };
             for (const auto& declared : net_delays()) {
                 if (declared.delayed
                     && net_terminal_port(declared.destination) == key.port) {
-                    (void)simulation_.set_verilog_driver_delays(declared.driver,
-                        { applied[0], applied[1], applied[2] });
+                    (void)simulation_.set_verilog_net_delay_table(declared.driver,
+                        elaboration::sdf_net_delay_table(
+                            *table, declared.reject, declared.error));
+                    split = true;
                     break;
                 }
+            }
+            // No annotation split the port's net: the first delay put on it
+            // splits it at the next safe point (Simulation::
+            // request_net_delay_split); until then, and for the puts that
+            // follow before the split, the request holds the latest delays.
+            if (!split) {
+                request_mipd_split(key.port, *table);
             }
         }
         return succeed(result);
@@ -15317,6 +15491,12 @@ private:
     std::unordered_map<std::uint32_t, DelayRows> check_delay_rows_;
     // The twelve delays vpi_put_delays gave an SDF net delay, by its index.
     std::map<std::uint32_t, std::vector<runtime::SimulationTick>> net_delay_overrides_;
+    // The twelve reject and error limits vpi_put_delays gave it with
+    // pulsere_flag set.
+    std::map<std::uint32_t,
+        std::pair<std::array<runtime::SimulationTick, 12U>,
+            std::array<runtime::SimulationTick, 12U>>>
+        net_pulse_overrides_;
     // The delays written to module input ports and port bits.
     std::map<MipdKey, DelayRows> mipd_rows_;
     std::uint64_t path_delay_hook_ { };

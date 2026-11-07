@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+vhdl sample p='X' quiet=true stable=true
+quiet=false p='1' at 5000000 fs
+stable=false p='1' at 5000000 fs
+quiet=true p='1' at 5000000 fs
+stable=true p='1' at 5000000 fs

@@ -3,6 +3,7 @@
 #include "application_phase_profile.hpp"
 #include "application_workspace_internal.hpp"
 #include "application_sdf_session.hpp"
+#include "application_sdf_vital_generics.hpp"
 #include "application_hierarchy_path_codec.hpp"
 #include "../elaboration/elaborated_design_process_access.hpp"
 #include "../systemc/producer_fingerprint.hpp"
@@ -1753,7 +1754,11 @@ int handle_elaborate(const cli::Invocation& invocation,
     const project::Config& config, diagnostic::Engine& diagnostics,
     std::ostream& output, std::ostream&)
 {
-    auto built = build_objects(config, invocation.objects,
+    // The VITAL cells of the SDF files annotate their timing generics while
+    // the design is built (IEEE 1076.4-2000 5.1.1).
+    auto build_config = config;
+    add_sdf_vital_inputs(build_config, invocation);
+    auto built = build_objects(build_config, invocation.objects,
         invocation.systemc_plugins, diagnostics);
     return elaborate_built_workspace(invocation, config, std::move(built),
         diagnostics, output);
@@ -1824,7 +1829,8 @@ static int handle_simulate_impl(
     if (!sdf_request.inputs.empty()) {
         auto planned = plan_sdf_session_inputs(
             built->design, built->time_resolution, built->cache_key,
-            sdf_request, { }, diagnostics);
+            sdf_request, { }, diagnostics,
+            { &built->design_ir, &built->systemverilog_hir });
         if (!planned)
             return 1;
         built->design = std::move(planned->design);

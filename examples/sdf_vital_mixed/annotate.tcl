@@ -1,4 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
-set summary [fsim::sdf configure mixed.sdf mixed_top {mixed_top.u_vital} typ 32]
-puts "generation=[dict get $summary generation]"
-puts "identity=[dict get $summary semantic_identity]"
+# The timing generics of a VITAL cell are constants of elaboration, so a Tcl
+# session cannot annotate them (IEEE 1076.4-2000 5.1.1); `fsim elaborate --sdf`
+# does. The session reports it.
+if {[catch {fsim::sdf configure mixed.sdf mixed_top {mixed_top.u_vital.u_core} typ 32} message]} {
+  puts "VITAL annotation is refused: $message"
+}

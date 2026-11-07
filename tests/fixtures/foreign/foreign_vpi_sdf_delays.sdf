@@ -10,7 +10,18 @@
   (CELL (CELLTYPE "top") (INSTANCE top)
     (DELAY (ABSOLUTE
       (INTERCONNECT u0.z u1.a (2) (3))
-      (INTERCONNECT u2.z u3.a (2) (3)))))
+      (INTERCONNECT u2.z u3.a (2) (3))
+      (INTERCONNECT u4.z[1] u5.a[1] (2) (3))
+      (INTERCONNECT u6.z u8.a (2))
+      (INTERCONNECT u7.z u8.a (7))
+      (INTERCONNECT u10.z u11.a (3) (4))
+      (INTERCONNECT ux.z uxp.a (2) (3) (4) (5) (6) (7) (8) (9) (10) (11) (12) (13))
+      (INTERCONNECT up.z upp.a ((10) (3) (6)) ((8) (2) (5)))
+      (INTERCONNECT u12.z u13.a (5) (6))
+      (PORT tin (3) (5)))))
+  (CELL (CELLTYPE "bus") (INSTANCE top.u5)
+    (DELAY (ABSOLUTE
+      (PORT a[3:2] (5)))))
   (CELL (CELLTYPE "drv") (INSTANCE top.u1)
     (DELAY (ABSOLUTE
       (PORT a (4))))))

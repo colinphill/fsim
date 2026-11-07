@@ -150,6 +150,167 @@ static void put(const char* label, vpiHandle path, double first, double second,
     delays(label, path, 3, 0, 0, vpiScaledRealTime);
 }
 
+// --- the load and the source of a delayed net (IEEE 1364-2005 16.2.4) -------
+//
+// The load port, and what lies at or below its instance, shows the delayed
+// value and reports its changes late; the source side shows the net at once.
+
+static void show(const char* name)
+{
+    s_vpi_value value = { vpiBinStrVal, { 0 } };
+    vpiHandle object = named(name);
+    if (object == NULL) {
+        vpi_printf(" %s=missing", name);
+        return;
+    }
+    vpi_get_value(object, &value);
+    vpi_printf(" %s=%s", name, value.value.str != NULL ? value.value.str : "none");
+}
+
+// The low or high connection of the port `a` of top.u1, as a value.
+static void show_connection(const char* label, PLI_INT32 relation)
+{
+    s_vpi_value value = { vpiBinStrVal, { 0 } };
+    vpiHandle port = port_named(named("top.u1"), "a");
+    vpiHandle object = port != NULL ? vpi_handle(relation, port) : NULL;
+    if (object == NULL) {
+        vpi_printf(" %s=missing", label);
+        return;
+    }
+    vpi_get_value(object, &value);
+    vpi_printf(" %s=%s", label, value.value.str != NULL ? value.value.str : "none");
+}
+
+static void begin_sample(void)
+{
+    s_vpi_time now = { vpiSimTime, 0, 0, 0.0 };
+    vpi_get_time(NULL, &now);
+    vpi_printf("#c at %u", (unsigned)now.low);
+}
+
+// The net of the INTERCONNECT u0.z to u1.a (which a PORT delay and the
+// plug-in's puts retime): the source ports read the net, the load port and its
+// low connection the delayed copy, its high connection the net.
+static PLI_INT32 sample_interconnect(p_cb_data data)
+{
+    (void)data;
+    begin_sample();
+    show("top.w");
+    show("top.u0.z");
+    show("top.u1.a");
+    show_connection("low", vpiLowConn);
+    show_connection("high", vpiHighConn);
+    vpi_printf("\n");
+    return 0;
+}
+
+// The same for the INTERCONNECT u10.z to u11.a, whose changes the plug-in
+// also watches.
+static PLI_INT32 sample_watched(p_cb_data data)
+{
+    (void)data;
+    begin_sample();
+    show("top.w5");
+    show("top.u11.a");
+    vpi_printf("\n");
+    return 0;
+}
+
+// A PORT delay on a port of the design itself: the plug-in drives the port,
+// so the port object keeps what was driven while the instance below the
+// design reads the delayed copy.
+static PLI_INT32 sample_top_port(p_cb_data data)
+{
+    (void)data;
+    begin_sample();
+    show("top.tin");
+    show("top.u9.a");
+    vpi_printf("\n");
+    return 0;
+}
+
+static PLI_INT32 changed(p_cb_data data)
+{
+    s_vpi_time now = { vpiSimTime, 0, 0, 0.0 };
+    s_vpi_value value = { vpiBinStrVal, { 0 } };
+    vpi_get_value(data->obj, &value);
+    vpi_get_time(NULL, &now);
+    vpi_printf("#c vcb %s=%s t=%u\n", (const char*)data->user_data,
+        value.value.str != NULL ? value.value.str : "none", (unsigned)now.low);
+    return 0;
+}
+
+// A value-change callback on the object `name`; the load's fires when the
+// delayed copy changes, the source's with the net.
+static void watch(const char* name)
+{
+    static s_vpi_time times[4];
+    static s_vpi_value values[4];
+    static int used;
+    s_cb_data callback;
+    vpiHandle object = named(name);
+    if (object == NULL || used == 4) {
+        vpi_printf("#c vcb %s missing\n", name);
+        return;
+    }
+    times[used].type = vpiSuppressTime;
+    values[used].format = vpiSuppressVal;
+    memset(&callback, 0, sizeof callback);
+    callback.reason = cbValueChange;
+    callback.cb_rtn = changed;
+    callback.obj = object;
+    callback.time = &times[used];
+    callback.value = &values[used];
+    callback.user_data = (PLI_BYTE8*)name;
+    ++used;
+    vpi_register_cb(&callback);
+}
+
+// The routine runs `ticks` simulation ticks after time zero.
+static void at(PLI_UINT32 ticks, PLI_INT32 (*routine)(p_cb_data))
+{
+    static s_vpi_time times[16];
+    static int used;
+    s_cb_data callback;
+    if (used == 16) {
+        return;
+    }
+    times[used].type = vpiSimTime;
+    times[used].high = 0;
+    times[used].low = ticks;
+    memset(&callback, 0, sizeof callback);
+    callback.reason = cbAfterDelay;
+    callback.cb_rtn = routine;
+    callback.time = &times[used++];
+    vpi_register_cb(&callback);
+}
+
+static void drive_top_port(PLI_INT32 bit)
+{
+    s_vpi_value value;
+    vpiHandle object = named("top.tin");
+    if (object == NULL) {
+        return;
+    }
+    value.format = vpiIntVal;
+    value.value.integer = bit;
+    vpi_put_value(object, &value, NULL, vpiNoDelay);
+}
+
+static PLI_INT32 drive_high(p_cb_data data)
+{
+    (void)data;
+    drive_top_port(1);
+    return 0;
+}
+
+static PLI_INT32 drive_low(p_cb_data data)
+{
+    (void)data;
+    drive_top_port(0);
+    return 0;
+}
+
 static PLI_INT32 check(p_cb_data data)
 {
     vpiHandle z;
@@ -225,6 +386,17 @@ static PLI_INT32 check(p_cb_data data)
     return 0;
 }
 
+// The value changes of the source and of the load of an INTERCONNECT delay,
+// watched once the start-up transitions of the delayed copy have settled
+// (the simulation time is in picoseconds).
+static PLI_INT32 start_watching(p_cb_data data)
+{
+    (void)data;
+    watch("top.w5");
+    watch("top.u11.a");
+    return 0;
+}
+
 static PLI_INT32 start(p_cb_data data)
 {
     s_cb_data callback;
@@ -235,6 +407,22 @@ static PLI_INT32 start(p_cb_data data)
     callback.cb_rtn = check;
     callback.time = &time;
     vpi_register_cb(&callback);
+    // Samples between the changes of the delayed nets.
+    at(5000, start_watching);
+    at(23500, sample_interconnect);
+    at(30000, sample_interconnect);
+    at(43500, sample_interconnect);
+    at(49000, sample_interconnect);
+    at(11000, sample_watched);
+    at(15000, sample_watched);
+    at(26500, sample_watched);
+    at(30500, sample_watched);
+    at(56000, drive_high);
+    at(57500, sample_top_port);
+    at(60500, sample_top_port);
+    at(62000, drive_low);
+    at(64000, sample_top_port);
+    at(68500, sample_top_port);
     return 0;
 }
 

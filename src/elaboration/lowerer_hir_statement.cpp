@@ -9193,10 +9193,18 @@ bool Lowerer::lower_hir_statement_unsuspended(
             if ((signal_assignment && !continuous_assignment)
                 || input.assignment_control
                     != semantic::sv::AssignmentControl::none
-                || input.delay
+                || (input.delay && !continuous_assignment)
                 || hir_update_reevaluates_target(input)
                 || !width || *width == 0U) {
                 return assignment_rejected(__LINE__);
+            }
+            // A constant delay applies to every part (IEEE 1800-2023 10.3.3).
+            std::optional<TransitionDelays> part_delays;
+            if (input.delay) {
+                part_delays = transition_delay(*input.delay);
+                if (!part_delays) {
+                    return assignment_rejected(__LINE__);
+                }
             }
             auto lowered = lower_hir_expression(*value, *width);
             if (!lowered) {
@@ -9207,7 +9215,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     *lowered, *width, hir_expression_signed(*value));
             }
             return lower_hir_packed_copy_out(
-                *target, *lowered, packed_copy_out_mode);
+                *target, *lowered, packed_copy_out_mode, part_delays);
         }
         // `obj.v[i]` of a multidimensional array is a subarray, written
         // through a value path below.
@@ -21055,6 +21063,18 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 hir_expression_signed(*expression),
                 frontend::SystemVerilogScalarKind::Real);
         }
+        // A std_logic value shared with VHDL displays in four states (IEEE
+        // 1800-2023 21.2.1.3): the copy reads 'U', 'W' and '-' as x.
+        if (*displayed_value < register_domains_.size()
+            && register_domains_[*displayed_value]
+                == frontend::ValueDomain::Logic9) {
+            const auto four_state = allocate_register(
+                register_width(*displayed_value),
+                frontend::ValueDomain::Logic4);
+            process_.operations.emplace_back(
+                CopyRegister { four_state, *displayed_value });
+            displayed_value = four_state;
+        }
         emit_deferred_assertion_action_handoff();
         process_.operations.emplace_back(FormatDisplay {
             *displayed_value,
@@ -25343,6 +25363,20 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     }
                     waited_signals.push_back(*denoted);
                     whole_signals.push_back(*denoted);
+                    continue;
+                }
+                // S'STABLE(T) and S'QUIET(T) are signals of their own.
+                if (const auto state = sensitivity.expression
+                        ? hir_vhdl_implicit_state_attribute(
+                              *sensitivity.expression, hir_process_scope_)
+                        : std::nullopt) {
+                    const auto derived = vhdl_implicit_state_signal(
+                        *state, hir_source_span(sensitivity.source));
+                    if (!derived) {
+                        return true;
+                    }
+                    waited_signals.push_back(*derived);
+                    whole_signals.push_back(*derived);
                     continue;
                 }
                 // S'TRANSACTION is a signal of its own that toggles on each

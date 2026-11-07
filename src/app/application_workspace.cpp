@@ -3,6 +3,7 @@
 #include "application_phase_profile.hpp"
 #include "application_workspace_internal.hpp"
 #include "application_workspace_selection.hpp"
+#include "application_sdf_vital_generics.hpp"
 
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/artifact/design.hpp"
@@ -138,6 +139,7 @@ int handle_workspace_elaborate(const cli::Invocation& invocation, const project:
         output << "  loading " << selection->objects.size() << " HDL object(s) and "
                << selection->plugins.size() << " SystemC plugin(s)\n";
     }
+    add_sdf_vital_inputs(selected_config, invocation);
     auto built = build_workspace_objects(selected_config, selection->objects, selection->plugins, diagnostics);
     if (!built) {
         return 1;

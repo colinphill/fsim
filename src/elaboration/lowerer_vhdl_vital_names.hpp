@@ -18,6 +18,25 @@ namespace fsim::elaboration::vital_detail {
         separator == std::string_view::npos ? 0U : separator + 1U);
 }
 
+// Whether a type name is a standard-logic type that a VITAL signal may have
+// (std_ulogic and std_logic, their vectors, and the subtypes of
+// IEEE 1076.4-2000 9.1). A signal of such a type that a SystemVerilog net
+// or variable carries is stored in the four-state domain; its VHDL type, not
+// the storage of the other language, decides whether VITAL may use it
+// (IEEE 1800-2023 23.11 and IEEE 1076-2019 6.5.6.3 give the port mapping).
+[[nodiscard]] inline bool vital_standard_logic_type_name(
+    const std::string_view name) noexcept
+{
+    for (const std::string_view candidate :
+        { "std_logic", "std_ulogic", "std_logic_vector", "std_ulogic_vector",
+            "x01", "x01z", "ux01", "ux01z" }) {
+        if (elaboration_detail::equal_ignoring_ascii_case(name, candidate)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // Whether a name is unqualified or selected from `package`, optionally
 // through library IEEE.
 [[nodiscard]] inline bool has_vital_package_qualification(

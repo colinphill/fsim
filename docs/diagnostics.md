@@ -348,7 +348,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SDF-SCOPE-004` | error | An SDF annotation scope targets a stale elaborated-design identity. |
 | `FSIM-SDF-SCOPE-005` | error | SDF annotation scope construction exceeds the configured root-count or semantic-identity byte limit. |
 | `FSIM-SDF-RESOLVE-001` | error | SDF cell resolution encounters an incomplete/stale scope, a missing semantic parent/root, or duplicate elaborated instance ownership. |
-| `FSIM-SDF-RESOLVE-002` | error | An SDF CELLTYPE and INSTANCE selector has no match in the selected elaborated roots; the message includes deterministic candidate paths and types. |
+| `FSIM-SDF-RESOLVE-002` | error | An SDF CELLTYPE and INSTANCE selector has no match in the selected elaborated roots (for a VHDL cell, a block or generate label that does not exist, or a generate bit spec outside the FOR range, IEEE 1076.4-2000 5.2.4); the message includes deterministic candidate paths and types. |
 | `FSIM-SDF-RESOLVE-003` | error | A non-wildcard SDF cell selector resolves ambiguously to multiple elaborated instances. |
 | `FSIM-SDF-RESOLVE-005` | error | SDF cell resolution exceeds a configured candidate, match, diagnostic-candidate, or semantic-identity limit. |
 | `FSIM-SDF-ENDPOINT-001` | error | SDF endpoint resolution encounters incomplete, stale, duplicate, or structurally invalid resolved-cell or normalized-IR state. |
@@ -383,6 +383,17 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SDF-PLAN-002` | error | A resolved SDF annotation has no compatible elaborated timing target or has an empty/unsupported source or proposed value arity. |
 | `FSIM-SDF-PLAN-003` | error | Multiple resolved SDF annotations claim the same timing-target kind, identity, and construct ownership key. |
 | `FSIM-SDF-PLAN-004` | error | SDF target planning exceeds its configured annotation, values-per-annotation, or identity-byte limit. |
+| `FSIM-SDF-VITAL-001` | error | An SDF construct that annotates a VITAL timing generic has no translation to a legal VHDL identifier: the generic name built by the VITAL SDF map (IEEE 1076.4-2000 5.2) or the port or condition it uses is not a basic identifier (an escaped identifier, a double or trailing underscore, an untranslatable condition operator). |
+| `FSIM-SDF-VITAL-002` | error | The generic name that the VITAL SDF map builds from an SDF entry is not declared by the entity of the annotated instance (IEEE 1076.4-2000 5.2). |
+| `FSIM-SDF-VITAL-003` | error | A VITAL timing generic cannot take the annotation: it is not a VITAL delay type (`VitalDelayType`, `VitalDelayType01`, `VitalDelayType01Z`, `VitalDelayType01ZX`), its present value cannot be evaluated for an `INCREMENT` or null value, or the SDF delay list does not have one, two, three, six or twelve values. |
+| `FSIM-SDF-VITAL-004` | error | A VITAL timing generic holds fewer delay values than the SDF entry specifies (IEEE 1076.4-2000 5.2.6). |
+| `FSIM-SDF-VITAL-006` | error | The instance that an SDF `PORT` or `INTERCONNECT` names below the cell's instance is not an elaborated instance of the design. |
+| `FSIM-SDF-VITAL-007` | error | An SDF entry of a VITAL cell selects a bit or a range of a bus port, but the timing generic it names is not a vector delay type (IEEE 1076.4-2000 5.2.7.3.3). |
+| `FSIM-SDF-VITAL-008` | error | An SDF file given to a session after elaboration (`fsim simulate --sdf`, Tcl, the C and C++ APIs) names VHDL cells; their VITAL timing generics are elaboration constants and are annotated only by `fsim elaborate --sdf`. |
+| `FSIM-SDF-VITAL-010` | error | An SDF delay list of a VITAL cell has more than twelve values. |
+| `FSIM-SDF-VITAL-011` | error | The `RETAIN` delays of an SDF `IOPATH` violate the restrictions of IEEE 1076.4-2000 5.2.6 (Table 2): more than three retain values, more than six delays, three retain values or tristate delays on a generic that is not `VitalDelayType01ZX`, or a generic without the zero-to-Z and one-to-Z transitions. |
+| `FSIM-SDF-VITAL-012` | error | The row-dominant index mapping of IEEE 1076.4-2000 5.2.7.3.3.1 or 5.2.7.3.3.2 fails for an SDF entry on a vector delay generic: no port of the entry has an index, a port has no static range, `abs(r - i2) != abs(c - j2)` for two bus ports, or the computed index is outside the generic. |
+| `FSIM-SDF-VITAL-013` | error | The multiple source mode of an interconnect delay generic (IEEE 1076.4-2000 5.2.7.1.5, 6.4.1) cannot be set up: no unique `VitalWireDelay` call (for a vector generic, one for each element with a second source) uses it, the actual of its `InSig` port has no driver, an SDF source drives no part of the net, two ports of one instance are sources of one element, or a driver reads the net or writes it with an operation the per-source shadow write does not cover. Nothing is approximated. |
 | `FSIM-SDF-VITAL-PLAN-001` | error | VHDL/VITAL target planning receives incomplete or stale IR, cell, mapping, summary, cell-type, language, count, or limit state. |
 | `FSIM-SDF-VITAL-PLAN-002` | error | A resolved VHDL SDF cell has no unique elaborated entity, architecture, or configuration specialization binding. |
 | `FSIM-SDF-VITAL-PLAN-003` | error | A resolved VHDL SDF endpoint disagrees with its elaborated port/net identity, type, width, direction, select, or language boundary. |
@@ -505,8 +516,9 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SDF-CONTROL-004` | error | SDF control inputs, source bytes, bounded report entries, or immutable semantic identity exceed the configured resource limit. |
 | `FSIM-SDF-SESSION-001` | error | A session SDF input cannot be read within the file-body limit, or the design, time resolution or retained baseline is invalid. |
 | `FSIM-SDF-SESSION-002` | error | Session SDF selection contains no applicable annotations or an invalid selected target scope. |
-| `FSIM-SDF-SESSION-003` | error | A session SDF request contains a planned target family outside connected specify-path, timing-check, `INTERCONNECT` and `PORT` support, or an `INTERCONNECT` or `PORT` annotation without a complete effective delay. |
-| `FSIM-SDF-SESSION-004` | warning | An SDF `INTERCONNECT` or `PORT` delay is recorded and published through VPI but does not delay the net in simulation: its load is a top-level port or a select of a port, the sources of the load end with different delays (one delayed copy serves all of them), no process of the load instance reads the port, or one writes it or uses an operation the net split does not cover. |
+| `FSIM-SDF-SESSION-003` | error | A session SDF request contains a planned target family outside connected specify-path, timing-check, `INTERCONNECT`, `PORT` and `NETDELAY` support, or an `INTERCONNECT`, `PORT` or `NETDELAY` annotation without a complete effective delay. |
+| `FSIM-SDF-SESSION-004` | warning | An SDF `INTERCONNECT`, `PORT` or `NETDELAY` delay is recorded and published through VPI but does not delay the net in simulation: its load is a select outside the port's range, a port of the design itself that a process of the design also drives, or a port no process of whose instance reads, or whose net no process outside the instance drives; a `NETDELAY` net reaches no input or inout port of a Verilog or SystemVerilog instance; a driver writes the net with an operation the per-source dual write does not cover, or a port connection process uses an operation that cannot be remapped; or a switch (`tran`, `rtran`, `tranif`) sits inside the load instance on the port or on a net with per-source delays, which IEEE 1364-2005 16.2.4 (a delay only between module ports, never between primitive pins) gives no delay across. |
+| `FSIM-SDF-SESSION-005` | warning | An SDF `INTERCONNECT` names a source port that drives nothing on its load's net (the port is not on the net), so the delay is annotated anyway as the delay from all sources, like a `PORT` delay (IEEE 1364-2005 16.2.4). |
 | `FSIM-SDF-EFFECTIVE-001` | error | Effective SDF persistence receives incomplete identities, generation, policy, exact-value records, or producer-relative provenance. |
 | `FSIM-SDF-EFFECTIVE-002` | error | An effective SDF object, design, library, native-cache, or checkpoint archive has a stale schema, wrong artifact kind, malformed/truncated envelope, trailing data, or checksum corruption. |
 | `FSIM-SDF-EFFECTIVE-003` | error | Effective SDF persistence finds duplicate target ownership or a producer, policy, generation, target, or provenance identity incompatible with the consumer. |
@@ -2247,8 +2259,8 @@ scheduler.
 | `FSIM-ELAB-VHTEXTIO-001` | error | `readline` or `writeline` does not have one text-file and one writable `line` actual. |
 | `FSIM-ELAB-VHTEXTIO-002` | error | A selected TextIO `read` or `write` line actual is not writable. |
 | `FSIM-ELAB-VHTEXTIO-003` | error | A TextIO `read` or `write` profile has an invalid actual count or no value actual. |
-| `FSIM-ELAB-VHTEXTIO-004` | error | A TextIO `read` value is not a writable bounded scalar. |
-| `FSIM-ELAB-VHTEXTIO-005` | error | A TextIO `read` value type is outside the bounded integer, Boolean, and bit profiles. |
+| `FSIM-ELAB-VHTEXTIO-004` | error | A TextIO `read` value is not a writable bounded scalar, or an `hread`/`oread` value is not a writable bounded `bit_vector` or `std_ulogic_vector` (a `std_ulogic` selection needs static bounds). |
+| `FSIM-ELAB-VHTEXTIO-005` | error | A TextIO `read` value type is outside the bounded integer, Boolean, bit, character, real, string, `std_ulogic`, and `std_ulogic_vector` profiles. |
 | `FSIM-ELAB-VHTEXTIO-006` | error | A TextIO `read` `good` actual is not a writable Boolean. |
 | `FSIM-ELAB-VHTEXTIO-007` | error | A TextIO `write` justification is not the static `left` or `right` value. |
 | `FSIM-ELAB-VHTEXTIO-008` | error | A TextIO `write` field is not a static value in the bounded range 0 through 4096. |
@@ -2887,7 +2899,7 @@ scheduler.
 | `FSIM-ELAB-BIND-026` | error | An instance port is connected more than once. |
 | `FSIM-ELAB-BIND-027` | error | A boundary actual is not a whole signal, an input is illegally open, or a required VHDL direct-entity input is unassociated. |
 | `FSIM-ELAB-BIND-028` | error | A boundary actual names an unknown parent signal. |
-| `FSIM-ELAB-BIND-030` | error | A cross-language `inout` lacks an explicit resolver. |
+| `FSIM-ELAB-BIND-030` | error | A cross-language `inout` whose actual is unresolved lacks an explicit resolver. |
 | `FSIM-ELAB-BIND-031` | error | Same-language VHDL packed-array boundary bounds or direction differ. |
 | `FSIM-ELAB-BIND-032` | error | More than one preconstructed SystemC description names the same instance path. |
 | `FSIM-ELAB-BIND-033` | error | A preconstructed SystemC instance was not reached from the selected top. |

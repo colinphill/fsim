@@ -251,7 +251,18 @@ bool Lowerer::lower_hir_vhdl_vital_timing_call(
             valid = false;
             return std::nullopt;
         }
-        if (binding->domain != frontend::ValueDomain::Logic9) {
+        // A signal that a SystemVerilog net carries is stored in the
+        // four-state domain; its VHDL type decides (see
+        // vital_standard_logic_type_name).
+        const auto declared_type = binding->domain
+                == frontend::ValueDomain::Logic4
+            ? hir_vhdl_expression_subtype(*expression)
+            : std::nullopt;
+        const bool four_state_storage = declared_type
+            && vital_standard_logic_type_name(
+                vital_simple_name(declared_type->type_mark.spelling));
+        if (binding->domain != frontend::ValueDomain::Logic9
+            && !four_state_storage) {
             report("FSIM-ELAB-VITAL-012",
                 "VITAL timing formal '" + std::string { formal }
                     + "' requires a std_ulogic signal or vector",

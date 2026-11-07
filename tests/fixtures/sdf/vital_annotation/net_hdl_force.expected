@@ -1,0 +1,5 @@
+TRACE a=1 t=23
+TRACE a=z t=42
+TRACE a=0 t=62
+TRACE a=z t=82
+TRACE a=1 t=104

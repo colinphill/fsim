@@ -1,0 +1,16 @@
+// SPDX-License-Identifier: Apache-2.0
+(DELAYFILE
+  (SDFVERSION "4.0")
+  (DESIGN "top")
+  (DIVIDER .)
+  (TIMESCALE 1ns)
+  (CELL (CELLTYPE "top") (INSTANCE top)
+    (DELAY (ABSOLUTE
+      (INTERCONNECT uda.z pd.a (2) (3) (2) (4) (2) (6) (2) (2) (2) (2) (2) (2))
+      (INTERCONNECT udb.z pd.a (5) (5) (5) (3) (5) (2) (5) (5) (5) (5) (5) (5))
+      (INTERCONNECT ufa.z pf.a (2) (3) (2) (4) (2) (6) (2) (2) (2) (2) (2) (2))
+      (INTERCONNECT ufb.z pf.a (5) (5) (5) (3) (5) (2) (5) (5) (5) (5) (5) (5))
+      (INTERCONNECT ura.z pr.a (2) (3) (2) (4) (2) (6) (2) (2) (2) (2) (2) (2))
+      (INTERCONNECT urb.z pr.a (5) (5) (5) (3) (5) (2) (5) (5) (5) (5) (5) (5))
+      (INTERCONNECT uva.z pv.a (2) (3) (2) (4) (2) (6) (2) (2) (2) (2) (2) (2))
+      (INTERCONNECT uvb.z pv.a (5) (5) (5) (3) (5) (2) (5) (5) (5) (5) (5) (5))))))

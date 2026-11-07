@@ -64,6 +64,7 @@ std::optional<SignalId> written_signal(const Operation& operation)
             || std::is_same_v<T, WriteAfterDynamicPartSlice>
             || std::is_same_v<T, WriteInertial>
             || std::is_same_v<T, WriteInertialSlice>
+            || std::is_same_v<T, WriteNetDelay>
             || std::is_same_v<T, WriteInertialDynamicSlice>
             || std::is_same_v<T, WriteInertialDynamicPartSlice>
             || std::is_same_v<T, WriteProjected>

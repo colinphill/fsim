@@ -1,0 +1,12 @@
+// SPDX-License-Identifier: Apache-2.0
+// A path delay and the timing checks of a flip-flop, SDF 3.0.
+(DELAYFILE
+  (SDFVERSION "3.0")
+  (DESIGN "tb_check")
+  (TIMESCALE 1ns)
+  (CELL (CELLTYPE "vff") (INSTANCE tb_check.u)
+    (DELAY (ABSOLUTE (IOPATH (posedge clk) q (2:2:2) (3:3:3))))
+    (TIMINGCHECK
+      (SETUPHOLD d (posedge clk) (4:4:4) (2:2:2))
+      (WIDTH (posedge clk) (5:5:5))
+      (PERIOD (posedge clk) (12:12:12)))))

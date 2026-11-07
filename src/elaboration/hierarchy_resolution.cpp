@@ -780,6 +780,7 @@ HierarchyBuilder::rewrite_eligible_element_net_families()
                     || std::is_same_v<Type, WriteUpdateSlice>
                     || std::is_same_v<Type, WriteAfterSlice>
                     || std::is_same_v<Type, WriteInertialSlice>
+                    || std::is_same_v<Type, WriteNetDelay>
                     || std::is_same_v<Type, WriteProjectedSlice>
                     || std::is_same_v<Type, WriteBlockingDynamicSlice>
                     || std::is_same_v<Type, WriteUpdateDynamicSlice>
@@ -2829,6 +2830,39 @@ void HierarchyBuilder::validate_process_drivers()
         return resolution == ResolutionKind::std_logic
             || resolution == ResolutionKind::sv_wire;
     };
+    // A net on a VHDL inout keeps nine values only for its resolution: with
+    // one process of the port's instance driving every bit and no other
+    // source, the net's value is that driver's value through the logic
+    // mapping, which a four-state net applies on the write ('H' is 1), so
+    // the net goes back to four states and the kernel can own it.
+    for (const auto signal : vhdl_inout_nine_value_nets_) {
+        auto& net = design_.signals_[signal];
+        const auto ports = vhdl_port_sources_.find(signal);
+        const auto writers = driver_processes.find(signal);
+        if (net.value_kind != runtime::simir::ValueKind::logic9
+            || ports == vhdl_port_sources_.end() || ports->second.size() != 1U
+            || writers == driver_processes.end()
+            || writers->second.size() != 1U
+            || !net.vhdl_conversion_drivers.empty()) {
+            continue;
+        }
+        const auto view = design_.process_view(writers->second.front());
+        if (!inside(view.name(), ports->second.front().instance)
+            || std::ranges::none_of(view.driver_regions(),
+                [&](const runtime::simir::Process::DriverRegion& region) {
+                    return region.signal == signal
+                        && (region.whole || region.width == 0U
+                            || (region.offset == 0U
+                                && region.width
+                                    == net.initial_value.width()));
+                })) {
+            continue;
+        }
+        net.value_kind = runtime::simir::ValueKind::logic4;
+        net.initial_value = runtime::collapse_to_logic4(net.initial_value);
+        design_.signal_info_[signal].source_domain
+            = frontend::ValueDomain::Logic4;
+    }
     for (const auto& [signal, ports] : vhdl_port_sources_) {
         auto& initial = design_.signals_.at(signal).initial_value;
         if (!port_resolved(design_.signals_[signal].resolution)
@@ -2881,6 +2915,14 @@ void HierarchyBuilder::validate_process_drivers()
         initial = design_.signals_[signal].resolution == ResolutionKind::sv_wire
             ? runtime::collapse_to_logic4(*resolved)
             : std::move(*resolved);
+        // A net on a VHDL inout keeps nine values (see
+        // connect_compiled_boundary_port) but holds only mapped four-state
+        // ones.
+        if (design_.signals_[signal].value_kind
+                == runtime::simir::ValueKind::logic9
+            && !initial.is_logic9()) {
+            initial = initial.promoted_to_logic9();
+        }
     }
     // A port is a source of its actual (IEEE 1076-2008 14.7.3.2): a scalar
     // subelement of an out or inout port that no source inside its instance
@@ -2941,6 +2983,9 @@ void HierarchyBuilder::validate_process_drivers()
             }
             if (state.resolution == ResolutionKind::sv_wire) {
                 value = runtime::collapse_to_logic4(value);
+                if (state.value_kind == runtime::simir::ValueKind::logic9) {
+                    value = value.promoted_to_logic9();
+                }
             }
             Process driver;
             driver.id = static_cast<ProcessId>(design_.process_count());

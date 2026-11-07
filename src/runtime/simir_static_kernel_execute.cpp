@@ -26,8 +26,8 @@ namespace kw = kernel_word;
 namespace {
 
 /// Bits offset .. offset + width - 1 (width 1 to 64) of the wide register
-/// at storage index `base` with `chunks` chunks, and their 'U' mask when it
-/// has 'U' masks (packed_field: X past its chunks).
+/// at storage index `base` with `chunks` chunks, and their 'U' and weak
+/// masks when it has masks (packed_field: X past its chunks).
 [[nodiscard]] kw::UWord wide_field(const kw::Word* registers,
     const std::uint32_t base, const std::uint32_t chunks, const bool unknown,
     const std::uint32_t offset, const std::uint32_t width) noexcept
@@ -35,21 +35,23 @@ namespace {
     const auto word = offset / 64U;
     const auto shift = offset % 64U;
     if (word >= chunks) {
-        return { kw::all_x(width), 0U };
+        return { kw::all_x(width), 0U, 0U };
     }
     const auto low = registers[base + word];
     kw::Word value { low.a >> shift, low.b >> shift };
     std::uint64_t mask = unknown ? registers[base + chunks + word].a >> shift : 0U;
+    std::uint64_t weak = unknown ? registers[base + chunks + word].b >> shift : 0U;
     if (shift != 0U && shift + width > 64U && word + 1U < chunks) {
         const auto high = registers[base + word + 1U];
         value.a |= high.a << (64U - shift);
         value.b |= high.b << (64U - shift);
         if (unknown) {
             mask |= registers[base + chunks + word + 1U].a << (64U - shift);
+            weak |= registers[base + chunks + word + 1U].b << (64U - shift);
         }
     }
     const auto m = kw::mask(width);
-    return { { value.a & m, value.b & m }, mask & m };
+    return { { value.a & m, value.b & m }, mask & m, weak & m };
 }
 
 } // namespace
@@ -99,9 +101,18 @@ void Interpreter::Impl::StaticKernel::execute_body(
         return shadow_base != 0U && reg < shadow_base && body.tracked[reg] != 0U
             ? registers[shadow_base + reg].a : 0U;
     };
-    const auto set_unknown = [&](const std::uint32_t reg, const std::uint64_t value) {
+    // The weak mask: the shadow word's `b`, only in a design with weak
+    // elements (CompiledBody::weak).
+    const bool weak_body = body.weak != 0U;
+    const auto weak = [&](const std::uint32_t reg) -> std::uint64_t {
+        return weak_body && shadow_base != 0U && reg < shadow_base
+                && body.tracked[reg] != 0U
+            ? registers[shadow_base + reg].b : 0U;
+    };
+    const auto set_unknown = [&](const std::uint32_t reg, const std::uint64_t value,
+                                 const std::uint64_t weak_value = 0U) {
         if (shadow_base != 0U && reg < shadow_base && body.tracked[reg] != 0U) {
-            registers[shadow_base + reg] = { value, 0U };
+            registers[shadow_base + reg] = { value, weak_value };
         }
     };
     try {
@@ -126,22 +137,32 @@ void Interpreter::Impl::StaticKernel::execute_body(
         // 'U' mask of the result, from the operands before the instruction
         // overwrites one of them.
         std::uint64_t result_unknown = 0U;
+        // The weak mask of the result: the copy-like operations carry it,
+        // the logic operations produce none (their tables give 0, 1, X
+        // and U only).
+        std::uint64_t result_weak = 0U;
         if ((mode & u_aware) != 0U) {
             switch (inst.op) {
             case KOp::constant:
                 result_unknown = constant_unknown(inst.offset, inst.aux);
+                result_weak = constant_weak(inst.x, inst.y);
                 break;
             case KOp::copy:
                 result_unknown = unknown(inst.x);
+                result_weak = weak(inst.x);
                 break;
             case KOp::extract:
                 result_unknown = inst.sub >= 2U ? 0U
                     : (unknown(inst.x) >> inst.offset) & kw::mask(inst.width);
+                result_weak = inst.sub >= 2U ? 0U
+                    : (weak(inst.x) >> inst.offset) & kw::mask(inst.width);
                 break;
             case KOp::insert: {
                 const auto field = kw::mask(inst.width) << inst.offset;
                 result_unknown = (unknown(inst.x) & ~field)
                     | ((unknown(inst.y) << inst.offset) & field);
+                result_weak = (weak(inst.x) & ~field)
+                    | ((weak(inst.y) << inst.offset) & field);
                 break;
             }
             case KOp::concat: {
@@ -150,6 +171,8 @@ void Interpreter::Impl::StaticKernel::execute_body(
                     const auto& operand = body.concat[inst.aux + index];
                     result_unknown |= (unknown(operand.reg)
                                           & kw::mask(operand.width))
+                        << offset;
+                    result_weak |= (weak(operand.reg) & kw::mask(operand.width))
                         << offset;
                     offset += operand.width;
                 }
@@ -177,18 +200,32 @@ void Interpreter::Impl::StaticKernel::execute_body(
             case KOp::unary_not:
                 result_unknown = unknown(inst.x);
                 break;
+            case KOp::shift: {
+                // The weak elements move with their words; the mask shifts
+                // as a word of its own (an unknown amount gives all X: no
+                // weak element).
+                const auto moved = kw::shift(static_cast<ShiftOperator>(inst.sub),
+                    { weak(inst.x), 0U }, inst.width, registers[inst.y],
+                    inst.offset, (inst.flags & flag_signed) != 0U);
+                result_weak = moved.a & ~moved.b & kw::mask(inst.width);
+                break;
+            }
             case KOp::conditional: {
                 const auto condition = registers[inst.x];
                 if ((condition.b & 1U) == 0U) {
                     result_unknown = (condition.a & 1U) != 0U ? unknown(inst.y)
                                                               : unknown(inst.z);
+                    result_weak = (condition.a & 1U) != 0U ? weak(inst.y)
+                                                           : weak(inst.z);
                 }
                 break;
             }
             case KOp::dynamic_insert: {
                 const auto target = unknown(inst.x);
                 const auto source = unknown(inst.y);
-                if ((target | source) == 0U) {
+                const auto target_weak = weak(inst.x);
+                const auto source_weak = weak(inst.y);
+                if ((target | source | target_weak | source_weak) == 0U) {
                     break;
                 }
                 const auto offset = kw::dynamic_index(registers[inst.z],
@@ -198,27 +235,33 @@ void Interpreter::Impl::StaticKernel::execute_body(
                     const auto field = kw::mask(inst.offset) << *offset;
                     result_unknown = (target & ~field)
                         | ((source & kw::mask(inst.offset)) << *offset);
+                    result_weak = (target_weak & ~field)
+                        | ((source_weak & kw::mask(inst.offset)) << *offset);
                 } else if ((inst.flags & flag_strict) != 0U) {
                     throw KernelDeopt { at, false };
                 } else {
                     result_unknown = target;
+                    result_weak = target_weak;
                 }
                 break;
             }
             case KOp::dynamic_part_insert: {
                 const auto target = unknown(inst.x);
                 const auto source = unknown(inst.y);
-                if ((target | source) == 0U) {
+                const auto target_weak = weak(inst.x);
+                const auto source_weak = weak(inst.y);
+                if ((target | source | target_weak | source_weak) == 0U) {
                     break;
                 }
                 const auto& part = body.parts[inst.aux];
-                const auto write = kw::dynamic_part_write({ source, 0U },
+                const auto write = kw::dynamic_part_write({ source, source_weak },
                     registers[inst.z], part);
                 if (!write.valid) {
                     throw KernelDeopt { at, false };
                 }
                 if (!write.write) {
                     result_unknown = target;
+                    result_weak = target_weak;
                     break;
                 }
                 if (write.write->offset > inst.width
@@ -229,6 +272,9 @@ void Interpreter::Impl::StaticKernel::execute_body(
                     << write.write->offset;
                 result_unknown = (target & ~field)
                     | ((write.write->value.a & kw::mask(write.write->width))
+                        << write.write->offset);
+                result_weak = (target_weak & ~field)
+                    | ((write.write->value.b & kw::mask(write.write->width))
                         << write.write->offset);
                 break;
             }
@@ -258,11 +304,18 @@ void Interpreter::Impl::StaticKernel::execute_body(
         case KOp::generic:
             execute_generic(body, registers, inst, member_index);
             break;
+        case KOp::net_delay:
+            execute_net_delay(body, registers, inst, member_index);
+            break;
         case KOp::constant:
             registers[inst.d] = { inst.imm_a, inst.imm_b };
             break;
         case KOp::copy:
             registers[inst.d] = registers[inst.x];
+            if (weak_body && (mode & u_aware) == 0U) {
+                // A Logic4 destination reads '-' (the word Z) as X.
+                registers[inst.d] = kw::coerce_weak(registers[inst.x], weak(inst.x));
+            }
             break;
         case KOp::load_slot:
             registers[inst.d] = { arena_[inst.x], arena_[inst.x + 1U] };
@@ -278,8 +331,11 @@ void Interpreter::Impl::StaticKernel::execute_body(
             registers[inst.d] = kw::binary(static_cast<BinaryOperator>(inst.sub),
                 registers[inst.x], registers[inst.y], inst.width);
             // 'U' and X differ only in the 'U' mask.
+            // A weak element differs from the strong one its word holds
+            // (the enumeration compare of std_ulogic values).
             if (static_cast<BinaryOperator>(inst.sub) == BinaryOperator::case_equal
-                && unknown(inst.x) != unknown(inst.y)) {
+                && (unknown(inst.x) != unknown(inst.y)
+                    || weak(inst.x) != weak(inst.y))) {
                 registers[inst.d] = { };
             }
             break;
@@ -303,6 +359,8 @@ void Interpreter::Impl::StaticKernel::execute_body(
             registers[inst.d] = evaluate_slow(body, inst, at, member_index,
                 origin, registers[inst.x], registers[inst.y], { },
                 0U, &body.wide_registers);
+            scratch().last_unknown = 0U;
+            scratch().last_weak = result_weak;
             break;
         case KOp::extract:
             if (inst.sub == 3U) {
@@ -310,12 +368,8 @@ void Interpreter::Impl::StaticKernel::execute_body(
                 const auto field = wide_field(registers, inst.x,
                     static_cast<std::uint32_t>(inst.imm_b), inst.imm_a != 0U,
                     inst.offset, inst.width);
-                if (field.unknown != 0U
-                    && (shadow_base == 0U || inst.d >= shadow_base
-                        || body.tracked[inst.d] == 0U)) {
-                    throw KernelDeopt { at, false };
-                }
                 scratch().last_unknown = field.unknown;
+                scratch().last_weak = field.weak;
                 registers[inst.d] = field.value;
                 break;
             }
@@ -358,7 +412,8 @@ void Interpreter::Impl::StaticKernel::execute_body(
                       origin,
                       inst.sub >= 2U ? Word { } : registers[inst.x],
                       registers[inst.y],
-                      inst.sub >= 2U ? Word { } : Word { unknown(inst.x), 0U },
+                      inst.sub >= 2U ? Word { }
+                                     : Word { unknown(inst.x), weak(inst.x) },
                       0U, &body.wide_registers);
             break;
         case KOp::wide_load:
@@ -366,12 +421,13 @@ void Interpreter::Impl::StaticKernel::execute_body(
         case KOp::wide_const:
         case KOp::wide_concat:
         case KOp::wide_store:
-            execute_wide(body, registers, inst, at, member_index, origin, { }, 0U,
+            execute_wide(body, registers, inst, at, member_index, origin, { }, Word { },
                 { }, inst.op == KOp::wide_load ? inst.x : inst.d);
             break;
         case KOp::wide_part_insert:
             execute_wide(body, registers, inst, at, member_index, origin,
-                registers[inst.y], unknown(inst.y), registers[inst.z], 0U);
+                registers[inst.y], Word { unknown(inst.y), weak(inst.y) },
+                registers[inst.z], 0U);
             break;
         case KOp::dynamic_insert:
         case KOp::dynamic_part_insert:
@@ -410,7 +466,9 @@ void Interpreter::Impl::StaticKernel::execute_body(
                 registers[inst.x],
                 inst.op == KOp::store_slot_nba || inst.op == KOp::store_host
                     ? Word { } : registers[inst.y],
-                { }, inst.d);
+                inst.op == KOp::store_host ? Word { unknown(inst.x), weak(inst.x) }
+                                           : Word { },
+                inst.d);
             break;
         case KOp::mem_read:
             registers[inst.d] = evaluate_slow(body, inst, at, member_index,
@@ -448,8 +506,8 @@ void Interpreter::Impl::StaticKernel::execute_body(
             break;
         case KOp::store_vhdl:
             effect_slow(body, inst, at, member_index, origin, registers[inst.x],
-                inst.sub == 1U ? registers[inst.y] : Word { },
-                { unknown(inst.x), 0U }, inst.d);
+                inst.sub == 1U || inst.sub == 3U ? registers[inst.y] : Word { },
+                { unknown(inst.x), weak(inst.x) }, inst.d);
             break;
         case KOp::integer_check:
         case KOp::assert_check:
@@ -506,8 +564,6 @@ void Interpreter::Impl::StaticKernel::execute_body(
                                                : static_cast<std::uint32_t>(target.a);
             break;
         }
-        case KOp::deopt:
-            throw KernelDeopt { at, false };
         case KOp::suspend:
             behavioral_suspended_ = inst.x;
             return;
@@ -527,13 +583,19 @@ void Interpreter::Impl::StaticKernel::execute_body(
             case KOp::load_host:
             case KOp::dynamic_extract:
             case KOp::dynamic_part_select:
-                set_unknown(inst.d, scratch().last_unknown);
+            case KOp::shift:
+                set_unknown(inst.d, scratch().last_unknown, scratch().last_weak);
                 break;
             case KOp::extract:
-                set_unknown(inst.d, inst.sub >= 2U ? scratch().last_unknown : result_unknown);
+                if (inst.sub >= 2U) {
+                    set_unknown(inst.d, scratch().last_unknown, scratch().last_weak);
+                } else {
+                    set_unknown(inst.d, result_unknown, result_weak);
+                }
                 break;
             case KOp::store_vhdl:
             case KOp::generic:
+            case KOp::net_delay:
             // Wide registers hold their own 'U' masks.
             case KOp::wide_load:
             case KOp::wide_copy:
@@ -543,7 +605,7 @@ void Interpreter::Impl::StaticKernel::execute_body(
             case KOp::wide_part_insert:
                 break;
             default:
-                set_unknown(inst.d, result_unknown);
+                set_unknown(inst.d, result_unknown, result_weak);
                 break;
             }
         }
@@ -600,10 +662,12 @@ void Interpreter::Impl::StaticKernel::handle_deopt(const std::uint32_t member_in
             }
             continue;
         }
-        const auto unknown = body.shadow_base != 0U && body.tracked[reg] != 0U
-            ? body.registers[body.shadow_base + reg].a : 0U;
+        const bool shadowed = body.shadow_base != 0U && body.tracked[reg] != 0U;
+        const auto unknown = shadowed ? body.registers[body.shadow_base + reg].a : 0U;
+        const auto weak = shadowed && body.weak != 0U
+            ? body.registers[body.shadow_base + reg].b : 0U;
         member.registers[reg] = uword_value(body.registers[reg], unknown,
-            width, kind);
+            width, kind, weak);
     }
     if (body.call_stack_base != 0U) {
         // The synthetic stack's live entries continue on the runtime stack.
@@ -636,10 +700,13 @@ bool Interpreter::Impl::StaticKernel::wide_part_insert(CompiledBody& body,
     const auto source = base + insert.source;
     const auto index = base + insert.selection.base;
     const auto& widths = body.register_widths;
+    // A field with 'U' or weak elements takes the reference path (the
+    // wide target's Logic9 planes are the reference's).
     const auto unknown = [&](const std::uint32_t reg) -> std::uint64_t {
         return body.shadow_base != 0U && reg < body.tracked.size()
                 && body.tracked[reg] != 0U
             ? registers[body.shadow_base + reg].a
+                | (body.weak != 0U ? registers[body.shadow_base + reg].b : 0U)
             : 0U;
     };
     const auto chunked = [&](const std::uint32_t reg) {
@@ -678,32 +745,66 @@ bool Interpreter::Impl::StaticKernel::wide_part_insert(CompiledBody& body,
     return true;
 }
 
+PackedLogic4 Interpreter::Impl::StaticKernel::register_operand(
+    const CompiledBody& body, const Word* registers,
+    const std::uint32_t member_index, const std::uint32_t base,
+    const RegisterId reg) const
+{
+    const auto& member = members_[member_index];
+    const auto index = base + reg;
+    const auto width = body.register_widths[index];
+    if (width <= 64U) {
+        const auto kind = reg < member.register_kinds.size()
+            ? member.register_kinds[reg] : ValueKind::logic4;
+        const bool shadowed = body.shadow_base != 0U
+            && index < body.tracked.size() && body.tracked[index] != 0U;
+        const auto unknown = shadowed ? registers[body.shadow_base + index].a : 0U;
+        const auto weak = shadowed && body.weak != 0U
+            ? registers[body.shadow_base + index].b : 0U;
+        return uword_value(registers[index], unknown, width, kind, weak);
+    }
+    if (index < body.wide_base.size() && body.wide_base[index] != 0U) {
+        const auto kind = reg < member.register_kinds.size()
+            ? member.register_kinds[reg] : ValueKind::logic4;
+        return wide_value(body, registers, index, kind);
+    }
+    return body.wide_registers[index];
+}
+
 void Interpreter::Impl::StaticKernel::generic_load_operands(CompiledBody& body,
     const Word* registers, const KInst& inst, const std::uint32_t member_index,
     const std::vector<RegisterId>& reads)
 {
     auto& member = members_[member_index];
-    const auto base = inst.y;
     for (const auto reg : reads) {
-        const auto index = base + reg;
-        const auto width = body.register_widths[index];
-        if (width <= 64U) {
-            const auto kind = reg < member.register_kinds.size()
-                ? member.register_kinds[reg] : ValueKind::logic4;
-            const auto unknown = body.shadow_base != 0U
-                    && index < body.tracked.size() && body.tracked[index] != 0U
-                ? registers[body.shadow_base + index].a : 0U;
-            member.registers[reg] = uword_value(registers[index], unknown, width,
-                kind);
-        } else if (index < body.wide_base.size() && body.wide_base[index] != 0U) {
-            const auto kind = reg < member.register_kinds.size()
-                ? member.register_kinds[reg] : ValueKind::logic4;
-            member.registers[reg] = wide_value(body, registers, index, kind);
-        } else {
-            member.registers[reg] = body.wide_registers[index];
-        }
+        member.registers[reg]
+            = register_operand(body, registers, member_index, inst.y, reg);
     }
 }
+
+void Interpreter::Impl::StaticKernel::execute_net_delay(
+    const CompiledBody& body, const Word* registers, const KInst& inst,
+    const std::uint32_t member_index)
+{
+    // KOp::net_delay: x the source register, y the operation. The kernel's
+    // delayed write holds its pending changes as timers.
+    auto value = register_operand(body, registers, member_index, 0U, inst.x);
+    if (auto* const lane = worker_lane_; lane != nullptr) {
+        // A worker's write waits for the leader's replay (emit_lane_output),
+        // which schedules it at the member's place in the serial order.
+        LaneOutput output;
+        output.kind = LaneOutput::Kind::net_delay;
+        output.member = member_index;
+        output.pc = inst.y;
+        output.value = std::move(value);
+        lane->outputs.push_back(std::move(output));
+        return;
+    }
+    net_delay_write(member_index, inst.y,
+        operation_get<WriteNetDelay>(members_[member_index].operations()[inst.y]),
+        value);
+}
+
 
 bool Interpreter::Impl::StaticKernel::generic_store_result(CompiledBody& body,
     Word* registers, const KInst& inst, const std::uint32_t member_index,
@@ -718,9 +819,7 @@ bool Interpreter::Impl::StaticKernel::generic_store_result(CompiledBody& body,
     auto& value = member.registers[*write];
     if (width > 64U) {
         if (index < body.wide_base.size() && body.wide_base[index] != 0U) {
-            if (!set_wide_value(body, registers, index, value)) {
-                throw KernelDeopt { inst.x, true, *write };
-            }
+            set_wide_value(body, registers, index, value);
         } else {
             body.wide_registers[index] = value;
         }
@@ -733,12 +832,21 @@ bool Interpreter::Impl::StaticKernel::generic_store_result(CompiledBody& body,
     const auto word = exact_uword(value);
     const bool tracked = body.shadow_base != 0U
         && index < body.tracked.size() && body.tracked[index] != 0U;
-    if (!word || (word->unknown != 0U && !tracked)) {
+    // A generic result is a source of the tracking (track_unknowns), so
+    // every Logic9 result has its mask words; a Logic4 destination keeps
+    // none (its value holds no 'U' or weak element).
+    if (word && word->weak != 0U && body.weak == 0U) {
+        // design_may_hold_weak is conservative: no source of a weak element
+        // is missing from a design without weak support.
+        throw std::logic_error { "static kernel met a weak std_logic value in a body without weak support" };
+    }
+    if (!word || ((word->unknown | word->weak) != 0U && !tracked)) {
         throw KernelDeopt { inst.x, true, *write };
     }
     registers[index] = word->value;
     if (tracked) {
-        registers[body.shadow_base + index] = { word->unknown, 0U };
+        registers[body.shadow_base + index] = { word->unknown,
+            body.weak != 0U ? word->weak : 0U };
     }
     // Two-state code cannot continue with a result with X or 'U' bits.
     return two_state_code && (word->value.b != 0U || word->unknown != 0U);
@@ -863,6 +971,27 @@ void Interpreter::Impl::StaticKernel::native_generic_kind(
     }
 }
 
+void Interpreter::Impl::StaticKernel::native_net_delay(
+    StaticKernelNativeFrame* frame, Word* registers, const std::uint32_t at)
+{
+    auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
+    if (kernel.profile_) {
+        ++kernel.profile_native_calls_[3];
+    }
+    try {
+        const auto& program = *static_cast<const CompiledBody*>(frame->program);
+        kernel.scratch().running_position = frame->position;
+        kernel.execute_net_delay(program, registers, program.code[at],
+            frame->member);
+    } catch (const KernelDeopt& deopt) {
+        kernel.scratch().pending_deopt = deopt;
+        frame->status = 2U;
+    } catch (...) {
+        kernel.scratch().native_exception = std::current_exception();
+        frame->status = 1U;
+    }
+}
+
 template <std::size_t K>
 std::uint32_t Interpreter::Impl::StaticKernel::native_step_kind(
     StaticKernelNativeFrame* frame, const std::uint32_t pc)
@@ -947,10 +1076,6 @@ Interpreter::Impl::StaticKernel::evaluate_slow_op(const CompiledBody& body,
     const auto fail_at = [&](const std::string& message) {
         fail(member_index, body_begin + at, message);
     };
-    const auto tracks = [&](const std::uint32_t reg) {
-        return body.shadow_base != 0U && reg < body.tracked.size()
-            && body.tracked[reg] != 0U;
-    };
     // Source bits from a wide slot (sub 1) or wide register (sub 2); 'U'
     // elements of a Logic9 register need a tracked destination.
     const auto source_field = [&](const std::uint32_t offset,
@@ -958,7 +1083,7 @@ Interpreter::Impl::StaticKernel::evaluate_slow_op(const CompiledBody& body,
         if (inst.op == KOp::load_field9 || inst.sub == 1U) {
             const auto& slot = slots_[resolved];
             if (slot.planes != 4U) {
-                return { read_field(resolved, offset, width), 0U };
+                return { read_field(resolved, offset, width), 0U, 0U };
             }
             // A Logic9 slot read in place; imm_b 1 coerces to Logic4.
             std::uint64_t planes[4] { };
@@ -974,28 +1099,27 @@ Interpreter::Impl::StaticKernel::evaluate_slow_op(const CompiledBody& body,
             if (inst.op == KOp::load_field9 ? inst.sub == 1U : inst.imm_b != 0U) {
                 return { kw::logic9_coerced(planes[0], planes[1], planes[2],
                              planes[3], width),
-                    0U };
+                    0U, 0U };
             }
+            // All nine codes: 'U' and the weak elements go to the masks of
+            // the (tracked) destination.
             const auto field = kw::logic9_uword(planes[0], planes[1], planes[2],
                 planes[3], width);
-            if (!field || (field->unknown != 0U && !tracks(inst.d))) {
-                throw KernelDeopt { at, false };
+            if (field.weak != 0U && body.weak == 0U) {
+                throw std::logic_error { "static kernel met a weak std_logic value in a body without weak support" };
             }
-            return *field;
+            return field;
         }
         if (inst.sub == 3U) {
             // A wide register's chunks (imm_b of them; imm_a: 'U' masks).
             const auto field = wide_field(scratch().wide_file, inst.x,
                 static_cast<std::uint32_t>(inst.imm_b), inst.imm_a != 0U, offset,
                 width);
-            if (field.unknown != 0U && !tracks(inst.d)) {
-                throw KernelDeopt { at, false };
-            }
             return field;
         }
         const auto& source = (*wide)[inst.x];
         if (!source.is_logic9()) {
-            return { packed_field(source, offset, width), 0U };
+            return { packed_field(source, offset, width), 0U, 0U };
         }
         std::uint64_t planes[4] { };
         const auto word = offset / 64U;
@@ -1003,7 +1127,7 @@ Interpreter::Impl::StaticKernel::evaluate_slow_op(const CompiledBody& body,
         for (std::uint32_t plane = 0U; plane < 4U; ++plane) {
             const auto words = source.logic9_plane_words(plane);
             if (word >= words.size()) {
-                return { kw::all_x(width), 0U };
+                return { kw::all_x(width), 0U, 0U };
             }
             planes[plane] = words[word] >> shift;
             if (shift != 0U && shift + width > 64U && word + 1U < words.size()) {
@@ -1012,10 +1136,10 @@ Interpreter::Impl::StaticKernel::evaluate_slow_op(const CompiledBody& body,
         }
         const auto field = kw::logic9_uword(planes[0], planes[1], planes[2],
             planes[3], width);
-        if (!field || (field->unknown != 0U && !tracks(inst.d))) {
-            throw KernelDeopt { at, false };
+        if (field.weak != 0U && body.weak == 0U) {
+            throw std::logic_error { "static kernel met a weak std_logic value in a body without weak support" };
         }
-        return *field;
+        return field;
     };
     // Runs SimIR operation `origin + at` on the reference evaluator with the
     // given operand words and returns its destination as a word.
@@ -1035,15 +1159,19 @@ Interpreter::Impl::StaticKernel::evaluate_slow_op(const CompiledBody& body,
         }
         (void)(this->*operation_steps()[operation_kind_of<T>])(member_index,
             body_begin + at);
-        if (const auto word = exact_word(member.registers[destination])) {
-            return *word;
+        // An integer result holds 0, 1, X and Z only ('U' and weak
+        // elements read as the words of their masks).
+        if (const auto word = exact_uword(member.registers[destination])) {
+            return word->value;
         }
-        throw KernelDeopt { at, true, destination };
+        fail_at("static kernel integer result has no register representation");
+        return { };
     };
     switch (Op) {
     case KOp::load_field9: {
         const auto field = source_field(inst.offset, inst.width);
         scratch().last_unknown = field.unknown;
+        scratch().last_weak = field.weak;
         return field.value;
     }
     case KOp::branch: {
@@ -1081,17 +1209,20 @@ Interpreter::Impl::StaticKernel::evaluate_slow_op(const CompiledBody& body,
         const auto& slot = slots_[resolved];
         const auto* planes = arena_.data() + slot.offset;
         scratch().last_unknown = 0U;
+        scratch().last_weak = 0U;
         if (inst.sub == 1U) {
             return kw::logic9_coerced(planes[0], planes[1], planes[2], planes[3],
                 inst.width);
         }
-        if (const auto word = kw::logic9_uword(planes[0], planes[1], planes[2],
-                planes[3], inst.width);
-            word && (word->unknown == 0U || tracks(inst.d))) {
-            scratch().last_unknown = word->unknown;
-            return word->value;
+        const auto word = kw::logic9_uword(planes[0], planes[1], planes[2],
+            planes[3], inst.width);
+        if (word.weak != 0U && body.weak == 0U) {
+            // design_may_hold_weak finds every source of a weak element.
+            throw std::logic_error { "static kernel met a weak std_logic value in a body without weak support" };
         }
-        throw KernelDeopt { at, false };
+        scratch().last_unknown = word.unknown;
+        scratch().last_weak = word.weak;
+        return word.value;
     }
     case KOp::integer_binary: {
         const auto& op = *operation_get_if<IntegerBinary>(
@@ -1130,13 +1261,16 @@ Interpreter::Impl::StaticKernel::evaluate_slow_op(const CompiledBody& body,
     case KOp::load_host: {
         const auto& current = impl_.logical_signal_value(resolved);
         scratch().last_unknown = 0U;
+        scratch().last_weak = 0U;
         if (inst.sub == 1U && current.is_logic9()) {
-            if (const auto word = exact_uword(current);
-                word && (word->unknown == 0U || tracks(inst.d))) {
+            if (const auto word = exact_uword(current)) {
+                if (word->weak != 0U && body.weak == 0U) {
+                    throw std::logic_error { "static kernel met a weak std_logic value in a body without weak support" };
+                }
                 scratch().last_unknown = word->unknown;
+                scratch().last_weak = word->weak;
                 return word->value;
             }
-            throw KernelDeopt { at, false };
         }
         const auto value = Impl::coerce_value_kind(current, ValueKind::logic4);
         const auto aval = value.aval_words();
@@ -1153,14 +1287,17 @@ Interpreter::Impl::StaticKernel::evaluate_slow_op(const CompiledBody& body,
         // A selection from a wide register (sub 2).
         const auto field = source_field(inst.offset, inst.width);
         scratch().last_unknown = field.unknown;
+        scratch().last_weak = field.weak;
         return field.value;
     }
     case KOp::dynamic_extract: {
         scratch().last_unknown = 0U;
+        scratch().last_weak = 0U;
         const auto offset = kw::dynamic_index(y, body.indices[inst.aux]);
         if (inst.sub != 0U && offset && *offset < inst.width) {
             const auto field = source_field(*offset, 1U);
             scratch().last_unknown = field.unknown;
+            scratch().last_weak = field.weak;
             return field.value;
         }
         if (!offset || *offset >= inst.width) {
@@ -1172,8 +1309,9 @@ Interpreter::Impl::StaticKernel::evaluate_slow_op(const CompiledBody& body,
             }
             return kw::all_x(1U);
         }
-        // z holds the source register's 'U' mask.
+        // z holds the source register's 'U' and weak masks.
         scratch().last_unknown = (z.a >> *offset) & 1U;
+        scratch().last_weak = (z.b >> *offset) & 1U;
         return kw::extract(x, *offset, 1U);
     }
     case KOp::dynamic_part_select: {
@@ -1197,6 +1335,7 @@ Interpreter::Impl::StaticKernel::evaluate_slow_op(const CompiledBody& body,
                 ? signed_base + (descending ? 0 : edge)
                 : signed_base - (descending ? edge : 0);
             scratch().last_unknown = 0U;
+            scratch().last_weak = 0U;
             if ((descending && part.right == lower)
                 || (!descending && part.right == upper)) {
                 // Result bit i is source bit first + i: one field read.
@@ -1221,6 +1360,7 @@ Interpreter::Impl::StaticKernel::evaluate_slow_op(const CompiledBody& body,
                     result.a = (result.a & ~m) | (source.value.a << shift);
                     result.b = (result.b & ~m) | (source.value.b << shift);
                     scratch().last_unknown = source.unknown << shift;
+                    scratch().last_weak = source.weak << shift;
                 }
                 return result;
             }
@@ -1244,12 +1384,17 @@ Interpreter::Impl::StaticKernel::evaluate_slow_op(const CompiledBody& body,
                 result.a = (result.a & ~one) | (source.value.a << bit);
                 result.b = (result.b & ~one) | (source.value.b << bit);
                 scratch().last_unknown |= source.unknown << bit;
+                scratch().last_weak |= source.weak << bit;
             }
             return result;
         }
-        // z holds the source register's 'U' mask: the same selection of it,
-        // with bits outside the source not 'U'.
+        // z holds the source register's 'U' and weak masks: the same
+        // selection of each, with bits outside the source neither.
         scratch().last_unknown = kw::dynamic_part_select({ z.a, 0U }, inst.offset, y,
+            part.left, part.right, part.base_offset, inst.width,
+            (inst.flags & flag_increasing) != 0U,
+            (inst.flags & flag_descending) != 0U, true).a;
+        scratch().last_weak = kw::dynamic_part_select({ z.b, 0U }, inst.offset, y,
             part.left, part.right, part.base_offset, inst.width,
             (inst.flags & flag_increasing) != 0U,
             (inst.flags & flag_descending) != 0U, true).a;
@@ -1355,7 +1500,7 @@ void Interpreter::Impl::StaticKernel::effect_slow_op(const CompiledBody& body,
     switch (Op) {
     case KOp::store_vhdl: {
         auto offset = inst.offset;
-        if (inst.sub == 1U) {
+        if (inst.sub == 1U || inst.sub == 3U) {
             const auto& selection = body.indices[inst.aux];
             const auto selected = kw::dynamic_index(y, selection);
             if (!selected) {
@@ -1372,12 +1517,36 @@ void Interpreter::Impl::StaticKernel::effect_slow_op(const CompiledBody& body,
         if (offset > slot.width || inst.width > slot.width - offset) {
             fail_at("partial update range is outside its target signal");
         }
+        if (inst.sub >= 2U) {
+            // A nine-value constant into a resolved slot: its codes, which
+            // no register holds, from the body's constants (kind 3), one
+            // write per 64-bit chunk.
+            // Sub 3 carries the source count above the constants' index.
+            const auto constant
+                = (inst.sub == 2U ? inst.imm_a : inst.imm_b) & 0xffffffffU;
+            for (std::uint32_t done = 0U; done < inst.width; done += 64U) {
+                StaticKernelWrite write;
+                write.slot = resolved;
+                write.offset = offset + done;
+                write.width = std::min(64U, inst.width - done);
+                write.member = member_index;
+                write.a = constant + done / 32U;
+                write.kind = 3U;
+                write.instruction = body_begin + at;
+                // Resolved into the slot's next block now; the queued write
+                // marks the slot for the update phase.
+                set_net_bits(resolved, member_process_[member_index], write.offset,
+                    write.width, net_constant_codes(write), true);
+                push_write(write);
+            }
+            return;
+        }
         if ((inst.flags & flag_blocking) != 0U) {
             // Shared variable: immediate.
             last_writer_[resolved] = member_process_[member_index];
             const WordSnapshot before(
                 arena_.data() + slot.offset, slot.planes * slot.words);
-            store_slot_word(resolved, x, offset, inst.width, z.a);
+            store_slot_word(resolved, x, offset, inst.width, z.a, z.b);
             if (!std::equal(before.begin(), before.end(),
                     arena_.begin() + slot.offset)) {
                 slot_changed(resolved, 0U, before.data());
@@ -1392,7 +1561,17 @@ void Interpreter::Impl::StaticKernel::effect_slow_op(const CompiledBody& body,
         write.a = x.a;
         write.b = x.b;
         write.unknown = z.a & kw::mask(inst.width);
+        write.weak = z.b & kw::mask(inst.width);
         write.instruction = body_begin + at;
+        if (slot.resolved) {
+            // A VHDL assignment to a resolved slot resolves into its next
+            // block now (kind 4); the queued write marks the slot for the
+            // update phase.
+            write.kind = 4U;
+            set_net_bits(resolved, member_process_[member_index], offset,
+                inst.width,
+                kw::logic9_planes(x, inst.width, write.unknown, write.weak), true);
+        }
         push_write(write);
         return;
     }
@@ -1447,8 +1626,6 @@ void Interpreter::Impl::StaticKernel::effect_slow_op(const CompiledBody& body,
         fail_at("call-stack return target is invalid");
         return;
     }
-    case KOp::deopt:
-        throw KernelDeopt { at, false };
     case KOp::assert_check: {
         if ((x.a & 1U) != 0U && (x.b & 1U) == 0U) {
             return;
@@ -1510,7 +1687,11 @@ void Interpreter::Impl::StaticKernel::effect_slow_op(const CompiledBody& body,
         return;
     }
     case KOp::store_host:
-        write_host(member_index, resolved, to_packed(x, inst.width),
+        // A tracked value with weak elements ('U' is excluded by the
+        // operand check) is a nine-value one: the word and its mask.
+        write_host(member_index, resolved,
+            z.b != 0U ? uword_value(x, 0U, inst.width, ValueKind::logic9, z.b)
+                      : to_packed(x, inst.width),
             (inst.flags & flag_linear) != 0U
                 ? std::optional<std::uint32_t> { inst.offset }
                 : std::nullopt,
@@ -1565,7 +1746,7 @@ constexpr std::array evaluate_kinds { KOp::load_field9, KOp::branch, KOp::ret,
     KOp::dynamic_part_select, KOp::dynamic_insert, KOp::dynamic_part_insert,
     KOp::mem_read };
 constexpr std::array effect_kinds { KOp::store_vhdl, KOp::integer_check,
-    KOp::call, KOp::ret, KOp::deopt, KOp::assert_check, KOp::store_slot,
+    KOp::call, KOp::ret, KOp::assert_check, KOp::store_slot,
     KOp::store_slot_nba, KOp::store_slot_dynamic, KOp::store_slot_part,
     KOp::store_host, KOp::mem_copy, KOp::wide_move, KOp::mem_write };
 
@@ -1665,6 +1846,7 @@ void Interpreter::Impl::StaticKernel::native_evaluate(
         out[0] = result.a;
         out[1] = result.b;
         out[2] = kernel.scratch().last_unknown;
+        out[3] = kernel.scratch().last_weak;
     } catch (const KernelDeopt& deopt) {
         kernel.scratch().pending_deopt = deopt;
         if (kernel.scratch().pending_deopt->resume == 0xffffffffU) {
@@ -1768,6 +1950,7 @@ void Interpreter::Impl::StaticKernel::set_instruction_helpers(
              = &StaticKernel::native_wide<wide_kinds[I]>),
             ...);
     }(std::make_index_sequence<wide_kinds.size()>());
+    helpers.net_delay = &StaticKernel::native_net_delay;
     [&]<std::size_t... K>(std::index_sequence<K...>) {
         ((helpers.generic_ops[K] = &StaticKernel::native_generic_kind<K>), ...);
         ((helpers.step_ops[K] = &StaticKernel::native_step_kind<K>), ...);
@@ -1921,11 +2104,13 @@ PackedLogic4 Interpreter::Impl::StaticKernel::wide_value(
     const auto base = entry & ~wide_unknown_flag;
     const auto width = body.register_widths[reg];
     const auto chunks = wide_chunks(width);
-    // As uword_value: a value with 'U' bits is Logic9 whatever the kind.
+    // As uword_value: a value with 'U' or weak bits is Logic9 whatever the
+    // kind.
     bool unknown = false;
     for (std::uint32_t chunk = 0U;
          chunk < chunks && (entry & wide_unknown_flag) != 0U; ++chunk) {
-        unknown = unknown || registers[base + chunks + chunk].a != 0U;
+        unknown = unknown || registers[base + chunks + chunk].a != 0U
+            || registers[base + chunks + chunk].b != 0U;
     }
     if (!unknown) {
         // One buffer for both planes; short values stay off the heap.
@@ -1950,7 +2135,8 @@ PackedLogic4 Interpreter::Impl::StaticKernel::wide_value(
     }
     for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
         const auto codes = kw::logic9_planes(registers[base + chunk],
-            std::min(64U, width - 64U * chunk), registers[base + chunks + chunk].a);
+            std::min(64U, width - 64U * chunk), registers[base + chunks + chunk].a,
+            registers[base + chunks + chunk].b);
         planes[0][chunk] = codes.p0;
         planes[1][chunk] = codes.p1;
         planes[2][chunk] = codes.p2;
@@ -1960,16 +2146,13 @@ PackedLogic4 Interpreter::Impl::StaticKernel::wide_value(
         planes[2], planes[3]);
 }
 
-bool Interpreter::Impl::StaticKernel::set_wide_value(const CompiledBody& body,
+void Interpreter::Impl::StaticKernel::set_wide_value(const CompiledBody& body,
     Word* registers, const std::uint32_t reg, const PackedLogic4& value)
 {
     const auto entry = body.wide_base[reg];
     const auto base = entry & ~wide_unknown_flag;
     const auto width = body.register_widths[reg];
     const auto chunks = wide_chunks(width);
-    if (value.width() != width) {
-        return false;
-    }
     if ((entry & wide_unknown_flag) == 0U || !value.is_logic9()) {
         const auto logic4 = Impl::coerce_value_kind(value, ValueKind::logic4);
         const auto a = logic4.aval_words();
@@ -1982,33 +2165,27 @@ bool Interpreter::Impl::StaticKernel::set_wide_value(const CompiledBody& body,
                 registers[base + chunks + chunk] = { };
             }
         }
-        return true;
+        return;
     }
-    // Every chunk is checked before any is written.
+    // Every Logic9 code has a representation: the word and its masks. A
+    // design without weak sources (CompiledBody::weak) has no weak mask.
     const auto plane = [&](const std::uint32_t index, const std::uint32_t chunk) {
         const auto words = value.logic9_plane_words(index);
         return chunk < words.size() ? words[chunk] : 0U;
     };
-    for (std::uint32_t pass = 0U; pass < 2U; ++pass) {
-        for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
-            const auto field = kw::logic9_uword(plane(0U, chunk), plane(1U, chunk),
-                plane(2U, chunk), plane(3U, chunk), std::min(64U, width - 64U * chunk));
-            if (!field) {
-                return false;
-            }
-            if (pass == 1U) {
-                registers[base + chunk] = field->value;
-                registers[base + chunks + chunk] = { field->unknown, 0U };
-            }
-        }
+    for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
+        const auto field = kw::logic9_uword(plane(0U, chunk), plane(1U, chunk),
+            plane(2U, chunk), plane(3U, chunk), std::min(64U, width - 64U * chunk));
+        registers[base + chunk] = field.value;
+        registers[base + chunks + chunk]
+            = { field.unknown, body.weak != 0U ? field.weak : 0U };
     }
-    return true;
 }
 
 void Interpreter::Impl::StaticKernel::execute_wide(const CompiledBody& body,
     Word* registers, const KInst& inst, const std::uint32_t at,
     const std::uint32_t member_index, const std::uint32_t body_begin,
-    const Word y, const std::uint64_t y_unknown, const Word z,
+    const Word y, const Word y_masks, const Word z,
     const std::uint32_t resolved)
 {
     const auto chunks = wide_chunks(inst.width);
@@ -2020,16 +2197,6 @@ void Interpreter::Impl::StaticKernel::execute_wide(const CompiledBody& body,
         const auto& slot = slots_[resolved];
         const auto* planes = arena_.data() + slot.offset;
         const auto words = static_cast<std::uint32_t>(inst.imm_a);
-        if (inst.sub == 1U) {
-            // Every chunk is checked before any is written.
-            for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
-                if (!kw::logic9_uword(planes[chunk], planes[words + chunk],
-                        planes[2U * words + chunk], planes[3U * words + chunk],
-                        chunk_width(chunk))) {
-                    throw KernelDeopt { at, false };
-                }
-            }
-        }
         for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
             const auto m = kw::mask(chunk_width(chunk));
             switch (inst.sub) {
@@ -2041,11 +2208,11 @@ void Interpreter::Impl::StaticKernel::execute_wide(const CompiledBody& body,
                 }
                 break;
             case 1U: {
-                const auto field = *kw::logic9_uword(planes[chunk],
+                const auto field = kw::logic9_uword(planes[chunk],
                     planes[words + chunk], planes[2U * words + chunk],
                     planes[3U * words + chunk], chunk_width(chunk));
                 registers[inst.d + chunk] = field.value;
-                registers[inst.d + chunks + chunk] = { field.unknown, 0U };
+                registers[inst.d + chunks + chunk] = { field.unknown, field.weak };
                 break;
             }
             default:
@@ -2064,6 +2231,15 @@ void Interpreter::Impl::StaticKernel::execute_wide(const CompiledBody& body,
         for (std::uint32_t index = 0U; index < inst.aux; ++index) {
             registers[inst.d + index] = registers[inst.x + index];
         }
+        if (inst.sub == 1U) {
+            // A Logic4 destination reads the source's weak elements as
+            // coerce_weak does ('W' and '-' as X); inst.aux is the chunk
+            // count, the source's masks follow its chunks.
+            for (std::uint32_t index = 0U; index < inst.aux; ++index) {
+                registers[inst.d + index] = kw::coerce_weak(registers[inst.x + index],
+                    registers[inst.x + inst.aux + index].b);
+            }
+        }
         for (std::uint64_t index = 0U; index < inst.imm_a; ++index) {
             registers[inst.d + inst.aux + index] = { };
         }
@@ -2076,15 +2252,16 @@ void Interpreter::Impl::StaticKernel::execute_wide(const CompiledBody& body,
     case KOp::wide_concat: {
         // Into scratch first: an operand may be the destination.
         auto& value = scratch().wide_concat;
-        value.assign(3U * chunks, 0U);
-        const auto place = [&](const Word bits, const std::uint64_t unknown,
+        value.assign(4U * chunks, 0U);
+        const auto place = [&](const Word bits, const Word masks,
                                const std::uint32_t width,
                                const std::uint32_t offset) {
             const auto m = kw::mask(width);
             const auto word = offset / 64U;
             const auto shift = offset % 64U;
-            const std::uint64_t parts[3] { bits.a & m, bits.b & m, unknown & m };
-            for (std::uint32_t plane = 0U; plane < 3U; ++plane) {
+            const std::uint64_t parts[4] { bits.a & m, bits.b & m, masks.a & m,
+                masks.b & m };
+            for (std::uint32_t plane = 0U; plane < 4U; ++plane) {
                 value[plane * chunks + word] |= parts[plane] << shift;
                 if (shift != 0U && shift + width > 64U) {
                     value[plane * chunks + word + 1U] |= parts[plane] >> (64U - shift);
@@ -2095,17 +2272,22 @@ void Interpreter::Impl::StaticKernel::execute_wide(const CompiledBody& body,
         for (std::uint32_t index = inst.x; index-- > 0U;) {
             const auto& operand = body.concat[inst.aux + index];
             if (operand.width <= 64U) {
-                const auto unknown = body.shadow_base != 0U
-                        && operand.reg < body.tracked.size()
-                        && body.tracked[operand.reg] != 0U
-                    ? registers[body.shadow_base + operand.reg].a : 0U;
-                place(registers[operand.reg], unknown, operand.width, offset);
+                const bool shadowed = body.shadow_base != 0U
+                    && operand.reg < body.tracked.size()
+                    && body.tracked[operand.reg] != 0U;
+                place(registers[operand.reg],
+                    shadowed ? Word { registers[body.shadow_base + operand.reg].a,
+                                   body.weak != 0U
+                                       ? registers[body.shadow_base + operand.reg].b
+                                       : 0U }
+                             : Word { },
+                    operand.width, offset);
             } else {
                 const auto count = wide_chunks(operand.width);
                 for (std::uint32_t chunk = 0U; chunk < count; ++chunk) {
                     place(registers[operand.reg + chunk],
                         operand.unknown != 0U
-                            ? registers[operand.reg + count + chunk].a : 0U,
+                            ? registers[operand.reg + count + chunk] : Word { },
                         std::min(64U, operand.width - 64U * chunk),
                         offset + 64U * chunk);
                 }
@@ -2115,7 +2297,8 @@ void Interpreter::Impl::StaticKernel::execute_wide(const CompiledBody& body,
         for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
             registers[inst.d + chunk] = { value[chunk], value[chunks + chunk] };
             if (inst.sub == 1U) {
-                registers[inst.d + chunks + chunk] = { value[2U * chunks + chunk], 0U };
+                registers[inst.d + chunks + chunk]
+                    = { value[2U * chunks + chunk], value[3U * chunks + chunk] };
             }
         }
         return;
@@ -2131,6 +2314,11 @@ void Interpreter::Impl::StaticKernel::execute_wide(const CompiledBody& body,
                     & kw::mask(chunk_width(chunk))
                                   : 0U;
         };
+        const auto weak = [&](const std::uint32_t chunk) {
+            return inst.aux != 0U && body.weak != 0U
+                ? registers[inst.x + chunks + chunk].b & kw::mask(chunk_width(chunk))
+                : 0U;
+        };
         if (inst.sub == 2U && (inst.flags & flag_blocking) != 0U) {
             // A shared variable: immediate, one change report.
             last_writer_[resolved] = member_process_[member_index];
@@ -2138,7 +2326,8 @@ void Interpreter::Impl::StaticKernel::execute_wide(const CompiledBody& body,
                 arena_.data() + slot.offset, slot.planes * slot.words);
             for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
                 store_slot_word(resolved, registers[inst.x + chunk],
-                    inst.offset + 64U * chunk, chunk_width(chunk), unknown(chunk));
+                    inst.offset + 64U * chunk, chunk_width(chunk), unknown(chunk),
+                    weak(chunk));
             }
             if (!std::equal(before.begin(), before.end(),
                     arena_.begin() + slot.offset)) {
@@ -2164,7 +2353,19 @@ void Interpreter::Impl::StaticKernel::execute_wide(const CompiledBody& body,
             write.a = value.a & m;
             write.b = value.b & m;
             write.unknown = unknown(chunk);
+            write.weak = weak(chunk);
             write.instruction = body_begin + at;
+            if (slot.resolved) {
+                // A VHDL assignment to a resolved slot resolves into its next
+                // block now (kind 4); the queued write marks the slot for the
+                // update phase.
+                write.kind = 4U;
+                set_net_bits(resolved, member_process_[member_index], offset,
+                    write.width,
+                    kw::logic9_planes({ write.a, write.b }, write.width, write.unknown,
+                        write.weak),
+                    true);
+            }
             push_write(write);
         }
         return;
@@ -2190,9 +2391,9 @@ void Interpreter::Impl::StaticKernel::execute_wide(const CompiledBody& body,
         if (!write.write) {
             return;
         }
-        const auto field_unknown = y_unknown != 0U
-            ? kw::dynamic_part_write({ y_unknown, 0U }, z, part).write->value.a
-            : 0U;
+        const auto field_masks = (y_masks.a | y_masks.b) != 0U
+            ? kw::dynamic_part_write(y_masks, z, part).write->value
+            : Word { };
         const auto width = write.write->width;
         const auto m = kw::mask(width);
         const auto word = write.write->offset / 64U;
@@ -2207,7 +2408,8 @@ void Interpreter::Impl::StaticKernel::execute_wide(const CompiledBody& body,
             target.b = (target.b & ~field_mask) | place(write.write->value.b);
             if (masks) {
                 auto& mask = registers[inst.d + chunks + chunk];
-                mask.a = (mask.a & ~field_mask) | place(field_unknown);
+                mask.a = (mask.a & ~field_mask) | place(field_masks.a);
+                mask.b = (mask.b & ~field_mask) | place(field_masks.b);
             }
         };
         insert(word, false);
@@ -2235,6 +2437,7 @@ void Interpreter::Impl::StaticKernel::native_wide(StaticKernelNativeFrame* frame
     out[0] = 0U;
     out[1] = 0U;
     out[2] = 0U;
+    out[3] = 0U;
     try {
         const auto& body = *static_cast<const CompiledBody*>(frame->program);
         const auto& inst = body.code[at];
@@ -2249,6 +2452,7 @@ void Interpreter::Impl::StaticKernel::native_wide(StaticKernelNativeFrame* frame
             out[0] = result.a;
             out[1] = result.b;
             out[2] = kernel.scratch().last_unknown;
+            out[3] = kernel.scratch().last_weak;
         } else {
             std::uint32_t resolved = 0U;
             if constexpr (Op == KOp::wide_load) {
@@ -2256,10 +2460,9 @@ void Interpreter::Impl::StaticKernel::native_wide(StaticKernelNativeFrame* frame
             } else if constexpr (Op == KOp::wide_store) {
                 resolved = frame->bindings[2U * inst.d + 1U] & ~partition_tag;
             }
-            // x carries the 'U' mask of y.
-            (void)xb;
+            // x carries the 'U' (xa) and weak (xb) masks of y.
             kernel.execute_wide(body, registers, inst, at, frame->member, body_begin,
-                { ya, yb }, xa, { za, zb }, resolved);
+                { ya, yb }, { xa, xb }, { za, zb }, resolved);
         }
     } catch (const KernelDeopt& deopt) {
         kernel.scratch().pending_deopt = deopt;

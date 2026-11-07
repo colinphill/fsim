@@ -209,9 +209,16 @@ rejected directly.
 
 The compiled-HIR bundle is schema 3 and embeds semantic schema 5,
 SystemVerilog HIR schema 16, and VHDL HIR schema 11. The standalone design's
-other current state schemas are runtime 101, DesignIR 5, coverage 7, UVM 3, and
+other current state schemas are runtime 102, DesignIR 5, coverage 7, UVM 3, and
 class specializations (`FSIMSVCS`) 1. Runtime schema 101 stores packed values as
-their width and raw bit planes. Schema 101 gives a user-resolved VHDL signal
+their width and raw bit planes. Schema 102 adds the interconnect-delay write
+`WriteNetDelay` (twelve transition delays with a pulse reject and error limit
+each, IEEE 1364-2005 16.2.4) after the signal operations, the pulse limits
+of an SDF net delay record, and the table of reads through hierarchical names
+(`hierarchical_reads`: process, ReadSignal destination register, signal,
+implicit-wait flag and full path) that SDF net delays use to give such a read
+of a delayed load port the delayed value (IEEE 1364-2005 16.2.4). Schema 101
+gives a user-resolved VHDL signal
 that a foreign architecture drives a resolver program that takes the driver
 count at run time, after its eight fixed-count variants, also for a composite resolved per element or by segments, and records the typespec of each user-defined nettype declaration for VPI. Schema 100 adds the virtual interface handle
 table (IEEE 1800-2023 37.29 `vpiActual`) and the definition name of an

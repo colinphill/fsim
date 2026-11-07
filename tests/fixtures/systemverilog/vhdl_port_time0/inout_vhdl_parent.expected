@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+sv 0 sda=1
+vhdl 0 sda='H'
+sv 1 sda=0
+vhdl 1 sda='0'
+sv 2 sda=1
+vhdl 2 sda='H'
+sv 3 sda=1
+vhdl 3 sda='H'

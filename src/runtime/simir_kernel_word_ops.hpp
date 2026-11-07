@@ -219,24 +219,40 @@ struct Word {
     return Word { p0 & m, (unknown | high_z) & m };
 }
 
-/// A Logic4 word with a 'U' mask: 'U' elements (code 0000) read as X in
-/// the word. Every element must be 0, 1, X, Z or U.
+/// A Logic4 word with a 'U' mask and a weak mask: 'U' elements (code 0000)
+/// read as X in the word, and the elements 'L', 'H', 'W' and '-' read as the
+/// Logic4 value the std_logic_1164 logic tables treat them as, with their
+/// weak mask bit set: the word holds 0 for 'L', 1 for 'H', X for 'W' and Z
+/// for '-' (an unused Logic4 combination, so the four are told apart).
+/// 'U' and weak masks are disjoint.
 struct UWord {
     Word value;
     std::uint64_t unknown { };
+    std::uint64_t weak { };
 };
 
-[[nodiscard]] constexpr std::optional<UWord> logic9_uword(const std::uint64_t p0,
+/// Every Logic9 code is representable: nothing is rejected.
+[[nodiscard]] constexpr UWord logic9_uword(const std::uint64_t p0,
     const std::uint64_t p1, const std::uint64_t p2, const std::uint64_t p3,
     const std::uint32_t width) noexcept
 {
     const auto m = mask(width);
     const auto unknown = ~(p0 | p1 | p2 | p3) & m;
-    const auto word = logic9_word(p0 | unknown, p1, p2, p3, width);
-    if (!word) {
-        return std::nullopt;
-    }
-    return UWord { *word, unknown };
+    // Codes: U 0000, X 0001, 0 0010, 1 0011, Z 0100, W 0101, L 0110,
+    // H 0111, '-' 1000.
+    const auto a = (p0 | unknown) & m;
+    const auto b = ((~p1 & (p0 | p2 | unknown)) | p3) & m;
+    const auto weak = ((p2 & (p1 | p0)) | p3) & m;
+    return UWord { { a, b }, unknown, weak };
+}
+
+/// A Logic9 register's word read as Logic4 (CopyRegister into a Logic4
+/// register): 'W' (the word X) and '-' (the word Z) with their weak mask
+/// bits read as X; 'L' and 'H' already read as 0 and 1.
+[[nodiscard]] constexpr Word coerce_weak(const Word value,
+    const std::uint64_t weak) noexcept
+{
+    return { value.a | (weak & value.b), value.b };
 }
 
 /// Logic9 code planes coerced to Logic4 (L and H read as 0 and 1, U, W and
@@ -262,11 +278,15 @@ struct Logic9Planes {
 };
 
 [[nodiscard]] constexpr Logic9Planes logic9_planes(const Word value,
-    const std::uint32_t width, const std::uint64_t unknown = 0U) noexcept
+    const std::uint32_t width, const std::uint64_t unknown = 0U,
+    const std::uint64_t weak = 0U) noexcept
 {
-    // 'U' elements have code 0000.
+    // 'U' elements have code 0000; a weak element's word holds 0 ('L'),
+    // 1 ('H'), X ('W') or Z ('-'), see UWord.
     const auto m = mask(width) & ~unknown;
-    return { value.a & m, ~value.b & m, ~value.a & value.b & m, 0U };
+    const auto z_shape = ~value.a & value.b;
+    return { value.a & m, ~value.b & m, (weak ^ z_shape) & m,
+        weak & z_shape & m };
 }
 
 /// The bits of a packed value of 1 to 64 elements that are all 0 or 1, in

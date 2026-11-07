@@ -482,6 +482,7 @@ namespace {
                     || std::is_same_v<Operation, WriteUpdateSlice>
                     || std::is_same_v<Operation, WriteAfterSlice>
                     || std::is_same_v<Operation, WriteInertialSlice>
+                    || std::is_same_v<Operation, WriteNetDelay>
                     || std::is_same_v<Operation, WriteProjectedSlice>
                     || std::is_same_v<
                         Operation, WriteProjectedWaveformSlice>
@@ -2967,6 +2968,14 @@ std::optional<Process> Lowerer::lower_hir_process(
                     sensitivity_expression = declaration->vhdl->initializer;
                 }
             }
+            if (sensitivity_expression && sensitivity_expression->valid()
+                && hir_vhdl_implicit_state_attribute(
+                    *sensitivity_expression, input.scope)) {
+                description.implicit_state_sensitivities.emplace_back(
+                    *sensitivity_expression,
+                    hir_source_span(sensitivity.source));
+                continue;
+            }
             if (sensitivity_expression
                 && sensitivity_expression->valid()) {
                 // An alias of an element or slice of a signal denotes that
@@ -4554,6 +4563,25 @@ std::optional<Process> Lowerer::lower_hir_process_body(
     const frontend::Language language,
     const std::string_view hierarchy)
 {
+    auto lowered = lower_hir_process_body_attempts(
+        description, language, hierarchy);
+    // The reads of the final attempt through hierarchical names belong to
+    // the process that is published with its identifier.
+    if (lowered) {
+        for (auto& mark : hierarchical_marks_) {
+            mark.process = lowered->id;
+            design_.hierarchical_reads_.push_back(std::move(mark));
+        }
+    }
+    hierarchical_marks_.clear();
+    return lowered;
+}
+
+std::optional<Process> Lowerer::lower_hir_process_body_attempts(
+    const HirProcessDescription& description,
+    const frontend::Language language,
+    const std::string_view hierarchy)
+{
     // A process whose lowered class function bodies cannot all be lowered
     // is lowered again with calls to the failing functions left to the
     // runtime interpreter, and as a last resort with every class function
@@ -4686,6 +4714,7 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
     process_ = Process { };
     generated_processes_.clear();
     implicit_signal_dependencies_.clear();
+    hierarchical_marks_.clear();
     deferred_assertion_action_phase_.reset();
     deferred_assertion_action_handoff_.reset();
     language_ = language;
@@ -4745,6 +4774,24 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
         return std::nullopt;
     }
     process_.static_sensitivity = description.sensitivities;
+    for (const auto& [expression, span] :
+        description.implicit_state_sensitivities) {
+        const auto attribute = hir_vhdl_implicit_state_attribute(
+            expression, description.scope);
+        const auto derived = attribute
+            ? vhdl_implicit_state_signal(*attribute, span)
+            : std::nullopt;
+        if (!derived) {
+            process_ = { };
+            hir_local_registers_.clear();
+            hir_local_string_registers_.clear();
+            hir_local_container_registers_.clear();
+            hir_local_container_types_.clear();
+            return std::nullopt;
+        }
+        process_.static_sensitivity.push_back(
+            { *derived, runtime::simir::EdgeKind::any });
+    }
     // Procedural continuous assignments are also Verilog statements (IEEE
     // 1364-2005 9.3).
     if (language != frontend::Language::Vhdl2008
@@ -6092,6 +6139,11 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
             if (!covered(dependency)) {
                 process_.static_sensitivity.push_back(dependency);
             }
+        }
+        // The process waits on what it reads, so a read through a
+        // hierarchical name also waits on that name's signal.
+        for (auto& mark : hierarchical_marks_) {
+            mark.implicit = true;
         }
         if (description.require_wildcard_dependency
             && !description.always_comb_or_latch

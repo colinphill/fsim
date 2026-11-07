@@ -1,0 +1,4 @@
+TRACE sw b=1 t=20
+TRACE sw b=z t=40
+TRACE tr a=1 t=124
+TRACE tr a=z t=144

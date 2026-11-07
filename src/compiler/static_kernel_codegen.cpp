@@ -208,6 +208,7 @@ static_assert(offsetof(runtime::simir::StaticKernelWrite, b) == 24U);
 static_assert(offsetof(runtime::simir::StaticKernelWrite, unknown) == 32U);
 static_assert(offsetof(runtime::simir::StaticKernelWrite, kind) == 40U);
 static_assert(offsetof(runtime::simir::StaticKernelWrite, instruction) == 44U);
+static_assert(offsetof(runtime::simir::StaticKernelWrite, weak) == 48U);
 
 constexpr std::uint32_t silent_bit = std::uint32_t { 1 } << 31U;
 
@@ -368,7 +369,7 @@ public:
         }
         blocks_[size] = return_block_;
         builder_.SetInsertPoint(entry);
-        out_ = builder_.CreateAlloca(i64_, constant(3U), "out");
+        out_ = builder_.CreateAlloca(i64_, constant(4U), "out");
         plan_local_registers();
         for (std::size_t reg = 0U; reg < local_.size(); ++reg) {
             if (local_[reg] != nullptr) {
@@ -434,13 +435,16 @@ public:
                 spine_.insert(blocks_[at]);
             }
             last_unknown_ = nullptr;
+            last_weak_ = nullptr;
             insert_unknown_ = nullptr;
+            insert_weak_ = nullptr;
             at_ = at;
             guarded_unknown_ = nullptr;
             emit_unknown_checks(at);
             const auto result_unknown = unknown_before(at);
+            const auto result_weak = weak_before(at);
             emit_instruction(at);
-            unknown_after(at, result_unknown);
+            unknown_after(at, result_unknown, result_weak);
             // Every instruction's inner blocks rejoin in the block it ends
             // in, which dominates the rest of the KIR block; values defined
             // in its inner blocks must not be reused after it.
@@ -572,7 +576,6 @@ private:
             case KOp::load_field:
             case KOp::load_slot9:
             case KOp::load_field9:
-            case KOp::deopt:
                 writes = true;
                 return true;
             case KOp::integer_unary:
@@ -589,7 +592,7 @@ private:
                 return true;
             case KOp::store_vhdl:
                 reads = { inst.x };
-                if (inst.sub == 1U) {
+                if (inst.sub == 1U || inst.sub == 3U) {
                     reads.push_back(inst.y);
                 }
                 return true;
@@ -666,6 +669,9 @@ private:
                 return true;
             case KOp::wide_part_insert:
                 reads = { inst.y, inst.z };
+                return true;
+            case KOp::net_delay:
+                reads = { inst.x };
                 return true;
             case KOp::call:
             case KOp::ret:
@@ -1128,7 +1134,15 @@ private:
                             : builder_.getTrue())));
         }
         case BinaryOperator::case_equal:
-            // 'U' and X differ only in the 'U' mask.
+            // 'U' and X differ only in the 'U' mask, 'H' and 1 (and 'L' and
+            // 0, 'W' and X, '-' and Z) only in the weak mask.
+            if (weak_mode()) {
+                return scalar_bool(builder_.CreateAnd(
+                    builder_.CreateAnd(builder_.CreateAnd(builder_.CreateICmpEQ(l.a, r.a),
+                                           builder_.CreateICmpEQ(l.b, r.b)),
+                        builder_.CreateICmpEQ(unknown_of(inst.x), unknown_of(inst.y))),
+                    builder_.CreateICmpEQ(weak_of(inst.x), weak_of(inst.y))));
+            }
             return scalar_bool(builder_.CreateAnd(
                 builder_.CreateAnd(builder_.CreateICmpEQ(l.a, r.a),
                     builder_.CreateICmpEQ(l.b, r.b)),
@@ -1218,6 +1232,7 @@ private:
                       | (static_cast<std::uint64_t>(width) << 8U)),
                     l.a, l.b, r.a, r.b, out_ });
             last_unknown_ = constant(0U);
+            last_weak_ = nullptr;
             return { builder_.CreateLoad(i64_, out_),
                 builder_.CreateLoad(i64_,
                     builder_.CreateConstInBoundsGEP1_64(i64_, out_, 1U)) };
@@ -1348,6 +1363,9 @@ private:
         check_status();
         last_unknown_ = builder_.CreateLoad(i64_,
             builder_.CreateConstInBoundsGEP1_64(i64_, out, 2U));
+        last_weak_ = weak_mode()
+            ? builder_.CreateLoad(i64_, builder_.CreateConstInBoundsGEP1_64(i64_, out, 3U))
+            : nullptr;
         return { builder_.CreateLoad(i64_, out),
             builder_.CreateLoad(i64_,
                 builder_.CreateConstInBoundsGEP1_64(i64_, out, 1U)) };
@@ -1401,6 +1419,9 @@ private:
         check_status();
         last_unknown_ = builder_.CreateLoad(i64_,
             builder_.CreateConstInBoundsGEP1_64(i64_, out_, 2U));
+        last_weak_ = weak_mode()
+            ? builder_.CreateLoad(i64_, builder_.CreateConstInBoundsGEP1_64(i64_, out_, 3U))
+            : nullptr;
         return { builder_.CreateLoad(i64_, out_),
             builder_.CreateLoad(i64_,
                 builder_.CreateConstInBoundsGEP1_64(i64_, out_, 1U)) };
@@ -1445,6 +1466,32 @@ private:
             masks ? field(base + chunks, 0U) : constant(0U) };
     }
 
+    /// The weak mask of bits [offset, offset + width) of the wide register at
+    /// storage index `base` (`chunks` chunks, with masks): the `b` words of
+    /// its mask chunks.
+    [[nodiscard]] llvm::Value* wide_weak_field(const std::uint32_t base,
+        const std::uint32_t chunks, const std::uint32_t offset,
+        const std::uint32_t width)
+    {
+        const auto word = offset / 64U;
+        const auto shift = offset % 64U;
+        auto* m = constant(mask_of(width));
+        if (word >= chunks) {
+            return constant(0U);
+        }
+        const bool spans = shift != 0U && shift + width > 64U && word + 1U < chunks;
+        llvm::Value* value = builder_.CreateLShr(
+            builder_.CreateLoad(i64_, chunk_address(base + chunks + word, 1U)),
+            constant(shift));
+        if (spans) {
+            value = builder_.CreateOr(value,
+                builder_.CreateShl(
+                    builder_.CreateLoad(i64_, chunk_address(base + chunks + word + 1U, 1U)),
+                    constant(64U - shift)));
+        }
+        return builder_.CreateAnd(value, m);
+    }
+
     void check_status()
     {
         auto* status = builder_.CreateLoad(i32_, frame_field(40U));
@@ -1473,7 +1520,8 @@ private:
     /// Returns the merged result in the continuation block.
     [[nodiscard]] Pair with_fallback(llvm::Value* fast_ok, const Pair fast,
         const std::uint32_t at, const Pair x, const Pair y,
-        llvm::Value* fast_unknown = nullptr, llvm::Value* z_a = nullptr)
+        llvm::Value* fast_unknown = nullptr, llvm::Value* z_a = nullptr,
+        llvm::Value* fast_weak = nullptr, llvm::Value* z_w = nullptr)
     {
         if (folded(fast_ok, true) || (two_state_ && hand_over_slow_paths_)) {
             // Two-state code leaves a slow path (an error or an unusual
@@ -1482,6 +1530,7 @@ private:
                 read_or_hand_over(fast_ok);
             }
             last_unknown_ = fast_unknown != nullptr ? fast_unknown : constant(0U);
+            last_weak_ = fast_weak;
             return fast;
         }
         auto* fast_block = builder_.GetInsertBlock();
@@ -1490,7 +1539,8 @@ private:
         builder_.CreateCondBr(fast_ok, merge, slow);
         builder_.SetInsertPoint(slow);
         const auto slow_value = call_evaluate(at, x, y,
-            z_a != nullptr ? Pair { z_a, constant(0U) } : zero_pair());
+            z_a != nullptr ? Pair { z_a, z_w != nullptr ? z_w : constant(0U) }
+                           : zero_pair());
         auto* slow_end = builder_.GetInsertBlock();
         builder_.CreateBr(merge);
         builder_.SetInsertPoint(merge);
@@ -1506,6 +1556,14 @@ private:
             fast_block);
         unknown->addIncoming(last_unknown_, slow_end);
         last_unknown_ = unknown;
+        if (weak_mode() && last_weak_ != nullptr) {
+            // The fast path produces no weak element.
+            auto* weak = builder_.CreatePHI(i64_, 2U);
+            weak->addIncoming(fast_weak != nullptr ? fast_weak : constant(0U),
+                fast_block);
+            weak->addIncoming(last_weak_, slow_end);
+            last_weak_ = weak;
+        }
         return { a, b };
     }
 
@@ -1584,9 +1642,14 @@ private:
             builder_.CreateAnd(builder_.CreateLShr(source.b, safe), constant(1U)) };
         // The source's 'U' elements select with it (the helper gets the mask).
         auto* source_unknown = unknown_of(inst.x);
+        llvm::Value* source_weak = weak_mode() && tracked(inst.x) ? weak_of(inst.x) : nullptr;
         return with_fallback(ok, fast, at, source, index,
             builder_.CreateAnd(builder_.CreateLShr(source_unknown, safe), constant(1U)),
-            source_unknown);
+            source_unknown,
+            source_weak != nullptr
+                ? builder_.CreateAnd(builder_.CreateLShr(source_weak, safe), constant(1U))
+                : nullptr,
+            source_weak);
     }
 
     [[nodiscard]] Pair emit_dynamic_part_select(const KInst& inst,
@@ -1639,9 +1702,14 @@ private:
         const Pair fast { builder_.CreateAnd(builder_.CreateLShr(source.a, safe), m),
             builder_.CreateAnd(builder_.CreateLShr(source.b, safe), m) };
         auto* source_unknown = unknown_of(inst.x);
+        llvm::Value* source_weak = weak_mode() && tracked(inst.x) ? weak_of(inst.x) : nullptr;
         return with_fallback(ok, fast, at, source, base,
             builder_.CreateAnd(builder_.CreateLShr(source_unknown, safe), m),
-            source_unknown);
+            source_unknown,
+            source_weak != nullptr
+                ? builder_.CreateAnd(builder_.CreateLShr(source_weak, safe), m)
+                : nullptr,
+            source_weak);
     }
 
     /// Appends a deferred VHDL assignment to the round's queue.
@@ -1876,7 +1944,7 @@ private:
         const auto location = memory_location(element);
         auto* data = builder_.CreateLoad(ptr_, queue);
         auto* entry = builder_.CreateInBoundsGEP(i8_, data,
-            builder_.CreateMul(builder_.CreateZExt(count, i64_), constant(48U)));
+            builder_.CreateMul(builder_.CreateZExt(count, i64_), constant(56U)));
         const auto entry_field = [&](const std::uint64_t offset) {
             return builder_.CreateConstInBoundsGEP1_64(i8_, entry, offset);
         };
@@ -1892,6 +1960,9 @@ private:
         builder_.CreateStore(constant(0U), entry_field(32U));
         builder_.CreateStore(llvm::ConstantInt::get(i32_, 0U), entry_field(40U));
         builder_.CreateStore(llvm::ConstantInt::get(i32_, at), entry_field(44U));
+        if (body_.weak != 0U) {
+            builder_.CreateStore(constant(0U), entry_field(48U));
+        }
         builder_.CreateStore(
             builder_.CreateAdd(count, llvm::ConstantInt::get(i32_, 1U)),
             builder_.CreateConstInBoundsGEP1_64(i8_, queue, 8U));
@@ -2320,7 +2391,7 @@ private:
         llvm::Value* unknown, llvm::Value* slot, llvm::Value* offset,
         llvm::BasicBlock* skip)
     {
-        if (inst.op != KOp::store_vhdl || inst.sub != 0U
+        if (inst.op != KOp::store_vhdl || inst.sub != 0U || inst.aux != 0U
             || (inst.imm_b != 2U && inst.imm_b != 4U) || inst.imm_a == 0U
             || inst.width == 0U || inst.width > 64U
             || (offset == nullptr && inst.offset + inst.width > 64U)) {
@@ -2465,7 +2536,7 @@ private:
         b.CreateCondBr(b.CreateICmpULT(count, capacity), fast, full);
         b.SetInsertPoint(fast);
         auto* entry_at = b.CreateInBoundsGEP(i8_, b.CreateLoad(ptr_, writes),
-            b.CreateMul(b.CreateZExt(count, i64_), k64(48U)));
+            b.CreateMul(b.CreateZExt(count, i64_), k64(56U)));
         b.CreateStore(slot, word(entry_at, 0U));
         b.CreateStore(offset, word(entry_at, 4U));
         b.CreateStore(width, word(entry_at, 8U));
@@ -2475,6 +2546,9 @@ private:
         b.CreateStore(unknown, word(entry_at, 32U));
         b.CreateStore(llvm::ConstantInt::get(i32_, 0U), word(entry_at, 40U));
         b.CreateStore(at, word(entry_at, 44U));
+        if (body_.weak != 0U) {
+            b.CreateStore(k64(0U), word(entry_at, 48U));
+        }
         b.CreateStore(b.CreateAdd(count, llvm::ConstantInt::get(i32_, 1U)),
             word(writes, 8U));
         auto* mark = block("write_mark");
@@ -2493,10 +2567,19 @@ private:
         const auto value = load_register(inst.x);
         auto* unknown = builder_.CreateAnd(unknown_of(inst.x),
             constant(mask_of(inst.width)));
+        // The value's weak mask, when it can have one.
+        llvm::Value* weak = weak_mode() && tracked(inst.x)
+            ? builder_.CreateAnd(weak_of(inst.x), constant(mask_of(inst.width)))
+            : nullptr;
         auto* slot = builder_.CreateAnd(binding(inst.d, 1U),
             llvm::ConstantInt::get(i32_, ~silent_bit));
         auto* done = llvm::BasicBlock::Create(context_, "appended", &function_);
-        if (outline_stores_) {
+        // An assignment to a resolved slot is resolved into its next block
+        // here and queued as kind 4 (StaticKernelWrite): the outlined store
+        // does not know it.
+        const auto shape = inst.op == KOp::store_vhdl ? detail::net_shape(inst)
+                                                      : std::nullopt;
+        if (outline_stores_ && !shape && weak == nullptr) {
             const bool check = inst.op == KOp::store_vhdl && inst.sub == 0U
                 && (inst.imm_b == 2U || inst.imm_b == 4U) && inst.imm_a != 0U
                 && inst.width != 0U && inst.width <= 64U
@@ -2523,7 +2606,9 @@ private:
             builder_.SetInsertPoint(done);
             return;
         }
-        emit_unchanged_write_skip(inst, value, unknown, slot, offset, done);
+        if (weak == nullptr) {
+            emit_unchanged_write_skip(inst, value, unknown, slot, offset, done);
+        }
         auto* queue = builder_.CreateLoad(ptr_, frame_field(56U));
         auto* count = builder_.CreateLoad(i32_,
             builder_.CreateConstInBoundsGEP1_64(i8_, queue, 8U));
@@ -2535,7 +2620,7 @@ private:
         builder_.SetInsertPoint(fast);
         auto* data = builder_.CreateLoad(ptr_, queue);
         auto* entry = builder_.CreateInBoundsGEP(i8_, data,
-            builder_.CreateMul(builder_.CreateZExt(count, i64_), constant(48U)));
+            builder_.CreateMul(builder_.CreateZExt(count, i64_), constant(56U)));
         const auto field = [&](const std::uint64_t offset) {
             return builder_.CreateConstInBoundsGEP1_64(i8_, entry, offset);
         };
@@ -2549,19 +2634,110 @@ private:
         builder_.CreateStore(value.a, field(16U));
         builder_.CreateStore(value.b, field(24U));
         builder_.CreateStore(unknown, field(32U));
-        builder_.CreateStore(llvm::ConstantInt::get(i32_, 0U), field(40U));
+        builder_.CreateStore(llvm::ConstantInt::get(i32_, shape ? 4U : 0U), field(40U));
         builder_.CreateStore(llvm::ConstantInt::get(i32_, at), field(44U));
+        if (body_.weak != 0U) {
+            builder_.CreateStore(weak != nullptr ? weak : constant(0U), field(48U));
+        }
         builder_.CreateStore(builder_.CreateAdd(count, llvm::ConstantInt::get(i32_, 1U)),
             builder_.CreateConstInBoundsGEP1_64(i8_, queue, 8U));
+        if (shape) {
+            emit_net_begin_pending(inst, *shape, (shape->width + 63U) / 64U);
+            emit_net_vhdl_field(inst, *shape, offset, inst.offset, inst.width,
+                net_codes(value, unknown, inst.width, weak));
+        }
         emit_write_mark(slot, done);
         builder_.SetInsertPoint(slow);
         // y: a dynamic index (store_vhdl sub 1) or a part-select base.
         call_effect(at, value,
             inst.sub == 1U || inst.op == KOp::store_slot_part ? load_register(inst.y)
                                                                : zero_pair(),
-            Pair { unknown, constant(0U) });
+            Pair { unknown, weak != nullptr ? weak : constant(0U) });
         builder_.CreateBr(done);
         builder_.SetInsertPoint(done);
+    }
+
+    /// A wide value stored to a resolved slot (wide_store with imm_a: its
+    /// words per plane, from bit 32 its width; imm_b as for store_slot), one
+    /// 64-bit chunk at a time as StaticKernel's wide_store effect stores it:
+    /// a SystemVerilog store (sub 0) resolves each chunk at once, a VHDL
+    /// assignment (sub 2) queues it.
+    void emit_wide_net_store(const KInst& inst, const std::uint32_t at)
+    {
+        const auto chunks = static_cast<std::uint32_t>(detail::wide_chunks(inst.width));
+        const auto chunk_value = [&](const std::uint32_t chunk) {
+            auto* m = constant(mask_of(std::min(64U, inst.width - 64U * chunk)));
+            return Pair { builder_.CreateAnd(builder_.CreateLoad(i64_,
+                                                 chunk_address(inst.x + chunk, 0U)),
+                              m),
+                builder_.CreateAnd(builder_.CreateLoad(i64_, chunk_address(inst.x + chunk, 1U)),
+                    m) };
+        };
+        if (inst.sub == 0U) {
+            for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
+                emit_store_net(inst, chunk_value(chunk), inst.imm_a & 0xffffffffU,
+                    static_cast<std::uint32_t>(inst.imm_a >> 32U),
+                    inst.offset + 64U * chunk, std::min(64U, inst.width - 64U * chunk));
+            }
+            return;
+        }
+        std::vector<QueuedChunk> queued;
+        for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
+            const auto bits = std::min(64U, inst.width - 64U * chunk);
+            // The chunk's 'U' mask follows the chunks (wide_unknown_flag).
+            queued.push_back({ inst.offset + 64U * chunk, bits, chunk_value(chunk),
+                inst.aux != 0U
+                    ? builder_.CreateAnd(builder_.CreateLoad(i64_,
+                                             chunk_address(inst.x + chunks + chunk, 0U)),
+                          constant(mask_of(bits)))
+                    : constant(0U) });
+        }
+        const auto shape = *detail::net_shape(inst);
+        emit_queued_chunks(inst.d, queued, 4U, nullptr, at, [&] {
+            // Each chunk resolves into the slot's next block (kind 4 writes).
+            emit_net_begin_pending(inst, shape, (shape.width + 63U) / 64U);
+            for (const auto& chunk : queued) {
+                emit_net_vhdl_field(inst, shape, nullptr, chunk.offset, chunk.width,
+                    net_codes(chunk.value, chunk.unknown, chunk.width));
+            }
+        }, [&] { (void)call_wide(at, zero_pair(), zero_pair(), zero_pair()); });
+    }
+
+    /// A nine-value constant assigned to a resolved slot (store_vhdl sub 2,
+    /// or sub 3 at `offset`): one kind 3 write per 64-bit chunk, whose codes
+    /// the commit takes from the body's constants at imm_a (sub 2) or imm_b
+    /// (sub 3; StaticKernelWrite).
+    void emit_net_constant_store(const KInst& inst, const std::uint32_t at,
+        llvm::Value* offset)
+    {
+        // Sub 3 carries the source count above the constants' index.
+        const auto constants = (inst.sub == 2U ? inst.imm_a : inst.imm_b) & 0xffffffffU;
+        const auto chunks = static_cast<std::uint32_t>(detail::wide_chunks(inst.width));
+        std::vector<QueuedChunk> queued;
+        for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
+            queued.push_back({ (offset != nullptr ? 0U : inst.offset) + 64U * chunk,
+                std::min(64U, inst.width - 64U * chunk),
+                { constant(constants + 2U * chunk), constant(0U) }, constant(0U) });
+        }
+        const auto shape = *detail::net_shape(inst);
+        emit_queued_chunks(inst.d, queued, 3U, offset, at, [&] {
+            // Each chunk's codes, constants of the body, resolve into the
+            // slot's next block now.
+            emit_net_begin_pending(inst, shape, (shape.width + 63U) / 64U);
+            for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
+                const auto& low = body_.wide_constants[constants + 2U * chunk];
+                const auto& high = body_.wide_constants[constants + 2U * chunk + 1U];
+                emit_net_vhdl_field(inst, shape,
+                    offset != nullptr
+                        ? builder_.CreateAdd(offset, llvm::ConstantInt::get(i32_, 64U * chunk))
+                        : nullptr,
+                    inst.offset + 64U * chunk, std::min(64U, inst.width - 64U * chunk),
+                    { constant(low.a), constant(low.b), constant(high.a), constant(high.b) });
+            }
+        }, [&] {
+            call_effect(at, zero_pair(), inst.sub == 3U ? load_register(inst.y) : zero_pair(),
+                zero_pair());
+        });
     }
 
     /// Deferred store at a dynamic index (kernel_word::dynamic_index): a
@@ -2585,18 +2761,22 @@ private:
         auto* offset = builder_.CreateAdd(distance, constant(selection.base_offset));
         // offset + width <= slot width (both small; no overflow in 64 bits).
         auto* fits = builder_.CreateICmpULE(
-            builder_.CreateAdd(offset, constant(inst.width)), constant(inst.imm_a));
+            builder_.CreateAdd(offset, constant(inst.width)),
+            constant(inst.imm_a & 0xffffffffU));
         auto* ok = builder_.CreateAnd(builder_.CreateAnd(known, in_range), fits);
         auto* direct = llvm::BasicBlock::Create(context_, "indexed_store", &function_);
         auto* reference = llvm::BasicBlock::Create(context_, "indexed_store_ref", &function_);
         auto* joined = llvm::BasicBlock::Create(context_, "indexed_stored", &function_);
         builder_.CreateCondBr(ok, direct, reference);
         builder_.SetInsertPoint(direct);
-        emit_deferred_store(inst, at, builder_.CreateTrunc(offset, i32_));
+        if (inst.sub == 3U) {
+            emit_net_constant_store(inst, at, builder_.CreateTrunc(offset, i32_));
+        } else {
+            emit_deferred_store(inst, at, builder_.CreateTrunc(offset, i32_));
+        }
         builder_.CreateBr(joined);
         builder_.SetInsertPoint(reference);
-        call_effect(at, load_register(inst.x), index,
-            Pair { unknown_of(inst.x), constant(0U) });
+        call_effect(at, load_register(inst.x), index, masks_of(inst.x));
         builder_.CreateBr(joined);
         builder_.SetInsertPoint(joined);
     }
@@ -2615,7 +2795,32 @@ private:
             : constant(0U);
     }
 
-    void set_unknown(const std::uint32_t reg, llvm::Value* value)
+    /// Whether the code carries weak masks ('H', 'L', 'W', '-'; see
+    /// CompiledBody::weak): only in a design that has such elements, and not
+    /// in two-state code, which the template has not (native_units).
+    [[nodiscard]] bool weak_mode() const
+    {
+        // A body of wide registers only has no shadow words (shadow_base 0)
+        // but its wide registers carry masks.
+        return body_.weak != 0U && !two_state_;
+    }
+
+    /// The weak mask of a tracked register (zero without weak mode).
+    [[nodiscard]] llvm::Value* weak_of(const std::uint32_t reg)
+    {
+        return weak_mode() && tracked(reg)
+            ? load_register(body_.shadow_base + reg).b
+            : constant(0U);
+    }
+
+    /// The shadow word of a tracked register: its 'U' and weak masks.
+    [[nodiscard]] Pair masks_of(const std::uint32_t reg)
+    {
+        return { unknown_of(reg), weak_of(reg) };
+    }
+
+    void set_unknown(const std::uint32_t reg, llvm::Value* value,
+        llvm::Value* weak = nullptr)
     {
         if (two_state_) {
             // The 'U' mask stays zero in the register file; store_register
@@ -2629,7 +2834,8 @@ private:
             return;
         }
         if (tracked(reg)) {
-            store_register(body_.shadow_base + reg, Pair { value, constant(0U) });
+            store_register(body_.shadow_base + reg,
+                Pair { value, weak != nullptr && weak_mode() ? weak : constant(0U) });
         }
     }
 
@@ -2752,7 +2958,88 @@ private:
         }
     }
 
-    void unknown_after(const std::uint32_t at, llvm::Value* result_unknown)
+    /// The weak mask of a dynamic_insert or dynamic_part_insert result: the
+    /// instruction on the weak masks of its target and source as words,
+    /// inline like the value. Null when neither operand is tracked.
+    [[nodiscard]] llvm::Value* weak_insert(const KInst& inst, const std::uint32_t at)
+    {
+        if (!weak_mode() || (!tracked(inst.x) && !tracked(inst.y))
+            || builder_.GetInsertBlock()->getTerminator() != nullptr) {
+            return nullptr;
+        }
+        const auto saved_unknown = insert_unknown_;
+        const auto saved_weak = last_weak_;
+        const Pair target { weak_of(inst.x), constant(0U) };
+        const Pair source { weak_of(inst.y), constant(0U) };
+        const auto moved = inst.op == KOp::dynamic_insert
+            ? emit_dynamic_insert(inst, at, target, source, load_register(inst.z))
+            : emit_dynamic_part_insert(inst, at, target, source, load_register(inst.z));
+        insert_unknown_ = saved_unknown;
+        last_weak_ = saved_weak;
+        return moved.a;
+    }
+
+    /// The result's weak mask of a copy-like operation, computed from the
+    /// operands before the instruction may overwrite one of them; null when
+    /// the result has none (the logic operations give 0, 1, X and 'U' only).
+    [[nodiscard]] llvm::Value* weak_before(const std::uint32_t at)
+    {
+        const auto& inst = body_.code[at];
+        if (!weak_mode() || (mode_of(at) & detail::u_aware) == 0U
+            || builder_.GetInsertBlock()->getTerminator() != nullptr) {
+            return nullptr;
+        }
+        switch (inst.op) {
+        case KOp::constant:
+            return constant(detail::constant_weak(inst.x, inst.y));
+        case KOp::copy:
+            return weak_of(inst.x);
+        case KOp::extract:
+            if (inst.sub >= 2U) {
+                return nullptr;
+            }
+            return builder_.CreateAnd(
+                builder_.CreateLShr(weak_of(inst.x), constant(inst.offset)),
+                constant(mask_of(inst.width)));
+        case KOp::insert: {
+            const auto field = mask_of(inst.width) << inst.offset;
+            return builder_.CreateOr(
+                builder_.CreateAnd(weak_of(inst.x), constant(~field)),
+                builder_.CreateAnd(
+                    builder_.CreateShl(weak_of(inst.y), constant(inst.offset)),
+                    constant(field)));
+        }
+        case KOp::concat: {
+            llvm::Value* result = constant(0U);
+            std::uint32_t offset = 0U;
+            for (std::uint32_t index = inst.x; index-- > 0U;) {
+                const auto& operand = body_.concat[inst.aux + index];
+                result = builder_.CreateOr(result,
+                    builder_.CreateShl(
+                        builder_.CreateAnd(weak_of(operand.reg),
+                            constant(mask_of(operand.width))),
+                        constant(offset)));
+                offset += operand.width;
+            }
+            return result;
+        }
+        case KOp::conditional: {
+            // A known condition selects a value with its weak elements; an
+            // unknown one merges as Logic4 (none).
+            const auto condition = load_register(inst.x);
+            auto* a0 = builder_.CreateAnd(condition.a, constant(1U));
+            auto* b0 = builder_.CreateAnd(condition.b, constant(1U));
+            auto* selected = builder_.CreateSelect(nonzero(a0), weak_of(inst.y),
+                weak_of(inst.z));
+            return builder_.CreateSelect(nonzero(b0), constant(0U), selected);
+        }
+        default:
+            return nullptr;
+        }
+    }
+
+    void unknown_after(const std::uint32_t at, llvm::Value* result_unknown,
+        llvm::Value* result_weak)
     {
         const auto& inst = body_.code[at];
         const auto mode = mode_of(at);
@@ -2773,29 +3060,38 @@ private:
         case KOp::load_host:
         case KOp::dynamic_extract:
         case KOp::dynamic_part_select:
+        case KOp::shift:
             set_unknown(inst.d, last_unknown_ != nullptr ? last_unknown_
-                                                         : constant(0U));
+                                                         : constant(0U),
+                last_weak_);
             break;
         case KOp::dynamic_insert:
         case KOp::dynamic_part_insert:
             set_unknown(inst.d, insert_unknown_ != nullptr ? insert_unknown_
-                                                           : constant(0U));
+                                                           : constant(0U),
+                insert_weak_);
             break;
         case KOp::extract:
-            set_unknown(inst.d, inst.sub >= 2U
-                    ? (last_unknown_ != nullptr ? last_unknown_ : constant(0U))
-                    : result_unknown);
+            if (inst.sub >= 2U) {
+                set_unknown(inst.d,
+                    last_unknown_ != nullptr ? last_unknown_ : constant(0U),
+                    last_weak_);
+            } else {
+                set_unknown(inst.d, result_unknown, result_weak);
+            }
             break;
         case KOp::store_vhdl:
         case KOp::generic:
+        case KOp::net_delay:
             break;
         default:
             if (result_unknown != nullptr) {
-                set_unknown(inst.d, result_unknown);
+                set_unknown(inst.d, result_unknown, result_weak);
             }
             break;
         }
         last_unknown_ = nullptr;
+        last_weak_ = nullptr;
     }
 
     /// Inline dynamic_part_insert: known base, selection in range with
@@ -3008,6 +3304,865 @@ private:
         return { a, b };
     }
 
+    /// A chunk's two planes and its 'U' mask.
+    struct WideChunk {
+        Pair value;
+        llvm::Value* unknown { };
+    };
+
+    /// Chunk `chunk` of the wide value at storage index `reg` (`count`
+    /// chunks; `masks`: with 'U' masks), as the reference reads a wide
+    /// operand.
+    [[nodiscard]] WideChunk load_wide_chunk(const std::uint32_t reg,
+        const std::uint32_t count, const bool masks, const std::uint32_t chunk)
+    {
+        return { { builder_.CreateLoad(i64_, chunk_address(reg + chunk, 0U)),
+                     builder_.CreateLoad(i64_, chunk_address(reg + chunk, 1U)) },
+            masks ? builder_.CreateLoad(i64_, chunk_address(reg + count + chunk, 0U))
+                  : constant(0U) };
+    }
+
+    /// KOp::wide_concat, as StaticKernel::execute_wide builds it: the
+    /// result's planes (and, for sub 1, its 'U' and weak masks) are
+    /// assembled in values from every operand (narrow ones from their
+    /// registers and shadows, wide ones from their chunks), then stored; an
+    /// operand may be the destination.
+    void emit_wide_concat(const KInst& inst)
+    {
+        const auto chunks = detail::wide_chunks(inst.width);
+        // Planes 0 and 1 of each chunk, then the 'U' and weak masks.
+        const std::uint32_t used = inst.sub != 1U ? 2U : weak_mode() ? 4U : 3U;
+        std::vector<llvm::Value*> planes(4U * chunks, nullptr);
+        const auto place = [&](llvm::Value* a, llvm::Value* b, llvm::Value* u,
+                               llvm::Value* w, const std::uint32_t width,
+                               const std::uint32_t offset) {
+            const auto word = offset / 64U;
+            const auto shift = offset % 64U;
+            if (width == 0U || word >= chunks) {
+                return;
+            }
+            auto* m = constant(mask_of(width));
+            llvm::Value* parts[4] { builder_.CreateAnd(a, m),
+                builder_.CreateAnd(b, m), builder_.CreateAnd(u, m),
+                builder_.CreateAnd(w, m) };
+            const auto add = [&](const std::uint32_t index, llvm::Value* bits) {
+                planes[index] = planes[index] == nullptr
+                    ? bits : builder_.CreateOr(planes[index], bits);
+            };
+            for (std::uint32_t plane = 0U; plane < used; ++plane) {
+                add(plane * chunks + word, builder_.CreateShl(parts[plane], constant(shift)));
+                if (shift != 0U && shift + width > 64U && word + 1U < chunks) {
+                    add(plane * chunks + word + 1U,
+                        builder_.CreateLShr(parts[plane], constant(64U - shift)));
+                }
+            }
+        };
+        std::uint32_t offset = 0U;
+        for (std::uint32_t index = inst.x; index-- > 0U;) {
+            const auto& operand = body_.concat[inst.aux + index];
+            if (operand.width <= 64U) {
+                const auto value = load_register(operand.reg);
+                place(value.a, value.b, unknown_of(operand.reg), weak_of(operand.reg),
+                    operand.width, offset);
+            } else {
+                const auto count = detail::wide_chunks(operand.width);
+                for (std::uint32_t chunk = 0U; chunk < count; ++chunk) {
+                    const auto part = load_wide_chunk(operand.reg, count,
+                        operand.unknown != 0U, chunk);
+                    auto* weak = used == 4U && operand.unknown != 0U
+                        ? builder_.CreateLoad(i64_,
+                              chunk_address(operand.reg + count + chunk, 1U))
+                        : constant(0U);
+                    place(part.value.a, part.value.b, part.unknown, weak,
+                        std::min(64U, operand.width - 64U * chunk), offset + 64U * chunk);
+                }
+            }
+            offset += operand.width;
+        }
+        const auto plane = [&](const std::uint32_t index) {
+            return planes[index] != nullptr ? planes[index] : constant(0U);
+        };
+        for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
+            builder_.CreateStore(plane(chunk), chunk_address(inst.d + chunk, 0U));
+            builder_.CreateStore(plane(chunks + chunk), chunk_address(inst.d + chunk, 1U));
+            if (inst.sub == 1U) {
+                builder_.CreateStore(plane(2U * chunks + chunk),
+                    chunk_address(inst.d + chunks + chunk, 0U));
+                builder_.CreateStore(plane(3U * chunks + chunk),
+                    chunk_address(inst.d + chunks + chunk, 1U));
+            }
+        }
+    }
+
+    /// The value, 'U' mask and validity (an element that is not 0, 1, X, Z
+    /// or 'U' makes `ok` false) of the Logic9 code planes p0..p3 of `width`
+    /// elements, as kernel_word::logic9_uword; or, when `coerced`, the
+    /// Logic4 word they coerce to (kernel_word::logic9_coerced; always ok).
+    struct Logic9Chunk {
+        Pair value;
+        llvm::Value* unknown { };
+        llvm::Value* ok { };
+    };
+
+    [[nodiscard]] Logic9Chunk logic9_chunk(llvm::Value* raw0, llvm::Value* raw1,
+        llvm::Value* raw2, llvm::Value* raw3, const std::uint32_t width,
+        const bool coerced)
+    {
+        auto* m = constant(mask_of(width));
+        auto* p0 = builder_.CreateAnd(raw0, m);
+        auto* p1 = builder_.CreateAnd(raw1, m);
+        auto* p2 = builder_.CreateAnd(raw2, m);
+        auto* p3 = builder_.CreateAnd(raw3, m);
+        const auto inverted = [&](llvm::Value* value) {
+            return builder_.CreateAnd(builder_.CreateNot(value), m);
+        };
+        if (coerced) {
+            auto* not_p3 = inverted(p3);
+            auto* zero = builder_.CreateAnd(builder_.CreateAnd(not_p3, p1), inverted(p0));
+            auto* one = builder_.CreateAnd(builder_.CreateAnd(not_p3, p1), p0);
+            auto* high_z = builder_.CreateAnd(builder_.CreateAnd(not_p3, p2),
+                builder_.CreateAnd(inverted(p1), inverted(p0)));
+            auto* unknown = inverted(
+                builder_.CreateOr(builder_.CreateOr(zero, one), high_z));
+            return { { builder_.CreateOr(one, unknown),
+                         builder_.CreateOr(high_z, unknown) },
+                constant(0U), llvm::ConstantInt::getTrue(context_) };
+        }
+        auto* u = inverted(builder_.CreateOr(builder_.CreateOr(p0, p1),
+            builder_.CreateOr(p2, p3)));
+        auto* q0 = builder_.CreateOr(p0, u);
+        auto* x = builder_.CreateAnd(builder_.CreateAnd(inverted(p2), inverted(p1)), q0);
+        auto* high_z = builder_.CreateAnd(builder_.CreateAnd(p2, inverted(p1)),
+            inverted(q0));
+        return { { q0, builder_.CreateOr(x, high_z) }, u,
+            llvm::ConstantInt::getTrue(context_) };
+    }
+
+    /// The register d from the code planes p0..p3 of `m`-masked elements,
+    /// all nine codes (kernel_word::logic9_uword): the word, the 'U' mask
+    /// (last_unknown_) and the weak mask (last_weak_).
+    void store_nine(const std::uint32_t d, llvm::Value* raw0, llvm::Value* raw1,
+        llvm::Value* raw2, llvm::Value* raw3, llvm::Value* m)
+    {
+        auto* p0 = builder_.CreateAnd(raw0, m);
+        auto* p1 = builder_.CreateAnd(raw1, m);
+        auto* p2 = builder_.CreateAnd(raw2, m);
+        auto* p3 = builder_.CreateAnd(raw3, m);
+        auto* u = builder_.CreateAnd(
+            builder_.CreateNot(builder_.CreateOr(builder_.CreateOr(p0, p1),
+                builder_.CreateOr(p2, p3))),
+            m);
+        auto* a = builder_.CreateOr(p0, u);
+        auto* b = builder_.CreateAnd(
+            builder_.CreateOr(
+                builder_.CreateAnd(builder_.CreateNot(p1),
+                    builder_.CreateOr(builder_.CreateOr(p0, p2), u)),
+                p3),
+            m);
+        auto* w = builder_.CreateAnd(
+            builder_.CreateOr(
+                builder_.CreateAnd(p2, builder_.CreateOr(p1, p0)), p3),
+            m);
+        last_unknown_ = u;
+        last_weak_ = w;
+        store_register(d, Pair { a, b });
+    }
+
+    /// KOp::wide_load: slot x into the chunks of d, as execute_wide. A
+    /// Logic9 slot (sub 1) is read exactly: 0, 1, X, Z and 'U' here (a
+    /// design with weak sources reads through execute_wide).
+    void emit_wide_load(const KInst& inst)
+    {
+        const auto chunks = detail::wide_chunks(inst.width);
+        std::vector<Logic9Chunk> loaded;
+        for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
+            const auto width = std::min(64U, inst.width - 64U * chunk);
+            const auto plane = [&](const std::uint64_t index) {
+                return builder_.CreateLoad(i64_,
+                    slot_word(inst.x, index * inst.imm_a + chunk));
+            };
+            if (inst.sub == 0U) {
+                // A Logic4 slot: its planes' words are the chunks.
+                auto* m = constant(mask_of(width));
+                loaded.push_back({ { builder_.CreateAnd(plane(0U), m),
+                                       builder_.CreateAnd(plane(1U), m) },
+                    constant(0U), nullptr });
+                continue;
+            }
+            loaded.push_back(logic9_chunk(plane(0U), plane(1U), plane(2U), plane(3U),
+                width, inst.sub != 1U));
+        }
+        for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
+            builder_.CreateStore(loaded[chunk].value.a, chunk_address(inst.d + chunk, 0U));
+            builder_.CreateStore(loaded[chunk].value.b, chunk_address(inst.d + chunk, 1U));
+            if (inst.sub == 1U || inst.aux != 0U) {
+                // 'U' masks: the slot's (exact) or cleared.
+                builder_.CreateStore(loaded[chunk].unknown,
+                    chunk_address(inst.d + chunks + chunk, 0U));
+                builder_.CreateStore(constant(0U),
+                    chunk_address(inst.d + chunks + chunk, 1U));
+            }
+        }
+    }
+
+    /// Word `chunk` (a value) of the wide register at storage index `reg`,
+    /// plane `plane`.
+    [[nodiscard]] llvm::Value* dynamic_chunk_address(const std::uint32_t reg,
+        llvm::Value* chunk, const std::uint64_t plane)
+    {
+        return builder_.CreateInBoundsGEP(i64_, registers_,
+            builder_.CreateAdd(builder_.CreateShl(chunk, constant(1U)),
+                constant(static_cast<std::uint64_t>(reg) * 2U + plane)));
+    }
+
+    /// KOp::wide_part_insert, as execute_wide: the part selection of the
+    /// base register z (kernel_word::dynamic_part_write) places the narrow
+    /// source y into a copy of the target x. The selection's in-range
+    /// indices form one interval; its first element and length give the
+    /// written field. A write outside the target, or one whose target bits
+    /// do not follow the source bits, deoptimizes before anything is
+    /// written; an unknown base or a selection outside the object writes
+    /// nothing.
+    void emit_wide_part_insert(const KInst& inst, const std::uint32_t at)
+    {
+        const auto& part = body_.parts[inst.aux];
+        const auto chunks = detail::wide_chunks(inst.width);
+        const bool masks = inst.imm_a != 0U;
+        const auto source = load_register(inst.y);
+        const auto base = load_register(inst.z);
+        auto* source_unknown = unknown_of(inst.y);
+        const bool descending = part.source_descending;
+        const auto edge = static_cast<std::int64_t>(part.width - 1U);
+        const auto lower = std::min(part.left, part.right);
+        const auto upper = std::max(part.left, part.right);
+        const auto signed_constant = [&](const std::int64_t value) {
+            return constant(static_cast<std::uint64_t>(value));
+        };
+        const auto smax = [&](llvm::Value* left, llvm::Value* right) {
+            return builder_.CreateSelect(builder_.CreateICmpSGT(left, right), left, right);
+        };
+        const auto smin = [&](llvm::Value* left, llvm::Value* right) {
+            return builder_.CreateSelect(builder_.CreateICmpSLT(left, right), left, right);
+        };
+        auto* known = builder_.CreateICmpEQ(
+            builder_.CreateAnd(base.b, constant(mask_of(32U))), constant(0U));
+        auto* selected_right = builder_.CreateAdd(signed_index(base),
+            signed_constant(part.increasing ? (descending ? 0 : edge)
+                                            : (descending ? -edge : 0)));
+        // Source bit i selects index selected_right + i (descending) or
+        // selected_right - i; the ones inside [lower, upper] are bits
+        // first .. first + count - 1.
+        auto* from = descending ? builder_.CreateSub(signed_constant(lower), selected_right)
+                                : builder_.CreateSub(selected_right, signed_constant(upper));
+        auto* to = descending ? builder_.CreateSub(signed_constant(upper), selected_right)
+                              : builder_.CreateSub(selected_right, signed_constant(lower));
+        auto* first = smax(from, constant(0U));
+        auto* last = smin(to, signed_constant(edge));
+        auto* write = builder_.CreateAnd(known, builder_.CreateICmpSLE(first, last));
+        // Without a write the fields below are 0 (and gated off).
+        auto* first_bit = builder_.CreateSelect(write, first, constant(0U));
+        auto* count = builder_.CreateSelect(write,
+            builder_.CreateAdd(builder_.CreateSub(last, first), constant(1U)),
+            constant(1U));
+        auto* first_index = descending ? builder_.CreateAdd(selected_right, first_bit)
+                                       : builder_.CreateSub(selected_right, first_bit);
+        auto* right = signed_constant(part.right);
+        auto* distance = builder_.CreateSub(first_index, right);
+        auto* offset = builder_.CreateAdd(
+            builder_.CreateSelect(builder_.CreateICmpSGE(distance, constant(0U)),
+                distance, builder_.CreateNeg(distance)),
+            constant(part.base_offset));
+        auto* follows = builder_.CreateOr(
+            builder_.CreateICmpULT(count, constant(2U)),
+            descending ? builder_.CreateICmpSGE(first_index, right)
+                       : builder_.CreateICmpSLE(first_index, right));
+        auto* inside = builder_.CreateAnd(
+            builder_.CreateICmpULE(offset, constant(inst.width)),
+            builder_.CreateICmpULE(count,
+                builder_.CreateSub(constant(inst.width), offset)));
+        fail_unless(builder_.CreateNot(
+                        builder_.CreateAnd(write,
+                            builder_.CreateNot(builder_.CreateAnd(follows, inside)))),
+            at);
+        auto* field_offset = builder_.CreateSelect(write, offset, constant(0U));
+        if (inst.d != inst.x) {
+            const auto copied = masks ? 2U * chunks : chunks;
+            for (std::uint32_t index = 0U; index < copied; ++index) {
+                for (std::uint64_t word = 0U; word < 2U; ++word) {
+                    builder_.CreateStore(
+                        builder_.CreateLoad(i64_, chunk_address(inst.x + index, word)),
+                        chunk_address(inst.d + index, word));
+                }
+            }
+        }
+        auto* word = builder_.CreateLShr(field_offset, constant(6U));
+        auto* shift = builder_.CreateAnd(field_offset, constant(63U));
+        // The bits of the field in its chunk and, when it crosses into the
+        // next one, in that chunk.
+        auto* m = builder_.CreateLShr(constant(mask_of(64U)),
+            builder_.CreateSub(constant(64U), count));
+        auto* spills = builder_.CreateAnd(builder_.CreateICmpNE(shift, constant(0U)),
+            builder_.CreateICmpUGT(builder_.CreateAdd(shift, count), constant(64U)));
+        auto* spill = builder_.CreateAnd(builder_.CreateSub(constant(64U), shift),
+            constant(63U));
+        auto* low_field = builder_.CreateSelect(write, builder_.CreateShl(m, shift),
+            constant(0U));
+        auto* high_field = builder_.CreateSelect(builder_.CreateAnd(write, spills),
+            builder_.CreateLShr(m, spill), constant(0U));
+        auto* high_word = builder_.CreateSelect(spills,
+            builder_.CreateAdd(word, constant(1U)), word);
+        const auto place = [&](const std::uint32_t reg, const std::uint64_t plane,
+                               llvm::Value* bits) {
+            auto* field = builder_.CreateAnd(builder_.CreateLShr(bits, first_bit), m);
+            const auto merge = [&](llvm::Value* at_word, llvm::Value* mask,
+                                   llvm::Value* placed) {
+                auto* address = dynamic_chunk_address(reg, at_word, plane);
+                builder_.CreateStore(
+                    builder_.CreateOr(
+                        builder_.CreateAnd(builder_.CreateLoad(i64_, address),
+                            bit_not(mask)),
+                        builder_.CreateAnd(placed, mask)),
+                    address);
+            };
+            merge(word, low_field, builder_.CreateShl(field, shift));
+            merge(high_word, high_field, builder_.CreateLShr(field, spill));
+        };
+        place(inst.d, 0U, source.a);
+        place(inst.d, 1U, source.b);
+        if (masks) {
+            place(inst.d + chunks, 0U, source_unknown);
+        }
+    }
+
+    /// `count` bits (1 to 64; a value) from bit `offset` (a value; the field
+    /// lies inside the register) of the wide register at storage index
+    /// `reg` (`chunks` chunks; `masks`: with 'U' masks), and their 'U'
+    /// mask: wide_field in the reference evaluator for a run-time offset.
+    [[nodiscard]] std::pair<Pair, llvm::Value*> dynamic_wide_field(
+        const std::uint32_t reg, const std::uint32_t chunks, const bool masks,
+        llvm::Value* offset, llvm::Value* count)
+    {
+        auto* word = builder_.CreateLShr(offset, constant(6U));
+        auto* shift = builder_.CreateAnd(offset, constant(63U));
+        auto* spills = builder_.CreateAnd(
+            builder_.CreateICmpNE(shift, constant(0U)),
+            builder_.CreateAnd(
+                builder_.CreateICmpUGT(builder_.CreateAdd(shift, count), constant(64U)),
+                builder_.CreateICmpULT(builder_.CreateAdd(word, constant(1U)),
+                    constant(chunks))));
+        // The high chunk is read (from an in-register address) only when
+        // the field crosses into it.
+        auto* next = builder_.CreateSelect(spills,
+            builder_.CreateAdd(word, constant(1U)), word);
+        auto* spill_shift = builder_.CreateAnd(
+            builder_.CreateSub(constant(64U), shift), constant(63U));
+        auto* m = builder_.CreateLShr(constant(mask_of(64U)),
+            builder_.CreateSub(constant(64U), count));
+        const auto field = [&](const std::uint32_t first, const std::uint64_t plane) {
+            auto* low = builder_.CreateLoad(i64_,
+                dynamic_chunk_address(first, word, plane));
+            auto* high = builder_.CreateLoad(i64_,
+                dynamic_chunk_address(first, next, plane));
+            return builder_.CreateAnd(
+                builder_.CreateOr(builder_.CreateLShr(low, shift),
+                    builder_.CreateSelect(spills,
+                        builder_.CreateShl(high, spill_shift), constant(0U))),
+                m);
+        };
+        return { { field(reg, 0U), field(reg, 1U) },
+            masks ? field(reg + chunks, 0U) : constant(0U) };
+    }
+
+    /// Two-state code hands the instruction to the full code, the full
+    /// code deoptimizes (the reference evaluator continues at `at`), unless
+    /// `ok`.
+    void require(llvm::Value* ok, const std::uint32_t at)
+    {
+        if (two_state_) {
+            read_or_hand_over(ok);
+        } else {
+            fail_unless(ok, at);
+        }
+    }
+
+    /// dynamic_extract (sub 3) of one bit of a wide register, as
+    /// evaluate_slow_op: an index outside the declared range or the source
+    /// reads X (strict: the helper reports it); a 'U' element read into an
+    /// untracked register deoptimizes.
+    [[nodiscard]] Pair emit_wide_dynamic_extract(const KInst& inst,
+        const std::uint32_t at)
+    {
+        const auto& selection = body_.indices[inst.aux];
+        const auto index = load_register(inst.y);
+        const auto lower = std::min(selection.left, selection.right);
+        const auto upper = std::max(selection.left, selection.right);
+        auto* known = builder_.CreateICmpEQ(
+            builder_.CreateAnd(index.b, constant(mask_of(32U))), constant(0U));
+        auto* value = signed_index(index);
+        auto* in_range = builder_.CreateAnd(
+            builder_.CreateICmpSGE(value, constant(static_cast<std::uint64_t>(lower))),
+            builder_.CreateICmpSLE(value, constant(static_cast<std::uint64_t>(upper))));
+        auto* right = constant(static_cast<std::uint64_t>(selection.right));
+        auto* distance = builder_.CreateSelect(builder_.CreateICmpSGE(value, right),
+            builder_.CreateSub(value, right), builder_.CreateSub(right, value));
+        auto* offset = builder_.CreateAdd(distance, constant(selection.base_offset));
+        auto* fits = builder_.CreateICmpULT(offset, constant(inst.width));
+        auto* ok = builder_.CreateAnd(builder_.CreateAnd(known, in_range), fits);
+        auto* safe = builder_.CreateSelect(ok, offset, constant(0U));
+        const bool masks = inst.imm_a != 0U;
+        const auto [bit, unknown] = dynamic_wide_field(inst.x,
+            static_cast<std::uint32_t>(inst.imm_b), masks, safe, constant(1U));
+        if (masks && !tracked(inst.d)) {
+            require(builder_.CreateOr(builder_.CreateNot(ok),
+                        builder_.CreateICmpEQ(unknown, constant(0U))),
+                at);
+        }
+        auto* selected_unknown = builder_.CreateSelect(ok, unknown, constant(0U));
+        if ((inst.flags & detail::flag_strict) == 0U) {
+            last_unknown_ = selected_unknown;
+            return select(ok, bit, x_value(1U));
+        }
+        if (two_state_) {
+            // The full code reports the index.
+            read_or_hand_over(ok);
+            last_unknown_ = selected_unknown;
+            return bit;
+        }
+        auto* fast_block = builder_.GetInsertBlock();
+        auto* slow = llvm::BasicBlock::Create(context_, "slow", &function_);
+        auto* merge = llvm::BasicBlock::Create(context_, "merge", &function_);
+        builder_.CreateCondBr(ok, merge, slow);
+        builder_.SetInsertPoint(slow);
+        const auto slow_value = call_wide(at, zero_pair(), index, zero_pair());
+        auto* slow_end = builder_.GetInsertBlock();
+        builder_.CreateBr(merge);
+        builder_.SetInsertPoint(merge);
+        auto* a = builder_.CreatePHI(i64_, 2U);
+        a->addIncoming(bit.a, fast_block);
+        a->addIncoming(slow_value.a, slow_end);
+        auto* b = builder_.CreatePHI(i64_, 2U);
+        b->addIncoming(bit.b, fast_block);
+        b->addIncoming(slow_value.b, slow_end);
+        auto* merged_unknown = builder_.CreatePHI(i64_, 2U);
+        merged_unknown->addIncoming(unknown, fast_block);
+        merged_unknown->addIncoming(last_unknown_, slow_end);
+        last_unknown_ = merged_unknown;
+        return { a, b };
+    }
+
+    /// dynamic_part_select (sub 3) from a wide register, as
+    /// evaluate_slow_op reads a wide source: bits whose selected index is
+    /// outside the range or the source read X (0 in two-state code); an
+    /// unknown base selects nothing; a 'U' element read into an untracked
+    /// register deoptimizes. When the declared right bound is the low bound
+    /// of a descending range or the high bound of an ascending one, the
+    /// selected bits are one field of the source; otherwise each bit is
+    /// read on its own.
+    [[nodiscard]] Pair emit_wide_part_select(const KInst& inst, const std::uint32_t at)
+    {
+        const auto base = load_register(inst.y);
+        const auto& part = body_.parts[inst.aux];
+        const bool increasing = (inst.flags & detail::flag_increasing) != 0U;
+        const bool descending = (inst.flags & detail::flag_descending) != 0U;
+        const bool two_state = (inst.flags & detail::flag_two_state) != 0U;
+        const bool masks = inst.imm_a != 0U;
+        const auto chunks = static_cast<std::uint32_t>(inst.imm_b);
+        const auto lower = std::min(part.left, part.right);
+        const auto upper = std::max(part.left, part.right);
+        const auto width = inst.width;
+        const auto edge = static_cast<std::int64_t>(width) - 1;
+        const auto source_width = static_cast<std::int64_t>(inst.offset);
+        const auto signed_constant = [&](const std::int64_t value) {
+            return constant(static_cast<std::uint64_t>(value));
+        };
+        const auto smax = [&](llvm::Value* left, llvm::Value* right) {
+            return builder_.CreateSelect(builder_.CreateICmpSGT(left, right), left, right);
+        };
+        const auto smin = [&](llvm::Value* left, llvm::Value* right) {
+            return builder_.CreateSelect(builder_.CreateICmpSLT(left, right), left, right);
+        };
+        auto* known = builder_.CreateICmpEQ(
+            builder_.CreateAnd(base.b, constant(mask_of(32U))), constant(0U));
+        auto* selected_right = builder_.CreateAdd(signed_index(base),
+            signed_constant(increasing ? (descending ? 0 : edge)
+                                       : (descending ? -edge : 0)));
+        auto* m = constant(mask_of(width));
+        auto* fill = two_state ? constant(0U) : m;
+        Pair result { fill, fill };
+        llvm::Value* result_unknown = constant(0U);
+        // A 'U' element read: the destination must track it.
+        llvm::Value* unknown_read = llvm::ConstantInt::getFalse(context_);
+        if ((descending && part.right == lower) || (!descending && part.right == upper)) {
+            // Result bit i is source bit first + i.
+            auto* first = builder_.CreateAdd(
+                signed_constant(static_cast<std::int64_t>(part.base_offset)),
+                descending ? builder_.CreateSub(selected_right, signed_constant(part.right))
+                           : builder_.CreateSub(signed_constant(part.right), selected_right));
+            auto* low = descending
+                ? builder_.CreateSub(signed_constant(lower), selected_right)
+                : builder_.CreateSub(selected_right, signed_constant(upper));
+            auto* high = descending
+                ? builder_.CreateSub(signed_constant(upper), selected_right)
+                : builder_.CreateSub(selected_right, signed_constant(lower));
+            low = smax(smax(low, constant(0U)), builder_.CreateSub(constant(0U), first));
+            high = smin(smin(high, signed_constant(edge)),
+                builder_.CreateSub(signed_constant(source_width - 1), first));
+            auto* any = builder_.CreateAnd(known, builder_.CreateICmpSLE(low, high));
+            // Safe values when nothing is selected.
+            auto* count = builder_.CreateSelect(any,
+                builder_.CreateAdd(builder_.CreateSub(high, low), constant(1U)),
+                constant(1U));
+            auto* shift_out = builder_.CreateSelect(any, low, constant(0U));
+            auto* offset = builder_.CreateSelect(any, builder_.CreateAdd(first, low),
+                constant(0U));
+            const auto [field, field_unknown] = dynamic_wide_field(inst.x, chunks,
+                masks, offset, count);
+            auto* count_mask = builder_.CreateLShr(constant(mask_of(64U)),
+                builder_.CreateSub(constant(64U), count));
+            auto* keep = builder_.CreateNot(builder_.CreateShl(count_mask, shift_out));
+            const auto placed = [&](llvm::Value* plane, llvm::Value* bits) {
+                return builder_.CreateSelect(any,
+                    builder_.CreateOr(builder_.CreateAnd(plane, keep),
+                        builder_.CreateShl(bits, shift_out)),
+                    plane);
+            };
+            result = { placed(fill, field.a), placed(fill, field.b) };
+            result_unknown = builder_.CreateSelect(any,
+                builder_.CreateShl(field_unknown, shift_out), constant(0U));
+            unknown_read = builder_.CreateAnd(any,
+                builder_.CreateICmpNE(field_unknown, constant(0U)));
+        } else {
+            for (std::uint32_t bit = 0U; bit < width; ++bit) {
+                auto* selected = descending
+                    ? builder_.CreateAdd(selected_right, constant(bit))
+                    : builder_.CreateSub(selected_right, constant(bit));
+                auto* right = signed_constant(part.right);
+                auto* distance = builder_.CreateSub(selected, right);
+                auto* from = builder_.CreateAdd(
+                    builder_.CreateSelect(builder_.CreateICmpSGE(distance, constant(0U)),
+                        distance, builder_.CreateNeg(distance)),
+                    constant(part.base_offset));
+                auto* ok = builder_.CreateAnd(known,
+                    builder_.CreateAnd(
+                        builder_.CreateAnd(
+                            builder_.CreateICmpSGE(selected, signed_constant(lower)),
+                            builder_.CreateICmpSLE(selected, signed_constant(upper))),
+                        builder_.CreateICmpULT(from, signed_constant(source_width))));
+                const auto [source, source_unknown] = dynamic_wide_field(inst.x, chunks,
+                    masks, builder_.CreateSelect(ok, from, constant(0U)), constant(1U));
+                const auto one = std::uint64_t { 1 } << bit;
+                const auto put = [&](llvm::Value* plane, llvm::Value* bits) {
+                    return builder_.CreateSelect(ok,
+                        builder_.CreateOr(builder_.CreateAnd(plane, constant(~one)),
+                            builder_.CreateShl(bits, constant(bit))),
+                        plane);
+                };
+                result = { put(result.a, source.a), put(result.b, source.b) };
+                result_unknown = builder_.CreateOr(result_unknown,
+                    builder_.CreateSelect(ok,
+                        builder_.CreateShl(source_unknown, constant(bit)), constant(0U)));
+                unknown_read = builder_.CreateOr(unknown_read,
+                    builder_.CreateAnd(ok, builder_.CreateICmpNE(source_unknown, constant(0U))));
+            }
+        }
+        if (masks && !tracked(inst.d)) {
+            require(builder_.CreateNot(unknown_read), at);
+        }
+        last_unknown_ = result_unknown;
+        return result;
+    }
+
+    /// One 64-bit chunk of a wide value written to a slot: bits [offset,
+    /// offset + width) with their 'U' mask.
+    struct QueuedChunk {
+        std::uint32_t offset { };
+        std::uint32_t width { };
+        Pair value;
+        llvm::Value* unknown { };
+    };
+
+    /// Appends `chunks` as writes of `kind` (StaticKernelWrite) to the slot
+    /// bound at `binding_index` to the round's queue (StaticKernel::push_write:
+    /// one entry each, then one mark of the slot), each chunk's offset from
+    /// `base` when it is set. `appended` emits what follows the entries
+    /// (a resolved slot's inline resolution). A full queue takes `full`,
+    /// which emits the instruction's helper (the runtime grows the queue).
+    template <typename Appended, typename Full>
+    void emit_queued_chunks(const std::uint32_t binding_index,
+        const std::vector<QueuedChunk>& chunks, const std::uint32_t kind, llvm::Value* base,
+        const std::uint32_t at, Appended&& appended, Full&& full)
+    {
+        auto* slot = builder_.CreateAnd(binding(binding_index, 1U),
+            llvm::ConstantInt::get(i32_, ~silent_bit));
+        auto* done = llvm::BasicBlock::Create(context_, "appended", &function_);
+        auto* queue = builder_.CreateLoad(ptr_, frame_field(56U));
+        auto* count = builder_.CreateLoad(i32_,
+            builder_.CreateConstInBoundsGEP1_64(i8_, queue, 8U));
+        auto* capacity = builder_.CreateLoad(i32_,
+            builder_.CreateConstInBoundsGEP1_64(i8_, queue, 12U));
+        auto* next = builder_.CreateAdd(count,
+            llvm::ConstantInt::get(i32_, static_cast<std::uint32_t>(chunks.size())));
+        auto* fast = llvm::BasicBlock::Create(context_, "append", &function_);
+        auto* slow = llvm::BasicBlock::Create(context_, "append_full", &function_);
+        builder_.CreateCondBr(builder_.CreateICmpULE(next, capacity), fast, slow);
+        builder_.SetInsertPoint(fast);
+        auto* data = builder_.CreateLoad(ptr_, queue);
+        auto* member = builder_.CreateLoad(i32_, frame_field(32U));
+        for (std::uint32_t index = 0U; index < chunks.size(); ++index) {
+            const auto& chunk = chunks[index];
+            auto* entry = builder_.CreateInBoundsGEP(i8_, data,
+                builder_.CreateMul(builder_.CreateZExt(
+                                       builder_.CreateAdd(count,
+                                           llvm::ConstantInt::get(i32_, index)),
+                                       i64_),
+                    constant(56U)));
+            const auto field = [&](const std::uint64_t at_byte) {
+                return builder_.CreateConstInBoundsGEP1_64(i8_, entry, at_byte);
+            };
+            builder_.CreateStore(slot, field(0U));
+            builder_.CreateStore(base != nullptr
+                    ? builder_.CreateAdd(base, llvm::ConstantInt::get(i32_, chunk.offset))
+                    : llvm::ConstantInt::get(i32_, chunk.offset),
+                field(4U));
+            builder_.CreateStore(llvm::ConstantInt::get(i32_, chunk.width), field(8U));
+            builder_.CreateStore(member, field(12U));
+            builder_.CreateStore(chunk.value.a, field(16U));
+            builder_.CreateStore(chunk.value.b, field(24U));
+            builder_.CreateStore(chunk.unknown, field(32U));
+            builder_.CreateStore(llvm::ConstantInt::get(i32_, kind), field(40U));
+            builder_.CreateStore(llvm::ConstantInt::get(i32_, at), field(44U));
+            if (body_.weak != 0U) {
+                builder_.CreateStore(constant(0U), field(48U));
+            }
+        }
+        builder_.CreateStore(next, builder_.CreateConstInBoundsGEP1_64(i8_, queue, 8U));
+        appended();
+        emit_write_mark(slot, done);
+        builder_.SetInsertPoint(slow);
+        full();
+        builder_.CreateBr(done);
+        builder_.SetInsertPoint(done);
+    }
+
+    /// Chunk `chunk` of `bits` bits of the wide register at storage index
+    /// `reg`.
+    [[nodiscard]] Pair wide_chunk_value(const std::uint32_t reg,
+        const std::uint32_t chunk, const std::uint32_t bits)
+    {
+        auto* m = constant(mask_of(bits));
+        return { builder_.CreateAnd(builder_.CreateLoad(i64_,
+                                        chunk_address(reg + chunk, 0U)),
+                     m),
+            builder_.CreateAnd(builder_.CreateLoad(i64_, chunk_address(reg + chunk, 1U)), m) };
+    }
+
+    /// KOp::wide_store to a slot that is not resolved (imm_a 0), as
+    /// StaticKernel's wide_store effect stores it, one 64-bit chunk at a
+    /// time. A SystemVerilog blocking store (sub 0; imm_b the slot's words
+    /// per plane) writes each chunk as the field store of a wide slot does;
+    /// a nonblocking one (sub 1) and a VHDL signal assignment (sub 2) append
+    /// one write per chunk to the round's queue. A VHDL shared variable
+    /// (sub 2, flag_blocking) stores at once with one change report, which
+    /// the helper makes.
+    void emit_wide_slot_store(const KInst& inst, const std::uint32_t at)
+    {
+        const auto chunks = static_cast<std::uint32_t>(detail::wide_chunks(inst.width));
+        const auto chunk_bits = [&](const std::uint32_t chunk) {
+            return std::min(64U, inst.width - 64U * chunk);
+        };
+        if (inst.sub == 0U && inst.imm_b != 0U) {
+            for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
+                auto field = inst;
+                field.imm_a = inst.imm_b;
+                field.offset = inst.offset + 64U * chunk;
+                field.width = chunk_bits(chunk);
+                emit_store_wide_slot(field, wide_chunk_value(inst.x, chunk, chunk_bits(chunk)));
+            }
+            return;
+        }
+        if (inst.sub == 0U || (inst.sub == 2U && (inst.flags & detail::flag_blocking) != 0U)) {
+            (void)call_wide(at, zero_pair(), zero_pair(), zero_pair());
+            return;
+        }
+        std::vector<QueuedChunk> queued;
+        for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
+            // The chunk's 'U' mask follows the chunks (wide_unknown_flag).
+            queued.push_back({ inst.offset + 64U * chunk, chunk_bits(chunk),
+                wide_chunk_value(inst.x, chunk, chunk_bits(chunk)),
+                inst.aux != 0U
+                    ? builder_.CreateAnd(builder_.CreateLoad(i64_,
+                                             chunk_address(inst.x + chunks + chunk, 0U)),
+                          constant(mask_of(chunk_bits(chunk))))
+                    : constant(0U) });
+        }
+        emit_queued_chunks(inst.d, queued, 0U, nullptr, at, [] { }, [&] {
+            (void)call_wide(at, zero_pair(), zero_pair(), zero_pair());
+        });
+    }
+
+    /// Whether the part selection of a KOp::wide_move (sub 1) takes result
+    /// bit i from source bit first + i: the declared right bound is the low
+    /// bound of a descending range or the high bound of an ascending one.
+    [[nodiscard]] bool selects_one_field(const KInst& inst) const
+    {
+        const auto& part = body_.parts[inst.aux];
+        const bool descending = (inst.flags & detail::flag_descending) != 0U;
+        return (descending && part.right == std::min(part.left, part.right))
+            || (!descending && part.right == std::max(part.left, part.right));
+    }
+
+    /// Whether emit_wide_move covers `inst`: the target is not resolved
+    /// (imm_b the target's words per plane, from bit 32 the source slot's
+    /// width) and a part selection is one field of the source.
+    [[nodiscard]] bool moves_inline(const KInst& inst) const
+    {
+        return (inst.imm_b & 0xffffffffU) != 0U
+            && (inst.sub == 0U || (inst.sub == 1U && selects_one_field(inst)));
+    }
+
+    /// `count` bits (1 to 64; a value) at bit `offset` (a value; the field
+    /// lies inside the slot) of a Logic4 slot bound at `index` with `words`
+    /// words per plane: its two planes (read_bits in StaticKernel::move_wide).
+    [[nodiscard]] Pair dynamic_slot_field(const std::uint32_t index,
+        const std::uint64_t words, llvm::Value* offset, llvm::Value* count)
+    {
+        auto* word = builder_.CreateLShr(offset, constant(6U));
+        auto* shift = builder_.CreateAnd(offset, constant(63U));
+        auto* spills = builder_.CreateAnd(
+            builder_.CreateICmpNE(shift, constant(0U)),
+            builder_.CreateAnd(
+                builder_.CreateICmpUGT(builder_.CreateAdd(shift, count), constant(64U)),
+                builder_.CreateICmpULT(builder_.CreateAdd(word, constant(1U)),
+                    constant(words))));
+        auto* next = builder_.CreateSelect(spills,
+            builder_.CreateAdd(word, constant(1U)), word);
+        auto* spill_shift = builder_.CreateAnd(
+            builder_.CreateSub(constant(64U), shift), constant(63U));
+        auto* m = builder_.CreateLShr(constant(mask_of(64U)),
+            builder_.CreateSub(constant(64U), count));
+        const auto plane = [&](const std::uint64_t first) {
+            auto* start = slot_word(index, first);
+            auto* low = builder_.CreateLoad(i64_,
+                builder_.CreateInBoundsGEP(i64_, start, word));
+            auto* high = builder_.CreateLoad(i64_,
+                builder_.CreateInBoundsGEP(i64_, start, next));
+            return builder_.CreateAnd(
+                builder_.CreateOr(builder_.CreateLShr(low, shift),
+                    builder_.CreateSelect(spills,
+                        builder_.CreateShl(high, spill_shift), constant(0U))),
+                m);
+        };
+        return { plane(0U), plane(words) };
+    }
+
+    /// KOp::wide_move to a slot that is not resolved (moves_inline), as
+    /// move_wide does it: the value (the source slot's bits, or its part
+    /// selection of base y, with X where the selection is outside the
+    /// source) is read whole, then written one 64-bit chunk at a time,
+    /// immediately or (flag_nba) queued.
+    void emit_wide_move(const KInst& inst, const std::uint32_t at)
+    {
+        const auto chunks = static_cast<std::uint32_t>(detail::wide_chunks(inst.width));
+        const auto source_words = inst.imm_a;
+        const auto target_words = inst.imm_b & 0xffffffffU;
+        const auto source_width = static_cast<std::int64_t>(inst.imm_b >> 32U);
+        std::vector<QueuedChunk> moved;
+        if (inst.sub == 0U) {
+            for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
+                const auto bits = std::min(64U, inst.width - 64U * chunk);
+                auto* m = constant(mask_of(bits));
+                moved.push_back({ inst.offset + 64U * chunk, bits,
+                    { builder_.CreateAnd(builder_.CreateLoad(i64_,
+                                             slot_word(inst.x, chunk)),
+                          m),
+                        builder_.CreateAnd(builder_.CreateLoad(i64_,
+                                               slot_word(inst.x, source_words + chunk)),
+                            m) },
+                    constant(0U) });
+            }
+        } else {
+            const auto base = load_register(inst.y);
+            const auto& part = body_.parts[inst.aux];
+            const bool increasing = (inst.flags & detail::flag_increasing) != 0U;
+            const bool descending = (inst.flags & detail::flag_descending) != 0U;
+            const bool two_state = (inst.flags & detail::flag_two_state) != 0U;
+            const auto lower = std::min(part.left, part.right);
+            const auto upper = std::max(part.left, part.right);
+            const auto edge = static_cast<std::int64_t>(inst.width) - 1;
+            const auto signed_constant = [&](const std::int64_t value) {
+                return constant(static_cast<std::uint64_t>(value));
+            };
+            const auto smax = [&](llvm::Value* left, llvm::Value* right) {
+                return builder_.CreateSelect(builder_.CreateICmpSGT(left, right), left, right);
+            };
+            const auto smin = [&](llvm::Value* left, llvm::Value* right) {
+                return builder_.CreateSelect(builder_.CreateICmpSLT(left, right), left, right);
+            };
+            auto* known = builder_.CreateICmpEQ(
+                builder_.CreateAnd(base.b, constant(mask_of(32U))), constant(0U));
+            auto* selected_right = builder_.CreateAdd(signed_index(base),
+                signed_constant(increasing ? (descending ? 0 : edge)
+                                           : (descending ? -edge : 0)));
+            // Result bit i is source bit first + i, for the bits low .. high
+            // that select an index of the source.
+            auto* first = builder_.CreateAdd(
+                signed_constant(static_cast<std::int64_t>(part.base_offset)),
+                descending ? builder_.CreateSub(selected_right, signed_constant(part.right))
+                           : builder_.CreateSub(signed_constant(part.right), selected_right));
+            auto* low = descending
+                ? builder_.CreateSub(signed_constant(lower), selected_right)
+                : builder_.CreateSub(selected_right, signed_constant(upper));
+            auto* high = descending
+                ? builder_.CreateSub(signed_constant(upper), selected_right)
+                : builder_.CreateSub(selected_right, signed_constant(lower));
+            low = smax(smax(low, constant(0U)), builder_.CreateSub(constant(0U), first));
+            high = smin(smin(high, signed_constant(edge)),
+                builder_.CreateSub(signed_constant(source_width - 1), first));
+            for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
+                const auto bits = std::min(64U, inst.width - 64U * chunk);
+                const auto chunk_low = static_cast<std::int64_t>(64U * chunk);
+                // This chunk's share of the selected bits.
+                auto* from = smax(low, signed_constant(chunk_low));
+                auto* to = smin(high, signed_constant(chunk_low + bits - 1));
+                auto* any = builder_.CreateAnd(known, builder_.CreateICmpSLE(from, to));
+                auto* count = builder_.CreateSelect(any,
+                    builder_.CreateAdd(builder_.CreateSub(to, from), constant(1U)),
+                    constant(1U));
+                auto* shift_out = builder_.CreateSelect(any,
+                    builder_.CreateSub(from, signed_constant(chunk_low)), constant(0U));
+                auto* offset = builder_.CreateSelect(any, builder_.CreateAdd(first, from),
+                    constant(0U));
+                const auto field = dynamic_slot_field(inst.x, source_words, offset, count);
+                auto* count_mask = builder_.CreateLShr(constant(mask_of(64U)),
+                    builder_.CreateSub(constant(64U), count));
+                auto* keep = builder_.CreateNot(builder_.CreateShl(count_mask, shift_out));
+                auto* fill = two_state ? constant(0U) : constant(mask_of(bits));
+                const auto placed = [&](llvm::Value* plane) {
+                    return builder_.CreateSelect(any,
+                        builder_.CreateOr(builder_.CreateAnd(fill, keep),
+                            builder_.CreateShl(plane, shift_out)),
+                        fill);
+                };
+                moved.push_back({ inst.offset + 64U * chunk, bits,
+                    { placed(field.a), placed(field.b) }, constant(0U) });
+            }
+        }
+        if ((inst.flags & detail::flag_nba) == 0U) {
+            for (const auto& chunk : moved) {
+                auto field = inst;
+                field.imm_a = target_words;
+                field.offset = chunk.offset;
+                field.width = chunk.width;
+                emit_store_wide_slot(field, chunk.value);
+            }
+            return;
+        }
+        emit_queued_chunks(inst.d, moved, 0U, nullptr, at, [] { }, [&] {
+            call_effect(at, zero_pair(),
+                inst.sub == 1U ? load_register(inst.y) : zero_pair(), zero_pair());
+        });
+    }
+
     void emit_instruction(const std::uint32_t at)
     {
         const auto& inst = body_.code[at];
@@ -3048,6 +4203,22 @@ private:
                 // (status 4, see StaticKernel::native_generic_kind).
                 (void)continue_point();
             }
+            check_status();
+            break;
+        }
+        case KOp::net_delay: {
+            // The helper reads its source (and 'U' mask) from the register
+            // file: a local source is stored there first. It writes no
+            // register and no slot, so nothing cached is stale.
+            if (inst.x < local_.size() && local_[inst.x] != nullptr) {
+                const auto value = load_register(inst.x);
+                builder_.CreateStore(value.a, chunk_address(inst.x, 0U));
+                builder_.CreateStore(value.b, chunk_address(inst.x, 1U));
+            }
+            auto* type = llvm::FunctionType::get(llvm::Type::getVoidTy(context_),
+                { ptr_, ptr_, i32_ }, false);
+            builder_.CreateCall(type, helper_symbol("fsim_sk_net_delay", type),
+                { frame_, registers_, llvm::ConstantInt::get(i32_, at) });
             check_status();
             break;
         }
@@ -3149,9 +4320,17 @@ private:
             }
             store_register(inst.d, { constant(inst.imm_a), constant(inst.imm_b) });
             break;
-        case KOp::copy:
-            store_register(inst.d, load_register(inst.x));
+        case KOp::copy: {
+            auto value = load_register(inst.x);
+            if (weak_mode() && tracked(inst.x) && (mode_of(at) & detail::u_aware) == 0U) {
+                // A Logic4 destination reads '-' (the word Z) as X
+                // (kernel_word::coerce_weak).
+                value.a = builder_.CreateOr(value.a,
+                    builder_.CreateAnd(weak_of(inst.x), value.b));
+            }
+            store_register(inst.d, value);
             break;
+        }
         case KOp::load_slot:
             store_register(inst.d,
                 { builder_.CreateLoad(i64_, slot_word(inst.x, 0U)),
@@ -3209,17 +4388,16 @@ private:
                 const auto [value, unknown] = wide_field(inst.x,
                     static_cast<std::uint32_t>(inst.imm_b), inst.imm_a != 0U,
                     inst.offset, inst.width);
-                if (inst.imm_a != 0U && !tracked(inst.d)) {
-                    // A 'U' bit has nowhere to go: the reference evaluator
-                    // continues (two-state code: the full code redoes it).
-                    auto* ok = builder_.CreateICmpEQ(unknown, constant(0U));
-                    if (two_state_) {
-                        read_or_hand_over(ok);
-                    } else {
-                        fail_unless(ok, at);
-                    }
+                if (two_state_ && inst.imm_a != 0U) {
+                    // Two-state code holds no 'U' (the full code redoes the
+                    // instruction).
+                    read_or_hand_over(builder_.CreateICmpEQ(unknown, constant(0U)));
                 }
                 last_unknown_ = unknown;
+                last_weak_ = weak_mode() && inst.imm_a != 0U
+                    ? wide_weak_field(inst.x, static_cast<std::uint32_t>(inst.imm_b),
+                          inst.offset, inst.width)
+                    : nullptr;
                 store_register(inst.d, value);
                 break;
             }
@@ -3283,14 +4461,33 @@ private:
             store_register(inst.d,
                 call_evaluate(at, zero_pair(), zero_pair(), zero_pair()));
             break;
-        case KOp::shift:
+        case KOp::shift: {
+            auto* weak_in = weak_mode() && tracked(inst.x) ? weak_of(inst.x) : nullptr;
+            // The weak mask shifts as a word of its own, inline like the
+            // value (an unknown amount gives all X: no weak element).
+            std::optional<Pair> moved;
+            if (weak_in != nullptr) {
+                moved = emit_shift(inst, at, Pair { weak_in, constant(0U) },
+                    load_register(inst.y));
+            }
             store_register(inst.d,
                 emit_shift(inst, at, load_register(inst.x), load_register(inst.y)));
+            if (moved) {
+                last_unknown_ = constant(0U);
+                last_weak_ = builder_.CreateAnd(moved->a,
+                    builder_.CreateAnd(bit_not(moved->b), constant(mask_of(inst.width))));
+            }
             break;
+        }
         case KOp::dynamic_extract:
             if (inst.sub == 3U) {
-                store_register(inst.d,
-                    call_wide(at, zero_pair(), load_register(inst.y), zero_pair()));
+                if (weak_mode() && inst.imm_a != 0U) {
+                    // Weak elements of a wide register: the helper.
+                    store_register(inst.d,
+                        call_wide(at, zero_pair(), load_register(inst.y), zero_pair()));
+                } else {
+                    store_register(inst.d, emit_wide_dynamic_extract(inst, at));
+                }
             } else if (inst.sub != 0U) {
                 store_register(inst.d,
                     call_evaluate(at, zero_pair(), load_register(inst.y), zero_pair()));
@@ -3301,8 +4498,12 @@ private:
             break;
         case KOp::dynamic_part_select:
             if (inst.sub == 3U) {
-                store_register(inst.d,
-                    call_wide(at, zero_pair(), load_register(inst.y), zero_pair()));
+                if (weak_mode() && inst.imm_a != 0U) {
+                    store_register(inst.d,
+                        call_wide(at, zero_pair(), load_register(inst.y), zero_pair()));
+                } else {
+                    store_register(inst.d, emit_wide_part_select(inst, at));
+                }
             } else if (inst.sub == 1U && (inst.z == 2U || inst.z == 4U)) {
                 store_register(inst.d, emit_slot_part_select(inst, at));
             } else if (inst.sub != 0U) {
@@ -3343,11 +4544,13 @@ private:
             store_register(inst.d,
                 emit_dynamic_insert(inst, at, load_register(inst.x),
                     load_register(inst.y), load_register(inst.z)));
+            insert_weak_ = weak_insert(inst, at);
             break;
         case KOp::dynamic_part_insert:
             store_register(inst.d,
                 emit_dynamic_part_insert(inst, at, load_register(inst.x),
                     load_register(inst.y), load_register(inst.z)));
+            insert_weak_ = weak_insert(inst, at);
             break;
         case KOp::mem_read:
             store_register(inst.d, emit_mem_read(inst, at));
@@ -3392,7 +4595,9 @@ private:
             break;
         }
         case KOp::store_slot:
-            if (inst.sub == 1U) {
+            if (inst.sub >= 2U) {
+                emit_store_net(inst, load_register(inst.x));
+            } else if (inst.sub == 1U) {
                 emit_store_wide_slot(inst, load_register(inst.x));
             } else {
                 emit_store_slot(inst, load_register(inst.x));
@@ -3403,7 +4608,10 @@ private:
             emit_deferred_store(inst, at);
             break;
         case KOp::store_host:
-            call_effect(at, load_register(inst.x), zero_pair(), zero_pair());
+            // z carries the value's weak mask (a VHDL host signal holds the
+            // nine values).
+            call_effect(at, load_register(inst.x), zero_pair(),
+                weak_mode() && tracked(inst.x) ? masks_of(inst.x) : zero_pair());
             break;
         case KOp::store_slot_dynamic:
             emit_store_slot_dynamic(inst, at);
@@ -3419,10 +4627,19 @@ private:
             call_effect(at, zero_pair(), zero_pair(), zero_pair());
             break;
         case KOp::wide_move:
+            if (moves_inline(inst)) {
+                emit_wide_move(inst, at);
+                break;
+            }
             call_effect(at, zero_pair(),
                 inst.sub == 1U ? load_register(inst.y) : zero_pair(), zero_pair());
             break;
         case KOp::wide_copy:
+            if (weak_mode() && inst.sub == 1U) {
+                // A Logic4 destination reads weak elements as coerce_weak.
+                (void)call_wide(at, zero_pair(), zero_pair(), zero_pair());
+                break;
+            }
             for (std::uint32_t index = 0U; index < inst.aux; ++index) {
                 for (std::uint64_t word = 0U; word < 2U; ++word) {
                     builder_.CreateStore(
@@ -3444,40 +4661,36 @@ private:
             }
             break;
         case KOp::wide_load:
-            if (inst.sub == 0U) {
-                // A Logic4 slot: its planes' words are the chunks.
-                const auto chunks = detail::wide_chunks(inst.width);
-                for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
-                    auto* m = constant(mask_of(std::min(64U, inst.width - 64U * chunk)));
-                    for (std::uint64_t plane = 0U; plane < 2U; ++plane) {
-                        builder_.CreateStore(
-                            builder_.CreateAnd(builder_.CreateLoad(i64_,
-                                                   slot_word(inst.x,
-                                                       plane * inst.imm_a + chunk)),
-                                m),
-                            chunk_address(inst.d + chunk, plane));
-                    }
-                    if (inst.aux != 0U) {
-                        builder_.CreateStore(constant(0U),
-                            chunk_address(inst.d + chunks + chunk, 0U));
-                        builder_.CreateStore(constant(0U),
-                            chunk_address(inst.d + chunks + chunk, 1U));
-                    }
-                }
+            if (weak_mode() && inst.sub == 1U) {
+                // All nine codes: the helper (execute_wide) decodes them.
+                (void)call_wide(at, zero_pair(), zero_pair(), zero_pair());
                 break;
             }
-            (void)call_wide(at, zero_pair(), zero_pair(), zero_pair());
+            emit_wide_load(inst);
+            break;
+        case KOp::wide_store:
+            if (weak_mode() && inst.sub == 2U && inst.aux != 0U) {
+                // Chunks with weak masks.
+                (void)call_wide(at, zero_pair(), zero_pair(), zero_pair());
+                break;
+            }
+            if (inst.imm_a != 0U) {
+                emit_wide_net_store(inst, at);
+                break;
+            }
+            emit_wide_slot_store(inst, at);
             break;
         case KOp::wide_concat:
-        case KOp::wide_store:
-            (void)call_wide(at, zero_pair(), zero_pair(), zero_pair());
+            emit_wide_concat(inst);
             break;
-        case KOp::wide_part_insert: {
-            const auto source = load_register(inst.y);
-            (void)call_wide(at, Pair { unknown_of(inst.y), constant(0U) }, source,
-                load_register(inst.z));
+        case KOp::wide_part_insert:
+            if (weak_mode() && inst.imm_a != 0U) {
+                (void)call_wide(at, tracked(inst.y) ? masks_of(inst.y) : zero_pair(),
+                    load_register(inst.y), load_register(inst.z));
+                break;
+            }
+            emit_wide_part_insert(inst, at);
             break;
-        }
         case KOp::load_slot9: {
             // Strong 0/1 elements: p1 set, p2 and p3 clear, p0 the value.
             const auto plane = [&](const std::uint64_t index) {
@@ -3490,6 +4703,11 @@ private:
             auto* ok = builder_.CreateAnd(
                 builder_.CreateICmpEQ(builder_.CreateAnd(upper, m), constant(0U)),
                 builder_.CreateICmpEQ(builder_.CreateAnd(p1, m), m));
+            if (weak_mode()) {
+                // All nine codes inline.
+                store_nine(inst.d, p0, p1, plane(2U), plane(3U), m);
+                break;
+            }
             if (two_state_) {
                 read_or_hand_over(ok);
                 last_unknown_ = constant(0U);
@@ -3544,51 +4762,52 @@ private:
                 last_unknown_ = constant(0U);
                 break;
             }
-            // Exact (kernel_word::logic9_uword): 0, 1, X, Z, and 'U' into a
-            // tracked register; W, L, H and '-' take the reference path.
+            if (weak_mode()) {
+                // Exact, all nine codes inline (store_nine).
+                store_nine(inst.d, p0, p1, p2, p3, m);
+                break;
+            }
+            // Exact (kernel_word::logic9_uword): 0, 1, X, Z and 'U' into the
+            // tracked destination. A design without weak sources has no
+            // other code (design_may_hold_weak).
             auto* u = inverted(builder_.CreateOr(builder_.CreateOr(p0, p1),
                 builder_.CreateOr(p2, p3)));
             auto* q0 = builder_.CreateOr(p0, u);
-            auto* known = builder_.CreateAnd(p1, inverted(p2));
             auto* x = builder_.CreateAnd(builder_.CreateAnd(inverted(p2), inverted(p1)), q0);
             auto* high_z = builder_.CreateAnd(builder_.CreateAnd(p2, inverted(p1)),
                 inverted(q0));
-            llvm::Value* ok = builder_.CreateAnd(builder_.CreateICmpEQ(p3, constant(0U)),
-                builder_.CreateICmpEQ(builder_.CreateOr(builder_.CreateOr(known, x), high_z),
-                    m));
-            if (!tracked(inst.d)) {
-                ok = builder_.CreateAnd(ok, builder_.CreateICmpEQ(u, constant(0U)));
-            }
             if (two_state_) {
                 // Two-state code continues only with strong 0/1 values.
-                read_or_hand_over(builder_.CreateAnd(ok,
-                    builder_.CreateICmpEQ(builder_.CreateOr(builder_.CreateOr(x, high_z), u),
-                        constant(0U))));
+                read_or_hand_over(builder_.CreateICmpEQ(
+                    builder_.CreateOr(builder_.CreateOr(x, high_z), u), constant(0U)));
                 last_unknown_ = constant(0U);
                 store_register(inst.d, Pair { q0, constant(0U) });
                 break;
             }
-            store_register(inst.d,
-                with_fallback(ok, Pair { q0, builder_.CreateOr(x, high_z) }, at,
-                    zero_pair(), zero_pair(), u));
+            last_unknown_ = u;
+            store_register(inst.d, Pair { q0, builder_.CreateOr(x, high_z) });
             break;
         }
         case KOp::store_vhdl:
+            if (inst.sub == 2U && (inst.flags & detail::flag_blocking) == 0U) {
+                emit_net_constant_store(inst, at, nullptr);
+                break;
+            }
             if (inst.sub == 0U && (inst.flags & detail::flag_blocking) == 0U) {
                 // z - 1: a per-instance binding holding the bit offset.
                 emit_deferred_store(inst, at,
                     inst.z != 0U ? binding(inst.z - 1U, 0U) : nullptr);
                 break;
             }
-            if (inst.sub == 1U && (inst.flags & detail::flag_blocking) == 0U
-                && inst.imm_a != 0U) {
+            if ((inst.sub == 1U || inst.sub == 3U)
+                && (inst.flags & detail::flag_blocking) == 0U && inst.imm_a != 0U) {
                 emit_indexed_deferred_store(inst, at);
                 break;
             }
-            // z carries the value's 'U' mask.
+            // z carries the value's 'U' and weak masks.
             call_effect(at, load_register(inst.x),
-                inst.sub == 1U ? load_register(inst.y) : zero_pair(),
-                Pair { unknown_of(inst.x), constant(0U) });
+                inst.sub == 1U || inst.sub == 3U ? load_register(inst.y) : zero_pair(),
+                masks_of(inst.x));
             break;
         case KOp::integer_binary:
             store_register(inst.d, emit_integer_binary(inst, at,
@@ -3615,9 +4834,6 @@ private:
             break;
         case KOp::ret:
             emit_return(inst, at);
-            break;
-        case KOp::deopt:
-            call_effect(at, zero_pair(), zero_pair(), zero_pair());
             break;
         }
     }
@@ -3924,6 +5140,423 @@ private:
         builder_.SetInsertPoint(after);
     }
 
+    /// A field [offset, offset + width) of a resolved slot (store_slot sub 2
+    /// and 3; imm_a words per plane, imm_b the source count and from bit 32
+    /// the member's source, aux the slot's width): the member's source takes
+    /// the field's codes, and the words the field touches resolve over every
+    /// source as StaticKernel::resolve_net_words resolves them.
+    void emit_store_net(const KInst& inst, const Pair value)
+    {
+        emit_store_net(inst, value, inst.imm_a, inst.aux, inst.offset, inst.width);
+    }
+
+    /// emit_store_net's field [offset, offset + width) of the slot bound at
+    /// inst.d, with `words` words per plane and `slot_width` bits; imm_b as
+    /// for store_slot.
+    void emit_store_net(const KInst& inst, const Pair value, const std::uint64_t words,
+        const std::uint32_t slot_width, const std::uint32_t offset,
+        const std::uint32_t width)
+    {
+        auto* info = binding(inst.d, 1U);
+        const auto sources = static_cast<std::uint32_t>(inst.imm_b);
+        const auto own = static_cast<std::uint32_t>(inst.imm_b >> 32U);
+        const auto word = offset / 64U;
+        const auto shift = offset % 64U;
+        const bool spans = shift != 0U && shift + width > 64U && word + 1U < words;
+        auto* m = constant(mask_of(width));
+        // The field's codes: 0 0010, 1 0011, x 0001, z 0100.
+        auto* a = builder_.CreateAnd(value.a, m);
+        auto* b = builder_.CreateAnd(value.b, m);
+        const std::array<llvm::Value*, 3> codes { a,
+            builder_.CreateAnd(builder_.CreateNot(b), m),
+            builder_.CreateAnd(b, builder_.CreateNot(a)) };
+        const auto source_word = [&](const std::uint64_t source,
+                                     const std::uint64_t plane, const std::uint64_t index) {
+            return slot_word(inst.d, (2U + 4U * source + plane) * words + index);
+        };
+        for (std::uint64_t plane = 0U; plane < 4U; ++plane) {
+            auto* bits = plane < 3U ? codes[plane] : constant(0U);
+            auto* low = source_word(own, plane, word);
+            builder_.CreateStore(
+                builder_.CreateOr(builder_.CreateAnd(builder_.CreateLoad(i64_, low),
+                                      constant(~(mask_of(width) << shift))),
+                    builder_.CreateShl(bits, constant(shift))),
+                low);
+            if (spans) {
+                const auto spill = 64U - shift;
+                auto* high = source_word(own, plane, word + 1U);
+                builder_.CreateStore(
+                    builder_.CreateOr(builder_.CreateAnd(builder_.CreateLoad(i64_, high),
+                                          constant(~(mask_of(width) >> spill))),
+                        builder_.CreateLShr(bits, constant(spill))),
+                    high);
+            }
+        }
+        // Resolution; the changes, as bits of the field (wide) or the word.
+        llvm::Value* changed = constant(0U);
+        for (std::uint64_t index = word; index <= word + (spans ? 1U : 0U); ++index) {
+            llvm::Value* strong0 = constant(0U);
+            llvm::Value* strong1 = constant(0U);
+            llvm::Value* weak0 = constant(0U);
+            llvm::Value* weak1 = constant(0U);
+            for (std::uint64_t source = 0U; source < sources; ++source) {
+                auto* p0 = builder_.CreateLoad(i64_, source_word(source, 0U, index));
+                auto* p1 = builder_.CreateLoad(i64_, source_word(source, 1U, index));
+                auto* p2 = builder_.CreateLoad(i64_, source_word(source, 2U, index));
+                auto* p3 = builder_.CreateLoad(i64_, source_word(source, 3U, index));
+                auto* not2 = builder_.CreateNot(p2);
+                auto* not3 = builder_.CreateNot(p3);
+                auto* unknown = builder_.CreateOr(p3,
+                    builder_.CreateAnd(not2, builder_.CreateNot(p1)));
+                auto* known = builder_.CreateAnd(builder_.CreateAnd(not3, not2), p1);
+                auto* weak = builder_.CreateAnd(builder_.CreateAnd(not3, p2),
+                    builder_.CreateOr(p1, p0));
+                strong0 = builder_.CreateOr(strong0, builder_.CreateOr(unknown,
+                    builder_.CreateAnd(known, builder_.CreateNot(p0))));
+                strong1 = builder_.CreateOr(strong1, builder_.CreateOr(unknown,
+                    builder_.CreateAnd(known, p0)));
+                weak0 = builder_.CreateOr(weak0, builder_.CreateAnd(weak,
+                    builder_.CreateNot(builder_.CreateAnd(p1, p0))));
+                weak1 = builder_.CreateOr(weak1, builder_.CreateAnd(weak, p0));
+            }
+            auto* free = builder_.CreateNot(builder_.CreateOr(strong0, strong1));
+            auto* zero = builder_.CreateOr(strong0, builder_.CreateAnd(free, weak0));
+            auto* one = builder_.CreateOr(strong1, builder_.CreateAnd(free, weak1));
+            const auto bits = slot_width - 64U * static_cast<std::uint32_t>(index);
+            auto* word_mask = constant(bits >= 64U ? ~std::uint64_t { 0 } : mask_of(bits));
+            auto* next_a = builder_.CreateAnd(one, word_mask);
+            auto* next_b = builder_.CreateAnd(
+                builder_.CreateNot(builder_.CreateXor(zero, one)), word_mask);
+            auto* address_a = slot_word(inst.d, index);
+            auto* address_b = slot_word(inst.d, words + index);
+            auto* diff = builder_.CreateOr(
+                builder_.CreateXor(builder_.CreateLoad(i64_, address_a), next_a),
+                builder_.CreateXor(builder_.CreateLoad(i64_, address_b), next_b));
+            builder_.CreateStore(next_a, address_a);
+            builder_.CreateStore(next_b, address_b);
+            if (words == 1U) {
+                changed = diff;
+            } else {
+                changed = builder_.CreateOr(changed, index == word
+                        ? builder_.CreateLShr(diff, constant(shift))
+                        : builder_.CreateShl(diff, constant(64U - shift)));
+            }
+        }
+        if (words != 1U) {
+            changed = builder_.CreateAnd(changed, m);
+        }
+        // While a VHDL assignment is pending on the slot, the same write
+        // lands in its next block too.
+        emit_net_mirror(inst, detail::NetShape { sources, own, slot_width }, words,
+            net_field(words, nullptr, offset, width),
+            { codes[0], codes[1], codes[2], constant(0U) });
+        auto* silent = builder_.CreateICmpNE(
+            builder_.CreateAnd(info, llvm::ConstantInt::get(i32_, silent_bit)),
+            llvm::ConstantInt::get(i32_, 0U));
+        auto* notify = llvm::BasicBlock::Create(context_, "notify_net", &function_);
+        auto* after = llvm::BasicBlock::Create(context_, "stored_net", &function_);
+        builder_.CreateCondBr(builder_.CreateAnd(nonzero(changed),
+                                  builder_.CreateNot(silent)),
+            notify, after);
+        builder_.SetInsertPoint(notify);
+        auto* slot = builder_.CreateAnd(info, llvm::ConstantInt::get(i32_, ~silent_bit));
+        emit_notify_skip(slot, after);
+        if (words == 1U) {
+            auto* type = llvm::FunctionType::get(llvm::Type::getVoidTy(context_),
+                { ptr_, i32_, i64_ }, false);
+            builder_.CreateCall(type, helper_symbol("fsim_sk_notify", type),
+                { frame_, slot, changed });
+        } else {
+            auto* type = llvm::FunctionType::get(llvm::Type::getVoidTy(context_),
+                { ptr_, i32_, i64_, i32_ }, false);
+            builder_.CreateCall(type, helper_symbol("fsim_sk_notify_field", type),
+                { frame_, slot, changed, llvm::ConstantInt::get(i32_, offset) });
+        }
+        auto* status = builder_.CreateLoad(i32_, frame_field(40U));
+        builder_.CreateCondBr(
+            builder_.CreateICmpNE(status, llvm::ConstantInt::get(i32_, 0U)),
+            failure_block_, after);
+        builder_.SetInsertPoint(after);
+    }
+
+    /// The bit field a write to a resolved slot touches: its first word and
+    /// shift (constants for a static offset), and whether it continues in
+    /// the next word: for certain (`spans_fixed`), or when the i1 `spans`
+    /// says so at run time. A field is at most 64 bits wide.
+    struct NetField {
+        llvm::Value* word { };
+        llvm::Value* shift { };
+        bool spans_fixed { };
+        llvm::Value* spans { };
+        std::uint32_t width { };
+    };
+
+    /// The field of `width` bits at the static bit offset `fixed`, or at the
+    /// run-time i32 `offset` when it is not null, of a slot of `words` words
+    /// per plane.
+    [[nodiscard]] NetField net_field(const std::uint64_t words, llvm::Value* offset,
+        const std::uint32_t fixed, const std::uint32_t width)
+    {
+        NetField field;
+        field.width = width;
+        if (offset == nullptr) {
+            field.word = constant(fixed / 64U);
+            field.shift = constant(fixed % 64U);
+            field.spans_fixed = fixed % 64U != 0U && fixed % 64U + width > 64U
+                && fixed / 64U + 1U < words;
+            return field;
+        }
+        auto* bits = builder_.CreateZExt(offset, i64_);
+        if (words == 1U) {
+            field.word = constant(0U);
+            field.shift = bits;
+            return field;
+        }
+        field.word = builder_.CreateLShr(bits, constant(6U));
+        field.shift = builder_.CreateAnd(bits, constant(63U));
+        field.spans = builder_.CreateAnd(
+            builder_.CreateICmpUGT(builder_.CreateAdd(field.shift, constant(width)),
+                constant(64U)),
+            builder_.CreateICmpULT(builder_.CreateAdd(field.word, constant(1U)),
+                constant(words)));
+        return field;
+    }
+
+    /// Runs `body` when the i1 `condition` holds.
+    template <typename Body>
+    void emit_net_when(llvm::Value* condition, const char* name, Body&& body)
+    {
+        auto* then = llvm::BasicBlock::Create(context_, name, &function_);
+        auto* after = llvm::BasicBlock::Create(context_, "net_after", &function_);
+        builder_.CreateCondBr(condition, then, after);
+        builder_.SetInsertPoint(then);
+        body();
+        builder_.CreateBr(after);
+        builder_.SetInsertPoint(after);
+    }
+
+    /// Word `word` of row `row` (the value's planes are rows 0 and 1, source
+    /// k's code planes rows 2 + 4 k .. 5 + 4 k) of the current or next block
+    /// of the resolved slot bound at inst.d (Slot::net_processes).
+    [[nodiscard]] llvm::Value* net_word(const KInst& inst, const detail::NetShape& shape,
+        const std::uint64_t words, const bool next, const std::uint64_t row,
+        llvm::Value* word)
+    {
+        const auto base = ((next ? 2U + 4U * std::uint64_t { shape.sources } : 0U) + row)
+            * words;
+        return builder_.CreateInBoundsGEP(i64_, slot_pointer(inst.d),
+            builder_.CreateAdd(constant(base), word));
+    }
+
+    /// The first VHDL assignment of an update phase to a resolved slot: the
+    /// next block takes the current one and the pending flag is set, as
+    /// StaticKernel::begin_net_pending does.
+    void emit_net_begin_pending(const KInst& inst, const detail::NetShape& shape,
+        const std::uint64_t words)
+    {
+        const auto block = (2U + 4U * std::uint64_t { shape.sources }) * words;
+        auto* flag = slot_word(inst.d, 2U * block);
+        emit_net_when(builder_.CreateICmpEQ(builder_.CreateLoad(i64_, flag), constant(0U)),
+            "net_start", [&] {
+                if (block <= 16U) {
+                    for (std::uint64_t index = 0U; index < block; ++index) {
+                        builder_.CreateStore(
+                            builder_.CreateLoad(i64_, slot_word(inst.d, index)),
+                            slot_word(inst.d, block + index));
+                    }
+                } else {
+                    auto* from = builder_.GetInsertBlock();
+                    auto* loop = llvm::BasicBlock::Create(context_, "net_copy", &function_);
+                    auto* done = llvm::BasicBlock::Create(context_, "net_copied", &function_);
+                    builder_.CreateBr(loop);
+                    builder_.SetInsertPoint(loop);
+                    auto* index = builder_.CreatePHI(i64_, 2);
+                    index->addIncoming(constant(0U), from);
+                    auto* base = slot_pointer(inst.d);
+                    builder_.CreateStore(
+                        builder_.CreateLoad(i64_, builder_.CreateInBoundsGEP(i64_, base, index)),
+                        builder_.CreateInBoundsGEP(i64_, base,
+                            builder_.CreateAdd(index, constant(block))));
+                    auto* next = builder_.CreateAdd(index, constant(1U));
+                    index->addIncoming(next, loop);
+                    builder_.CreateCondBr(builder_.CreateICmpULT(next, constant(block)),
+                        loop, done);
+                    builder_.SetInsertPoint(done);
+                }
+                builder_.CreateStore(constant(1U), flag);
+            });
+    }
+
+    /// The member's source of the current or next block takes `bits` (the
+    /// four code planes, masked to the field) at `field`.
+    void emit_net_insert(const KInst& inst, const detail::NetShape& shape,
+        const std::uint64_t words, const bool next, const NetField& field,
+        const std::array<llvm::Value*, 4>& bits)
+    {
+        auto* m = constant(mask_of(field.width));
+        const auto put = [&](const bool high) {
+            auto* word = high ? builder_.CreateAdd(field.word, constant(1U)) : field.word;
+            for (std::uint64_t plane = 0U; plane < 4U; ++plane) {
+                auto* address = net_word(inst, shape, words, next,
+                    2U + 4U * std::uint64_t { shape.own } + plane, word);
+                auto* old = builder_.CreateLoad(i64_, address);
+                if (!high) {
+                    builder_.CreateStore(
+                        builder_.CreateOr(
+                            builder_.CreateAnd(old,
+                                builder_.CreateNot(builder_.CreateShl(m, field.shift))),
+                            builder_.CreateShl(bits[plane], field.shift)),
+                        address);
+                    continue;
+                }
+                auto* spill = builder_.CreateSub(constant(64U), field.shift);
+                builder_.CreateStore(
+                    builder_.CreateOr(
+                        builder_.CreateAnd(old,
+                            builder_.CreateNot(builder_.CreateLShr(m, spill))),
+                        builder_.CreateLShr(bits[plane], spill)),
+                    address);
+            }
+        };
+        put(false);
+        if (field.spans_fixed) {
+            put(true);
+        } else if (field.spans != nullptr) {
+            emit_net_when(field.spans, "net_insert_high", [&] { put(true); });
+        }
+    }
+
+    /// The mask of the slot's bits in word `word`.
+    [[nodiscard]] llvm::Value* net_word_mask(const std::uint32_t width, llvm::Value* word)
+    {
+        if (const auto* fixed = llvm::dyn_cast<llvm::ConstantInt>(word)) {
+            const auto bits = width - 64U * static_cast<std::uint32_t>(fixed->getZExtValue());
+            return constant(bits >= 64U ? ~std::uint64_t { 0 } : mask_of(bits));
+        }
+        if (width % 64U == 0U) {
+            return constant(~std::uint64_t { 0 });
+        }
+        auto* bits = builder_.CreateSub(constant(width), builder_.CreateShl(word, constant(6U)));
+        auto* full = builder_.CreateICmpUGE(bits, constant(64U));
+        auto* clamped = builder_.CreateSelect(full, constant(63U), bits);
+        return builder_.CreateSelect(full, constant(~std::uint64_t { 0 }),
+            builder_.CreateSub(builder_.CreateShl(constant(1U), clamped), constant(1U)));
+    }
+
+    /// Resolves word `word` of the current or next block's value over that
+    /// block's sources as StaticKernel::resolve_net_words does.
+    void emit_net_resolve_word(const KInst& inst, const detail::NetShape& shape,
+        const std::uint64_t words, const bool next, llvm::Value* word)
+    {
+        llvm::Value* strong0 = constant(0U);
+        llvm::Value* strong1 = constant(0U);
+        llvm::Value* weak0 = constant(0U);
+        llvm::Value* weak1 = constant(0U);
+        for (std::uint64_t source = 0U; source < shape.sources; ++source) {
+            const auto plane = [&](const std::uint64_t index) {
+                return builder_.CreateLoad(i64_,
+                    net_word(inst, shape, words, next, 2U + 4U * source + index, word));
+            };
+            auto* p0 = plane(0U);
+            auto* p1 = plane(1U);
+            auto* p2 = plane(2U);
+            auto* p3 = plane(3U);
+            auto* not2 = builder_.CreateNot(p2);
+            auto* not3 = builder_.CreateNot(p3);
+            auto* unknown = builder_.CreateOr(p3,
+                builder_.CreateAnd(not2, builder_.CreateNot(p1)));
+            auto* known = builder_.CreateAnd(builder_.CreateAnd(not3, not2), p1);
+            auto* weak = builder_.CreateAnd(builder_.CreateAnd(not3, p2),
+                builder_.CreateOr(p1, p0));
+            strong0 = builder_.CreateOr(strong0, builder_.CreateOr(unknown,
+                builder_.CreateAnd(known, builder_.CreateNot(p0))));
+            strong1 = builder_.CreateOr(strong1, builder_.CreateOr(unknown,
+                builder_.CreateAnd(known, p0)));
+            weak0 = builder_.CreateOr(weak0, builder_.CreateAnd(weak,
+                builder_.CreateNot(builder_.CreateAnd(p1, p0))));
+            weak1 = builder_.CreateOr(weak1, builder_.CreateAnd(weak, p0));
+        }
+        auto* unforced = builder_.CreateNot(builder_.CreateOr(strong0, strong1));
+        auto* zero = builder_.CreateOr(strong0, builder_.CreateAnd(unforced, weak0));
+        auto* one = builder_.CreateOr(strong1, builder_.CreateAnd(unforced, weak1));
+        auto* word_mask = net_word_mask(shape.width, word);
+        builder_.CreateStore(builder_.CreateAnd(one, word_mask),
+            net_word(inst, shape, words, next, 0U, word));
+        builder_.CreateStore(
+            builder_.CreateAnd(builder_.CreateNot(builder_.CreateXor(zero, one)), word_mask),
+            net_word(inst, shape, words, next, 1U, word));
+    }
+
+    /// Resolves the words `field` touches.
+    void emit_net_resolve(const KInst& inst, const detail::NetShape& shape,
+        const std::uint64_t words, const bool next, const NetField& field)
+    {
+        emit_net_resolve_word(inst, shape, words, next, field.word);
+        if (field.spans_fixed) {
+            emit_net_resolve_word(inst, shape, words, next,
+                builder_.CreateAdd(field.word, constant(1U)));
+        } else if (field.spans != nullptr) {
+            emit_net_when(field.spans, "net_resolve_high", [&] {
+                emit_net_resolve_word(inst, shape, words, next,
+                    builder_.CreateAdd(field.word, constant(1U)));
+            });
+        }
+    }
+
+    /// A SystemVerilog write that landed in the current block of a resolved
+    /// slot also lands in its next block while the slot is pending.
+    void emit_net_mirror(const KInst& inst, const detail::NetShape& shape,
+        const std::uint64_t words, const NetField& field,
+        const std::array<llvm::Value*, 4>& bits)
+    {
+        const auto block = (2U + 4U * std::uint64_t { shape.sources }) * words;
+        emit_net_when(builder_.CreateICmpNE(
+                          builder_.CreateLoad(i64_, slot_word(inst.d, 2U * block)),
+                          constant(0U)),
+            "net_mirror", [&] {
+                emit_net_insert(inst, shape, words, true, field, bits);
+                emit_net_resolve(inst, shape, words, true, field);
+            });
+    }
+
+    /// The code planes of a field of `width` bits holding `value` ('U' at the
+    /// bits of `unknown`, a weak element at those of `weak` when it is not
+    /// null), as kernel_word::logic9_planes: 'U' 0000, 'X' 0001, '0' 0010,
+    /// '1' 0011, 'Z' 0100, 'W' 0101, 'L' 0110, 'H' 0111, '-' 1000.
+    [[nodiscard]] std::array<llvm::Value*, 4> net_codes(const Pair value,
+        llvm::Value* unknown, const std::uint32_t width,
+        llvm::Value* weak = nullptr)
+    {
+        auto* known = builder_.CreateAnd(constant(mask_of(width)),
+            builder_.CreateNot(unknown));
+        auto* z_shape = builder_.CreateAnd(builder_.CreateNot(value.a), value.b);
+        if (weak == nullptr) {
+            return { builder_.CreateAnd(value.a, known),
+                builder_.CreateAnd(builder_.CreateNot(value.b), known),
+                builder_.CreateAnd(z_shape, known), constant(0U) };
+        }
+        // A weak element: 'L' 0110, 'H' 0111, 'W' 0101, '-' 1000, from its
+        // word 0, 1, X, Z (kernel_word::logic9_planes).
+        return { builder_.CreateAnd(value.a, known),
+            builder_.CreateAnd(builder_.CreateNot(value.b), known),
+            builder_.CreateAnd(builder_.CreateXor(weak, z_shape), known),
+            builder_.CreateAnd(builder_.CreateAnd(weak, z_shape), known) };
+    }
+
+    /// One VHDL assignment's field of a resolved slot: resolved into the next
+    /// block (emit_net_begin_pending first), where the update phase takes it
+    /// from (StaticKernel::commit_writes). The field is at the run-time i32
+    /// `offset` when it is not null, else at `fixed`.
+    void emit_net_vhdl_field(const KInst& inst, const detail::NetShape& shape,
+        llvm::Value* offset, const std::uint32_t fixed, const std::uint32_t width,
+        const std::array<llvm::Value*, 4>& bits)
+    {
+        const std::uint64_t words = (shape.width + 63U) / 64U;
+        const auto field = net_field(words, offset, fixed, width);
+        emit_net_insert(inst, shape, words, true, field, bits);
+        emit_net_resolve(inst, shape, words, true, field);
+    }
+
     /// Branches to `skip` where the notify helper would do nothing for the
     /// changed slot (the frame's fast_notify table): its one target is the
     /// running partition with readers at or after the frame's position, or
@@ -4155,8 +5788,11 @@ private:
     llvm::Value* out_ { };
     /// 'U' mask returned by the last evaluate helper call (or its merge).
     llvm::Value* last_unknown_ { };
+    /// The weak mask beside last_unknown_ (null: none), in weak mode.
+    llvm::Value* last_weak_ { };
     /// 'U' mask of a U-aware dynamic insert's result.
     llvm::Value* insert_unknown_ { };
+    llvm::Value* insert_weak_ { };
     llvm::Value* bindings_ { };
     llvm::BasicBlock* entry_ { };
     /// Entry-block values: binding words by index * 2 + word, and slot
@@ -4415,6 +6051,7 @@ private:
         add("fsim_sk_notify_field", helpers.notify_field);
         add("fsim_sk_fail", helpers.fail);
         add("fsim_sk_member_due", helpers.member_due);
+        add("fsim_sk_net_delay", helpers.net_delay);
 #if defined(__MINGW32__)
         add("___chkstk_ms", &___chkstk_ms);
 #endif

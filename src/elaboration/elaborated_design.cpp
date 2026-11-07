@@ -791,6 +791,13 @@ ElaboratedDesign::processes() const
     return processes_;
 }
 
+bool ElaboratedDesign::has_nine_value_signals() const noexcept
+{
+    return std::ranges::any_of(signals_, [](const auto& signal) {
+        return signal.value_kind == runtime::simir::ValueKind::logic9;
+    });
+}
+
 std::size_t ElaboratedDesign::bind_primitive_delay_slots()
 {
     using namespace runtime::simir;
@@ -1142,6 +1149,12 @@ const std::vector<SdfNetDelayInfo>&
 ElaboratedDesign::sdf_net_delays() const noexcept
 {
     return sdf_net_delays_;
+}
+
+const std::vector<HierarchicalSignalRead>&
+ElaboratedDesign::hierarchical_reads() const noexcept
+{
+    return hierarchical_reads_;
 }
 
 const std::vector<runtime::simir::ModuleTimingCheck>&
@@ -1640,6 +1653,7 @@ ElaboratedDesignState ElaboratedDesign::state() const&
         { }, code_coverage_inventory_, *driver_inventory,
         verilog_primitives_, sdf_net_delays_,
         interface_handle_rows(systemverilog_interface_handles_),
+        hierarchical_reads_,
     };
     if (process_rows_) {
         result.processes.reserve(process_rows_->rows.size());
@@ -1702,6 +1716,7 @@ detail::ElaboratedDesignProcessAccess::artifact_state(
         design.code_coverage_inventory_, *driver_inventory,
         design.verilog_primitives_, design.sdf_net_delays_,
         interface_handle_rows(design.systemverilog_interface_handles_),
+        design.hierarchical_reads_,
     };
     result.signal_names.reserve(design.signal_by_path_.size());
     for (const auto& [path, signal] : design.signal_by_path_) {
@@ -1764,6 +1779,7 @@ detail::ElaboratedDesignProcessAccess::take_artifact_state(
         std::move(design.verilog_primitives_),
         std::move(design.sdf_net_delays_),
         interface_handle_rows(design.systemverilog_interface_handles_),
+        std::move(design.hierarchical_reads_),
     };
     result.signal_names.reserve(design.signal_by_path_.size());
     for (const auto& [path, signal] : design.signal_by_path_) {
@@ -1833,6 +1849,7 @@ ElaboratedDesignState ElaboratedDesign::state() &&
         std::move(driver_inventory_value),
         std::move(verilog_primitives_), std::move(sdf_net_delays_),
         interface_handle_rows(systemverilog_interface_handles_),
+        std::move(hierarchical_reads_),
     };
     result.signal_names.reserve(signal_by_path_.size());
     for (const auto& [path, signal] : signal_by_path_) {
@@ -2289,10 +2306,18 @@ ElaboratedDesign::from_state_with_process_rows(
             return std::nullopt;
         }
     }
+    for (const auto& read : state.hierarchical_reads) {
+        if (read.process >= process_count
+            || read.signal >= state.signals.size()) {
+            return std::nullopt;
+        }
+    }
     for (const auto& delay : state.sdf_net_delays) {
         if (delay.source.signal >= state.signals.size()
             || delay.destination.signal >= state.signals.size()
             || delay.delays.size() != 12U
+            || (!delay.reject.empty() && delay.reject.size() != 12U)
+            || (!delay.error.empty() && delay.error.size() != 12U)
             || (delay.delayed
                 && (delay.load_signal >= state.signals.size()
                     || delay.driver >= process_count))) {
@@ -2461,6 +2486,7 @@ ElaboratedDesign::from_state_with_process_rows(
     result.verilog_timing_checks_ = std::move(state.verilog_timing_checks);
     result.verilog_primitives_ = std::move(state.verilog_primitives);
     result.sdf_net_delays_ = std::move(state.sdf_net_delays);
+    result.hierarchical_reads_ = std::move(state.hierarchical_reads);
     for (auto& [path, handle] : state.systemverilog_interface_handles) {
         result.systemverilog_interface_handles_.emplace(
             std::move(path), handle);

@@ -1197,6 +1197,161 @@ struct Interpreter::Impl : SchedulerBatchTask {
         PackedLogic4 source_value;
     };
 
+    // One pending change of one bit of a WriteNetDelay's range: the value
+    // the bit takes at `time`, detected at `detected` (the leading edge of
+    // the pulse a later change would end), with the pulse limits of its
+    // transition.
+    struct NetDelayEvent {
+        SimulationTick time { };
+        SimulationTick detected { };
+        SimulationTick reject { };
+        SimulationTick error { };
+        Logic4 value { Logic4::x };
+    };
+
+    // The pending changes of a WriteNetDelay driver's range, oldest first
+    // for each bit, with strictly ascending times (a transport delay: a new
+    // change deletes the pending ones that mature at or after it). `wakes`
+    // holds one entry for each time that some bit's change matures at, with
+    // the number of changes waiting for it; the entry goes when the last of
+    // them is deleted. The algorithm is independent of where the owner keeps
+    // time: the interpreter schedules a task for each wake (`handle`), the
+    // static kernel a timer of its own heap (StaticKernel::net_delay_write);
+    // both call change() and mature() and follow what they report.
+    struct PendingNetDelayWrites {
+        struct Wake {
+            ScheduledTaskHandle handle;
+            std::uint32_t events { };
+        };
+        std::vector<std::vector<NetDelayEvent>> bits;
+        std::map<SimulationTick, Wake> wakes;
+
+        // The index of a bit's change in the twelve transitions of an
+        // interconnect delay (IEEE 1800-2023 30.5.1 Table 30-2).
+        [[nodiscard]] static std::size_t transition(
+            const Logic4 from, const Logic4 to)
+        {
+            static constexpr std::array<std::pair<Logic4, Logic4>, 12> order { {
+                { Logic4::zero, Logic4::one },
+                { Logic4::one, Logic4::zero },
+                { Logic4::zero, Logic4::z },
+                { Logic4::z, Logic4::one },
+                { Logic4::one, Logic4::z },
+                { Logic4::z, Logic4::zero },
+                { Logic4::zero, Logic4::x },
+                { Logic4::x, Logic4::one },
+                { Logic4::one, Logic4::x },
+                { Logic4::x, Logic4::zero },
+                { Logic4::x, Logic4::z },
+                { Logic4::z, Logic4::x } } };
+            return static_cast<std::size_t>(
+                std::ranges::find(order, std::pair { from, to })
+                - order.begin());
+        }
+
+        // Bit `bit` of the driver is written `wanted` at `now`, `current`
+        // being the value it last matured to. The change reverses the
+        // pending one when it differs from it: the pulse between them is as
+        // wide as the time since the pending change was detected, and the
+        // limits of its transition filter it (IEEE 1800-2023 30.7). The
+        // change that remains takes the delay of its transition, and
+        // supersedes the pending ones that mature at or after it.
+        // `added(delay, time, wake)` is called for a time nothing matures at
+        // yet (it may throw: the wake is then dropped), `dropped(wake)` for
+        // a time whose last change was deleted.
+        template <typename Added, typename Dropped>
+        void change(const std::uint32_t bit, const Logic4 current,
+            const Logic4 wanted, const SimulationTick now,
+            const std::span<const SimulationTick> delays,
+            const std::span<const SimulationTick> rejects,
+            const std::span<const SimulationTick> errors, Added&& added,
+            Dropped&& dropped)
+        {
+            auto& events = bits[bit];
+            const auto release = [&](const SimulationTick time) {
+                const auto wake = wakes.find(time);
+                if (wake != wakes.end() && --wake->second.events == 0U) {
+                    dropped(wake->second);
+                    wakes.erase(wake);
+                }
+            };
+            for (;;) {
+                const auto last = events.empty() ? current : events.back().value;
+                if (wanted == last) {
+                    break;
+                }
+                if (!events.empty()) {
+                    const auto& pulse = events.back();
+                    const auto pulse_width = now - pulse.detected;
+                    if (pulse_width < pulse.reject) {
+                        release(pulse.time);
+                        events.pop_back();
+                        continue;
+                    }
+                    if (pulse_width < pulse.error && pulse.value != Logic4::x) {
+                        // The pulse reaches the load as x at its own time;
+                        // the change follows from x.
+                        events.back().value = Logic4::x;
+                        continue;
+                    }
+                }
+                const auto index = transition(last, wanted);
+                const auto delay = delays[index];
+                if (delay > std::numeric_limits<SimulationTick>::max() - now) {
+                    throw std::overflow_error {
+                        "simulation time overflow while scheduling interconnect delay"
+                    };
+                }
+                const auto time = now + delay;
+                // A transport delay: the changes that mature at or after
+                // this one are superseded by it.
+                while (!events.empty() && events.back().time >= time) {
+                    release(events.back().time);
+                    events.pop_back();
+                }
+                if ((events.empty() ? current : events.back().value) == wanted) {
+                    break;
+                }
+                auto [wake, fresh] = wakes.try_emplace(time);
+                if (fresh) {
+                    try {
+                        added(delay, time, wake->second);
+                    } catch (...) {
+                        wakes.erase(wake);
+                        throw;
+                    }
+                }
+                ++wake->second.events;
+                events.push_back(
+                    { time, now, rejects[index], errors[index], wanted });
+                break;
+            }
+        }
+
+        // The bits whose change matures by `now`, in bit order, with the
+        // value each takes (the last of its matured changes); the wake of
+        // `now` is spent.
+        [[nodiscard]] std::vector<std::pair<std::uint32_t, Logic4>> mature(
+            const SimulationTick now)
+        {
+            wakes.erase(wakes.begin(), wakes.upper_bound(now));
+            std::vector<std::pair<std::uint32_t, Logic4>> matured;
+            for (std::uint32_t bit = 0U; bit < bits.size(); ++bit) {
+                auto& events = bits[bit];
+                std::size_t taken { };
+                while (taken < events.size() && events[taken].time <= now) {
+                    ++taken;
+                }
+                if (taken != 0U) {
+                    matured.emplace_back(bit, events[taken - 1U].value);
+                    events.erase(events.begin(),
+                        events.begin() + static_cast<std::ptrdiff_t>(taken));
+                }
+            }
+            return matured;
+        }
+    };
+
     struct PendingModulePathWrite {
         ScheduledTaskHandle handle;
         PackedLogic4 source_value;
@@ -1719,9 +1874,47 @@ struct Interpreter::Impl : SchedulerBatchTask {
     // its slotted WriteDelayed operations, which exist only in a run with a
     // foreign library.
     std::unordered_map<ProcessId, TransitionDelays> driver_delay_overrides;
+    // The tables vpi_put_delays and acc_replace_delays gave an interconnect
+    // delay's driver (Interpreter::set_net_delay_table); they replace the
+    // tables of its WriteNetDelay operations.
+    std::unordered_map<ProcessId, NetDelayTable> net_delay_overrides;
+    // A net's group-mode SDF load copies (Interpreter::add_foreign_net_delay_load)
+    // and the foreign writes of the net still on their way to a copy. Empty
+    // unless the design has a per-source interconnect delay, so every
+    // foreign write tests one empty map.
+    struct ForeignNetDelayPending {
+        std::uint64_t serial { };
+        SimulationTick time { };
+        ForeignNetDelayKind kind { ForeignNetDelayKind::deposit };
+        std::vector<std::pair<std::uint32_t, Logic4>> bits;
+    };
+    struct ForeignNetDelayLoad {
+        SignalId copy { };
+        std::vector<ForeignNetDelayGroup> groups;
+        std::vector<ForeignNetDelayPending> pending;
+        std::uint64_t next_serial { };
+    };
+    std::unordered_map<SignalId, std::vector<ForeignNetDelayLoad>>
+        foreign_net_delay_loads;
+    // A force or release statement of such a net outside its loads (IEEE
+    // 1800-2023 10.6.2) is a change no source made too: these reach the
+    // Interpreter's foreign_net_delay_before and _after, and are set with
+    // the first load (unset, a statement tests one empty function).
+    std::function<std::optional<PackedLogic4>(SignalId)> net_delay_force_before;
+    std::function<void(SignalId, ForeignNetDelayKind,
+        const std::optional<PackedLogic4>&, std::size_t, std::size_t)>
+        net_delay_force_after;
+    std::unordered_map<
+        InertialDriverKey,
+        PendingNetDelayWrites,
+        InertialDriverKeyHash>
+        pending_net_delay_writes;
     // Initial values of nets with X bits from delayed continuous
     // assignments (Interpreter::add_signal).
     std::unordered_map<SignalId, PackedLogic4> delayed_net_initial_values;
+    // Elaborated values of nets that a SystemVerilog driver's registration
+    // replaced; a VHDL driver of the net starts there (register_driver).
+    std::unordered_map<SignalId, PackedLogic4> elaborated_net_initial_values;
     std::unordered_map<
         InertialDriverKey,
         PendingModulePathWrite,
@@ -1819,6 +2012,10 @@ struct Interpreter::Impl : SchedulerBatchTask {
     bool has_bidirectional_switches { };
     bool switch_refreshing { };
     bool started { };
+    /// push_process_late is registering a process of the running simulation
+    /// (add_process_program_impl lifts its started check).
+    bool late_process_registration { };
+    bool late_process_kernel_member { };
     bool package_static_startup_actions_entered { };
     bool start_in_progress { };
     bool package_static_initialization_active { };
@@ -2171,6 +2368,18 @@ struct Interpreter::Impl : SchedulerBatchTask {
     /// Registers the signals a program's sampled reads need histories of
     /// (sampled_value_dependency_mask).
     void record_sampled_dependencies(const ProcessProgramView& process);
+    /// Run-time growth for a lazy MIPD graft (Interpreter::graft_net_delay):
+    /// the signal and process tables extended past the ones sized at start.
+    SignalId push_signal_late(Signal signal);
+    /// kernel_member: the static kernel owns its wake (no sensitivity cohort;
+    /// fusion_dormant / event_driven set as install_static_kernel does);
+    /// otherwise the evaluator schedules it like an elaborated process.
+    void push_process_late(Process process, bool kernel_member);
+    /// Evaluator engine only: replaces a running process's program with one
+    /// whose reads of `net` read `copy` (same operation count and positions)
+    /// and moves its static and dynamic sensitivity from net to copy.
+    void rewrite_process_reads_late(ProcessId process, Process rewritten,
+        SignalId net, SignalId copy);
     [[nodiscard]] ProcessId add_process_program_impl(
         ProcessProgramView process,
         std::shared_ptr<const ProcessProgramTemplate> common_program,
@@ -3449,7 +3658,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
         std::span<const Process::DriverRegion> regions,
         DriveStrength strength,
         std::shared_ptr<const std::vector<Process::DriverRegion>> scalar_regions,
-        bool delayed_writer = false);
+        bool delayed_writer = false,
+        bool vhdl_writer = false);
 
     void set_driver(
         const ProcessId process,
@@ -3601,6 +3811,28 @@ struct Interpreter::Impl : SchedulerBatchTask {
         const std::optional<std::size_t> offset,
         const TransitionDelays& delays,
         SignalUpdateDomain domain = SignalUpdateDomain::generic);
+    // An interconnect delay's write (IEEE 1364-2005 16.2.4): each bit's
+    // change matures after the delay of its own transition (twelve, Table
+    // 30-2), with any number of changes pending; a change that reverses a
+    // pending one is a pulse that its transition's reject and error limits
+    // filter (dropped, x, or propagated, 30.7). A table that
+    // Interpreter::set_net_delay_table gave the driver replaces `operation`'s.
+    void schedule_net_delay(ProcessId process, const WriteNetDelay& operation,
+        PackedLogic4 value);
+    // The delays and the reject and error limits of an interconnect delay's
+    // twelve transitions: the table Interpreter::set_net_delay_table gave
+    // `process`, else the operation's own. The static kernel's delayed
+    // writes (StaticKernel::net_delay_write) read them here as well.
+    struct NetDelayLimits {
+        std::span<const SimulationTick> delays;
+        std::span<const SimulationTick> rejects;
+        std::span<const SimulationTick> errors;
+    };
+    [[nodiscard]] NetDelayLimits net_delay_limits(
+        ProcessId process, const WriteNetDelay& operation) const;
+    // The task that matures the changes due now (schedule_net_delay).
+    void mature_net_delay(const InertialDriverKey& key, ProcessId process,
+        SignalId signal, SignalChangeOrigin origin);
 
     void schedule_projected_scalar_waveform(
         const ProcessId process,

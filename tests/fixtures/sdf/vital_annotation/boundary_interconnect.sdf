@@ -1,0 +1,9 @@
+// SPDX-License-Identifier: Apache-2.0
+// INTERCONNECT a u_v.a in the cell of bi_top: tipd_a of u_v is
+// (rise 3 ns, fall 4 ns); tpd_a_y keeps its default (1 ns, 2 ns).
+(DELAYFILE
+  (SDFVERSION "3.0")
+  (DESIGN "bi_bench")
+  (TIMESCALE 1ns)
+  (CELL (CELLTYPE "bi_top") (INSTANCE bi_bench.dut)
+    (DELAY (ABSOLUTE (INTERCONNECT a u_v.a (3:3:3) (4:4:4))))))

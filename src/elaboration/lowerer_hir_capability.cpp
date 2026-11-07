@@ -7709,10 +7709,14 @@ std::optional<SignalId> Lowerer::hir_hierarchical_signal(
     const auto lookup = [&](const std::string& candidate)
         -> std::optional<SignalId> {
         const auto found = design_.signal_by_name_.find(candidate);
-        return found != design_.signal_by_name_.end()
-                && found->second < design_.signal_info_.size()
-            ? std::optional { found->second }
-            : std::nullopt;
+        if (found == design_.signal_by_name_.end()
+            || found->second >= design_.signal_info_.size()) {
+            return std::nullopt;
+        }
+        hierarchical_last_found_ = true;
+        hierarchical_last_signal_ = found->second;
+        hierarchical_last_path_ = candidate;
+        return found->second;
     };
     if (!name.starts_with("$root.")) {
         // Inside a task or function called through an instance
@@ -7816,6 +7820,15 @@ std::optional<SignalId> Lowerer::hir_hierarchical_signal(
             ? std::string_view { }
             : scope.substr(0U, separator);
     }
+}
+
+frontend::ValueDomain Lowerer::hir_signal_reader_domain(
+    const SignalId signal, const bool systemverilog_reader) const
+{
+    const auto domain = design_.signal_info_[signal].source_domain;
+    return systemverilog_reader && domain == frontend::ValueDomain::Logic9
+        ? frontend::ValueDomain::Logic4
+        : domain;
 }
 
 std::optional<Lowerer::HirRuntimeBinding>
@@ -9321,7 +9334,8 @@ Lowerer::hir_runtime_binding(
         result.name = design_.signal_info_[*signal_id].name;
         const auto& signal = design_.signal_info_[*signal_id];
         result.width = signal.width;
-        result.domain = signal.source_domain;
+        result.domain = hir_signal_reader_domain(
+            *signal_id, declaration->systemverilog != nullptr);
         result.signed_value = signal.is_signed;
         result.integer_range = signal.integer_range;
         composite_vhdl_storage = signal.vhdl_array

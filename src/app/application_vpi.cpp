@@ -3426,6 +3426,56 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             interconnect_nets.emplace(unit.value(), declaration.name);
         }
     }
+    // The load ports that SDF annotation delayed (split_sdf_net_delays): the
+    // load instance reads a delayed copy of the net, so the objects that name
+    // the net at or below the load instance read and watch the copy, while the
+    // source side keeps the net (IEEE 1364-2005 16.2.4). A port of the design
+    // itself is the exception: its own object is what the outside drives, so
+    // it stays on the net and the instances below it read the copy.
+    struct DelayedLoad {
+        runtime::simir::SignalId net { };
+        runtime::simir::SignalId copy { };
+        std::string instance;
+        std::string object;
+        bool root { };
+    };
+    std::vector<DelayedLoad> delayed_loads;
+    for (const auto& sdf_delay : project.design.sdf_net_delays()) {
+        if (!sdf_delay.delayed) {
+            continue;
+        }
+        const auto& sdf_load = sdf_delay.destination;
+        const auto sdf_dot = sdf_load.object.rfind('.');
+        DelayedLoad sdf_entry { sdf_load.signal, sdf_delay.load_signal,
+            sdf_dot == std::string::npos ? std::string { }
+                                         : sdf_load.object.substr(0U, sdf_dot),
+            sdf_load.object, false };
+        sdf_entry.root = sdf_entry.instance.empty()
+            || std::ranges::find(project.design.roots(), sdf_entry.instance)
+                != project.design.roots().end();
+        if (std::ranges::none_of(delayed_loads, [&](const DelayedLoad& known) {
+                return known.net == sdf_entry.net && known.copy == sdf_entry.copy
+                    && known.instance == sdf_entry.instance;
+            })) {
+            delayed_loads.push_back(std::move(sdf_entry));
+        }
+    }
+    // The signal an object that names `of_net` at `at_path` reads.
+    const auto read_signal = [&](const runtime::simir::SignalId of_net,
+                                 const std::string_view at_path) {
+        for (const auto& held : delayed_loads) {
+            if (held.net != of_net || (held.root && at_path == held.object)) {
+                continue;
+            }
+            if (held.instance.empty()
+                || (at_path.size() > held.instance.size()
+                    && at_path.starts_with(held.instance)
+                    && at_path[held.instance.size()] == '.')) {
+                return held.copy;
+            }
+        }
+        return of_net;
+    };
     for (const auto* object_pointer : vpi_objects) {
         const auto& object = *object_pointer;
         const auto& specialization = project.design_ir.specializations().at(
@@ -3652,11 +3702,12 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         published_siblings.emplace(
             std::move(sibling_key), std::pair { signal, handle });
         if (category != runtime::SystemVerilogVpiValueCategory::Event) {
-            result.signals[signal].push_back(handle);
-            result.handles.emplace(handle, signal);
+            const auto read = read_signal(signal, path);
+            result.signals[read].push_back(handle);
+            result.handles.emplace(handle, read);
             result.scalar_kinds.emplace(
-                signal, signal_info.systemverilog_scalar);
-            result.categories.emplace(signal, category);
+                read, signal_info.systemverilog_scalar);
+            result.categories.emplace(read, category);
         } else {
             result.events[signal].push_back(handle);
         }

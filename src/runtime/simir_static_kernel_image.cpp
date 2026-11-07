@@ -55,7 +55,7 @@ using namespace static_kernel_compiled_detail;
 
 namespace {
 
-constexpr std::string_view image_magic { "fsim-static-kernel-image-v4" };
+constexpr std::string_view image_magic { "fsim-static-kernel-image-v6" };
 
 template <typename T>
 struct is_vector : std::false_type { };

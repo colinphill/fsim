@@ -1,0 +1,9 @@
+// SPDX-License-Identifier: Apache-2.0
+// An INTERCONNECT from u1.y to u2.a maps to the tipd_a generic of u2
+// (IEEE 1076.4-2000 5.2.7.1.4).
+(DELAYFILE
+  (SDFVERSION "3.0")
+  (DESIGN "tb_interconnect")
+  (TIMESCALE 1ns)
+  (CELL (CELLTYPE "tb_interconnect") (INSTANCE tb_interconnect)
+    (DELAY (ABSOLUTE (INTERCONNECT u1.y u2.a (2:2:2) (3:3:3))))))

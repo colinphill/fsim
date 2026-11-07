@@ -30,12 +30,17 @@ endif()
 math(EXPR FSIM_LAST_TEST "${FSIM_TEST_COUNT} - 1")
 set(FSIM_RESOLVED_COMMAND_COUNT 0)
 set(FSIM_UNRESOLVED_COMMAND_COUNT 0)
+# string(JSON) parses its whole input on every call, so each test's object is
+# taken out of the document once and read from there (the document is
+# megabytes; one test is a few hundred bytes).
 foreach(FSIM_TEST_INDEX RANGE 0 ${FSIM_LAST_TEST})
-  string(JSON FSIM_TEST_NAME
-    GET "${FSIM_CTEST_JSON}" tests ${FSIM_TEST_INDEX} name)
+  string(JSON FSIM_TEST
+    GET "${FSIM_CTEST_JSON}" tests ${FSIM_TEST_INDEX})
+  string(JSON FSIM_TEST_NAME GET "${FSIM_TEST}" name)
+  set("FSIM_CTEST_TEST_${FSIM_TEST_NAME}" "${FSIM_TEST}")
   string(JSON FSIM_COMMAND_COUNT
     ERROR_VARIABLE FSIM_COMMAND_ERROR
-    LENGTH "${FSIM_CTEST_JSON}" tests ${FSIM_TEST_INDEX} command)
+    LENGTH "${FSIM_TEST}" command)
   if(NOT FSIM_COMMAND_ERROR STREQUAL "NOTFOUND")
     math(EXPR FSIM_UNRESOLVED_COMMAND_COUNT
       "${FSIM_UNRESOLVED_COMMAND_COUNT} + 1")
@@ -48,8 +53,7 @@ foreach(FSIM_TEST_INDEX RANGE 0 ${FSIM_LAST_TEST})
     math(EXPR FSIM_LAST_ARGUMENT "${FSIM_COMMAND_COUNT} - 1")
     foreach(FSIM_ARGUMENT_INDEX RANGE 0 ${FSIM_LAST_ARGUMENT})
       string(JSON FSIM_ARGUMENT
-        GET "${FSIM_CTEST_JSON}" tests ${FSIM_TEST_INDEX}
-        command ${FSIM_ARGUMENT_INDEX})
+        GET "${FSIM_TEST}" command ${FSIM_ARGUMENT_INDEX})
       string(LENGTH "${FSIM_ARGUMENT}" FSIM_ARGUMENT_LENGTH)
       string(APPEND FSIM_CANONICAL_COMMAND
         "${FSIM_ARGUMENT_LENGTH}:${FSIM_ARGUMENT}")
@@ -70,61 +74,54 @@ endforeach()
 # without first executing every promised child-directory witness.
 function(fsim_require_fixture_setup FSIM_REQUIRED_TEST)
   set(FSIM_EXPECTED_FIXTURES ${ARGN})
-  set(FSIM_TEST_FOUND FALSE)
-  foreach(FSIM_TEST_INDEX RANGE 0 ${FSIM_LAST_TEST})
-    string(JSON FSIM_TEST_NAME
-      GET "${FSIM_CTEST_JSON}" tests ${FSIM_TEST_INDEX} name)
-    if(NOT "${FSIM_TEST_NAME}" STREQUAL "${FSIM_REQUIRED_TEST}")
-      continue()
-    endif()
-    set(FSIM_TEST_FOUND TRUE)
-    string(JSON FSIM_PROPERTY_COUNT
-      LENGTH "${FSIM_CTEST_JSON}" tests ${FSIM_TEST_INDEX} properties)
-    set(FSIM_FIXTURE_PROPERTY_FOUND FALSE)
-    if(FSIM_PROPERTY_COUNT GREATER 0)
-      math(EXPR FSIM_LAST_PROPERTY "${FSIM_PROPERTY_COUNT} - 1")
-      foreach(FSIM_PROPERTY_INDEX RANGE 0 ${FSIM_LAST_PROPERTY})
-        string(JSON FSIM_PROPERTY_NAME
-          GET "${FSIM_CTEST_JSON}" tests ${FSIM_TEST_INDEX}
-          properties ${FSIM_PROPERTY_INDEX} name)
-        if(NOT FSIM_PROPERTY_NAME STREQUAL "FIXTURES_SETUP")
-          continue()
-        endif()
-        set(FSIM_FIXTURE_PROPERTY_FOUND TRUE)
-        string(JSON FSIM_FIXTURE_COUNT
-          LENGTH "${FSIM_CTEST_JSON}" tests ${FSIM_TEST_INDEX}
-          properties ${FSIM_PROPERTY_INDEX} value)
-        foreach(FSIM_EXPECTED_FIXTURE IN LISTS FSIM_EXPECTED_FIXTURES)
-          set(FSIM_EXPECTED_FIXTURE_FOUND FALSE)
-          if(FSIM_FIXTURE_COUNT GREATER 0)
-            math(EXPR FSIM_LAST_FIXTURE "${FSIM_FIXTURE_COUNT} - 1")
-            foreach(FSIM_FIXTURE_INDEX RANGE 0 ${FSIM_LAST_FIXTURE})
-              string(JSON FSIM_ACTUAL_FIXTURE
-                GET "${FSIM_CTEST_JSON}" tests ${FSIM_TEST_INDEX}
-                properties ${FSIM_PROPERTY_INDEX} value
-                ${FSIM_FIXTURE_INDEX})
-              if("${FSIM_ACTUAL_FIXTURE}" STREQUAL
-                 "${FSIM_EXPECTED_FIXTURE}")
-                set(FSIM_EXPECTED_FIXTURE_FOUND TRUE)
-                break()
-              endif()
-            endforeach()
-          endif()
-          if(NOT FSIM_EXPECTED_FIXTURE_FOUND)
-            message(FATAL_ERROR
-              "CTest fixture ${FSIM_EXPECTED_FIXTURE} does not own child-directory witness ${FSIM_REQUIRED_TEST}")
-          endif()
-        endforeach()
-      endforeach()
-    endif()
-    if(NOT FSIM_FIXTURE_PROPERTY_FOUND)
-      message(FATAL_ERROR
-        "child-directory witness ${FSIM_REQUIRED_TEST} has no CTest fixture ownership")
-    endif()
-  endforeach()
-  if(NOT FSIM_TEST_FOUND)
+  if(NOT DEFINED "FSIM_CTEST_TEST_${FSIM_REQUIRED_TEST}")
     message(FATAL_ERROR
       "required child-directory CTest witness is missing: ${FSIM_REQUIRED_TEST}")
+  endif()
+  set(FSIM_TEST "${FSIM_CTEST_TEST_${FSIM_REQUIRED_TEST}}")
+  string(JSON FSIM_PROPERTY_COUNT
+    ERROR_VARIABLE FSIM_PROPERTY_ERROR
+    LENGTH "${FSIM_TEST}" properties)
+  if(NOT FSIM_PROPERTY_ERROR STREQUAL "NOTFOUND")
+    set(FSIM_PROPERTY_COUNT 0)
+  endif()
+  set(FSIM_FIXTURE_PROPERTY_FOUND FALSE)
+  if(FSIM_PROPERTY_COUNT GREATER 0)
+    math(EXPR FSIM_LAST_PROPERTY "${FSIM_PROPERTY_COUNT} - 1")
+    foreach(FSIM_PROPERTY_INDEX RANGE 0 ${FSIM_LAST_PROPERTY})
+      string(JSON FSIM_PROPERTY_NAME
+        GET "${FSIM_TEST}" properties ${FSIM_PROPERTY_INDEX} name)
+      if(NOT FSIM_PROPERTY_NAME STREQUAL "FIXTURES_SETUP")
+        continue()
+      endif()
+      set(FSIM_FIXTURE_PROPERTY_FOUND TRUE)
+      string(JSON FSIM_FIXTURE_COUNT
+        LENGTH "${FSIM_TEST}" properties ${FSIM_PROPERTY_INDEX} value)
+      foreach(FSIM_EXPECTED_FIXTURE IN LISTS FSIM_EXPECTED_FIXTURES)
+        set(FSIM_EXPECTED_FIXTURE_FOUND FALSE)
+        if(FSIM_FIXTURE_COUNT GREATER 0)
+          math(EXPR FSIM_LAST_FIXTURE "${FSIM_FIXTURE_COUNT} - 1")
+          foreach(FSIM_FIXTURE_INDEX RANGE 0 ${FSIM_LAST_FIXTURE})
+            string(JSON FSIM_ACTUAL_FIXTURE
+              GET "${FSIM_TEST}" properties ${FSIM_PROPERTY_INDEX} value
+              ${FSIM_FIXTURE_INDEX})
+            if("${FSIM_ACTUAL_FIXTURE}" STREQUAL
+               "${FSIM_EXPECTED_FIXTURE}")
+              set(FSIM_EXPECTED_FIXTURE_FOUND TRUE)
+              break()
+            endif()
+          endforeach()
+        endif()
+        if(NOT FSIM_EXPECTED_FIXTURE_FOUND)
+          message(FATAL_ERROR
+            "CTest fixture ${FSIM_EXPECTED_FIXTURE} does not own child-directory witness ${FSIM_REQUIRED_TEST}")
+        endif()
+      endforeach()
+    endforeach()
+  endif()
+  if(NOT FSIM_FIXTURE_PROPERTY_FOUND)
+    message(FATAL_ERROR
+      "child-directory witness ${FSIM_REQUIRED_TEST} has no CTest fixture ownership")
   endif()
 endfunction()
 

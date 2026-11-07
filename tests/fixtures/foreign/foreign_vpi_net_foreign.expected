@@ -1,0 +1,35 @@
+#c put D 1
+#c D a=1 t=23
+#c put F force 1
+#c F a=1 t=28
+#c put V 01
+#c V a=0z t=32
+#c V a=01 t=33
+#c put D 0
+#c D a=0 t=43
+#c put F force 0
+#c F a=0 t=48
+#c put V 10
+#c V a=11 t=52
+#c V a=10 t=53
+#c put F release
+#c F a=z t=67
+#c put R 0
+#c R a=0 t=72
+#c put R force 1
+#c R a=1 t=82
+#c put R release
+#c R a=z t=92
+#c put D 1
+#c put D 0
+#c D a=1 t=102
+#c D a=0 t=104
+#c put D 1
+#c D a=1 t=112
+#c put D 0
+#c put D 1
+#c put D 0
+#c D a=0 t=203
+#c D a=1 t=304
+#c F a=0 t=312
+#c V a=11 t=324

@@ -25,11 +25,64 @@
 #c multi swapped=none
 #c multi unannotated=none
 #c multi other type=none
+#c vcb top.w5=0 t=9000
+#c at 11000 top.w5=0 top.u11.a=1
+#c vcb top.u11.a=0 t=13000
+#c at 15000 top.w5=0 top.u11.a=0
+#c hier top.u13.a=1 u13.a=1 w6=0 t=16
+#c star u13.a=0 t=18
 #c net top.u0 a=0 t=20
+#c hier top.u1.a=1 u1.a=1 w=0 t=22
+#c net top.u8 a=0 t=23
+#c at 23500 top.w=0 top.u0.z=0 top.u1.a=1 low=1 high=0
 #c net top.u2 a=0 t=25
+#c vcb top.w5=1 t=26000
+#c at 26500 top.w5=1 top.u11.a=0
 #c net top.u1 a=0 t=27
 #c net top.u3 a=0 t=28
+#c vcb top.u11.a=1 t=29000
+#c at 30000 top.w=0 top.u0.z=0 top.u1.a=0 low=0 high=0
+#c at 30500 top.w5=1 top.u11.a=1
+#c net top.u8 a=z t=33
+#c hier top.u13.a=0 u13.a=0 w6=1 t=36
+#c net top.u8 a=1 t=38
+#c star u13.a=1 t=39
 #c net top.u0 a=1 t=40
+#c hier top.u1.a=0 u1.a=0 w=1 t=43
+#c at 43500 top.w=1 top.u0.z=1 top.u1.a=0 low=0 high=1
 #c net top.u2 a=1 t=45
 #c net top.u1 a=1 t=46
 #c net top.u3 a=1 t=47
+#c net top.u8 a=0 t=48
+#c at 49000 top.w=1 top.u0.z=1 top.u1.a=1 low=1 high=1
+#c net top.u5 a=0001 t=50
+#c net top.u5 a=0011 t=52
+#c net top.u5 a=1111 t=55
+#c at 57500 top.tin=1 top.u9.a=z
+#c net top.u9 a=1 t=59
+#c at 60500 top.tin=1 top.u9.a=1
+#c at 64000 top.tin=0 top.u9.a=1
+#c net top.u9 a=0 t=67
+#c at 68500 top.tin=0 top.u9.a=0
+#c net top.uxp a=1 t=132
+#c net top.uxp a=z t=146
+#c net top.uxp a=1 t=165
+#c net top.uxp a=0 t=173
+#c net top.uxp a=z t=184
+#c net top.uxp a=0 t=207
+#c net top.uxp a=x t=218
+#c net top.uxp a=1 t=239
+#c net top.uxp a=x t=260
+#c net top.uxp a=0 t=281
+#c net top.uxp a=x t=298
+#c net top.uxp a=z t=312
+#c net top.upp a=x t=330
+#c net top.upp a=0 t=332
+#c net top.uxp a=x t=333
+#c net top.upp a=1 t=360
+#c net top.upp a=0 t=365
+#c net top.upp a=1 t=390
+#c net top.upp a=0 t=396
+#c net top.upp a=1 t=404
+#c net top.upp a=x t=448
+#c net top.upp a=1 t=452

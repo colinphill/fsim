@@ -193,6 +193,7 @@ void test_simir_display_output();
 void test_deterministic_random_values();
 void test_transition_delay_selection();
 void test_simir_inertial_transition_writes();
+void test_simir_net_delay_writes();
 void test_simir_runtime_value_delays();
 void test_simir_module_paths();
 void test_simir_module_timing_checks();

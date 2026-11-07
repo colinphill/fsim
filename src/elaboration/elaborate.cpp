@@ -221,6 +221,7 @@ ElaborationResult elaborate_impl(
         const SystemCInstanceDescription* constructed_systemc{};
         std::optional<SystemCInstanceDescription> inferred_systemc;
         std::vector<std::pair<std::string, std::string>> generics{};
+        std::vector<TimingGenericAnnotation> timing_generics{};
     };
     std::vector<ResolvedRoot> resolved_roots;
     resolved_roots.reserve(normalized_roots.size());
@@ -253,7 +254,8 @@ ElaborationResult elaborate_impl(
             std::nullopt,
             nullptr,
             std::nullopt,
-            root_request.generics};
+            root_request.generics,
+            root_request.timing_generics};
         if (systemc_top) {
             const auto constructed = std::find_if(
                 systemc_instances.begin(),
@@ -505,8 +507,10 @@ ElaborationResult elaborate_impl(
             builder->add_root(*root->inferred_systemc, root->alias);
         } else if (root->compiled_unit) {
             builder->set_root_generic_overrides(root->generics);
+            builder->set_timing_generic_annotations(root->timing_generics);
             builder->add_root(*root->compiled_unit, root->alias);
             builder->set_root_generic_overrides({ });
+            builder->set_timing_generic_annotations({ });
         }
     }
     hierarchy_phase.reset();
@@ -522,6 +526,7 @@ ElaborationResult elaborate_impl(
     }
     result.selected_systemverilog_classes =
         builder->take_selected_systemverilog_classes();
+    result.vital_wire_locations = builder->take_vital_wire_locations();
     result.design = std::move(design);
     return result;
 }

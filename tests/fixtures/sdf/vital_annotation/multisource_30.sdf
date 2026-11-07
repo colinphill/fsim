@@ -1,0 +1,12 @@
+// SPDX-License-Identifier: Apache-2.0
+// Two sources of one input: the multiple source mode of IEEE 1076.4-2000
+// 5.2.7.1.5. u1.y reaches u2.a with (rise 1 ns, fall 2 ns), u3.y with
+// (rise 5 ns, fall 6 ns).
+(DELAYFILE
+  (SDFVERSION "3.0")
+  (DESIGN "tb_multisource")
+  (TIMESCALE 1ns)
+  (CELL (CELLTYPE "tb_multisource") (INSTANCE tb_multisource)
+    (DELAY (ABSOLUTE
+      (INTERCONNECT u1.y u2.a (1:1:1) (2:2:2))
+      (INTERCONNECT u3.y u2.a (5:5:5) (6:6:6))))))

@@ -69,7 +69,25 @@ collect_driver_regions(
               if (value.trigger_signal)
                   whole(*value.trigger_signal);
           } else if constexpr (std::is_same_v<OperationType, VitalDelay>) {
-              whole(value.output);
+              // A call on one element of a bus drives that element.
+              const auto drive = [&](const SignalId signal) {
+                  if (value.output_offset) {
+                      result.push_back(Process::DriverRegion{
+                          signal, *value.output_offset, 1, false});
+                  } else {
+                      whole(signal);
+                  }
+              };
+              drive(value.output);
+              for (const auto mirror : value.mirrors) {
+                  drive(mirror);
+              }
+          } else if constexpr (std::is_same_v<OperationType, WriteNetDelay>) {
+              if (value.offset) {
+                  slice(value.signal, value.source, *value.offset);
+              } else {
+                  whole(value.signal);
+              }
           } else if constexpr (
               std::is_same_v<OperationType, WriteBlockingSlice>
               || std::is_same_v<OperationType, WriteUpdateSlice>

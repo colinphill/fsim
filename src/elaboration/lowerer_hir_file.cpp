@@ -15,6 +15,7 @@
 namespace fsim::elaboration {
 namespace {
 
+    using runtime::simir::vhdl_textio_logic9_marker;
     using runtime::simir::vhdl_textio_radix_read_2008_marker;
     using runtime::simir::vhdl_textio_read_2008_marker;
     using runtime::simir::vhdl_textio_read_marker;
@@ -92,6 +93,8 @@ namespace {
     const auto simple = vhdl_simple_name(name);
     return simple == "file_open" || simple == "file_close"
         || simple == "read" || simple == "write" || simple == "swrite"
+        || simple == "bread" || simple == "binary_read"
+        || simple == "bwrite" || simple == "binary_write"
         || simple == "sread" || simple == "string_read"
         || simple == "hread" || simple == "hex_read"
         || simple == "oread" || simple == "octal_read"
@@ -754,7 +757,9 @@ bool Lowerer::is_hir_vhdl_file_statement(
     // READ, WRITE, TEE and FLUSH are file operations only when their first
     // actual is a file object or line; other procedures share these names.
     if (name != "read" && name != "write" && name != "swrite"
-        && name != "tee" && name != "flush") {
+        && name != "tee" && name != "flush" && name != "bread"
+        && name != "binary_read" && name != "bwrite"
+        && name != "binary_write") {
         return true;
     }
     if (statement->vhdl->procedure_arguments.empty()) {
@@ -3277,6 +3282,10 @@ bool Lowerer::lower_hir_vhdl_file_statement(
     // VHDL-2008 SWRITE(L, VALUE) is WRITE of a STRING (16.4).
     const auto name = called == "swrite" ? std::string_view { "write" }
         : called == "string_read" ? std::string_view { "sread" }
+        : called == "bread" || called == "binary_read"
+        ? std::string_view { "read" }
+        : called == "bwrite" || called == "binary_write"
+        ? std::string_view { "write" }
         : called == "hex_read" ? std::string_view { "hread" }
         : called == "octal_read" ? std::string_view { "oread" }
         : called == "hex_write" ? std::string_view { "hwrite" }
@@ -3297,6 +3306,13 @@ bool Lowerer::lower_hir_vhdl_file_statement(
         && vhdl_standard_ < frontend::VhdlStandard::Vhdl2008) {
         return fail("FSIM-ELAB-VHSTD-001",
             "TextIO HREAD, OREAD, HWRITE, and OWRITE require VHDL-2008");
+    }
+    if ((called == "bread" || called == "binary_read" || called == "bwrite"
+            || called == "binary_write")
+        && vhdl_standard_ < frontend::VhdlStandard::Vhdl2008) {
+        return fail("FSIM-ELAB-VHSTD-001",
+            "TextIO BREAD, BWRITE, BINARY_READ, and BINARY_WRITE require "
+            "VHDL-2008");
     }
     const auto actual = [&](const std::string_view formal,
                             const std::size_t position)
@@ -3440,6 +3456,23 @@ bool Lowerer::lower_hir_vhdl_file_statement(
         character,
         real,
         string,
+        // STD_ULOGIC and STD_ULOGIC_VECTOR with their subtypes: the
+        // IEEE 1164 TextIO subprograms (IEEE 1076-2019 16.7).
+        logic9_scalar,
+        logic9_vector,
+    };
+    const auto logic9_class = [](const std::string_view type_name)
+        -> std::optional<TextioScalarClass> {
+        if (type_name == "std_ulogic" || type_name == "std_logic"
+            || type_name == "x01" || type_name == "x01z"
+            || type_name == "ux01" || type_name == "ux01z") {
+            return TextioScalarClass::logic9_scalar;
+        }
+        if (type_name == "std_ulogic_vector"
+            || type_name == "std_logic_vector") {
+            return TextioScalarClass::logic9_vector;
+        }
+        return std::nullopt;
     };
     const auto textio_scalar_class = [&](const semantic::ExpressionId value) {
         if (hir_expression_is_string(value, hir_process_scope_)) {
@@ -3485,6 +3518,9 @@ bool Lowerer::lower_hir_vhdl_file_statement(
         if (subtype_name == "bit") {
             return TextioScalarClass::bit;
         }
+        if (const auto logic9 = logic9_class(subtype_name)) {
+            return *logic9;
+        }
         auto type_id = subtype->type_mark.target;
         std::unordered_set<std::uint32_t> visiting;
         while (type_id.valid()
@@ -3499,6 +3535,9 @@ bool Lowerer::lower_hir_vhdl_file_statement(
             }
             if (type_name == "bit_vector") {
                 return TextioScalarClass::bit_vector;
+            }
+            if (const auto logic9 = logic9_class(type_name)) {
+                return *logic9;
             }
             if (type->vhdl->form
                 == semantic::vhdl::TypeForm::enumeration) {
@@ -3516,6 +3555,9 @@ bool Lowerer::lower_hir_vhdl_file_statement(
             }
             if (base_name == "bit_vector") {
                 return TextioScalarClass::bit_vector;
+            }
+            if (const auto logic9 = logic9_class(base_name)) {
+                return *logic9;
             }
             type_id = type->vhdl->base.type_mark.target;
         }
@@ -3793,11 +3835,20 @@ bool Lowerer::lower_hir_vhdl_file_statement(
                     ? vhdl_textio_read_2008_marker
                     : vhdl_textio_read_marker;
             const auto value_class = textio_scalar_class(*value);
+            // READ, OREAD and HREAD of STD_ULOGIC(_VECTOR) are the
+            // subprograms of STD_LOGIC_1164 (IEEE 1076-2019 16.7); the
+            // runtime scans them as the package body does.
+            const bool logic9_read
+                = value_class == TextioScalarClass::logic9_scalar
+                || value_class == TextioScalarClass::logic9_vector;
+            if (logic9_read) {
+                conversion.prefix = std::string { vhdl_textio_logic9_marker };
+            }
             std::optional<RegisterId> selection_target;
             std::optional<RegisterId> selection_scan_target;
             std::optional<std::uint32_t> selection_offset;
             std::optional<HirVhdlRuntimeSlice> runtime_slice;
-            if (radix_read) {
+            if (radix_read || logic9_read) {
                 const auto target = runtime_binding(*value);
                 const auto target_width = hir_expression_width(
                     *value, hir_process_scope_);
@@ -3835,14 +3886,22 @@ bool Lowerer::lower_hir_vhdl_file_statement(
                         selected_target = true;
                     }
                 }
-                if (value_class != TextioScalarClass::bit_vector
+                const bool readable_class = logic9_read
+                    ? !radix_read
+                        || value_class == TextioScalarClass::logic9_vector
+                    : value_class == TextioScalarClass::bit_vector;
+                if (!readable_class
                     || !target || !target->local || !target_width
                     || *target_width == 0U
                     || *target_width
                         > std::numeric_limits<std::uint32_t>::max()) {
                     return fail("FSIM-ELAB-VHTEXTIO-004",
-                        "TextIO HREAD and OREAD require a writable bounded "
-                        "BIT_VECTOR value");
+                        logic9_read
+                            ? "TextIO READ, HREAD, and OREAD require a "
+                              "writable bounded STD_ULOGIC or "
+                              "STD_ULOGIC_VECTOR value"
+                            : "TextIO HREAD and OREAD require a writable "
+                              "bounded BIT_VECTOR value");
                 }
                 if (selected_target
                     && (!target_selection
@@ -3861,9 +3920,17 @@ bool Lowerer::lower_hir_vhdl_file_statement(
                           static_cast<std::uint32_t>(*target_width),
                           target->domain)
                     : *target->local;
-                conversion.format = name == "hread"
-                    ? InputScanFormat::hexadecimal
-                    : InputScanFormat::octal;
+                conversion.format = logic9_read
+                    ? (radix_read
+                              ? (name == "hread"
+                                      ? InputScanFormat::vhdl_logic9_hexadecimal
+                                      : InputScanFormat::vhdl_logic9_octal)
+                              : value_class
+                                      == TextioScalarClass::logic9_scalar
+                                  ? InputScanFormat::vhdl_logic9_scalar
+                                  : InputScanFormat::vhdl_logic9_vector)
+                    : name == "hread" ? InputScanFormat::hexadecimal
+                                      : InputScanFormat::octal;
                 conversion.target = {
                     InputScanTargetKind::packed_register,
                     scan_target,
@@ -4032,10 +4099,16 @@ bool Lowerer::lower_hir_vhdl_file_statement(
                         "boolean");
                 }
                 success = *good_binding->local;
-            } else if (vhdl_standard_
-                >= frontend::VhdlStandard::Vhdl2019) {
+            } else if (logic9_read
+                || vhdl_standard_ >= frontend::VhdlStandard::Vhdl2019) {
                 success = allocate_register(
                     1U, frontend::ValueDomain::Boolean);
+            }
+            // Without GOOD the 1164 READ, OREAD and HREAD report their own
+            // message (severity ERROR) for the failure they found.
+            std::optional<StringRegisterId> diagnostic;
+            if (logic9_read && !actual("good", 2U)) {
+                diagnostic = allocate_string_register();
             }
             const auto count = allocate_register(
                 32U, frontend::ValueDomain::Integer);
@@ -4111,6 +4184,7 @@ bool Lowerer::lower_hir_vhdl_file_statement(
             FileScan scan { count, 0U, *line->local, true,
                 { std::move(conversion) }, { }, !success,
                 success, true };
+            scan.diagnostic = diagnostic;
             if (time_conversion) {
                 scan.time_unit_femtoseconds = hir_time_unit_femtoseconds();
             }
@@ -4129,7 +4203,9 @@ bool Lowerer::lower_hir_vhdl_file_statement(
                         *selection_offset,
                     });
                 };
-                if (success) {
+                // A failed 1164 read leaves 'U' in every element of the
+                // value, so its part is always updated.
+                if (success && !logic9_read) {
                     const auto branch = static_cast<InstructionIndex>(
                         process_.operations.size());
                     process_.operations.emplace_back(Branch {
@@ -4143,7 +4219,23 @@ bool Lowerer::lower_hir_vhdl_file_statement(
                     update_target();
                 }
             }
-            if (!actual("good", 2U)
+            if (diagnostic) {
+                const auto severity = load_constant(
+                    unsigned_value(
+                        static_cast<std::uint64_t>(
+                            runtime::simir::AssertionSeverity::error),
+                        2U),
+                    frontend::ValueDomain::Bit2);
+                const auto branch = static_cast<InstructionIndex>(
+                    process_.operations.size());
+                process_.operations.emplace_back(Branch {
+                    *success, branch + 2U, branch + 1U,
+                    UnknownBranchPolicy::when_false });
+                process_.operations.emplace_back(StringReport {
+                    *diagnostic, severity, runtime_source_location(span),
+                    true });
+            }
+            if (!actual("good", 2U) && !logic9_read
                 && vhdl_standard_ >= frontend::VhdlStandard::Vhdl2019) {
                 const auto branch = static_cast<InstructionIndex>(
                     process_.operations.size());
@@ -4300,6 +4392,27 @@ bool Lowerer::lower_hir_vhdl_file_statement(
                     literal_bits = decoded;
                 }
             }
+            // HWRITE and OWRITE of STD_ULOGIC_VECTOR write TO_HSTRING and
+            // TO_OSTRING of the value (IEEE 1076-2019 16.7).
+            if (!literal_bits
+                && textio_scalar_class(*value)
+                    == TextioScalarClass::logic9_vector) {
+                const auto image = lower_hir_vhdl_runtime_image(*value,
+                    std::nullopt, OutputFormat::binary, false);
+                if (!image || !lower_dynamic_field()) {
+                    return false;
+                }
+                const auto formatted = allocate_string_register();
+                StringMethod conversion;
+                conversion.operation = name == "hwrite"
+                    ? StringMethodOperator::vhdl_logic9_hstring
+                    : StringMethodOperator::vhdl_logic9_ostring;
+                conversion.source = *image;
+                conversion.string_destination = formatted;
+                process_.operations.emplace_back(conversion);
+                append_string(formatted);
+                return true;
+            }
             const bool is_bit_vector = literal_bits.has_value()
                 || textio_scalar_class(*value)
                     == TextioScalarClass::bit_vector;
@@ -4311,7 +4424,7 @@ bool Lowerer::lower_hir_vhdl_file_statement(
                     > std::numeric_limits<std::uint32_t>::max()) {
                 return fail("FSIM-ELAB-VHTEXTIO-009",
                     "TextIO HWRITE and OWRITE require a bounded "
-                    "BIT_VECTOR value");
+                    "BIT_VECTOR or STD_ULOGIC_VECTOR value");
             }
             std::optional<RegisterId> lowered;
             if (literal_bits) {

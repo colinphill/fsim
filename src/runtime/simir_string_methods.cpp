@@ -470,6 +470,46 @@ std::optional<std::vector<std::string>> vhdl_composite_value_elements(
     return elements;
 }
 
+namespace {
+
+// TO_HSTRING and TO_OSTRING of STD_ULOGIC_VECTOR (IEEE 1076-2019 16.7):
+// the vector is padded on the left with 'Z' when its leftmost element is 'Z'
+// and with '0' otherwise, each group of 4 (3) elements is converted by
+// TO_X01Z, and a group with an unknown element is 'Z' when all its elements
+// are 'Z' and 'X' otherwise.
+std::string vhdl_logic9_radix_string(
+    const std::string_view elements, const bool hexadecimal)
+{
+    if (elements.empty()) {
+        return { };
+    }
+    const std::size_t bits = hexadecimal ? 4U : 3U;
+    const std::size_t digits = (elements.size() + bits - 1U) / bits;
+    std::string padded(digits * bits - elements.size(),
+        elements.front() == 'Z' ? 'Z' : '0');
+    padded.append(elements);
+    std::string result;
+    result.reserve(digits);
+    for (std::size_t digit = 0U; digit < digits; ++digit) {
+        unsigned value = 0U;
+        bool all_z = true;
+        bool known = true;
+        for (std::size_t bit = 0U; bit < bits; ++bit) {
+            const auto element = padded[digit * bits + bit];
+            const bool zero = element == '0' || element == 'L';
+            const bool one = element == '1' || element == 'H';
+            all_z = all_z && element == 'Z';
+            known = known && (zero || one);
+            value = value * 2U + (one ? 1U : 0U);
+        }
+        result.push_back(known ? "0123456789ABCDEF"[value]
+                               : all_z ? 'Z' : 'X');
+    }
+    return result;
+}
+
+} // namespace
+
 StringMethodResult execute_string_method(
     const StringMethodOperator operation,
     std::string& source,
@@ -572,6 +612,12 @@ StringMethodResult execute_string_method(
         return { std::nullopt,
             static_cast<std::uint64_t>(vhdl_physical_value(source, argument)),
             std::nullopt };
+    }
+    if (operation == StringMethodOperator::vhdl_logic9_hstring
+        || operation == StringMethodOperator::vhdl_logic9_ostring) {
+        return { std::nullopt, std::nullopt,
+            vhdl_logic9_radix_string(source,
+                operation == StringMethodOperator::vhdl_logic9_hstring) };
     }
     if (operation == StringMethodOperator::vhdl_string_fill) {
         if (!first || *first < 0

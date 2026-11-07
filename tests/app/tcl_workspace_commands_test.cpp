@@ -618,6 +618,7 @@ if {![dict get $first effective] || [dict get $first paths] != 1 ||
     [dict get $first timing_checks] != 0 || [dict get $first generation] != 1} {
   error "loaded Tcl SDF file did not apply: $first"
 }
+
 set ::sdf_live_committed 0
 proc commit_sdf_at_safe_point {time delta phase} {
   if {!$::sdf_live_committed && $time == 11000 && $phase eq "postponed"} {
@@ -665,6 +666,149 @@ puts sdf-workspace-ok
         || output.str().find("sdf-workspace-ok") == std::string::npos) {
         throw std::runtime_error(
             "Tcl loaded SDF session failed: " + error.str());
+    }
+}
+
+// NETDELAY (IEEE 1364-2005 16.2.4) and the live reannotation of a net delay.
+// n has two load ports, u1.a and u2.a, and u3.a is an input port of its own:
+//  - first.sdf (OVI SDF 2.1): the delay of n is 3 ns and of u3.a 5 ns. The
+//    change of s at 10 ns reaches u1.a and u2.a at 13 ns and the change of t
+//    reaches u3.a at 15 ns, so z1 and z2 rise at 13 ns and z3 at 15 ns.
+//  - second.sdf, applied at the safe point of 11 ns: the delay of n is 6 ns
+//    and of u3.a 2 ns. The changes pending at 11 ns keep their time (z1 at
+//    13 ns, z3 at 15 ns); the later ones use the new delays. s and t fall at
+//    40 ns: u3.a at 42 ns, u1.a and u2.a at 46 ns. They rise again at 70 ns:
+//    u3.a at 72 ns, u1.a and u2.a at 76 ns.
+//  - out.sdf puts a NETDELAY on the output port u1.z: the annotation fails
+//    and leaves the delays as they are.
+void run_sdf_net_delay_workspace_commands_test()
+{
+    TemporaryDirectory temporary;
+    WorkingDirectory working_directory(temporary.path());
+    {
+        std::ofstream source { "top.sv" };
+        source << R"sv(`timescale 1ns/1ps
+module ld(input logic a, output logic z);
+  assign z = a;
+endmodule
+module top;
+  logic s = 1'b0;
+  logic t = 1'b0;
+  logic marker = 1'b0;
+  wire n;
+  assign n = s;
+  wire z1, z2, z3;
+  ld u1(.a(n), .z(z1));
+  ld u2(.a(n), .z(z2));
+  ld u3(.a(t), .z(z3));
+  initial begin
+    #10 begin s = 1'b1; t = 1'b1; end
+    #1 marker = 1'b1;
+    #29 begin s = 1'b0; t = 1'b0; end
+    #30 begin s = 1'b1; t = 1'b1; end
+    #50 $finish;
+  end
+endmodule
+)sv";
+        if (!source)
+            throw std::runtime_error("cannot write Tcl NETDELAY source");
+    }
+    const auto write_sdf = [](const char* filename, const std::string& body) {
+        std::ofstream source { filename };
+        source << "(DELAYFILE\n"
+            "  (SDFVERSION \"OVI 2.1\")\n"
+            "  (DESIGN \"top\")\n"
+            "  (DIVIDER .)\n"
+            "  (TIMESCALE 1 ns)\n"
+            "  (CELL (CELLTYPE \"top\") (INSTANCE top)\n"
+            "    (DELAY (ABSOLUTE " << body << "))))\n";
+        if (!source)
+            throw std::runtime_error("cannot write Tcl NETDELAY SDF input");
+    };
+    write_sdf("first.sdf", "(NETDELAY n (3)) (NETDELAY u3.a (5))");
+    write_sdf("second.sdf", "(NETDELAY n (6)) (NETDELAY u3.a (2))");
+    write_sdf("out.sdf", "(NETDELAY u1.z (1))");
+    const auto invoke = [](const std::vector<std::string>& arguments) {
+        std::istringstream input;
+        std::ostringstream output;
+        std::ostringstream error;
+        if (run_cli(arguments, input, output, error) != 0)
+            throw std::runtime_error("Tcl NETDELAY setup failed: " + error.str());
+    };
+    invoke({ "fsim", "compile", "--library", "work", "top.sv" });
+    invoke({ "fsim", "elaborate", "work.top", "--snapshot", "netdelay" });
+    constexpr auto script = R"FSIM_TCL(
+set loaded [fsim::load_snapshot netdelay]
+if {![catch {fsim::sdf configure out.sdf top top typ} message]} {
+  error "NETDELAY on an output port succeeded"
+}
+set first [fsim::sdf configure first.sdf top top typ]
+if {![dict get $first effective] || [dict get $first generation] != 1} {
+  error "NETDELAY file did not apply: $first"
+}
+set ::sdf_live_committed 0
+proc commit_net_delay_at_safe_point {time delta phase} {
+  if {!$::sdf_live_committed && $time == 11000 && $phase eq "postponed"} {
+    set second [fsim::sdf configure second.sdf top top typ]
+    if {![dict get $second effective] || [dict get $second generation] != 2} {
+      error "safe-point NETDELAY file did not apply: $second"
+    }
+    set ::sdf_live_committed 1
+  }
+}
+fsim::add_callback safe_point commit_net_delay_at_safe_point
+fsim::run 11ns
+fsim::remove_callback safe_point
+if {!$::sdf_live_committed} {error "NETDELAY safe point was not reached"}
+fsim::run 12500ps
+if {[fsim::read_signal top.n] ne "1" || [fsim::read_signal top.z1] ne "0"
+    || [fsim::read_signal top.z2] ne "0" || [fsim::read_signal top.z3] ne "0"} {
+  error "net delay did not hold the change of s back"
+}
+fsim::run 13500ps
+if {[fsim::read_signal top.z1] ne "1" || [fsim::read_signal top.z2] ne "1"
+    || [fsim::read_signal top.z3] ne "0"} {
+  error "the pending change of the net did not keep its 13 ns time"
+}
+fsim::run 15500ps
+if {[fsim::read_signal top.z3] ne "1"} {
+  error "the pending change of u3.a did not keep its 15 ns time"
+}
+fsim::run 41500ps
+if {[fsim::read_signal top.z3] ne "1"} {error "u3.a fell before 42 ns"}
+fsim::run 42500ps
+if {[fsim::read_signal top.z3] ne "0" || [fsim::read_signal top.z1] ne "1"} {
+  error "reannotated delay of u3.a (2 ns) was not used"
+}
+fsim::run 45500ps
+if {[fsim::read_signal top.z1] ne "1" || [fsim::read_signal top.z2] ne "1"} {
+  error "net fell before the reannotated 6 ns delay"
+}
+fsim::run 46500ps
+if {[fsim::read_signal top.z1] ne "0" || [fsim::read_signal top.z2] ne "0"} {
+  error "reannotated delay of the net (6 ns) was not used"
+}
+fsim::run 71500ps
+if {[fsim::read_signal top.z3] ne "0"} {error "u3.a rose before 72 ns"}
+fsim::run 72500ps
+if {[fsim::read_signal top.z3] ne "1" || [fsim::read_signal top.z1] ne "0"} {
+  error "u3.a did not rise at 72 ns"
+}
+fsim::run 75500ps
+if {[fsim::read_signal top.z1] ne "0"} {error "net rose before 76 ns"}
+fsim::run 76500ps
+if {[fsim::read_signal top.z1] ne "1" || [fsim::read_signal top.z2] ne "1"} {
+  error "net did not rise at 76 ns"
+}
+puts sdf-net-delay-ok
+)FSIM_TCL";
+    std::istringstream input;
+    std::ostringstream output;
+    std::ostringstream error;
+    if (run_cli({ "fsim", "tcl", "-c", script }, input, output, error) != 0
+        || output.str().find("sdf-net-delay-ok") == std::string::npos) {
+        throw std::runtime_error(
+            "Tcl NETDELAY session failed: " + error.str());
     }
 }
 
@@ -932,6 +1076,7 @@ int main()
     try {
         run_workspace_commands_test();
         run_sdf_workspace_commands_test();
+        run_sdf_net_delay_workspace_commands_test();
         run_systemc_workspace_commands_test();
         run_unqualified_command_test();
         run_windows_long_path_cd_test();

@@ -1,0 +1,17 @@
+// SPDX-License-Identifier: Apache-2.0
+// ABSOLUTE then INCREMENT delays on one cell, and INCREMENT alone on another
+// (IEEE 1076.4-2000 5.2.7.1.1).
+(DELAYFILE
+  (SDFVERSION "3.0")
+  (DESIGN "tb_increment")
+  (TIMESCALE 1ns)
+  (CELL (CELLTYPE "vbuf") (INSTANCE tb_increment.u1)
+    (DELAY
+      (ABSOLUTE
+        (PORT a (1:1:1) (2:2:2))
+        (IOPATH a y (3:3:3) (4:4:4)))
+      (INCREMENT
+        (PORT a (0.5:0.5:0.5) (0.5:0.5:0.5))
+        (IOPATH a y (1:1:1) (2:2:2)))))
+  (CELL (CELLTYPE "vbuf") (INSTANCE tb_increment.u2)
+    (DELAY (INCREMENT (IOPATH a y (1:1:1) (2:2:2))))))

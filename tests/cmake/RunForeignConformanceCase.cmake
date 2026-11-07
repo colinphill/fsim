@@ -15,6 +15,10 @@
 # report; either ends the case there.
 # FSIM_ELABORATE_ARGS holds more `fsim elaborate` arguments, separated as a
 # shell would.
+# FSIM_ENVIRONMENT holds NAME=value entries, separated by "|", that every
+# step runs with; FSIM_RERUN_ENVIRONMENT, when set, makes the case run
+# `fsim simulate` a second time with those entries added and check the same
+# trace again.
 # FSIM_DEBUG_COMMANDS, when set, names a Tcl script that `fsim debug`
 # evaluates after loading the plug-in in place of `fsim simulate`; the
 # trace is then the plug-in's "#c " lines from that session.
@@ -27,6 +31,20 @@ foreach(FSIM_REQUIRED IN ITEMS FSIM_EXECUTABLE FSIM_PLUGIN FSIM_INTERFACE
     message(FATAL_ERROR "${FSIM_REQUIRED} is required")
   endif()
 endforeach()
+
+function(fsim_set_environment FSIM_ENTRIES)
+  string(REPLACE "|" ";" FSIM_ENTRY_LIST "${FSIM_ENTRIES}")
+  foreach(FSIM_ENTRY IN LISTS FSIM_ENTRY_LIST)
+    if(FSIM_ENTRY MATCHES "^([A-Za-z0-9_]+)=(.*)$")
+      set(ENV{${CMAKE_MATCH_1}} "${CMAKE_MATCH_2}")
+    elseif(NOT FSIM_ENTRY STREQUAL "")
+      message(FATAL_ERROR "environment entry \"${FSIM_ENTRY}\" is not NAME=value")
+    endif()
+  endforeach()
+endfunction()
+if(DEFINED FSIM_ENVIRONMENT)
+  fsim_set_environment("${FSIM_ENVIRONMENT}")
+endif()
 
 file(MAKE_DIRECTORY "${FSIM_WORK_DIR}")
 string(REPLACE "|" ";" FSIM_SOURCES "${FSIM_SOURCE}")
@@ -131,18 +149,28 @@ if(DEFINED FSIM_SIMULATE_MESSAGE AND NOT FSIM_SIMULATE_MESSAGE STREQUAL "")
   endif()
 endif()
 
-string(REPLACE "\r\n" "\n" FSIM_OUTPUT "${FSIM_STEP_OUTPUT}")
-string(REPLACE "\n" ";" FSIM_LINES "${FSIM_OUTPUT}")
-set(FSIM_TRACE "")
-foreach(FSIM_LINE IN LISTS FSIM_LINES)
-  if(FSIM_LINE MATCHES "^#c ")
-    string(APPEND FSIM_TRACE "${FSIM_LINE}\n")
+function(fsim_check_trace FSIM_RUN_OUTPUT)
+  string(REPLACE "\r\n" "\n" FSIM_OUTPUT "${FSIM_RUN_OUTPUT}")
+  string(REPLACE "\n" ";" FSIM_LINES "${FSIM_OUTPUT}")
+  set(FSIM_TRACE "")
+  foreach(FSIM_LINE IN LISTS FSIM_LINES)
+    if(FSIM_LINE MATCHES "^#c ")
+      string(APPEND FSIM_TRACE "${FSIM_LINE}\n")
+    endif()
+  endforeach()
+  # The trace as run, for inspecting a difference without line wrapping.
+  file(WRITE "${FSIM_WORK_DIR}/actual.trace" "${FSIM_TRACE}")
+  file(READ "${FSIM_EXPECTED}" FSIM_EXPECTED_TRACE)
+  if(NOT FSIM_TRACE STREQUAL FSIM_EXPECTED_TRACE)
+    message(FATAL_ERROR
+      "trace differs from ${FSIM_EXPECTED}\n--- actual\n${FSIM_TRACE}--- expected\n${FSIM_EXPECTED_TRACE}")
   endif()
-endforeach()
-# The trace as run, for inspecting a difference without line wrapping.
-file(WRITE "${FSIM_WORK_DIR}/actual.trace" "${FSIM_TRACE}")
-file(READ "${FSIM_EXPECTED}" FSIM_EXPECTED_TRACE)
-if(NOT FSIM_TRACE STREQUAL FSIM_EXPECTED_TRACE)
-  message(FATAL_ERROR
-    "trace differs from ${FSIM_EXPECTED}\n--- actual\n${FSIM_TRACE}--- expected\n${FSIM_EXPECTED_TRACE}")
+endfunction()
+fsim_check_trace("${FSIM_STEP_OUTPUT}")
+if(DEFINED FSIM_RERUN_ENVIRONMENT AND NOT FSIM_RERUN_ENVIRONMENT STREQUAL ""
+    AND NOT (DEFINED FSIM_DEBUG_COMMANDS AND NOT FSIM_DEBUG_COMMANDS STREQUAL ""))
+  fsim_set_environment("${FSIM_RERUN_ENVIRONMENT}")
+  fsim_step(simulate simulate --engine "${FSIM_ENGINE}"
+    ${FSIM_LIBRARY_ARGUMENTS} ${FSIM_SIMULATE_ARGUMENTS})
+  fsim_check_trace("${FSIM_STEP_OUTPUT}")
 endif()

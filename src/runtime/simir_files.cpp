@@ -1452,6 +1452,9 @@ void Interpreter::Impl::run_file(
     }
     const bool complete = format_valid
         && file_scan_complete(effective_operation, scanned);
+    if (operation.diagnostic) {
+        storage.text(*operation.diagnostic) = std::move(scanned.diagnostic);
+    }
     if (operation.success) {
         storage.packed(*operation.success) = PackedLogic4::from_aval_bval(1, complete ? 1U : 0U, 0);
     }

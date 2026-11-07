@@ -512,7 +512,8 @@ namespace {
                 for (const auto& atom : node.atoms)
                     node.canonical_atoms.push_back(canonical_atom(atom, node.span));
             }
-            if (node.kind == SdfConstructKind::Value)
+            // A delval of several values has none of its own.
+            if (node.kind == SdfConstructKind::Value && node.children.empty())
                 normalize_value(node, parent);
 
             node.canonical_identity = to_string(node.kind);

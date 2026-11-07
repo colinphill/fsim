@@ -1206,10 +1206,12 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(delayed_concat_lvalue.ok());
-    const auto rejected_delayed_concat_lvalue = compile_and_elaborate(
+    // A delayed continuous assignment drives each net of a concatenation
+    // with the delay (IEEE 1800-2017 10.3.1, 10.3.3).
+    const auto accepted_delayed_concat_lvalue = compile_and_elaborate(
         delayed_concat_lvalue.design,
         "delayed_concat_lvalue");
-    assert(!rejected_delayed_concat_lvalue.ok());
+    assert(accepted_delayed_concat_lvalue.ok());
 
     const auto native_wire_drivers = fsim::frontend::parse_text(
         "native_wire_drivers.sv",

@@ -1465,6 +1465,10 @@ bool Interpreter::Impl::execute_operation(ProcessState& process,
                 op.offset,
                 op.delays,
                 op.domain);
+        } else if constexpr (std::is_same_v<OperationType, WriteNetDelay>) {
+            auto value = get_register(process, op.source);
+            ++process.pc;
+            schedule_net_delay(process.id, op, std::move(value));
         } else if constexpr (std::is_same_v<OperationType, WriteProjectedSlice>) {
             auto value = get_register(process, op.source);
             ++process.pc;

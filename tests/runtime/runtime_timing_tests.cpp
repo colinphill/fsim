@@ -261,6 +261,85 @@ void test_simir_inertial_transition_writes() {
       "packed whole/slice writes use the new value's transition");
 }
 
+// An interconnect delay (IEEE 1364-2005 16.2.4): twelve transition delays
+// with a pulse reject and error limit each. A rise takes 10 with limits 3 and
+// 6, a fall 8 with limits 2 and 5, and the transitions of x 8 (to x, to 0, to
+// z) or 10 (to 1), with the limits of the rise or fall they follow.
+void test_simir_net_delay_writes() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  NetDelayTable table;
+  table.delay = {10, 8, 8, 10, 8, 8, 8, 10, 8, 8, 8, 8};
+  table.reject = {3, 2, 2, 3, 2, 2, 2, 3, 2, 2, 2, 2};
+  table.error = {6, 5, 5, 6, 5, 5, 5, 6, 5, 5, 5, 5};
+  using Change = std::pair<SimulationTick, PackedLogic4>;
+  const auto run = [&](const std::vector<std::pair<SimulationTick, const char*>>&
+                           values) {
+    Interpreter interpreter{{1000, 32}};
+    const auto output = interpreter.add_signal(
+        {"net", PackedLogic4::from_msb_string("0")});
+    Process writer;
+    writer.name = "net-delay";
+    writer.register_count = static_cast<std::uint32_t>(values.size());
+    SimulationTick now = 0;
+    for (std::size_t index = 0; index < values.size(); ++index) {
+      if (values[index].first > now) {
+        writer.operations.emplace_back(WaitFor{values[index].first - now});
+        now = values[index].first;
+      }
+      writer.operations.emplace_back(LoadConstant{
+          static_cast<RegisterId>(index),
+          PackedLogic4::from_msb_string(values[index].second)});
+      writer.operations.emplace_back(WriteNetDelay{
+          output, static_cast<RegisterId>(index), std::nullopt,
+          table.values()});
+    }
+    writer.operations.emplace_back(Halt{});
+    static_cast<void>(interpreter.add_process(std::move(writer)));
+    std::vector<Change> changes;
+    interpreter.set_signal_change_hook(
+        [&](const SignalId signal, const PackedLogic4& value,
+            const SimulationTick time) {
+          if (signal == output) {
+            changes.emplace_back(time, value);
+          }
+        });
+    interpreter.start();
+    const auto result = interpreter.run();
+    require(result.status == RunStatus::completed
+            && !interpreter.scheduler().has_pending(),
+        "an interconnect delay leaves no pending change");
+    return changes;
+  };
+  const auto one = PackedLogic4::from_msb_string("1");
+  const auto zero = PackedLogic4::from_msb_string("0");
+  const auto unknown = PackedLogic4::from_msb_string("X");
+
+  // A pulse narrower than the reject limit is dropped.
+  require(run({{0, "1"}, {2, "0"}}).empty(),
+      "a net pulse below the reject limit is dropped");
+  // From the reject limit up to the error limit the pulse is x at the time
+  // the pulse would have arrived, and the change follows from x (x to 0: 8).
+  require(run({{0, "1"}, {4, "0"}})
+          == std::vector<Change>{{10, unknown}, {12, zero}},
+      "a net pulse between the limits is x");
+  // A wider pulse propagates, with the changes pending together.
+  require(run({{0, "1"}, {8, "0"}}) == std::vector<Change>{{10, one}, {16, zero}},
+      "a net pulse past the error limit propagates");
+  require(run({{0, "1"}, {8, "0"}, {14, "1"}})
+          == std::vector<Change>{{10, one}, {16, zero}, {24, one}},
+      "net changes are transported");
+  // The limits belong to the transition: 2 wide is dropped after a rise but
+  // x after a fall.
+  require(run({{0, "1"}, {20, "0"}, {22, "1"}})
+          == std::vector<Change>{{10, one}, {28, unknown}, {32, one}},
+      "net pulse limits follow the transition");
+  // A transition to x has a delay of its own (0 to x: 8).
+  require(run({{0, "X"}}) == std::vector<Change>{{8, unknown}},
+      "a net change to x takes its own delay");
+}
+
 void test_simir_projected_writes() {
   using namespace fsim::runtime;
   using namespace fsim::runtime::simir;

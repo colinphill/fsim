@@ -1,0 +1,8 @@
+// SPDX-License-Identifier: Apache-2.0
+// A bit spec outside the generate range names no instance (5.2.4).
+(DELAYFILE
+  (SDFVERSION "3.0")
+  (DESIGN "tb_generate")
+  (TIMESCALE 1ns)
+  (CELL (CELLTYPE "vbuf") (INSTANCE tb_generate.g[5].u)
+    (DELAY (ABSOLUTE (IOPATH a y (6:6:6) (7:7:7))))))

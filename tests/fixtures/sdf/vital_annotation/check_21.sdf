@@ -1,0 +1,13 @@
+// SPDX-License-Identifier: Apache-2.0
+// The same checks as separate SETUP and HOLD entries, SDF 2.1.
+(DELAYFILE
+  (SDFVERSION "2.1")
+  (DESIGN "tb_check")
+  (TIMESCALE 1 ns)
+  (CELL (CELLTYPE "vff") (INSTANCE tb_check.u)
+    (DELAY (ABSOLUTE (IOPATH (posedge clk) q (2) (3))))
+    (TIMINGCHECK
+      (SETUP d (posedge clk) (4))
+      (HOLD d (posedge clk) (2))
+      (WIDTH (posedge clk) (5))
+      (PERIOD (posedge clk) (12)))))

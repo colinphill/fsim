@@ -185,7 +185,8 @@ inline void operation_registers_of(const T& op, std::vector<RegisterId>& reads,
             || std::is_same_v<T, WriteUpdate>
             || std::is_same_v<T, WriteUpdateSlice>
             || std::is_same_v<T, WriteProjected>
-            || std::is_same_v<T, WriteProjectedSlice>) {
+            || std::is_same_v<T, WriteProjectedSlice>
+            || std::is_same_v<T, WriteNetDelay>) {
             reads.push_back(op.source);
         } else if constexpr (std::is_same_v<T, WriteBlockingDynamicSlice>
             || std::is_same_v<T, WriteUpdateDynamicSlice>
@@ -221,37 +222,11 @@ inline void operation_registers(const Operation& operation,
     }, operation);
 }
 
-/// Bits [offset, offset + width) of a Logic9 value as a Logic4 word.
-[[nodiscard]] inline std::optional<kw::Word> packed_field9(const PackedLogic4& value,
-    const std::uint32_t offset, const std::uint32_t width)
-{
-    std::uint64_t planes[4] { };
-    for (std::uint32_t plane = 0U; plane < 4U; ++plane) {
-        const auto words = value.logic9_plane_words(plane);
-        const auto word = offset / 64U;
-        const auto shift = offset % 64U;
-        if (word >= words.size()) {
-            return kw::all_x(width);
-        }
-        planes[plane] = words[word] >> shift;
-        if (shift != 0U && shift + width > 64U && word + 1U < words.size()) {
-            planes[plane] |= words[word + 1U] << (64U - shift);
-        }
-    }
-    return kw::logic9_word(planes[0], planes[1], planes[2], planes[3], width);
-}
-
+/// Bits [offset, offset + width) of a Logic4 value (a Logic9 value goes
+/// through kernel_word::logic9_uword).
 [[nodiscard]] inline kw::Word packed_field(const PackedLogic4& value,
     const std::uint32_t offset, const std::uint32_t width)
 {
-    if (value.is_logic9()) {
-        // A Logic9 register; codes outside {0, 1, X, Z} leave compiled
-        // execution at the instruction reading them.
-        if (const auto word = packed_field9(value, offset, width)) {
-            return *word;
-        }
-        throw static_kernel_detail::KernelDeopt { 0xffffffffU, false };
-    }
     const auto a = value.aval_words();
     const auto b = value.bval_words();
     const auto word = offset / 64U;
@@ -272,12 +247,13 @@ inline void operation_registers(const Operation& operation,
 /// Instructions whose static bit offset a canonical template may take from a
 /// per-unit binding instead (StaticKernel::build_native, step 2):
 /// load_field (then sub 1, binding y), load_field9 and static store_vhdl
-/// (then z, the binding plus one).
+/// (then z, the binding plus one; not to a resolved slot, whose generated
+/// code needs the bit offset: store_vhdl aux is its width, see net_shape).
 [[nodiscard]] inline bool binding_offset_field(const KInst& inst) noexcept
 {
     return (inst.op == KOp::load_field && inst.sub == 0U)
         || inst.op == KOp::load_field9
-        || (inst.op == KOp::store_vhdl && inst.sub == 0U);
+        || (inst.op == KOp::store_vhdl && inst.sub == 0U && inst.aux == 0U);
 }
 
 /// `inst` with its bit offset resolved from the unit's bindings when a
@@ -306,6 +282,11 @@ inline void kinst_flow(const KInst& inst, const std::uint32_t at,
     std::vector<RegisterId> reads;
     std::optional<RegisterId> write;
     const auto fall = [&] { next.push_back(at + 1U); };
+    // A chunked wide register by its storage index.
+    const auto named = [&](const std::uint32_t reg) {
+        return reg < body.wide_base.size() && body.wide_base[reg] != 0U
+            ? body.wide_base[reg] & ~wide_unknown_flag : reg;
+    };
     switch (inst.op) {
     case KOp::step:
         // Operation tier: the operation's static successors.
@@ -332,7 +313,6 @@ inline void kinst_flow(const KInst& inst, const std::uint32_t at,
     case KOp::load_field:
     case KOp::load_field9:
     case KOp::load_host:
-    case KOp::deopt:
         def = inst.d;
         fall();
         break;
@@ -420,17 +400,12 @@ inline void kinst_flow(const KInst& inst, const std::uint32_t at,
         break;
     case KOp::store_vhdl:
         use.push_back(inst.x);
-        if (inst.sub == 1U) {
+        if (inst.sub == 1U || inst.sub == 3U) {
             use.push_back(inst.y);
         }
         fall();
         break;
     case KOp::generic: {
-        // A chunked wide register by its storage index.
-        const auto named = [&](const std::uint32_t reg) {
-            return reg < body.wide_base.size() && body.wide_base[reg] != 0U
-                ? body.wide_base[reg] & ~wide_unknown_flag : reg;
-        };
         operation_registers(operations[inst.x], reads, write);
         for (const auto reg : reads) {
             use.push_back(named(inst.y + reg));
@@ -441,6 +416,10 @@ inline void kinst_flow(const KInst& inst, const std::uint32_t at,
         fall();
         break;
     }
+    case KOp::net_delay:
+        use.push_back(named(inst.x));
+        fall();
+        break;
     case KOp::wide_load:
     case KOp::wide_const:
         def = inst.d;
@@ -645,6 +624,7 @@ public:
         grouped(body.return_targets);
         grouped(body.live_at_entry);
         put(body.shadow_base);
+        put(body.weak);
         raw(body.tracked);
         raw(body.u_mode);
         grouped(body.u_operand_begin);
@@ -927,7 +907,7 @@ public:
             && list(body.wide_registers, [&](PackedLogic4& value) { return packed(value); })
             && grouped(body.wide_base) && grouped(body.wide_constants)
             && grouped(body.return_targets) && grouped(body.live_at_entry)
-            && get(body.shadow_base) && raw(body.tracked)
+            && get(body.shadow_base) && get(body.weak) && raw(body.tracked)
             && raw(body.u_mode) && grouped(body.u_operand_begin)
             && grouped(body.u_operands) && get(body.call_stack_base)
             && grouped(body.resume_entries);

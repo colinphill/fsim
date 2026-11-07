@@ -98,6 +98,13 @@ public:
     {
         root_generic_overrides_ = std::move(overrides);
     }
+    // SDF backannotation of VITAL timing generics (IEEE 1076.4-2000 5.1.1)
+    // for the instances below the next root added.
+    void set_timing_generic_annotations(
+        std::vector<TimingGenericAnnotation> annotations)
+    {
+        timing_generic_annotations_ = std::move(annotations);
+    }
     void add_root(
         const SystemCInstanceDescription& root,
         std::string path);
@@ -105,6 +112,10 @@ public:
 
     [[nodiscard]] std::vector<SelectedSystemVerilogClass>
     take_selected_systemverilog_classes();
+    std::vector<VitalWireLocations> take_vital_wire_locations()
+    {
+        return std::move(vital_wire_locations_);
+    }
 
 private:
     using SignalMap = elaboration_detail::SignalBindings;
@@ -2286,6 +2297,13 @@ private:
     std::unordered_map<std::uint32_t, StringObjectId>
         systemverilog_package_string_objects_;
     std::vector<std::pair<std::string, std::string>> root_generic_overrides_;
+    std::vector<TimingGenericAnnotation> timing_generic_annotations_;
+    std::vector<VitalWireLocations> vital_wire_locations_;
+    // Applies the timing generic annotations of the instance `path` to the
+    // generic actuals of its VHDL entity (hierarchy_packages.cpp).
+    void apply_compiled_vhdl_timing_annotations(const std::string& path,
+        const semantic::vhdl::Unit& entity,
+        std::vector<semantic::SpecializedHirActualIdentity>& actuals);
     std::vector<semantic::SpecializedHirActualIdentity>
     compiled_vhdl_root_generic_actuals(const semantic::vhdl::Unit& root);
     [[nodiscard]] std::vector<semantic::SpecializedHirActualIdentity>
@@ -2324,6 +2342,9 @@ private:
     };
     std::unordered_map<SignalId, std::vector<VhdlPortSource>>
         vhdl_port_sources_;
+    // SystemVerilog nets on a VHDL std_logic inout, kept in nine values so a
+    // VHDL 'L', 'H' or 'W' is weak on them (connect_compiled_boundary_port).
+    std::vector<SignalId> vhdl_inout_nine_value_nets_;
     struct PendingVhdlResolver {
         semantic::DeclarationId body;
         semantic::SourceSpanId source;

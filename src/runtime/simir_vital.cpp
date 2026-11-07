@@ -1818,6 +1818,21 @@ void Interpreter::Impl::execute_vital_delay(
   auto delay = vital_transition_delay(
       state.last_value, values.source,
       operation.shape, values.default_delays);
+  // The multiple source mode (IEEE 1076.4-2000 6.4.1): each changed source
+  // delays the new value by VitalCalcDelay of its location, and the minimum
+  // is the delay of the transport assignment.
+  if (!values.source_delays.empty()) {
+    delay = vital_transition_delay(
+        state.last_value, values.source,
+        operation.shape, values.source_delays.front());
+    for (std::size_t index = 1; index < values.source_delays.size(); ++index) {
+      delay = std::min(
+          delay,
+          vital_transition_delay(
+              state.last_value, values.source,
+              operation.shape, values.source_delays[index]));
+    }
+  }
   bool selected{};
   for (const auto& path : values.paths) {
     if (!path.condition
@@ -1873,6 +1888,11 @@ void Interpreter::Impl::execute_vital_delay(
     state.last_value = values.source;
     return;
   }
+  // A call on one element of a bus writes that element of the output and of
+  // every mirror (the call is one expansion of a generate over the bus).
+  const std::optional<std::size_t> element = operation.output_offset
+      ? std::optional<std::size_t>{*operation.output_offset}
+      : std::nullopt;
   if (glitch && !operation.negative_preemption
       && target < state.scheduled_time) {
     delay = state.scheduled_time - now;
@@ -1883,8 +1903,13 @@ void Interpreter::Impl::execute_vital_delay(
     waveform.push_back({vital_scalar(Logic9::x), 0U});
     if (delay != 0U) waveform.push_back({vital_scalar(output), delay});
     schedule_projected_waveform(
-        process, operation.output, waveform, std::nullopt, 0U,
+        process, operation.output, waveform, element, 0U,
         ProjectedDelayMode::transport);
+    for (const auto mirror : operation.mirrors) {
+      schedule_projected_waveform(
+          process, mirror, waveform, element, 0U,
+          ProjectedDelayMode::transport);
+    }
     state.scheduled_value = delay == 0U ? Logic9::x : output;
     state.scheduled_time = now + delay;
   } else if (glitch && operation.x_on
@@ -1894,16 +1919,26 @@ void Interpreter::Impl::execute_vital_delay(
     waveform.push_back({vital_scalar(Logic9::x), std::min(event_delay, delay)});
     if (delay > event_delay) waveform.push_back({vital_scalar(output), delay});
     schedule_projected_waveform(
-        process, operation.output, waveform, std::nullopt, 0U,
+        process, operation.output, waveform, element, 0U,
         ProjectedDelayMode::transport);
+    for (const auto mirror : operation.mirrors) {
+      schedule_projected_waveform(
+          process, mirror, waveform, element, 0U,
+          ProjectedDelayMode::transport);
+    }
     state.scheduled_value = delay > event_delay ? output : Logic9::x;
     state.scheduled_time = now + delay;
   } else {
     const auto mode = operation.mode == VitalGlitchMode::inertial
         ? ProjectedDelayMode::inertial : ProjectedDelayMode::transport;
     schedule_projected(
-        process, operation.output, vital_scalar(output), std::nullopt,
+        process, operation.output, vital_scalar(output), element,
         delay, mode == ProjectedDelayMode::inertial ? delay : 0U, mode);
+    for (const auto mirror : operation.mirrors) {
+      schedule_projected(
+          process, mirror, vital_scalar(output), element,
+          delay, mode == ProjectedDelayMode::inertial ? delay : 0U, mode);
+    }
     state.scheduled_value = output;
     state.scheduled_time = now + delay;
   }
@@ -1948,6 +1983,39 @@ void Interpreter::Impl::execute_vital_delay_operation(
       value.delays[index] = tick(path.delays[index]);
     }
     values.paths.push_back(value);
+  }
+  if (!operation.wire_sources.empty()) {
+    // On every event on the actual of InSig, the sources that changed in
+    // this delta cycle are those whose shadow had an event in it. The
+    // initialization of the call, and a change that no source made (a
+    // deposit or a force), select every source.
+    // A call on one element of a bus tells the sources apart by the element:
+    // a shadow is a bus, and its event in this delta cycle counts when the
+    // element changed in it.
+    const auto event = [&](const SignalId signal) {
+      (void)get_signal(signal);
+      const auto& stamp = signal_events[signal];
+      const bool now_event = stamp && stamp->first == scheduler.now()
+          && stamp->second == scheduler.delta();
+      return now_event
+          && (!operation.input_offset
+              || sensitivity_range_changed(signal_last_values[signal],
+                  get_signal(signal).initial_value,
+                  *operation.input_offset, 1U));
+    };
+    std::vector<const VitalWireSource*> changed;
+    for (const auto& wire_source : operation.wire_sources) {
+      if (event(wire_source.shadow)) changed.push_back(&wire_source);
+    }
+    if (changed.empty()) {
+      for (const auto& wire_source : operation.wire_sources) {
+        changed.push_back(&wire_source);
+      }
+    }
+    values.source_delays.reserve(changed.size());
+    for (const auto* wire_source : changed) {
+      values.source_delays.push_back(wire_source->delays);
+    }
   }
   execute_vital_delay(process_id, instruction, operation, values);
 }

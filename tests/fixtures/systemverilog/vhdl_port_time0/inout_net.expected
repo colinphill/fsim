@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+sv 0 io=x sda=1 o=1 d=x
+vhdl 0 io='X' sda='1'
+sv 1 io=1 sda=0 o=1 d=x
+vhdl 1 io='1' sda='0'
+sv 2 io=0 sda=1 o=1 d=x
+vhdl 2 io='0' sda='1'
+sv 3 io=x sda=1 o=0 d=x
+vhdl 3 io='X' sda='1'
+sv 4 io=x sda=1 o=0 d=x
+vhdl 4 io='X' sda='1'
+sv 5 io=x sda=1 o=0 d=x
+vhdl 5 io='X' sda='1'
+sv 6 io=x sda=1 o=0 d=x
+vhdl 6 io='X' sda='1'
+sv 7 io=z sda=1 o=0 d=x
+vhdl 7 io='Z' sda='1'

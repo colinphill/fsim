@@ -115,6 +115,17 @@ struct VitalPathCandidate {
   std::array<RegisterId, 6> delays{};
 };
 
+/// One source of a wire delay in the multiple source mode (IEEE 1076.4-2000
+/// 5.2.7.1.5, 6.4.1): the shadow signal that carries what the source drives
+/// onto the net, so an event on it says the source changed in this delta
+/// cycle, and the location that holds the source's interconnect delays
+/// (VitalDelayType, 01 or 01Z; the slots past the delay type's are zero), in
+/// simulation ticks.
+struct VitalWireSource {
+  SignalId shadow{};
+  std::array<SimulationTick, 6> delays{};
+};
+
 /// One intrinsic VITAL signal, wire, or path-delay call site.
 struct VitalDelay {
   VitalDelayKind kind{VitalDelayKind::signal};
@@ -134,6 +145,27 @@ struct VitalDelay {
   AssertionSeverity severity{AssertionSeverity::warning};
   std::string message;
   SourceLocation source_location;
+  /// The interconnect delay generic a VitalWireDelay call names (lower case),
+  /// when its delay actual is that generic; empty otherwise.
+  std::string wire_generic;
+  /// The sources of the call in the multiple source mode; empty in the single
+  /// source mode. On every event on the input, the delay of each source that
+  /// changed in the delta cycle is selected by its own location and the
+  /// minimum assigns the output (6.4.1).
+  std::vector<VitalWireSource> wire_sources;
+  /// Signals that every assignment of `output` also assigns, so that a
+  /// source's shadow follows what the source drives (the dual write).
+  std::vector<SignalId> mirrors;
+  /// A VitalWireDelay call that is one expansion of a generate over a bus
+  /// (`VitalWireDelay(A_ipd(i), A(i), tipd_A(i))`, IEEE 1076.4-2000 6.4.1):
+  /// the element of `output` (and of every mirror) that the call assigns, the
+  /// element of the actual of InSig that it reads (offsets counted from the
+  /// least significant element), and the index its delay actual
+  /// `tipd_A(i)` selects in the vector interconnect delay generic. Empty for
+  /// a scalar call.
+  std::optional<std::uint32_t> output_offset;
+  std::optional<std::uint32_t> input_offset;
+  std::optional<std::int64_t> wire_index;
 };
 
 struct VitalDelayState {
@@ -525,4 +557,8 @@ struct VitalDelayRuntimeValues {
   std::vector<VitalPathRuntimeValue> paths;
   std::array<SimulationTick, 6> default_delays{};
   std::array<Logic9, 9> output_map{};
+  /// The locations of the sources that changed in this delta cycle, when the
+  /// call is in the multiple source mode; the call's delay is then the
+  /// minimum of the delays they select.
+  std::vector<std::array<SimulationTick, 6>> source_delays;
 };

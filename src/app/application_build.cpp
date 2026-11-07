@@ -4,6 +4,8 @@
 #include "application_phase_profile.hpp"
 #include "application_compiled_environment_vhdl.hpp"
 #include "application_workspace_objects.hpp"
+#include "application_sdf_vital_generics.hpp"
+#include "fsim/elaboration/vital_wire_sources.hpp"
 
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/elaboration/coverage_external_exclusions.hpp"
@@ -368,6 +370,30 @@ namespace {
     {
         return serialize_cache_compiled_hir_bundle_with_source_projection(
             design, mappings, diagnostics);
+    }
+
+    /// A VITAL timing-generic annotation of the project as the elaborator
+    /// takes it (IEEE 1076.4-2000 5.2), with its indexed ports and RETAIN
+    /// values.
+    elaboration::TimingGenericAnnotation convert_timing_generic(
+        const project::TimingGenericAnnotation& annotation)
+    {
+        elaboration::TimingGenericAnnotation converted;
+        converted.instance = annotation.instance;
+        converted.generic = annotation.generic;
+        converted.increment = annotation.increment;
+        converted.values = annotation.values;
+        converted.source = annotation.source;
+        converted.retain = annotation.retain;
+        converted.interconnect = annotation.interconnect;
+        converted.source_instance = annotation.source_instance;
+        converted.source_port = annotation.source_port;
+        converted.ports.reserve(annotation.ports.size());
+        for (const auto& port : annotation.ports) {
+            converted.ports.push_back(
+                { port.name, port.indexed, port.left, port.right });
+        }
+        return converted;
     }
 
 } // namespace
@@ -788,8 +814,13 @@ std::optional<BuiltProject> build_checked_project(
     std::vector<elaboration::Root> elaboration_roots;
     elaboration_roots.reserve(tops.size());
     for (const auto& top : tops) {
-        elaboration_roots.push_back(
-            { top.target, top.alias, config.project.generics });
+        elaboration::Root root { top.target, top.alias, config.project.generics, { } };
+        root.timing_generics.reserve(config.project.timing_generics.size());
+        for (const auto& annotation : config.project.timing_generics) {
+            root.timing_generics.push_back(
+                convert_timing_generic(annotation));
+        }
+        elaboration_roots.push_back(std::move(root));
     }
     std::unique_ptr<VpiElaborationModules> vpi_modules;
     if (!config.elaboration.vpi_modules.empty()) {
@@ -830,6 +861,54 @@ std::optional<BuiltProject> build_checked_project(
         }
         if (registered) {
             elaborated = elaborate_design();
+        }
+    }
+    // SDF backannotation of VITAL timing generics (IEEE 1076.4-2000 5.1.1).
+    // The generics are constants of elaboration, so the design is elaborated
+    // once to find the cells the SDF files name and again with the annotated
+    // generic values.
+    bool sdf_vital_applied { };
+    if (elaborated.design
+        && (!config.project.sdf_inputs.empty()
+            || !elaborated.design->sdf_annotation_requests().empty())) {
+        std::vector<project::TimingGenericAnnotation> annotations;
+        if (!plan_sdf_vital_timing_generics(
+                *elaborated.design, config, diagnostics, annotations)) {
+            return std::nullopt;
+        }
+        sdf_vital_applied = true;
+        if (!annotations.empty()) {
+            for (auto& root : elaboration_roots) {
+                root.timing_generics.clear();
+                for (const auto& annotation : annotations) {
+                    root.timing_generics.push_back(
+                        convert_timing_generic(annotation));
+                }
+            }
+            elaborated = elaborate_design();
+            // The multiple source mode of an interconnect delay generic
+            // (IEEE 1076.4-2000 5.2.7.1.5) needs the drivers of the net,
+            // which exist once the design is elaborated.
+            if (elaborated.design && !elaborated.vital_wire_locations.empty()) {
+                auto state = elaborated.design->state();
+                const auto sources = elaboration::apply_vital_wire_sources(
+                    state, elaborated.vital_wire_locations);
+                for (const auto& failure : sources.failures) {
+                    diagnostics.error("FSIM-SDF-VITAL-013", failure);
+                }
+                if (sources.failures.empty()) {
+                    auto rebuilt = elaboration::ElaboratedDesign::from_state(
+                        std::move(state));
+                    if (!rebuilt) {
+                        diagnostics.error("FSIM-SDF-VITAL-013",
+                            "the multiple source mode of an interconnect "
+                            "delay generic produced an invalid elaborated "
+                            "design");
+                        return std::nullopt;
+                    }
+                    elaborated.design = std::move(*rebuilt);
+                }
+            }
         }
     }
     for (const auto& input : elaborated.messages) {
@@ -1090,6 +1169,7 @@ std::optional<BuiltProject> build_checked_project(
     result.vhdl_unit_provenance = std::move(vhdl_provenance);
     result.trace_archive = std::move(checked->trace_archive);
     result.code_coverage_enabled = code_coverage_enabled(config);
+    result.sdf_vital_applied = sdf_vital_applied;
     return result;
 }
 

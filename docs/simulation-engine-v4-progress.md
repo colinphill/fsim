@@ -138,6 +138,152 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-11-07: SDF net delays and SystemVerilog <-> VHDL ports gate, #149, #152, #164–#171 (this commit, sweeps `sd1g`, `sd1ga`)
+
+This commit holds the two 11-06 entries below (twelve-transition SDF net delays in the kernel, per-source INTERCONNECT, the VITAL SDF map, two-sided buses, weak values and sources, the LRM port contract) and the 11-07 follow-ups: foreign and HDL writes of group-mode nets, #171 (released nets take their drivers' value), and the faster ctest checks. The owner approved one gate for all of it (11-06).
+
+**Behaviour changes against `b08d0256`:**
+- A released SystemVerilog net takes its drivers' value (IEEE 1800-2023 10.6.2), not a value deposited before the force. This affected both engines in `b08d0256` and earlier (#171).
+- `std_ulogic'val`, `'succ` and `'pred` returned the low bit of the position: `'val(7)` gave '1', not 'H'. This affected both engines in `b08d0256` and earlier.
+- SDF for VITAL VHDL cells must be given at elaborate. `simulate --sdf`, Tcl and the C/C++ sessions reject them with FSIM-SDF-VITAL-008, so cocotb flows pass SDF in `ELAB_ARGS`/`elab_args`.
+
+**Gate (archive `sd1`):**
+- **ct4:** 1330/1330 in normal, verify and mt4.
+  - Strict had 3 transient failures at -j12, a race on the systemc working directory. They passed when rerun alone.
+- **Sweeps `sd1g` and `sd1ga`:** 0 losses against `fc9bg` and `fc9bga`.
+- **cocotb against `fc9b`:** +0 −0 in all four configurations.
+- **Census:** 0 losses in both modes.
+- **vgate:** rc 0.
+- **`collapse_fuzz` seeds 1–200:** 0 failures.
+
+| Suite | fc9bg passed / in scope | sd1g passed / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2635 / 2635 | 2635 / 2635 | 276 |
+| nvc | 1257 / 1257 | 1257 / 1257 | 225 |
+| sv-tests | 1495 / 1495 | 1495 / 1495 | 2 |
+| verilator | 2070 / 2070 | 2070 / 2070 | 345 |
+| vests | 3663 / 3663 | 3663 / 3663 | 2 |
+| vhdl-compliance | 65 / 65 | 65 / 65 | 7 |
+| cocotb 2.1 Verilog | 708 / 708 | 708 / 708 | 1 |
+| cocotb 2.1 VHDL | 646 / 646 | 646 / 646 | 1 |
+| cocotb master Verilog | 735 / 735 | 735 / 735 | 1 |
+| cocotb master VHDL | 666 / 666 | 666 / 666 | 1 |
+
+**D6 campaign `sd1-g5`** (`perf.sh`, 3 samples, CPU 9, ASLR off, xsim timed in the same session):
+- Geomean e2e is 3.59× (`fc9b-g5`: 3.66×). The minimum simulate speedup is 3.49× on original_codec (`fc9b-g5`: 3.55×, mixed_codec). Both floors hold.
+- `compact.sh` failed again because sudo asked for a password.
+- original_codec e2e is 12.27 s in this campaign against 10.76 s in `fc9b-g5`. That run-to-run drift is in fsim's elaborate time, and an interleaved A/B did not reproduce it (3 rounds, original_codec):
+
+  | | fc9b | sd1 |
+  |---|---:|---:|
+  | Elaborate wall | 10.7–11.7 s | 10.8–11.6 s |
+  | Elaborate instructions | 71.99G | 73.13G (+1.6%) |
+  | Simulate wall | 2.88–3.04 s | 2.84–3.36 s |
+  | Simulate instructions | 24.60G | 24.72G (+0.5%) |
+
+| Case | fsim e2e | xsim e2e | e2e × | fsim sim | xsim sim | sim × |
+|---|---:|---:|---:|---:|---:|---:|
+| original_codec | 12.27 | 28.71 | 2.34 | 2.13 | 7.45 | 3.49 |
+| original_throughput | 5.19 | 16.17 | 3.11 | 1.28 | 7.55 | 5.90 |
+| mixed_codec | 9.28 | 25.18 | 2.71 | 1.83 | 6.50 | 3.55 |
+| mixed_throughput | 4.57 | 12.89 | 2.82 | 1.43 | 6.14 | 4.30 |
+| codex_reference_mode0_frames1 | 2.16 | 9.28 | 4.30 | 0.13 | 3.84 | 30.59 |
+| codex_reference_mode0_frames2 | 2.11 | 9.38 | 4.45 | 0.12 | 3.84 | 30.69 |
+| codex_reference_mode1_frames1 | 2.31 | 9.93 | 4.30 | 0.13 | 3.84 | 30.42 |
+| codex_reference_mode1_frames2 | 2.31 | 10.13 | 4.39 | 0.13 | 3.84 | 30.53 |
+| codex_throughput_default | 2.41 | 10.13 | 4.20 | 0.28 | 3.94 | 14.25 |
+| codex_throughput_direct_syndrome | 2.06 | 8.52 | 4.14 | 0.28 | 3.84 | 13.90 |
+
+**Foreign-run cost** (original_throughput, interleaved, CPU 9). Both binaries are above the A-G7 targets in this session. The owner accepted the cost on 2026-11-07.
+
+| | Idle library | Clock watch |
+|---|---:|---:|
+| `fc9b` | 1.31× | 1.51× |
+| `sd1` | 1.36× | 1.55× |
+
+**Memory (open, follow-up).** sd1 uses more memory than fc9b on original_throughput, even with no library loaded:
+- Peak RSS rises from 665 to 728 MB, minor faults from 17.7k to 33.4k, and sys time by about 0.06 s.
+- mimalloc's statistics show about 245k live objects moving from the ≤192 B bin to the ≤320 B bin, about +30 MB.
+- The public `Operation`, `Process` and `Signal` types did not change size. The struct that grew is not identified yet.
+
+### 2026-11-06: SDF interconnect delays with twelve transitions and pulse limits (this commit)
+
+The owner asked for IEEE 1364-2005 16.2.4 in the kernel: twelve transition delays, reject and error limits for each, any number of pending schedules.
+
+- **`WriteNetDelay`** replaces the `WriteInertial`/`WriteInertialSlice` of the SDF copy drivers (`sdf_net_delay_split.cpp`, `add_drivers`). It carries 36 ticks (delays, reject limits, error limits in Table 30-2 order) and an optional bit offset. Runtime schema 102.
+- **State.** `Impl::pending_net_delay_writes` (key as `pending_inertial_writes`): per bit a list of pending changes (time, detection time, limits, value) with ascending times, and one scheduler task for each distinct time (cancelled with its last change).
+- **Filtering** (`Impl::schedule_net_delay`): a new value `v` compares with the last pending value (else the driver's current bit); a pulse narrower than the reject limit of that pending change removes it and the loop repeats; from the reject to the error limit its value becomes x and `v` follows from x; then `v` is scheduled with the delay of its transition, deleting the pending changes at or after its time. `mature_net_delay` commits the bits due at a time as one slice.
+- **Interpreter and kernel** share it: `Impl::PendingNetDelayWrites::change` and `mature` (per-bit pending lists, filtering, wake bookkeeping) are storage-agnostic; the interpreter schedules a scheduler task per wake, the kernel pushes a timer. The first client of kernel-owned delayed updates (family D step 5b): `StaticKernel::net_delay_write` keeps a `NetDelaySite` per member and operation, its maturities are `Timer`s with `net_delay` set in `timers_` (ordered by the writer's process, so they land in its stable order; `collect_timers` matures them before the threads of the step run, `next_timer` and `arm_timer` drop lapsed ones, warp mode needs nothing more), and `net_delay_mature` writes the bits as the member through `write_slot_value`. The target is no longer a host signal (`static_kernel_host_signal`, `host_delayed_writes_`). WriteNetDelay compiles to `KOp::net_delay`, whose generated code calls `fsim_sk_net_delay` directly (no generic instruction); the helper and the operation tier both call `net_delay_write`. A copy with several drivers (per-source groups) is a resolved slot (`several_net_delay_writers` in the planner, `build_fresh`), the plan is v10 (compiled bodies v7 and kernel image v6 after the #168 merge added the weak mask and the 56-byte write record; x8 set v6/v5 with `KOp::net_delay`). Multi-threaded runs: the parallel planner counts `WriteNetDelay` as register-only (its write happens later, through the kernel's timers), so it no longer makes its unit's whole level opaque, and `KOp::net_delay` no longer keeps its unit off the lanes. A worker logs the write as a `LaneOutput::Kind::net_delay` and the leader's replay calls `net_delay_write` at the unit's place in the serial order. The SDF fixture's 1- and 4-thread traces match. A copy with several bit or source drivers stays on the leader, as every resolved slot's writes do. Limits: a driver with a non-default drive strength stays a host member (pre-existing rule), pending changes are not part of save/restart (as before), and a mixed VHDL kernel is not exercised.
+- **SDF.** A delval of two or three values `((d) (r) (e))` parses on INTERCONNECT and PORT; `SdfPlannedAnnotation::reject_ticks/error_ticks` (plan schema 5), `SdfNetDelayInfo::reject/error` (twelve each, empty for none).
+- **VPI.** `retime_net_load` and the module input port put retime `NetDelayTable` through `Simulation::set_verilog_net_delay_table`; `vpi_get_delays` reads the limits.
+- **Test.** `vpi-sdf-delays` gains `ux` (12 distinct delays, x and z transitions) and `up` (pulse dropped, x, passed, three transported changes, per-transition limits); the expectations are derived in the fixture comments.
+
+### 2026-11-06: SystemVerilog <-> VHDL ports under the LRM + mapping contract (#152, this commit)
+
+The owner decided on 2026-11-06 to drop xsim parity for mixed scheduling. No standard orders zero-delay events across languages, and AMD UG900 documents only the value table. The contract is now the LRM port rules plus the logic mapping, and order within a time step is unspecified (`docs/cross-language-semantics.md`). Tests check values at time-step boundaries.
+
+- **Reverted.**
+  - B2: xsim's `#0`/timer-wake interleaving across the boundary. It broke 10 ctests, including the cocotb mixed suite and `mixed_vhdl_flop_after_sv_flop`.
+  - B1: the split SV/VHDL input-port views. Ports are aliases again, as at b08d0256, and the artifact schema is back to 101.
+  - The 11-03 same-pass rule stays.
+- **Kept from #152.**
+  - `S'STABLE`/`S'QUIET` as process sensitivities (IEEE 1076-2019 16.2.4). Before, `'QUIET` on an SV-driven prefix never returned to TRUE.
+  - SystemVerilog reads of a shared std_logic in four states: `%b` prints x for U/W/-.
+- **VHDL drivers of SystemVerilog nets** (`register_driver`). A VHDL out/inout driver starts at its port's default (14.7.2), and the default 'U' reads as x. The net's SystemVerilog drivers start at z.
+  - A VHDL writer is a generic-domain process with a language standard; fsim's own generic processes carry none, and UDPs carry one but run in the SystemVerilog domain.
+  - A driver of some elements starts at z on the others, so per-element drivers of an out vector do not make every bit x (`static-kernel-vhdl`).
+  - The first SV driver to register replaces the net's value with its own resolution. The net's elaborated value is therefore kept in `elaborated_net_initial_values` for VHDL drivers that register later; only nets whose value that registration changes get an entry.
+  - Before, `wire io; assign io = 1'bz;` on a VHDL inout read z until VHDL assigned it.
+- **Cross-language inout (B3).**
+  - An inout whose actual resolves in its own language shares that signal. `FSIM-ELAB-BIND-030` now applies only to unresolved actuals.
+  - An SV net on a VHDL std_logic inout is promoted to nine values when it is connected (`connect_compiled_boundary_port`), so the VHDL driver keeps its 'L'/'H'/'W'. The sv_wire resolution counts these as weak 0/1/x (owner: an fsim extension of UG900), so a VHDL pull-up yields to an SV 0.
+  - Both sides read the resolved net through the table: 'H' reads as '1'. For that reason such a net is neither kernel-owned nor on the identity single-driver routes.
+  - **Fast path (#161, owner "make a fast-compiled path for this case").** Timed on 256 VHDL leaves (`io <= 'H' when n = '1' else '0'`) under one SV top: the inout took 50.2 s against 3.4 s for the same leaves with `out` ports, every net on the general path.
+    - Elaboration (`hierarchy_resolution.cpp`) returns a promoted net to four states when its only source is one process of the port's instance driving every bit, with no conversion driver. With a single driver the resolution is the mapping alone, which the four-state net applies on the write. That brought the run to 30.2 s, all of it spent in kernel deoptimizations on the 'H' constant.
+    - The kernel (`simir_static_kernel_compiled.cpp`) now loads a VHDL constant holding 'H', 'L', 'W' or '-' as its four-state value when the register is only read as the value of writes to four-state slots.
+    - `FSIM_KERNEL_VERIFY` compares a run's writes to a four-state slot through the same mapping, since the reference evaluator queues 'H' where the compiled body queues 1. Both commit 1.
+    - Result: inout 3.46 s, out 3.46 s (0 deoptimizations). `FSIM_KERNEL_VERIFY` is clean on the benchmark and on both inout fixtures. Targeted ctest (26), the vhdl, mixed-language and static-kernel labels (100) and full ctest (1253/1253) pass.
+    - Real two-sided buses (SV and VHDL drivers on one net) still took the general path; #164 below.
+  - **Two-sided buses (#164; owner "make the two-sided bus fast path", "You must not leave anything on the slow path", "Resolve bus writes inline in the compiled code").**
+    - The planner (`elaborated_design_static_kernel.cpp`, `resolved_net`) owns a nine-value sv_wire net of a mixed VHDL kernel with no conversion driver when every writer is a member with default strength.
+    - The kernel gives it a four-state *resolved slot*. The sources follow the slot's planes in the arena (`Slot::net_processes`, four Logic9 code planes each), seeded from the host's driver records at build time and kept in the kernel image.
+    - SystemVerilog stores (`store_slot` sub 2/3, and `wide_store` per 64-bit chunk) write their source and resolve the touched words in generated code (`emit_store_net`), with notification as for other stores.
+    - VHDL assignments queue inline (narrow, indexed, and wide in chunks). Nine-value constants such as `(others => 'H')` or `"LHW-"` queue as kind 3 writes whose codes sit in the body's constants. `commit_writes` resolves them with a single-word fast path.
+    - Publication and materialization commit each source as its own driver. Resolved writers stay serial and outside delta collapse and store forwarding.
+    - Timed on 400 µs runs of 16 leaves; the control has the same SV and VHDL drivers on separate nets:
+
+      | design | before (helper calls) | now | control |
+      |---|---|---|---|
+      | tri (`'0'`/`'Z'` vs SV 1/z) | 6.20 s | 5.15 s | 4.48 s |
+      | pull (`'0'`/`'H'` vs SV 0/z) | 7.15 s | 4.76 s | 4.46 s |
+      | wide (128-bit, `'0'`/`'H'`) | 7.15 s | 6.91 s | 5.84 s (VHDL only) |
+
+    - Helper calls fell from about 6M to 1 per run (tri, pull); there are 0 deoptimizations. The rest of the time is the resolution itself.
+    - Wide keeps about 10.7k calls of the generic `wide_concat` helper. It builds the SV value `{64'h0, 64'h…}`, not the bus write, and is used for every wide concatenation in the kernel.
+    - `FSIM_KERNEL_VERIFY` and the interpreter agree on all three designs. Targeted ctest (98) and full ctest (1253/1253) pass.
+    - **Covered by #168/x7:** a computed 'H'/'L'/'W'/'-' held in a VHDL register (for example `sda <= sda_int`) no longer deoptimizes: registers carry a weak mask beside the 'U' mask (shadow word `b`, wide mask chunks' `b` words; docs/engine-v4-semantics.md S15), enabled per design (`CompiledBody::weak`), so VHDL without weak elements has unchanged code. Test: `fsim.application.vhdl-weak-values`.
+    - **Weak sources (#168, closed 2026-11-06):** `fsim.application.vhdl-weak-sources` passes with std_logic_1164 TextIO for std_ulogic and std_ulogic_vector (IEEE 1076-2008 16.7: READ, OREAD, HREAD, the BREAD/BWRITE aliases, WRITE, OWRITE, HWRITE). A read is one string-source `FileScan` with a nine-value format (`scan_vhdl_logic9` follows the package body: leading whitespace, the `_` rules, the digit tables and the truncation check, the failing character consumed, the target 'U' on failure, and the body's error message without GOOD); OWRITE and HWRITE build the image and then `vhdl_logic9_ostring`/`vhdl_logic9_hstring` (TO_OSTRING/TO_HSTRING). Test `fsim.application.vhdl-std-logic-textio` (interpreter, v4, v4 with `FSIM_KERNEL_VERIFY`, scheduler). Limits: a slice target with run-time bounds and a record-member target stay FSIM-ELAB-VHTEXTIO-004, as for the other radix reads.
+    - **Test:** `inout_bus` (a 72-bit net). It covers whole and slice constants with L/H/W/-, a constant at a computed index, computed values, an SV slice across the 64-bit word boundary, an SV bit against weak VHDL values, and VHDL readers.
+  - **Owner 2026-11-06 (#165):** the VHDL side must resolve in generated code too (not in `commit_writes`), and helper calls are to be avoided except where absolutely necessary (the `wide_concat` helper included). In progress with worker packages x1 (two-phase next-block resolution) and x2 (inline wide ops). `KOp::wide_concat` is now inline in every mode: `emit_wide_concat` assembles a fourth plane, the weak mask (narrow operands' shadow `b`, wide operands' mask chunk `b` words), when the body carries weak masks, so a weak-mode concatenation no longer calls `call_wide`. The other `call_wide` sites (weak `wide_part_insert` and the generic wide arithmetic) are #166.
+- **SDF per-source INTERCONNECT delays (#149, IEEE 1364-2005 16.2.4; owner: dual write).**
+  - `split_sdf_net_delays` groups the drivers of an annotated load's net by the source port each stands for. A group is either the processes of the port's instance that write the net (nearest instance first), or a parent's `port_result_`/`port_actual_` connection process that drives the net from that port's formal. The drivers no INTERCONNECT names form one more group, which takes the PORT delay.
+  - When every group has the same delays, one copy of the net is delayed as a whole (as before).
+  - Otherwise each driver keeps writing the net and also writes a copy of its group's contribution. The new helper `insert_after` adds an operation after a position and moves every instruction index: jumps, calls, branches, fork branches, disable sites and intervals, wait timeout origins and static trigger regions.
+  - The load's copy is then driven from each group copy with the group's delays and drive strength. It keeps the net's implicit driver and charge, so it resolves the groups as the net resolves its drivers.
+  - A writer that uses an operation the dual write does not cover warns FSIM-SDF-SESSION-004. (Closed 2026-11-06, `fsim.sdf-vital.net-*`: groups also split by drive strength, so each driver's strength reaches the load; a writer may read, wait on or be sensitive to the net; a load that drives its own port gets a zero-delay group of its own, with every operation on the port renamed to the copy: `$monitor`, `%v`, force/release, waits, VITAL checks, and processes with remapped signals; a source's drivers are found across port connection processes by cloning them per group; an INTERCONNECT whose source is not on the net is a PORT-like delay with FSIM-SDF-SESSION-005; a member whose interconnect delay targets a signal the kernel does not own (a copy with a strength driver, or one a host member touches such as a `%v` reader's) stays on the host (`net_delay_unowned`, ownership fixpoint); switches stay undelayed with a specific FSIM-SDF-SESSION-004, since 1364-2005 16.2.4 gives no delay across them.)
+  - **Fix found on the way:** source keys now name the port only. A select is a bit of the same driver.
+  - **Foreign writes of a group-mode net (owner 2026-11-07, worker x13).** The shadows carry only the sources' writes, so a deposit/force/release of the net from outside never reached a group-mode load copy (a regression against the undelayed shapes). Now a foreign write is "a change no source made" (1076.4-2000 6.4.1): `Interpreter::foreign_net_delay_before/after` (`simir_foreign_net_delay.cpp`) hook `deposit_signal`, `deposit_kernel_signal`, `force_signal`, `release_signal` and the slice forms (the one layer VPI, VHPI, ACC, TF, Tcl and the API all pass through, for both engines) and write each copy after the minimum over its groups of the per-bit transition delay (deposit, force, release of the copy through the same entry points; zero minimum in the same step; later write ends pending ones from its time on, per bit; no pulse limits). The map net -> copies is declared at simulation start (`Simulation::Impl::register_foreign_net_delays`) from the copy drivers' processes (`.$mipd_driver`, the table of their write, the net they read versus the record's net); the minimum reads `net_delay_overrides`, so reannotation retimes it. No cost without group-mode loads (one empty map test). Test `fsim.foreign.vpi-net-foreign.{v4,interpreter}`. Lead follow-ups: (1) a design `force`/`release` statement on the net (`Impl::force_slice_from_process`/`release_slice_from_process`, SystemVerilog branch) reaches the copies the same way through two `Impl` hooks installed with the first load (`net_delay_force_before/after`, empty otherwise); test `fsim.sdf-vital.net-hdl-force`; (2) a release of a net the v4 kernel owns read the net's stored value (the deposited or forced one) as its value after the release, since the slot re-resolves only when its drivers run again; the release now reruns the drivers and settles the copies' delays in the Inactive region (`foreign_net_delay_settle`); the net R of `foreign_vpi_net_foreign` (deposit 0, force 1, release: 1->z, 2 ns, where the stale value gives 3 ns or none) covers it; (3) a force statement forces its net again as it re-evaluates in the same step: a write of the value a bit is already on its way to lands at the pending write's time and replaces it (it took no delay before). **#171 (owner 2026-11-07: fix before the gate):** found by net R, in both engines and already in b08d0256, SDF or not: a released net returned to a value deposited before the force, not to its drivers' value (IEEE 1800-2023 10.6.2: "the net shall immediately be assigned the value determined by the drivers of the net"). `Impl::release_slice` now gives the released bits of a SystemVerilog net (sv_wire, wand, wor, user nettype) with drivers their drivers' resolved value; on v4, `StaticKernel::rerun_writers` (called for a released kernel-owned net) also resolves a resolved slot over its sources' planes again, which a foreign deposit leaves alone, whatever member kind wrote them (the delayed copy's net-delay members are not combinational). Not covered: a net upstream of the load's net, procedural assign/deassign, VHPI created-driver writes.
+  - **Slow ctest checks (owner 2026-11-07).** `fsim.ctest-command-uniqueness` (270 s) and `fsim.gate-migration-negative-probes` (264 s, whose last probe reruns the same check) spent their time in `string(JSON GET)`, which parses the whole 1.7 MB `--show-only=json-v1` document on every call (~9 ms, ~15,000 calls). `CheckCTestCommandUniqueness.cmake` now takes each test object out of the document once and reads its name, command and fixtures from it: 14.6 s and 32 s alone; a duplicated command and a missing fixture are still rejected.
+  - **Test:** `fsim.foreign.vpi-sdf-delays` gains u6/u7 → u8. Two tri-state sources reach one load with 2 ns and 7 ns delays, so u8 sees 0 at 23, z at 33, 1 at 38 and 0 at 48. The test passes on v4 and the interpreter, and the targeted `sdf|mipd` set passes 72/72.
+  - **Lazy MIPD (x11, owner 2026-11-06), partly done, not built:** a foreign port delay put on an unsplit input port asks for a split at the next safe point (`Simulation::request_net_delay_split`, plan `plan_sdf_net_delay_graft` through `split_sdf_net_delays`, commit `Simulation::Impl::commit_net_delay_splits`). No cost for runs that never put a port delay. Port bits split by select; a live SDF reannotation grafts the loads it newly delays. `Interpreter::graft_net_delay` routes to `StaticKernel::replan_at_safe_point(ReplanRequest)` (kinds `graft_net_delay`, `recompile_all`), which is declared and refuses every request: the kernel append (slot, compiled drivers, rebound reads, levels/partitions) and the evaluator's post-start growth are not written, so the put stays bookkeeping and test `fsim.foreign.vpi-mipd-split` fails.
+  - **Owner 2026-11-06:** twelve transition delays and pulse limits go in the v4 kernel, not the host module-path code (worker x3). VPI reads of the load, top-level port loads and lazy MIPD are with worker x4.
+  - **NETDELAY and live reannotation of net delays (worker x9).** `NETDELAY` (OVI SDF 1.0/2.0/2.1, IEEE 4.0; SDF 3.0 rejects it) is a PORT-kind record per load (`net_delay_records` in `application_sdf_session.cpp`): an input/inout port is a record of its own, a net gives one per input/inout port that shares its signal (ports from `design_ir` + SystemVerilog HIR via the new `SdfPortSource` argument of `plan_sdf_session_inputs`), an output port is `FSIM-SDF-INTERCONNECT-002`. Record identity is the target identity plus the load path; an `INCREMENT` adds to the earlier record of the load. Live reannotation: `Simulation::commit_sdf_reannotation(application, &planned->design)` compares the running design with the planned one (`sdf_net_delay_retiming`: same `$mipd` signals and driver processes, same tables-or-none) and, when they split the same loads, takes the planned design and gives each copy driver its new table through `Interpreter::set_net_delay_table` (pending changes keep their time). A load that would need a new or removed split keeps the running split (no processes can be added to a running simulation; the lazy-MIPD worker owns that). Test: `run_sdf_net_delay_workspace_commands_test` in `tests/app/tcl_workspace_commands_test.cpp` (NETDELAY on a net with two loads and on an input port, live reannotation at 11 ns, output-port rejection).
+  - **SDF backannotation of VITAL models (worker x10, IEEE 1076.4-2000 5.1, 5.2).** `fsim elaborate --sdf` now annotates the timing generics of the VHDL cells an SDF file names (`application_sdf_vital_generics.cpp`). The SDF side reuses the parser, the SDF IR, the scope binding and `resolve_sdf_cells`, and `select_sdf_timing_check_value`; it builds the generic names of the VITAL SDF map (`tpd_`, `tipd_`, `tdevice_`, the timing-check generics, condition and edge suffixes) and femtosecond delay lists, and the build elaborates a second time with `elaboration::TimingGenericAnnotation` entries on the roots. `HierarchyBuilder::apply_compiled_vhdl_timing_annotations` replaces the generic's actual of the instance's entity (scalar `VitalDelayType`, `01`, `01Z`, `01ZX`; Table 1, Table 7 for the X transitions; ABSOLUTE/INCREMENT against the default or mapped value), so the lowered processes and both engines start from the annotated state. The generics are elaboration constants, so `simulate --sdf`, Tcl and the C/C++ sessions reject VHDL cells (`FSIM-SDF-VITAL-008`) rather than fake a reannotation. The session strips the VHDL targets from its resolved cells (`remove_sdf_vital_targets`). Instance resolution now splits generate labels into path elements and accepts `label[a:b]`. A VITAL concurrent `VitalWireDelay` now wakes on its input (`record_implicit_signal_dependency`). Not covered: vector delay generics, multi-source `INTERCONNECT` (5.2.7.1.5), `RETAIN`; see docs/sdf.md. Tests: `fsim.sdf-vital.*` (traces derived by hand in the headers of `tests/fixtures/sdf/vital_annotation/tb_*.vhd`, both engines), `examples/sdf_vital_mixed` now a working VITAL cell.
+  - **Full VITAL SDF map (#169, closed 2026-11-06).** The x10 follow-ups close the items above: vector delay generics (row-dominant mapping, 5.2.7.3.3), `RETAIN` (Table 2), the scalar multiple source mode (5.2.7.1.5, 6.4.1: per-source shadow signals by dual write, `VitalDelay::wire_sources`, minimum over the sources with an event), aggregate generic actuals, VITAL cells under a SystemVerilog parent, and an INTERCONNECT from a SystemVerilog cell into a VHDL port (the session now finds the load's language by the instance that owns the port, so the net is not delayed a second time). Worker x12 adds the multiple source mode for vector `tipd_` generics: the per-element `VitalWireDelay(a_ipd(i), a(i), tipd_a(i))` of a wire delay generate is lowered (`VitalDelay::output_offset`, `input_offset`, `wire_index`; the process waits on its element only), `VitalWireLocations` holds one row set per element, each source instance and the unnamed drivers get one bus-wide shadow, and an element's call selects among its sources (event in the delta and a change of its bit). Test `fsim.sdf-vital.multisource-vector` (both engines). 1076.4 declares `VitalWireDelay` for scalar signals only, so there is no whole-vector form to lower. FSIM-SDF-VITAL-013 remains for a driver the dual write cannot cover, a source that drives nothing, two ports of one instance reaching one element, and an element in the mode with no wire delay call.
+- **Test:** `fsim.application.vhdl-port-time0-from-systemverilog` gains `inout_net` (inout/out defaults, the pull-up, H/L/W/-/U/X/Z) and `inout_vhdl_parent` (an SV inout on a VHDL std_logic bus). The mixed cases now read the ports between time steps (`stable_leaf` reports its S'STABLE/S'QUIET wakes only after time 0, and `svleaf` samples at 0.5 ns), so no expected file depends on the order within a step. The interpreter, the v4 kernel and the scheduler agree on every case.
+- **cocotb** (candidate archive `p152a`): 0 losses against `fc9b` in all four configurations (2.1/master × Verilog/VHDL, the mixed-language suites included): 708, 646, 735 and 666 passed. Full ctest 1253/1253. Gated with the 11-07 entry above.
+- **Open:** a SystemVerilog declaration initializer (`logic p = 0`) makes `p'QUIET` FALSE for one delta at time 0, a transaction from its startup write. It is TRUE at the end of the step. Under 1800-2023 6.8 the initializer is not an assignment, so this is an open point.
+
 ### 2026-11-05: Foreign-interface closure waves 5–10 (this commit, sweeps `fc9bg`, `fc9bga`)
 
 Plan: `~/.claude/plans/playful-kindling-teacup.md`, the work after Phase B. Conformance inventory: `docs/foreign-interface-conformance.md`. Worker packages w31–w69 ran in hand-made worktrees; the lead merged, built and tested them.
@@ -185,7 +331,7 @@ Plan: `~/.claude/plans/playful-kindling-teacup.md`, the work after Phase B. Conf
 - **SDF net delays (w57, w64 part 1):** INTERCONNECT, PORT and MIPD delays are simulated through a delayed copy of each load; annotation order follows IEEE 1364-2005 16.3 for a uniform source. A load that cannot be split is FSIM-SDF-SESSION-004. The rest (per-source copies, twelve transitions, select loads, VPI reads of the copy, lazy MIPD, PATHPULSE, reannotation) is the next gate (#149).
 - **Drivers and loads follow 37.21 strictly** (owner 2026-11-05, after the first gate run): `vpiDriver` and `vpiLoad` list continuous assignments, forces, procedural continuous assigns (`vpiAssignStmt`) and ports, and no blocking or nonblocking assignment; `vpiUse` still lists them. `reason_paramdrc` follows, so a reg written only procedurally has no driver change (IEEE 1364-2001 26.6.7 detail 7). The first gate run on `fc9` lost ivtest `vpi_br_gh141` to extra `reason_paramdrc` calls from wave 10's per-driver watch on such assignments.
 - **Workspace (w54):** an object compiled from outdated sources is skipped at compile with FSIM-WS-003.
-- **Formats:** runtime state schema 101, SV HIR schema 16, VHDL HIR schema 11, kernel image v4. Diagnostic catalog 2987.
+- **Formats:** runtime state schema 102, SV HIR schema 16, VHDL HIR schema 11, kernel image v4. Diagnostic catalog 2987.
 
 **Moved out of this gate (owner 2026-11-05):**
 - Mixed SV→VHDL ports at time 0 keep the existing behaviour: the port is one signal with the SV initial value, so only `'QUIET` toggles at 0. xsim starts the VHDL side at 'U' and gives it an event at 0; a same-pass separate VHDL view is the next project (#152).

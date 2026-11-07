@@ -36,7 +36,7 @@ namespace kw = kernel_word;
 
 namespace {
 
-constexpr std::string_view bodies_magic { "fsim-static-kernel-bodies-v5" };
+constexpr std::string_view bodies_magic { "fsim-static-kernel-bodies-v7" };
 
 } // namespace
 
@@ -50,6 +50,8 @@ void Interpreter::Impl::StaticKernel::compile_members()
 {
     std::map<std::string, std::size_t> failures;
     not_compiled_reason_.assign(members_.size(), nullptr);
+    // Decided before any member compiles (and before the commit reads it).
+    (void)design_may_hold_weak();
     const char* dump = std::getenv("FSIM_KERNEL_DUMP");
     std::size_t dumped = 0U;
     // Diagnostics: compile only members whose name contains
@@ -859,6 +861,7 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
     }
     // 2. Translate.
     CompiledBody body;
+    body.weak = design_may_hold_weak() ? 1U : 0U;
     // VHDL calls on the runtime-owned stack use a synthetic fixed stack in
     // the register file: a pointer and call_stack_depth entries.
     if (whole && std::ranges::any_of(member.operations(), [](const Operation& op) {
@@ -960,6 +963,132 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
     // every chunked VHDL register has 'U' masks.
     const auto has_unknowns = [&](const RegisterId reg) {
         return vhdl || kind_of(reg) == ValueKind::logic9;
+    };
+    // A VHDL register read only as the value of assignments to four-state
+    // slots (a SystemVerilog net, as on a VHDL inout it alone drives): the
+    // assignment maps 'H', 'L', 'W' and '-' to four states, so a constant
+    // with those codes loads as its four-state value instead of leaving
+    // compiled execution.
+    std::vector<std::uint8_t> four_state_sink(vhdl ? register_count : 0U, 1U);
+    // A VHDL register that only carries a constant into assignments to
+    // resolved slots (a SystemVerilog net with several sources), each
+    // directly after the constant's load: such an assignment takes the
+    // constant's nine values from the load (store_vhdl sub 2 and 3), so 'H',
+    // 'L', 'W' and '-' enter the net's resolution as they are.
+    std::vector<std::uint8_t> net_constant(vhdl ? register_count : 0U, 1U);
+    // The register an assignment to a resolved slot at `pc` stores, when the
+    // operation before it loads that register with a constant.
+    const auto constant_into_net = [&](const std::uint32_t pc)
+        -> std::optional<RegisterId> {
+        std::optional<RegisterId> source;
+        visit_operation([&](const auto& op) {
+            using T = std::decay_t<decltype(op)>;
+            if constexpr (std::is_same_v<T, WriteBlocking>
+                || std::is_same_v<T, WriteBlockingSlice>
+                || std::is_same_v<T, WriteUpdate>
+                || std::is_same_v<T, WriteUpdateSlice>
+                || std::is_same_v<T, WriteProjected>
+                || std::is_same_v<T, WriteProjectedSlice>
+                || std::is_same_v<T, WriteBlockingDynamicSlice>
+                || std::is_same_v<T, WriteUpdateDynamicSlice>
+                || std::is_same_v<T, WriteProjectedDynamicSlice>) {
+                const auto slot = owned_slot(op.signal);
+                if (!slot || !slots_[*slot].resolved || pc == begin
+                    || skip[pc - 1U] != 0U) {
+                    return;
+                }
+                const auto* load = operation_get_if<LoadConstant>(
+                    &member.operations()[pc - 1U]);
+                if (load != nullptr && load->destination == op.source) {
+                    source = op.source;
+                }
+            }
+        }, member.operations()[pc]);
+        return source;
+    };
+    if (vhdl) {
+        for (std::uint32_t pc = begin; pc < end; ++pc) {
+            if (skip[pc] != 0U) {
+                continue;
+            }
+            const auto& operation = member.operations()[pc];
+            operation_registers(operation, operand_reads, operand_write);
+            std::optional<RegisterId> stored;
+            visit_operation([&](const auto& op) {
+                using T = std::decay_t<decltype(op)>;
+                if constexpr (std::is_same_v<T, WriteBlocking>
+                    || std::is_same_v<T, WriteBlockingSlice>
+                    || std::is_same_v<T, WriteUpdate>
+                    || std::is_same_v<T, WriteUpdateSlice>
+                    || std::is_same_v<T, WriteProjected>
+                    || std::is_same_v<T, WriteProjectedSlice>) {
+                    if (const auto slot = owned_slot(op.signal);
+                        slot && slots_[*slot].planes == 2U
+                        && !slots_[*slot].resolved) {
+                        stored = op.source;
+                    }
+                }
+            }, operation);
+            const auto into_net = constant_into_net(pc);
+            for (const auto reg : operand_reads) {
+                if (reg < register_count && reg != stored) {
+                    four_state_sink[reg] = 0U;
+                }
+                if (reg < register_count && reg != into_net) {
+                    net_constant[reg] = 0U;
+                }
+            }
+        }
+    }
+    // A constant with codes four-state values do not hold ('H', 'L', 'W',
+    // '-').
+    const auto weak_codes = [](const PackedLogic4& value) {
+        return has_weak_codes(value);
+    };
+    const auto four_state_constant = [&](const LoadConstant& op) {
+        return vhdl && op.destination < register_count && op.value.is_logic9()
+            && (four_state_sink[op.destination] != 0U
+                || (net_constant[op.destination] != 0U && weak_codes(op.value)));
+    };
+    // The assignment at `pc` stores a nine-value constant into a resolved
+    // slot (net_constant): the position of the constant's load.
+    const auto net_constant_load = [&](const std::uint32_t pc)
+        -> std::optional<std::uint32_t> {
+        const auto source = vhdl ? constant_into_net(pc) : std::nullopt;
+        if (!source || *source >= register_count || net_constant[*source] == 0U
+            || !weak_codes(operation_get<LoadConstant>(
+                member.operations()[pc - 1U]).value)) {
+            return std::nullopt;
+        }
+        return pc - 1U;
+    };
+    // The codes of the constant loaded at `load`, appended to the body's
+    // constants as kind 3 writes read them (StaticKernelWrite): their index.
+    const auto net_constant_codes = [&](const std::uint32_t load) {
+        const auto& value = operation_get<LoadConstant>(member.operations()[load]).value;
+        const auto index = body.wide_constants.size();
+        const auto value_width = static_cast<std::uint32_t>(value.width());
+        for (std::uint32_t done = 0U; done < value_width; done += 64U) {
+            const auto chunk = [&](const std::uint32_t plane) {
+                const auto words = value.logic9_plane_words(plane);
+                return done / 64U < words.size()
+                    ? words[done / 64U] & kernel_word::mask(std::min(64U, value_width - done))
+                    : 0U;
+            };
+            body.wide_constants.push_back({ chunk(0U), chunk(1U) });
+            body.wide_constants.push_back({ chunk(2U), chunk(3U) });
+        }
+        return index;
+    };
+    // A store to a resolved slot (store_slot sub 2 and 3) carries the
+    // slot's shape for generated code: imm_b its source count and, from bit
+    // 32, the member's source; aux its width.
+    const auto net_store = [&](KInst& inst, const std::uint32_t slot) {
+        if (slots_[slot].resolved) {
+            inst.imm_b = slots_[slot].net_processes.size()
+                | std::uint64_t { net_source_index(slot, member.process) } << 32U;
+            inst.aux = slots_[slot].width;
+        }
     };
     const auto family_leaf = [&](const std::uint32_t family,
                                  const std::uint32_t offset,
@@ -1320,6 +1449,14 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     move.d = target;
                     move.offset = offset;
                     move.width = width[value];
+                    // Generated code moves to an unresolved slot chunk by
+                    // chunk (emit_wide_move): imm_a the source's words per
+                    // plane, imm_b the target's and, from bit 32, the
+                    // source's width.
+                    move.imm_a = slots_[move.x].words;
+                    move.imm_b = slots_[target].resolved ? 0U
+                        : slots_[target].words
+                            | std::uint64_t { slots_[move.x].width } << 32U;
                     move.flags = static_cast<std::uint8_t>(
                         move.flags | (deferred ? flag_nba : 0U));
                     matched = true;
@@ -1357,6 +1494,25 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
         }
         if (fused_move[pc - begin]) {
             body.code.push_back(*fused_move[pc - begin]);
+            continue;
+        }
+        if (const auto* delayed = operation_get_if<WriteNetDelay>(
+                &member.operations()[pc])) {
+            // An interconnect delay (IEEE 1364-2005 16.2.4) is the kernel's
+            // own instruction in every member kind: it reads its source
+            // (any width) from the register file and holds its pending
+            // changes as kernel timers (StaticKernel::net_delay_write).
+            if (delayed->source >= register_count || width[delayed->source] == 0U
+                || width[delayed->source] == polymorphic) {
+                throw reject("net_delay_source");
+            }
+            inst.op = KOp::net_delay;
+            inst.x = delayed->source;
+            inst.y = pc;
+            inst.width = width[delayed->source];
+            inst.aux = has_unknowns(delayed->source) ? 1U : 0U;
+            has_wide = has_wide || width[delayed->source] > 64U;
+            body.code.push_back(inst);
             continue;
         }
         if (behavioral) {
@@ -1527,9 +1683,9 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                         || width[op.destination] != width[op.source]) {
                         return;
                     }
-                    // The copy is coerced to the destination's kind: 'U'
+                    // The copy is coerced to the destination's kind: the
                     // masks survive only into a Logic9 register ('U' reads
-                    // as X without its mask).
+                    // as X, 'H' and 'L' as 1 and 0 without them).
                     const auto chunks = wide_chunks(width[op.destination]);
                     const bool to = has_unknowns(op.destination);
                     const bool keep = to && has_unknowns(op.source)
@@ -1540,6 +1696,9 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     inst.width = width[op.destination];
                     inst.aux = keep ? 2U * chunks : chunks;
                     inst.imm_a = to && !keep ? chunks : 0U;
+                    // sub 1: a Logic4 destination reads the source's weak
+                    // elements through coerce_weak ('W' and '-' as X).
+                    inst.sub = !keep && has_unknowns(op.source) ? 1U : 0U;
                     lowered = true;
                 } else if constexpr (std::is_same_v<T, LoadConstant>) {
                     if (!enabled(2U) || !chunked(op.destination)
@@ -1548,21 +1707,18 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     }
                     const auto chunks = wide_chunks(width[op.destination]);
                     const bool masks = has_unknowns(op.destination);
-                    const auto value
-                        = Impl::coerce_value_kind(op.value, kind_of(op.destination));
+                    const auto value = Impl::coerce_value_kind(op.value,
+                        four_state_constant(op) ? ValueKind::logic4
+                                                : kind_of(op.destination));
                     std::vector<Word> words(masks ? 2U * chunks : chunks);
                     for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
                         const auto field_width
                             = std::min(64U, width[op.destination] - 64U * chunk);
                         const auto field = value.extract_bits(64U * chunk, field_width);
                         const auto word = exact_uword(field);
-                        if (!word || (word->unknown != 0U && !masks)) {
-                            // Codes the chunks cannot hold.
-                            return;
-                        }
                         words[chunk] = word->value;
                         if (masks) {
-                            words[chunks + chunk] = { word->unknown, 0U };
+                            words[chunks + chunk] = { word->unknown, word->weak };
                         }
                     }
                     inst.op = KOp::wide_const;
@@ -1650,6 +1806,18 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     if (vhdl) {
                         inst.sub = 2U;
                         inst.flags = blocking ? flag_blocking : 0U;
+                        if (const auto load = net_constant_load(pc)) {
+                            // As the narrow assignment of such a constant.
+                            inst.op = KOp::store_vhdl;
+                            inst.x = op.source;
+                            inst.d = slot;
+                            inst.offset = offset;
+                            inst.width = width[op.source];
+                            inst.imm_a = net_constant_codes(*load);
+                            net_store(inst, slot);
+                            lowered = true;
+                            return;
+                        }
                     } else {
                         // As KOp::wide_move: Logic4 slots; an update in the
                         // generic domain stays generic.
@@ -1674,6 +1842,21 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     inst.offset = offset;
                     inst.width = width[op.source];
                     inst.aux = has_unknowns(op.source) ? 1U : 0U;
+                    // Generated code stores a SystemVerilog blocking write
+                    // chunk by chunk (emit_wide_slot_store): imm_b the
+                    // slot's words per plane.
+                    inst.imm_b = !vhdl && inst.sub == 0U ? slots_[slot].words : 0U;
+                    if (slots_[slot].resolved && (inst.flags & flag_blocking) == 0U
+                        && inst.sub != 1U) {
+                        // Generated code stores each chunk of a resolved
+                        // slot (emit_wide_net_store): imm_a the slot's words
+                        // per plane and, from bit 32, its width; imm_b as
+                        // for store_slot (net_store).
+                        inst.imm_a = slots_[slot].words
+                            | std::uint64_t { slots_[slot].width } << 32U;
+                        net_store(inst, slot);
+                        inst.aux = has_unknowns(op.source) ? 1U : 0U;
+                    }
                     lowered = true;
                 }
             }, member.operations()[pc]);
@@ -1857,15 +2040,18 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                         throw reject("wide_constant");
                     }
                     inst.d = narrow(op.destination);
-                    if (const auto word = exact_uword(op.value)) {
-                        inst.op = KOp::constant;
-                        inst.imm_a = word->value.a;
-                        inst.imm_b = word->value.b;
-                        inst.offset = static_cast<std::uint32_t>(word->unknown);
-                        inst.aux = static_cast<std::uint32_t>(word->unknown >> 32U);
-                    } else {
-                        inst.op = KOp::deopt;
-                    }
+                    // All nine values are representable (word, 'U' mask in
+                    // offset and aux, weak mask in x and y).
+                    const auto word = exact_uword(four_state_constant(op)
+                            ? Impl::coerce_value_kind(op.value, ValueKind::logic4)
+                            : op.value);
+                    inst.op = KOp::constant;
+                    inst.imm_a = word->value.a;
+                    inst.imm_b = word->value.b;
+                    inst.offset = static_cast<std::uint32_t>(word->unknown);
+                    inst.aux = static_cast<std::uint32_t>(word->unknown >> 32U);
+                    inst.x = static_cast<std::uint32_t>(word->weak);
+                    inst.y = static_cast<std::uint32_t>(word->weak >> 32U);
                 } else if constexpr (std::is_same_v<T, ReadSignal>) {
                     if (op.destination < register_count
                         && (field_slot[op.destination] != no_slot
@@ -1932,8 +2118,22 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                         inst.flags = blocking ? flag_blocking : 0U;
                         // The target's shape, for generated code's check of
                         // an unchanged assignment (words per plane, planes).
+                        // A resolved slot holds the resolution, not the
+                        // assignment's value: no check.
                         inst.imm_a = slots_[*slot].words;
-                        inst.imm_b = slots_[*slot].planes;
+                        inst.imm_b = slots_[*slot].resolved ? 0U : slots_[*slot].planes;
+                        // A resolved slot resolves the assignment into its
+                        // next block in generated code (net_shape): imm_b
+                        // its source count and the member's source, aux its
+                        // width.
+                        net_store(inst, *slot);
+                        if (const auto load = net_constant_load(pc)) {
+                            // Sub 2: the value is a nine-value constant,
+                            // whose codes are at imm_a in the body's
+                            // constants.
+                            inst.sub = 2U;
+                            inst.imm_a = net_constant_codes(*load);
+                        }
                     } else {
                         SignalUpdateDomain domain = SignalUpdateDomain::generic;
                         if constexpr (std::is_same_v<T, WriteUpdate>
@@ -1962,6 +2162,28 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     inst.width = w(op.source);
                     // The target's width, for the generated range check.
                     inst.imm_a = slots_[*slot].width;
+                    if (const auto load = net_constant_load(pc)) {
+                        // Sub 3: sub 1 of a nine-value constant, whose codes
+                        // are at imm_b in the body's constants (as sub 2).
+                        inst.sub = 3U;
+                        inst.imm_b = net_constant_codes(*load);
+                    }
+                    if (slots_[*slot].resolved) {
+                        // The slot's shape (net_shape): sub 1 imm_b its
+                        // source count and the member's source; sub 3 the
+                        // source count above the codes' index in imm_b and
+                        // the member's source above the width in imm_a.
+                        const auto sources = std::uint64_t {
+                            slots_[*slot].net_processes.size() };
+                        const auto own = std::uint64_t {
+                            net_source_index(*slot, member.process) };
+                        if (inst.sub == 3U) {
+                            inst.imm_b |= sources << 32U;
+                            inst.imm_a |= own << 32U;
+                        } else {
+                            inst.imm_b = sources | own << 32U;
+                        }
+                    }
                     inst.aux = static_cast<std::uint32_t>(body.indices.size());
                     body.indices.push_back(op.selection);
                     inst.flags = std::is_same_v<T, WriteBlockingDynamicSlice>
@@ -2374,8 +2596,13 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     // The whole leaf (see the generic decision).
                     inst.d = leaf->slot;
                     inst.offset = 0U;
-                    inst.sub = slots_[leaf->slot].words != 1U ? 1U : 0U;
+                    // Sub 2 and 3: sub 0 and 1 of a resolved slot, whose
+                    // stores resolve its sources (net_store).
+                    inst.sub = static_cast<std::uint8_t>(
+                        (slots_[leaf->slot].words != 1U ? 1U : 0U)
+                        + (slots_[leaf->slot].resolved ? 2U : 0U));
                     inst.imm_a = slots_[leaf->slot].words;
+                    net_store(inst, leaf->slot);
                     inst.op = !blocking
                             && domain == SignalUpdateDomain::systemverilog_nba
                         ? KOp::store_slot_nba : KOp::store_slot;
@@ -2383,8 +2610,11 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                 } else if (const auto slot = owned_slot(op.signal)) {
                     // Sub 1: a narrow slice of a wide slot; imm_a is the
                     // slot's word count.
-                    inst.sub = slots_[*slot].words != 1U ? 1U : 0U;
+                    inst.sub = static_cast<std::uint8_t>(
+                        (slots_[*slot].words != 1U ? 1U : 0U)
+                        + (slots_[*slot].resolved ? 2U : 0U));
                     inst.imm_a = slots_[*slot].words;
+                    net_store(inst, *slot);
                     if (offset > slots_[*slot].width
                         || value_width > slots_[*slot].width - offset
                         || (!slice && value_width != slots_[*slot].width)) {
@@ -2419,7 +2649,8 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                 // The slot's words per plane and width, for native stores
                 // (Logic4 slots only).
                 inst.imm_a = slots_[*slot].words;
-                inst.imm_b = slots_[*slot].planes == 2U ? slots_[*slot].width : 0U;
+                inst.imm_b = slots_[*slot].planes == 2U && !slots_[*slot].resolved
+                    ? slots_[*slot].width : 0U;
                 inst.aux = static_cast<std::uint32_t>(body.indices.size());
                 body.indices.push_back(op.selection);
                 // A strict (VHDL) index is checked; a SystemVerilog write
@@ -2448,7 +2679,8 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                 // As for store_slot_dynamic: the slot's words per plane and
                 // width, for native stores (Logic4 slots only).
                 inst.imm_a = slots_[*slot].words;
-                inst.imm_b = slots_[*slot].planes == 2U ? slots_[*slot].width : 0U;
+                inst.imm_b = slots_[*slot].planes == 2U && !slots_[*slot].resolved
+                    ? slots_[*slot].width : 0U;
                 inst.aux = static_cast<std::uint32_t>(body.parts.size());
                 body.parts.push_back(op.selection);
                 if constexpr (!blocking) {
@@ -2581,7 +2813,7 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
             break;
         case KOp::store_vhdl:
             check(inst.x);
-            if (inst.sub == 1U) {
+            if (inst.sub == 1U || inst.sub == 3U) {
                 check(inst.y);
             }
             break;
@@ -2660,7 +2892,6 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
             jump.d = member.body_begin;
             body.code[member.prologue_end] = jump;
         }
-        eliminate_dead_constants(body, member_index);
         track_unknowns(body, member_index);
         body.entry = member.body_begin;
         body.live_at_entry = std::move(live_at_entry);
@@ -2746,6 +2977,157 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
         }
     }
     return body;
+}
+
+bool Interpreter::Impl::StaticKernel::design_may_hold_weak()
+{
+    if (weak_possible_) {
+        return *weak_possible_;
+    }
+    // Every way a weak element ('H', 'L', 'W', '-') can arise in a design
+    // (the owner's rule: found at plan time, never at run time; a false
+    // positive costs speed, a false negative is a bug):
+    //  - a client other than the design writes values: a foreign library
+    //    (VPI, VHPI, PLI, DPI), a Tcl session, the debugger (weak_sources_);
+    //  - a constant: a LoadConstant of any process of the design (host
+    //    processes and compact constant drivers such as `sda <= 'H'`
+    //    included), the initial value of any signal or container element,
+    //    the value of any driver, a pull or weak driver strength (which a
+    //    VHDL reader sees as 'H', 'L' or 'W'), a Logic9 slot of the kernel;
+    //  - a value made from data at run time: 'VAL, 'VALUE (and every
+    //    conversion of an integer, character or string to a std_ulogic
+    //    value) reach SimIR as an Extract of a non-Logic9 register into a
+    //    Logic9 one, or as an operation outside those that only derive their
+    //    result from Logic9 inputs; any process with such an operation
+    //    writing a Logic9 register, and any file read (TEXTIO read, READ of
+    //    a file of std_ulogic) counts. 'SUCC, 'PRED, 'LEFTOF and 'RIGHTOF
+    //    are IntegerUnary/IntegerBinary on the ordinal followed by that
+    //    Extract.
+    // Resolution, the logic operators, TO_X01 and TO_UX01 (outputs 0, 1, X,
+    // U), copies, selects and shifts only derive weak elements from weak
+    // inputs, which are one of these sources.
+    bool weak = weak_sources_;
+    for (const auto& slot : slots_) {
+        const auto rows = slot.planes == 4U ? 4U : 0U;
+        for (std::uint32_t word = 0U; word < slot.words && !weak && rows != 0U;
+             ++word) {
+            const auto* planes = arena_.data() + slot.offset;
+            const auto p0 = planes[word];
+            const auto p1 = planes[slot.words + word];
+            const auto p2 = planes[2U * slot.words + word];
+            const auto p3 = planes[3U * slot.words + word];
+            weak = (p3 | (p2 & (p1 | p0))) != 0U;
+        }
+    }
+    const auto signal_count = impl_.signals.size();
+    for (std::size_t id = 0U; id < signal_count && !weak; ++id) {
+        const auto signal = static_cast<SignalId>(id);
+        weak = has_weak_codes(impl_.get_signal(signal).initial_value);
+        if (!weak && id < impl_.driver_values.size()) {
+            impl_.driver_values[id].for_each_in_process_order(
+                [&](const DriverRecord& record) {
+                    weak = weak || has_weak_codes(record.value)
+                        || record.strength.zero != StrengthRank::strong
+                        || record.strength.one != StrengthRank::strong;
+                });
+        }
+    }
+    const auto container_weak = [](const auto& self, const ContainerValue& value) -> bool {
+        return std::ranges::any_of(value.elements,
+                   [](const PackedLogic4& element) { return has_weak_codes(element); })
+            || std::ranges::any_of(value.nested_elements,
+                [&](const ContainerValue& nested) { return self(self, nested); });
+    };
+    for (std::size_t id = 0U; id < impl_.container_objects.size() && !weak; ++id) {
+        weak = container_weak(container_weak, impl_.container_objects[id].initial_value);
+    }
+    std::vector<RegisterId> reads;
+    std::optional<RegisterId> written;
+    // One operation of a program whose Logic9 registers are those `logic9`
+    // names.
+    const auto scan_operation = [&](const Operation& operation, const auto& logic9) {
+        visit_operation([&](const auto& o) {
+            using T = std::decay_t<decltype(o)>;
+            if constexpr (std::is_same_v<T, LoadConstant>) {
+                weak = weak || has_weak_codes(o.value);
+            } else if constexpr (std::is_same_v<T, FileReadLine>
+                || std::is_same_v<T, FileScan>
+                || std::is_same_v<T, FileBinaryRead>) {
+                weak = true;
+            }
+        }, operation);
+        if (weak) {
+            return;
+        }
+        written.reset();
+        operation_registers(operation, reads, written);
+        if (!written || !logic9(*written)) {
+            return;
+        }
+        // A Logic9 result: derived from Logic9 data, or made from other
+        // data.
+        bool derived = false;
+        visit_operation([&](const auto& o) {
+            using T = std::decay_t<decltype(o)>;
+            if constexpr (std::is_same_v<T, LoadConstant>
+                || std::is_same_v<T, CopyRegister>
+                || std::is_same_v<T, UnaryNot>
+                || std::is_same_v<T, LogicalNot>
+                || std::is_same_v<T, LogicalBinary>
+                || std::is_same_v<T, Binary>
+                || std::is_same_v<T, Reduction>
+                || std::is_same_v<T, Shift>
+                || std::is_same_v<T, Insert>
+                || std::is_same_v<T, Concatenate>
+                || std::is_same_v<T, ConditionalSelect>
+                || std::is_same_v<T, ConvertToTwoState>
+                || std::is_same_v<T, DynamicInsert>
+                || std::is_same_v<T, DynamicPartInsert>
+                || std::is_same_v<T, ReadSignal>
+                || std::is_same_v<T, ReadContainerObject>
+                || std::is_same_v<T, ContainerRead>
+                || std::is_same_v<T, ContainerElementRead>
+                || std::is_same_v<T, ContainerAggregateRead>) {
+                derived = true;
+            } else if constexpr (std::is_same_v<T, Extract>
+                || std::is_same_v<T, DynamicExtract>
+                || std::is_same_v<T, DynamicPartSelect>) {
+                derived = logic9(o.source);
+            }
+        }, operation);
+        weak = weak || !derived;
+    };
+    // The processes still in the process table (the host's) ...
+    const auto process_count = impl_.processes.size();
+    for (std::size_t id = 0U; id < process_count && !weak; ++id) {
+        const auto program = impl_.processes.program_view(static_cast<ProcessId>(id));
+        const auto& operations = program.operations();
+        const auto& kinds = program.register_value_kinds();
+        const auto logic9 = [&](const RegisterId reg) {
+            return reg < kinds.size() && kinds[reg] == ValueKind::logic9;
+        };
+        Operation scratch;
+        for (std::size_t op = 0U; op < operations.size() && !weak; ++op) {
+            scan_operation(operations.expanded_ref(op, scratch), logic9);
+        }
+    }
+    // ... and the kernel's members, whose programs the kernel took over
+    // (the table holds a stub for them).
+    for (const auto& member : members_) {
+        const auto logic9 = [&](const RegisterId reg) {
+            return reg < member.register_kinds.size()
+                && member.register_kinds[reg] == ValueKind::logic9;
+        };
+        const auto& operations = member.operations();
+        for (std::size_t op = 0U; op < operations.size() && !weak; ++op) {
+            scan_operation(operations[op], logic9);
+        }
+        if (weak) {
+            break;
+        }
+    }
+    weak_possible_ = weak;
+    return weak;
 }
 
 } // namespace fsim::runtime::simir

@@ -681,6 +681,9 @@ struct Simulation::Impl {
     /// heap layout, UVM services, constraints, and unsupported residuals.
     application_detail::SystemVerilogClassHirExecution class_hir_execution;
 
+    /// The elaborated design's process count, taken before the interpreter
+    /// takes its processes (a run-time split plans over them).
+    std::size_t design_process_count {};
     std::unique_ptr<runtime::simir::Interpreter> interpreter;
 
     std::unique_ptr<runtime::SystemVerilogVpiObjectRegistry> vpi_registry;
@@ -878,6 +881,33 @@ struct Simulation::Impl {
     SafePointHook safe_point_hook;
 
     std::map<std::uint64_t, SafePointHook> safe_point_observers;
+
+    /// Splits of load ports asked for by a foreign module input port delay
+    /// put (Simulation::request_net_delay_split), the safe-point observer
+    /// that makes them (0 when none is waiting), why requests were refused,
+    /// and the ports refused, which later puts do not ask for again.
+    std::vector<elaboration::SdfNetDelayInfo> net_delay_split_requests;
+    std::uint64_t net_delay_split_observer { 0U };
+    std::vector<std::string> net_delay_split_refusals;
+    /// The interpreter ids of the copy drivers a run-time split added, by
+    /// their ids in `built.design` (the run's fork children and foreign
+    /// drivers come between).
+    std::unordered_map<runtime::simir::ProcessId, runtime::simir::ProcessId>
+        grafted_process_ids;
+    [[nodiscard]] runtime::simir::ProcessId running_process(
+        runtime::simir::ProcessId design_process) const
+    {
+        const auto found = grafted_process_ids.find(design_process);
+        return found == grafted_process_ids.end() ? design_process
+                                                  : found->second;
+    }
+    std::set<std::string> net_delay_split_refused;
+    void commit_net_delay_splits();
+    /// Declares the group-mode SDF load copies of the design to the
+    /// interpreter (Interpreter::add_foreign_net_delay_load), from the copy
+    /// drivers the split built: a foreign write of the net reaches such a
+    /// copy after the smallest delay of its groups.
+    void register_foreign_net_delays();
 
     std::uint64_t next_safe_point_observer { 1 };
 

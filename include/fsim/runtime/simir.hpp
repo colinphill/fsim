@@ -220,7 +220,12 @@ enum class StringMethodOperator : std::uint8_t {
     vhdl_character_element,
     // `first` (a count) copies of the character whose position is `second`:
     // the value of an allocator `new string(1 to n)` (IEEE 1076-2008 9.3.7).
-    vhdl_string_fill
+    vhdl_string_fill,
+    // TO_HSTRING and TO_OSTRING of STD_ULOGIC_VECTOR (IEEE 1076-2019 16.7):
+    // the source string holds the element characters of the vector, leftmost
+    // first, and the result string its hexadecimal or octal digits.
+    vhdl_logic9_hstring,
+    vhdl_logic9_ostring
 };
 struct StringMethod {
     StringMethodOperator operation { };
@@ -1234,6 +1239,86 @@ struct WriteInertialSlice {
     SignalUpdateDomain domain { SignalUpdateDomain::generic };
 };
 
+/// The twelve transition delays of an interconnect delay (IEEE 1364-2005
+/// 16.2.4) with the pulse reject and error limits of each, in simulation
+/// ticks and in the order of a module path (IEEE 1800-2023 30.5.1 Table
+/// 30-2): 0->1, 1->0, 0->z, z->1, 1->z, z->0, 0->x, x->1, 1->x, x->0, x->z,
+/// z->x. A pulse narrower than a transition's reject limit is dropped, one
+/// between the reject and the error limit becomes x, and a wider one
+/// propagates (30.7); a limit that equals the delay makes the write inertial.
+struct NetDelayTable {
+    std::array<SimulationTick, 12> delay { };
+    std::array<SimulationTick, 12> reject { };
+    std::array<SimulationTick, 12> error { };
+
+    friend bool operator==(
+        const NetDelayTable&,
+        const NetDelayTable&) = default;
+
+    /// The 36 values a WriteNetDelay stores: the delays, then the reject
+    /// limits, then the error limits.
+    [[nodiscard]] std::vector<SimulationTick> values() const
+    {
+        std::vector<SimulationTick> result;
+        result.reserve(36U);
+        result.insert(result.end(), delay.begin(), delay.end());
+        result.insert(result.end(), reject.begin(), reject.end());
+        result.insert(result.end(), error.begin(), error.end());
+        return result;
+    }
+
+    /// The table of `values` (36 long, as values() gives them).
+    [[nodiscard]] static NetDelayTable from_values(
+        const std::span<const SimulationTick> values)
+    {
+        NetDelayTable result;
+        if (values.size() == 36U) {
+            std::copy_n(values.begin(), 12U, result.delay.begin());
+            std::copy_n(values.begin() + 12, 12U, result.reject.begin());
+            std::copy_n(values.begin() + 24, 12U, result.error.begin());
+        }
+        return result;
+    }
+};
+
+/// Drive a net's delayed copy with an interconnect delay: each bit's change
+/// takes the delay of its own transition, and any number of changes may be
+/// pending at once (a transport delay), each with its own pulse limits
+/// (IEEE 1364-2005 16.2.4). The packed range at `offset` (the whole signal
+/// when empty) is the driver's contribution. `table` holds the 36 values of
+/// a NetDelayTable (NetDelayTable::values, kept out of line so that the
+/// operation stays small). A later table that vpi_put_delays or
+/// acc_replace_delays gave the driver (Interpreter::set_net_delay_table)
+/// replaces it from the next write on.
+struct WriteNetDelay {
+    SignalId signal { };
+    RegisterId source { };
+    std::optional<std::uint32_t> offset;
+    std::vector<SimulationTick> table;
+    SignalUpdateDomain domain { SignalUpdateDomain::generic };
+};
+
+/// One copy driver of a group-mode SDF load (split_sdf_net_delays with
+/// per-source delays): it writes the bits [offset, offset + width) of the
+/// load's copy with `table`, the delays it was built with (a run without a
+/// delay has the zero table). A table that vpi_put_delays or
+/// acc_replace_delays gave `driver` later (Interpreter::set_net_delay_table)
+/// replaces it.
+struct ForeignNetDelayGroup {
+    ProcessId driver { };
+    std::uint32_t offset { };
+    std::uint32_t width { };
+    NetDelayTable table;
+};
+
+/// The kind of a foreign write of a net with group-mode loads
+/// (Interpreter::add_foreign_net_delay_load).
+enum class ForeignNetDelayKind : std::uint8_t {
+    deposit,
+    force,
+    release,
+};
+
 struct WriteProjectedSlice {
     SignalId signal { };
     RegisterId source { };
@@ -2211,6 +2296,19 @@ public:
     }
 };
 
+/// What splitting one more load port in a running simulation appends and
+/// rewrites (split_sdf_net_delays, at run time): the delayed copy of the net,
+/// the processes that write it with WriteNetDelay, and the processes of the
+/// load instance with their reads of the net renamed to the copy (same
+/// operation count and positions, so a suspended process keeps its place).
+/// `signals` and `processes` take the ids that follow the ones the
+/// interpreter has.
+struct NetDelayGraft {
+    std::vector<Signal> signals;
+    std::vector<Process> processes;
+    std::vector<std::pair<ProcessId, Process>> rewritten;
+};
+
 class InterpreterError : public std::runtime_error {
 public:
     InterpreterError(ProcessId process, InstructionIndex instruction,
@@ -2487,6 +2585,44 @@ public:
     /// The delays set_driver_delays gave a driver, if any.
     [[nodiscard]] std::optional<TransitionDelays> driver_delays(
         ProcessId process) const;
+    /// Replace the twelve transition delays and pulse limits of one driver
+    /// process's WriteNetDelay operations from the next write on, as
+    /// vpi_put_delays on an intermodule path or delay device does (IEEE
+    /// 1800-2023 38.32); a pending change keeps its timing. Legal at any
+    /// time; false, changing nothing, when the driver has no such write.
+    [[nodiscard]] bool set_net_delay_table(
+        ProcessId process, const NetDelayTable& table);
+    /// The table set_net_delay_table gave a driver, if any.
+    [[nodiscard]] std::optional<NetDelayTable> net_delay_table(
+        ProcessId process) const;
+    /// Declares `copy` a group-mode load copy of `net` (SDF INTERCONNECT
+    /// delays per source: the copy's drivers read shadows of the net that the
+    /// sources write, not the net), with the copy drivers `groups`. A foreign
+    /// write of `net` (deposit, force or release by VPI, VHPI, ACC, TF, Tcl
+    /// or the API: the Interpreter's deposit_signal, force_signal,
+    /// release_signal, their slice forms and deposit_kernel_signal) is a
+    /// change no source made, so no shadow carries it; it reaches the copy
+    /// after the smallest delay of the groups for each bit's transition
+    /// (IEEE 1076.4-2000 6.4.1 treats a change no source made the same way),
+    /// as a deposit, force or release of the copy. A write that matures at
+    /// or after a pending one's time replaces it (transport), and pulse
+    /// limits do not apply. Legal before the simulation starts.
+    void add_foreign_net_delay_load(SignalId net, SignalId copy,
+        std::vector<ForeignNetDelayGroup> groups);
+    /// Splits a load port of the running simulation (NetDelayGraft): the
+    /// copy starts at the net's current value, the load's processes read it
+    /// from their next resume on and are sensitive to it, and the copy's
+    /// drivers write it with their tables from the net's next change; changes
+    /// pending anywhere keep their time. Legal only at a scheduler safe point
+    /// after start. The static kernel adds the copy's slot and the drivers'
+    /// members and rebinds the load's reads without the evaluator running
+    /// (a re-plan of the affected units, as respecialize_silent does for
+    /// slot flags). The added processes take the ids that follow the run's
+    /// own (fork children and foreign drivers included), written back into
+    /// `graft.processes`. False, changing nothing and with `reason` set, when
+    /// the engine cannot take the graft.
+    [[nodiscard]] bool graft_net_delay(
+        NetDelayGraft& graft, std::string& reason);
     /// Replace the limits of one module timing check, as vpi_put_delays does
     /// (IEEE 1800-2023 38.32). Returns false, changing nothing, when the
     /// scheduler is started and not at a safe point; throws
@@ -2723,6 +2859,24 @@ public:
     /// takes the committed value into a signal it owns and rescans a signal
     /// it reads.
     void note_external_signal_write(SignalId signal);
+    /// The net's value before a foreign write, when the net has group-mode
+    /// load copies (add_foreign_net_delay_load); nothing otherwise (the
+    /// usual case: one map test). foreign_net_delay_after follows the write
+    /// with the delayed write of the copies. `offset` and `width` are the
+    /// bits the write covered.
+    [[nodiscard]] std::optional<PackedLogic4> foreign_net_delay_before(
+        SignalId signal) const;
+    void foreign_net_delay_after(SignalId signal, ForeignNetDelayKind kind,
+        const std::optional<PackedLogic4>& before, std::size_t offset,
+        std::size_t width);
+    /// The delayed write of the copies once the net holds its value after
+    /// the write: at once, or for a release of a net the v4 kernel owns, once
+    /// its drivers have run again (rerun_kernel_drivers).
+    void foreign_net_delay_settle(SignalId signal, ForeignNetDelayKind kind,
+        const PackedLogic4& before, std::size_t offset, std::size_t width);
+    void foreign_net_delay_mature(SignalId signal, std::size_t index,
+        ForeignNetDelayKind kind,
+        const std::vector<std::pair<std::uint32_t, Logic4>>& bits);
     /// A foreign deposit straight into the slot of a signal the v4 kernel
     /// owns, as an update event of the current time step: false when the
     /// kernel does not hold the signal's value alone (not owned, forced,
@@ -2783,6 +2937,10 @@ public:
     /// Return the immutable SimIR program owned by a static design process.
     /// The reference remains valid for the lifetime of this interpreter.
     [[nodiscard]] const Process& process_program(ProcessId process) const;
+    /// process_program with the static sensitivity a kernel member's program
+    /// gave up to the kernel's tables restored, for a lazy MIPD graft plan
+    /// (graft_net_delay). Built on first request and kept until a graft.
+    [[nodiscard]] const Process& sensitive_process_program(ProcessId process);
     /// Return the next SimIR instruction for a scheduler-owned process.
     [[nodiscard]] InstructionIndex process_instruction(
         ProcessId process) const;

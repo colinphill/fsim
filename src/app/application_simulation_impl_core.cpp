@@ -2962,6 +2962,93 @@ void Simulation::Impl::announce_vpi_driver(
         "driver publication");
 }
 
+void Simulation::Impl::register_foreign_net_delays()
+{
+    using namespace runtime::simir;
+    // The delayed loads: copy -> the net the load reads.
+    std::map<SignalId, SignalId> nets;
+    for (const auto& record : built.design.sdf_net_delays()) {
+        if (record.delayed && record.load_signal != record.destination.signal) {
+            nets.emplace(record.load_signal, record.destination.signal);
+        }
+    }
+    if (nets.empty()) {
+        return;
+    }
+    // The copy drivers (split_sdf_net_delays names them ".$mipd_driver"):
+    // a load whose drivers read the net itself has one delay for every
+    // source, which the net's change already carries to the copy. A load
+    // whose drivers read shadows of the net (one for each group of sources)
+    // misses a write that no source made, so its groups are declared.
+    struct Found {
+        bool grouped { };
+        std::vector<ForeignNetDelayGroup> groups;
+    };
+    std::map<SignalId, Found> loads;
+    for (std::size_t index = 0U; index < design_process_count; ++index) {
+        const auto driver = running_process(static_cast<ProcessId>(index));
+        const auto& program = interpreter->process_program(driver);
+        if (program.name.find(".$mipd_driver") == std::string::npos) {
+            continue;
+        }
+        std::optional<SignalId> read;
+        std::uint32_t slice_width { };
+        for (const auto& operation : program.operations) {
+            if (const auto* const input = operation_get_if<ReadSignal>(&operation)) {
+                read = input->signal;
+            } else if (const auto* const extract
+                = operation_get_if<Extract>(&operation)) {
+                slice_width = extract->width;
+            } else if (const auto* const delayed
+                = operation_get_if<WriteNetDelay>(&operation)) {
+                const auto copy = nets.find(delayed->signal);
+                if (copy == nets.end() || !read) {
+                    break;
+                }
+                auto& load = loads[delayed->signal];
+                load.grouped = load.grouped || *read != copy->second;
+                load.groups.push_back({ driver, delayed->offset.value_or(0U),
+                    delayed->offset
+                        ? slice_width
+                        : static_cast<std::uint32_t>(
+                            interpreter->signal_value(delayed->signal).width()),
+                    NetDelayTable::from_values(delayed->table) });
+                break;
+            } else if (const auto* const plain
+                = operation_get_if<WriteUpdate>(&operation)) {
+                const auto copy = nets.find(plain->signal);
+                if (copy == nets.end() || !read) {
+                    break;
+                }
+                auto& load = loads[plain->signal];
+                load.grouped = load.grouped || *read != copy->second;
+                load.groups.push_back({ driver, 0U,
+                    static_cast<std::uint32_t>(
+                        interpreter->signal_value(plain->signal).width()),
+                    NetDelayTable { } });
+                break;
+            } else if (const auto* const slice
+                = operation_get_if<WriteUpdateSlice>(&operation)) {
+                const auto copy = nets.find(slice->signal);
+                if (copy == nets.end() || !read) {
+                    break;
+                }
+                auto& load = loads[slice->signal];
+                load.grouped = load.grouped || *read != copy->second;
+                load.groups.push_back(
+                    { driver, slice->offset, slice_width, NetDelayTable { } });
+                break;
+            }
+        }
+    }
+    for (auto& [copy, load] : loads) {
+        if (load.grouped) {
+            interpreter->add_foreign_net_delay_load(
+                nets.at(copy), copy, std::move(load.groups));
+        }
+    }
+}
+
 void Simulation::Impl::start_interpreter()
 {
     interpreter->start();

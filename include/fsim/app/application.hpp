@@ -299,6 +299,10 @@ struct BuiltProject {
     /// build): derived state it carries is not re-derived and cross-checked.
     /// FSIM_VERIFY_ARTIFACT=1 keeps the checks.
     bool trusted_artifact { };
+    /// The build annotated the VITAL timing generics of the SDF files it was
+    /// given (IEEE 1076.4-2000 5.1.1), so the SDF session leaves VHDL cells
+    /// to it.
+    bool sdf_vital_applied { };
 };
 
 [[nodiscard]] bool code_coverage_enabled(
@@ -935,6 +939,35 @@ public:
     /// ones set_verilog_driver_delays gave it, else its first slotted write's.
     [[nodiscard]] std::optional<runtime::simir::TransitionDelays>
     verilog_driver_delays(runtime::simir::ProcessId process) const;
+    /// Give a driver process the twelve transition delays and pulse limits
+    /// of its interconnect-delay writes (IEEE 1364-2005 16.2.4); legal at any
+    /// time. False when the driver has no such write.
+    [[nodiscard]] bool set_verilog_net_delay_table(
+        runtime::simir::ProcessId process,
+        const runtime::simir::NetDelayTable& table);
+    /// The table a driver process's interconnect-delay writes use now: the
+    /// one set_verilog_net_delay_table gave it, else its first write's.
+    [[nodiscard]] std::optional<runtime::simir::NetDelayTable>
+    verilog_net_delay_table(runtime::simir::ProcessId process) const;
+    /// Asks for the split of a load port that no SDF annotation split (a PORT
+    /// `record` of the port, or of the bits a select names, with the twelve
+    /// delays a foreign vpi_put_delays, acc_replace_delays or
+    /// acc_append_delays gave): the port's net gets a delayed copy that the
+    /// instance behind the port reads, written by a $mipd_driver process, as
+    /// annotation does at elaboration (split_sdf_net_delays). The split is
+    /// made at the next scheduler safe point, with the net's value then, and
+    /// pending changes keep their time; a request for the same port before
+    /// that replaces the first one's delays. A run that never asks pays
+    /// nothing: no signal, process or hook exists until then. After the split
+    /// the port's record in design().sdf_net_delays() is delayed, and
+    /// set_verilog_net_delay_table retimes the copy.
+    void request_net_delay_split(elaboration::SdfNetDelayInfo record);
+    /// Whether a split asked for is waiting for its safe point.
+    [[nodiscard]] bool net_delay_split_pending() const noexcept;
+    /// Why each split that was asked for was not made (the engine cannot take
+    /// it, or the split does not cover the port), in request order.
+    [[nodiscard]] const std::vector<std::string>& net_delay_split_refusals()
+        const noexcept;
     /// Run `hook` with a timing check's index when it is violated; an empty
     /// function removes it (IEEE 1800-2023 38.36.3).
     void set_verilog_timing_violation_hook(
@@ -1325,8 +1358,19 @@ public:
     [[nodiscard]] std::uint64_t add_driver_transaction_hook(
         DriverTransactionHook hook);
     void remove_driver_transaction_hook(std::uint64_t token) noexcept;
+    /// Commits a live SDF reannotation: the module path and timing check
+    /// tables, and, when `annotated` (the session's design with its
+    /// interconnect and port delays split, plan_sdf_session_inputs) keeps the
+    /// split the simulation runs, the records and the delay tables of the
+    /// delayed copies of the load ports (sdf_net_delay_retiming): later
+    /// transitions use the new tables, pending ones keep their time. A
+    /// reannotation that changes which loads are split (a load that had no
+    /// delay at elaboration, or one that loses it) cannot add or remove
+    /// processes of a running simulation: it keeps the delay tables of the
+    /// running split and takes the effective path and check timing only.
     [[nodiscard]] SdfReannotationCommitResult commit_sdf_reannotation(
-        const SdfReannotationApplication& application);
+        const SdfReannotationApplication& application,
+        const elaboration::ElaboratedDesign* annotated = nullptr);
     [[nodiscard]] bool at_sdf_reannotation_safe_point() const noexcept;
     void set_execution_point_hook(ExecutionPointHook hook);
     /// Add an execution-point observer beside the debugger's hook. The

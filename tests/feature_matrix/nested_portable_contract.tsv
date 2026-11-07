@@ -25,7 +25,7 @@ sdf	include/fsim/app/sdf_reannotation.hpp	1	files,targets,pattern-bytes,identity
 sdf	include/fsim/app/sdf_scheduling.hpp	1	targets,values,identity-bytes
 sdf	include/fsim/app/sdf_schema.hpp	1	envelope-bytes,headers,strings,string-bytes
 sdf	include/fsim/app/sdf_secondary_timing_checks.hpp	2	checks,limits,identity-bytes
-sdf	include/fsim/app/sdf_target_plan.hpp	4	annotations,values,identity-bytes
+sdf	include/fsim/app/sdf_target_plan.hpp	5	annotations,values,identity-bytes
 sdf	include/fsim/app/sdf_vital_archive.hpp	1	delegated-effective-archive-limits
 sdf	include/fsim/app/sdf_vital_models.hpp	1	records,processes,ports,identity-bytes
 sdf	include/fsim/app/sdf_vital_observability.hpp	1	objects,values,events,identity-bytes

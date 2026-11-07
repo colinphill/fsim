@@ -325,7 +325,8 @@ namespace fsim::app::tcl_detail {
             auto planned = plan_sdf_session_inputs(built->design,
                 built->time_resolution, built->cache_key,
                 context.sdf_request, context.sdf_resolved_paths,
-                context.diagnostics);
+                context.diagnostics,
+                { &built->design_ir, &built->systemverilog_hir });
             if (!planned) {
                 (void)command_diagnostic_error(
                     context, interpreter, "SDF snapshot annotation failed");
@@ -364,6 +365,8 @@ namespace fsim::app::tcl_detail {
         // time, as a foreign library does).
         application_detail::plan_kernel_access(
             *context.built, engine, context.config.run.foreign_probes);
+        // The session may deposit and force any std_logic value.
+        context.built->kernel_access.weak_sources = true;
         // Only a session with a library compiles the primitive delay slots in.
         const bool foreign = application_detail::foreign_libraries_requested(context.config);
         if (foreign
@@ -541,7 +544,8 @@ namespace fsim::app::tcl_detail {
             auto planned = plan_sdf_session_inputs(built->design,
                 built->time_resolution, built->cache_key,
                 std::move(request), context.sdf_resolved_paths,
-                context.diagnostics);
+                context.diagnostics,
+                { &built->design_ir, &built->systemverilog_hir });
             if (!planned)
                 return command_diagnostic_error(
                     context, interpreter, "SDF snapshot annotation failed");
@@ -1060,7 +1064,12 @@ namespace fsim::app::tcl_detail {
                     ? std::string_view { "tcl-sdf-session" }
                     : std::string_view { context.sdf_base_cache_key },
                 std::move(effective_request), resolved_paths,
-                context.diagnostics);
+                context.diagnostics,
+                context.simulation
+                    ? SdfPortSource { &context.simulation->design_ir(),
+                          &context.simulation->systemverilog_hir() }
+                    : SdfPortSource { &context.built->design_ir,
+                          &context.built->systemverilog_hir });
             if (!planned)
                 return command_diagnostic_error(
                     context, interpreter, "SDF annotation failed");
@@ -1075,7 +1084,7 @@ namespace fsim::app::tcl_detail {
             }
             if (context.simulation) {
                 auto committed = context.simulation->commit_sdf_reannotation(
-                    *planned->control->effective());
+                    *planned->control->effective(), &planned->design);
                 if (!committed.ok()) {
                     for (const auto& entry : committed.diagnostics)
                         context.diagnostics.error(entry.code, entry.message);

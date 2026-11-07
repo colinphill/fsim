@@ -56,6 +56,88 @@ struct Binding {
     std::optional<std::string> resolver;
 };
 
+/// A port of an SDF entry, with the bit or range its index selects.
+struct TimingGenericPort {
+    std::string name;
+    bool indexed {};
+    std::int64_t left {};
+    std::int64_t right {};
+
+    friend bool operator==(const TimingGenericPort&,
+        const TimingGenericPort&) = default;
+};
+
+/// The location of one source in the multiple source mode: the delays of an
+/// interconnect delay generic that the source's INTERCONNECT entries and the
+/// PORT entries left, in femtoseconds (5.2.7.1.5).
+struct VitalWireSourceLocation {
+    std::string source_instance;
+    std::string source_port;
+    std::vector<std::int64_t> slots;
+};
+
+/// One element of an interconnect delay generic (tipd_) in the multiple
+/// source mode (the whole generic when it is scalar): `slots` is the
+/// element's value, which a source that no INTERCONNECT entry names keeps,
+/// and `sources` the locations of the sources the entries name for it. An
+/// element that no second source reached has no sources and keeps the
+/// single source behaviour (5.2.7.1.5).
+struct VitalWireElement {
+    std::vector<std::int64_t> slots;
+    std::vector<VitalWireSourceLocation> sources;
+};
+
+/// An interconnect delay generic of an instance with the multiple source mode
+/// on at least one element. A vector delay generic (`VitalDelayArrayType*`)
+/// has one element for each index of its range, the first at index `left`;
+/// the scalar generic has one element.
+struct VitalWireLocations {
+    std::string instance;
+    std::string generic;
+    bool vector_form {};
+    std::int64_t left {};
+    std::vector<VitalWireElement> elements;
+};
+
+/// One backannotation of a timing generic from SDF data (IEEE 1076.4-2000
+/// 5.1.1, 5.2). The annotator names the generic by the VITAL SDF map; the
+/// elaborator, which knows the generic's declared type, applies the value
+/// before the instance is lowered, so the model starts with the annotated
+/// state (5.1: the state at the beginning of simulation is the same however
+/// the annotation was made).
+struct TimingGenericAnnotation {
+    /// Elaborated instance path, the root alias first.
+    std::string instance;
+    /// The generic name the VITAL SDF map constructs (5.2.7).
+    std::string generic;
+    /// INCREMENT adds to the generic's current value; ABSOLUTE replaces it
+    /// (5.2.7.1.1).
+    bool increment {};
+    /// The delval_list or rvalue after the minimum, typical or maximum
+    /// selection, in femtoseconds, extended to one, two, three, six or
+    /// twelve entries (5.2.6); an empty entry is an SDF null value that
+    /// leaves its transition unchanged.
+    std::vector<std::optional<std::int64_t>> values;
+    /// Where the SDF entry is, for the diagnostics.
+    std::string source;
+    /// The ports of the SDF entry that make up the generic name (one or two,
+    /// in SDF order), with their bit or range index; a vector delay generic
+    /// takes the element each index selects (5.2.7.3.3).
+    std::vector<TimingGenericPort> ports;
+    /// The RETAIN values of an IOPATH, up to three (5.2.6, Table 2).
+    std::vector<std::optional<std::int64_t>> retain;
+    /// An INTERCONNECT entry (5.2.7.1.4), with the elaborated path of the
+    /// instance that holds its source port and the source port's name (with
+    /// its select). Two sources of one generic make the multiple source mode
+    /// of 5.2.7.1.5.
+    bool interconnect {};
+    std::string source_instance;
+    std::string source_port;
+
+    friend bool operator==(const TimingGenericAnnotation&,
+        const TimingGenericAnnotation&) = default;
+};
+
 /// One independently selected simulation root. `target` follows the same
 /// qualified or inferred spelling as the legacy singular top; `alias` is the
 /// stable first hierarchy component visible to tracing and debugging.
@@ -65,6 +147,9 @@ struct Root {
     // Generic and parameter overrides for this root (`--generic`), applied
     // to the generics the root declares by that name.
     std::vector<std::pair<std::string, std::string>> generics {};
+    // Backannotation of VITAL timing generics from SDF data, applied to the
+    // VHDL instances below this root as they are elaborated.
+    std::vector<TimingGenericAnnotation> timing_generics {};
 };
 
 /// Parser-independent identity of a class made visible by one selected
@@ -1155,13 +1240,16 @@ enum class SdfNetDelayKind : std::uint8_t {
 /// One end of an SDF net delay: the port or net an INTERCONNECT or PORT
 /// annotation names. `instance` is the SDF cell instance the annotation is
 /// in and `object` the hierarchical path of the port or net. `select_width`
-/// is the width of a bit or part select, 0 for the whole object.
+/// is the width of a bit or part select, 0 for the whole object, and
+/// `select_left`/`select_right` its bounds as the HDL indexes them.
 struct SdfNetDelayTerminal {
     std::string instance;
     std::string object;
     runtime::simir::SignalId signal { };
     bool port { };
     std::uint32_t select_width { };
+    std::int64_t select_left { };
+    std::int64_t select_right { };
 };
 
 /// An interconnect or port delay that SDF annotation created (IEEE
@@ -1177,14 +1265,41 @@ struct SdfNetDelayInfo {
     SdfNetDelayTerminal source;
     SdfNetDelayTerminal destination;
     std::vector<runtime::SimulationTick> delays;
+    /// The pulse reject and error limit of each of the twelve transitions,
+    /// in ticks and in the order of `delays`, or empty when the SDF gives
+    /// none: each limit then equals its delay (an inertial delay) and an
+    /// error limit that is not given equals the reject limit (IEEE 1364-2005
+    /// 14.6, 16.2.4; IEEE 1497-2001 delval with pulse limits).
+    std::vector<runtime::SimulationTick> reject;
+    std::vector<runtime::SimulationTick> error;
     /// Set when annotation split the load port's net (split_sdf_net_delays):
     /// the instance behind `destination` reads `load_signal`, a delayed copy
-    /// of `destination.signal` that `driver` writes with a delayed
-    /// (slotted when a foreign library is loaded) transition-delay write.
+    /// of `destination.signal` that `driver` writes with an interconnect-delay
+    /// write (WriteNetDelay), whose twelve delays and pulse limits
+    /// vpi_put_delays retimes.
     /// Records that end at the same load port share one driver.
     bool delayed { };
     runtime::simir::SignalId load_signal { };
     runtime::simir::ProcessId driver { };
+};
+
+/// A read of a signal that a process wrote with a hierarchical name
+/// (IEEE 1800-2023 23.6, 23.8: `$display(top.u1.a)`), kept so that SDF
+/// annotation can give the read the delayed value of a load port when it
+/// names one (IEEE 1364-2005 16.2.4: a reference to an annotated port,
+/// wherever it occurs, provides the delayed signal value). Only the reads
+/// through a hierarchical name are recorded, so a design without one has
+/// none. `reg` is the destination register of the process's ReadSignal
+/// operation, which no later rewrite of the operation list moves.
+struct HierarchicalSignalRead {
+    runtime::simir::ProcessId process { };
+    runtime::simir::RegisterId reg { };
+    runtime::simir::SignalId signal { };
+    /// The process waits on its reads (an implicit event list), so the
+    /// delayed copy also wakes it.
+    bool implicit { };
+    /// The full hierarchical path the name resolved to.
+    std::string path;
 };
 
 struct ElaboratedDesignState {
@@ -1226,6 +1341,9 @@ struct ElaboratedDesignState {
     /// interface instance it denotes, sorted by path (37.29 vpiActual).
     std::vector<std::pair<std::string, std::uint64_t>>
         systemverilog_interface_handles;
+    /// The reads of signals through hierarchical names, ordered by process
+    /// and register.
+    std::vector<HierarchicalSignalRead> hierarchical_reads;
 };
 
 /// One pure acyclic continuous-assignment cone selected for A2 fusion. The
@@ -1283,17 +1401,23 @@ struct StaticKernelAccessPlan {
     /// are slotted WriteDelayed operations (bind_primitive_delay_slots), so
     /// the kernel plan differs from the default one.
     bool delay_slots { };
+    /// A client other than the design itself can write a std_logic value at
+    /// run time: a VPI, VHPI, PLI or DPI library, a Tcl session or the
+    /// debugger. Their writes can bring 'H', 'L', 'W' or '-' (the kernel's
+    /// registers then carry weak masks, CompiledBody::weak).
+    bool weak_sources { };
 
     /// Key text for persisted plans; empty for the default plan.
     [[nodiscard]] std::string identity() const
     {
-        if (!coverage && !debug && !delay_slots) {
+        if (!coverage && !debug && !delay_slots && !weak_sources) {
             return { };
         }
         std::string text { "access" };
         text += coverage ? ";coverage" : "";
         text += debug ? ";debug" : "";
         text += delay_slots ? ";delay-slots" : "";
+        text += weak_sources ? ";weak-sources" : "";
         return text;
     }
 };
@@ -1416,6 +1540,9 @@ public:
     /// a driver. Runs without a library never call it and keep the constant
     /// WriteInertial operations. Returns the operations changed.
     std::size_t bind_primitive_delay_slots();
+    /// Whether any signal holds nine values (ValueKind::logic9): only those
+    /// can take a weak value ('H', 'L', 'W', '-') a foreign client writes.
+    [[nodiscard]] bool has_nine_value_signals() const noexcept;
     /// Number of runtime processes without materializing artifact-backed rows.
     [[nodiscard]] std::size_t process_count() const noexcept;
     /// Materialize and return the public Process facade. This may allocate for
@@ -1433,6 +1560,8 @@ public:
     verilog_primitives() const noexcept;
     [[nodiscard]] const std::vector<SdfNetDelayInfo>&
     sdf_net_delays() const noexcept;
+    [[nodiscard]] const std::vector<HierarchicalSignalRead>&
+    hierarchical_reads() const noexcept;
     [[nodiscard]] const std::vector<SystemCInstanceInfo>&
     systemc_instances() const noexcept;
     [[nodiscard]] const std::vector<SystemCProcessInfo>&
@@ -1647,6 +1776,7 @@ private:
     std::vector<runtime::simir::ModuleTimingCheck> verilog_timing_checks_;
     std::vector<VerilogPrimitiveInfo> verilog_primitives_;
     std::vector<SdfNetDelayInfo> sdf_net_delays_;
+    std::vector<HierarchicalSignalRead> hierarchical_reads_;
     std::vector<SystemCInstanceInfo> systemc_instances_;
     std::vector<SystemCProcessInfo> systemc_processes_;
     std::vector<SystemCNamedObjectInfo> systemc_objects_;
@@ -1710,6 +1840,10 @@ private:
 
 struct ElaborationResult {
     std::optional<ElaboratedDesign> design;
+    /// The delay locations of interconnect delay generics in the multiple
+    /// source mode (IEEE 1076.4-2000 5.2.7.1.5), for
+    /// apply_vital_wire_sources.
+    std::vector<VitalWireLocations> vital_wire_locations;
     std::vector<Diagnostic> diagnostics;
     // Non-failing elaboration-time language messages remain ordered beside
     // ordinary errors without making a successful design unavailable.

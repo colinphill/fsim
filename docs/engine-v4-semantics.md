@@ -218,7 +218,28 @@ state, S3):
   - `host_touched` marks signals a non-member accesses by anything other than
     a current read.
   - A resolved net (`sv_wire`, `std_logic`) is owned only when its drivers
-    cover disjoint bits, so resolution is the identity (S15).
+    cover disjoint bits, so resolution is the identity (S15). One exception:
+    a nine-value SystemVerilog net on a VHDL `std_logic` inout whose
+    SystemVerilog and VHDL drivers overlap (a two-sided bus; no conversion
+    driver, default strengths) is owned as a *resolved slot*. Its slot holds
+    four states, and each driver's value follows it in the arena as four
+    Logic9 code planes. Every write updates its writer's source and resolves
+    the touched words: strong values decide, `'L'`/`'H'`/`'W'` count as weak
+    0/1/x where no strong source drives, and z where none drives
+    (cross-language-semantics.md). Generated code resolves both sides inline.
+    The arena holds a second (next) block after the current one (value planes
+    and the K sources' code planes) and a pending flag word. A SystemVerilog
+    store lands in the current block and, while the flag is set, in the next.
+    A VHDL assignment copies the current block to the next one when the flag
+    is clear, sets it, updates its member's source in the next block and
+    resolves the touched words there, so the signal keeps its value until the
+    update phase; the write is also queued (`StaticKernelWrite` kinds 3 and 4,
+    which only mark the slot), and the commit makes the next block the
+    current one. The reference executor does the same, and
+    `FSIM_KERNEL_VERIFY` compares the blocks. Publication and materialization
+    commit each source as its process's driver, so the host's resolution
+    agrees. Writers of a resolved slot stay
+    off the multi-thread lanes and out of delta collapse.
   - Signals with event variables, implicit drivers, charge strength or SV
     scalar kinds are never owned. Memories are owned when all accessors are
     members.
@@ -262,6 +283,23 @@ state, S3):
     become behavioral; that is not implemented.
   - Gap: a self-waking member inside a compiled partition is still
     suppressed while its partition runs.
+  - A port delay put at run time on a port no SDF annotation split
+    (`Interpreter::graft_net_delay`, 1364-2005 §16.2.4) grows the running
+    kernel at a scheduler safe point (`StaticKernel::replan_at_safe_point`),
+    with no fresh kernel and no reference evaluator. The delayed copy of the
+    net is a new slot that starts at the net's value; its drivers are new
+    compiled combinational members (`KOp::net_delay`, sensitive to the net,
+    one level past the net's writers); the load members read the copy: their
+    operations, waits, sensitivity, readers, edges, dispatch groups,
+    partition programs and native bindings are rewritten in place (a binding
+    a partition shares with members that keep the net gets a template of its
+    own). A net whose stores were silent announces its changes from then on.
+    Slot values, pending timers and net-delay changes, queued writes and
+    suspended threads (their waits move to the copy with their epochs) keep
+    their state, and a multi-threaded kernel plans its batches again. A graft
+    the kernel cannot take (a debugger plan, a VHDL kernel, a hosted or lazy
+    load, a load that keeps reading the net) is refused with the kernel
+    unchanged.
 - **Witness.** T-sv (combinational netlist, case block, net array), T-cone.
   Loop and latch behavior: to add.
 
@@ -549,9 +587,51 @@ state, S3):
     (`writers_ok`). Any other multi-driver signal stays a host signal with a
     host resolver.
   - General resolution functions in the kernel are *not yet*.
-  - Logic9 storage is implemented as four planes; compiled code tracks `U`
-    with a shadow mask and deoptimizes to the reference evaluator for
-    `W`, `L`, `H` and `-`.
+  - Logic9 storage is implemented as four planes. A register holds a Logic4
+    word (`a`, `b`) plus, for a *tracked* register (one that can receive
+    `U` or a weak element: an exact Logic9 read, a constant with either,
+    reference-evaluated results, and what copies, selects, concatenates or
+    shifts them), a mask pair in its shadow word (`a` = `U` mask, `b` = weak
+    mask; wide registers keep it in the `a`/`b` words of their mask chunks).
+    A `U` element reads as X in the word. A weak element's word holds the
+    Logic4 value the IEEE 1164 logic tables treat it as, with its weak bit
+    set: `L` is 0, `H` is 1, `W` is X and `-` is Z (the Logic4 combination
+    no other element of a Logic9 register uses). So all nine values are
+    representable with no deoptimization: `and`, `or`, `xor`, `not`,
+    comparison, arithmetic, reductions and conditions ignore the mask pair
+    (`H` acts as 1, `L` as 0, `W`/`-` as unknown, which the word gives);
+    the enumeration compare (`=` on `std_ulogic`) compares both masks (so
+    `'H' /= '1'`); copies, extracts, inserts, concatenations, conditional
+    selects, dynamic selects and inserts, and shifts carry the weak mask
+    with the words; a CopyRegister into a Logic4 register reads `W` and `-`
+    as X (`coerce_weak`); stores write the weak element's own code (a Logic4
+    slot gets 0, 1 or X). The weak mask exists only in a design that can hold
+    weak elements (`CompiledBody::weak`, decided once, at plan time, by
+    `StaticKernel::design_may_hold_weak`; nothing recompiles at run time); a
+    design without them has exactly the code it has for `U` alone, and its
+    write-queue entries are never read for a weak mask. Every source of a
+    weak element makes the design weak, and a false positive only costs
+    speed:
+    - a client other than the design writes values: a VPI, VHPI, PLI or DPI
+      library, a Tcl session or the debugger
+      (`StaticKernelAccessPlan::weak_sources`);
+    - a constant: a `LoadConstant` of any process of the design (host
+      processes and compact constant drivers such as `sda <= 'H'` included),
+      the initial value of any signal or container element, the value of
+      any driver, a pull or weak driver strength (a VHDL reader sees 'H',
+      'L' or 'W'), a Logic9 slot of the kernel;
+    - a value made from data at run time: `std_ulogic'val` and the other
+      position-to-enumeration conversions (lowered to a selection among the
+      nine literals, so the literals count as constants), an operation that
+      writes a Logic9 register but only derives it from Logic9 inputs
+      (anything else counts), and every TEXTIO or file read.
+    Resolution, the logic operators, `To_X01` and `To_UX01` (outputs 0, 1,
+    X, U), copies, selects and shifts derive weak elements only from weak
+    inputs, which are one of these sources. Narrow weak-carrying loads,
+    copies, shifts, dynamic selects and inserts and deferred stores are
+    inline; the wide ones (over 64 elements) use the wide helpers
+    (`execute_wide`), as the strong wide ones do. A weak element met by a
+    body without weak support is an internal error.
   - Guarded signals, non-pure-routing conversion drivers and port
     associations keep their programs on the host and make their sources host
     signals.
@@ -583,10 +663,11 @@ state, S3):
     that region's nonblocking updates, and the change is an event of the
     current delta (`'EVENT` is true there). A process woken by a VHDL update
     runs in the next delta. A VHDL process's own continuation (`wait for
-    0 ns`) and what its writes wake run in the next delta. This is the order
-    Vivado gives: an SV flop feeding a VHDL flop on one SystemVerilog clock
-    samples the old value, as a second SV flop would
-    (`mixed_vhdl_flop_after_sv_flop`).
+    0 ns`) and what its writes wake run in the next delta. An SV flop
+    feeding a VHDL flop on one SystemVerilog clock samples the old value, as
+    a second SV flop would (`mixed_vhdl_flop_after_sv_flop`). Order within a
+    time step beyond these rules is unspecified; the kernel matches the
+    reference scheduler, which is what tests compare.
   - When every kernel round is a host delta (`host_boundary_`: hosted or
     host processes at the boundary), the VHDL members and threads woken by
     SystemVerilog work outside a round (pending at activation, or woken by
@@ -604,8 +685,16 @@ state, S3):
     signals it exchanges to be kernel-owned; only VHDL accesses require a
     closed kernel (S11).
 - **Basis.** `cross-language-semantics.md`; 1800 §4.5; 1076 §14.7.5.3;
-  no standard orders zero-delay events across languages, so the reference
-  scheduler's interleaving is the contract.
+  no standard orders zero-delay events across languages, so the kernel
+  follows the reference scheduler's interleaving; the user-visible contract
+  is the values at time-step boundaries (cross-language-semantics.md). A
+  nine-value SystemVerilog net on a VHDL inout is never kernel-owned, since
+  its resolution maps a sole `'H'` to 1. When one process of the port's
+  instance is the net's only source and drives every bit, elaboration
+  returns the net to four states (the mapping then happens on the write),
+  and the kernel owns it. A VHDL constant whose register only feeds writes
+  to four-state slots loads as its mapped value (`'H'` as 1), so such a
+  writer does not deoptimize.
 - **Status:** *implemented* (`activate_mixed`; `FSIM_STATIC_KERNEL_MIXED=0`
   falls back to the majority language only). Memories are not owned when a
   VHDL member accesses them in a mixed kernel.

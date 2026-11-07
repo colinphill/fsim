@@ -4,6 +4,7 @@
 #include "application_uvm_registry.hpp"
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/app/sdf_reannotation.hpp"
+#include "fsim/elaboration/sdf_net_delay_split.hpp"
 #include "fsim/artifact/coverage_database_codec.hpp"
 #include "fsim/artifact/coverage_database_merge.hpp"
 #include "fsim/support/path.hpp"
@@ -767,24 +768,180 @@ void Simulation::remove_driver_transaction_hook(
 }
 
 SdfReannotationCommitResult Simulation::commit_sdf_reannotation(
-    const SdfReannotationApplication& application)
+    const SdfReannotationApplication& application,
+    const elaboration::ElaboratedDesign* annotated)
 {
     static_assert(std::is_nothrow_move_assignable_v<
         elaboration::ElaboratedDesign>);
+    // The interconnect and port delays follow the reannotation when the
+    // annotated design splits the same loads as the running one; the design
+    // is then the annotated one, whose records name the delayed copies.
+    std::optional<std::vector<
+        std::pair<runtime::simir::ProcessId, runtime::simir::NetDelayTable>>>
+        retiming;
+    if (annotated != nullptr)
+        retiming = elaboration::sdf_net_delay_retiming(
+            impl_->built.design, *annotated);
     auto replacement = elaboration::ElaboratedDesign::from_state(
-        application.design().state());
+        retiming ? annotated->state() : application.design().state());
     if (!replacement)
         throw std::invalid_argument("SDF reannotation has invalid design state");
     auto result = fsim::app::commit_sdf_reannotation(
         application, *impl_->interpreter);
-    if (result.ok())
+    if (result.ok()) {
+        if (retiming) {
+            for (const auto& [driver, table] : *retiming)
+                (void)impl_->interpreter->set_net_delay_table(
+                    impl_->running_process(driver), table);
+        }
         impl_->built.design = std::move(*replacement);
+        if (!retiming && annotated != nullptr) {
+            // The annotation changes which loads are delayed: a load that
+            // had no delay is split now, at this safe point
+            // (request_net_delay_split), and one that lost its delay takes a
+            // zero table, which is exact (no un-split).
+            const auto same_load = [](const elaboration::SdfNetDelayInfo& left,
+                                       const elaboration::SdfNetDelayInfo& right) {
+                return left.destination.object == right.destination.object
+                    && left.destination.select_width
+                        == right.destination.select_width
+                    && left.destination.select_left
+                        == right.destination.select_left;
+            };
+            std::vector<elaboration::SdfNetDelayInfo> fresh;
+            const runtime::simir::NetDelayTable none { };
+            for (const auto& record : annotated->sdf_net_delays()) {
+                const auto& running = impl_->built.design.sdf_net_delays();
+                if (!record.delayed) {
+                    for (const auto& each : running) {
+                        if (each.delayed && same_load(each, record))
+                            (void)impl_->interpreter->set_net_delay_table(
+                                impl_->running_process(each.driver), none);
+                    }
+                    continue;
+                }
+                if (std::ranges::any_of(running, [&](const auto& each) {
+                        return each.delayed && same_load(each, record);
+                    }))
+                    continue;
+                // Later records to one load replace earlier ones (16.3).
+                std::erase_if(fresh, [&](const auto& each) {
+                    return same_load(each, record);
+                });
+                fresh.push_back(record);
+            }
+            for (auto& record : fresh) {
+                record.delayed = false;
+                record.load_signal = { };
+                record.driver = { };
+                request_net_delay_split(std::move(record));
+            }
+            if (!fresh.empty())
+                impl_->commit_net_delay_splits();
+        }
+    }
     return result;
 }
 
 bool Simulation::at_sdf_reannotation_safe_point() const noexcept
 {
     return impl_->interpreter->scheduler().at_safe_point();
+}
+
+namespace {
+
+// The port, or the bits of it, a split request names.
+std::string net_delay_split_key(const elaboration::SdfNetDelayInfo& record)
+{
+    const auto& terminal = record.destination;
+    return terminal.object + '[' + std::to_string(terminal.select_left) + "+:"
+        + std::to_string(terminal.select_width) + ']';
+}
+
+} // namespace
+
+void Simulation::request_net_delay_split(elaboration::SdfNetDelayInfo record)
+{
+    auto& requests = impl_->net_delay_split_requests;
+    const auto key = net_delay_split_key(record);
+    if (impl_->net_delay_split_refused.contains(key))
+        return;
+    const auto same = std::ranges::find_if(requests, [&](const auto& each) {
+        return net_delay_split_key(each) == key;
+    });
+    if (same != requests.end()) {
+        *same = std::move(record);
+        return;
+    }
+    requests.push_back(std::move(record));
+    if (impl_->net_delay_split_observer != 0U)
+        return;
+    // The split waits for a safe point, which the kernel's own time steps do
+    // not reach (Interpreter::open_external_observation); the observer
+    // removes itself once it has made the splits.
+    impl_->net_delay_split_observer = add_safe_point_hook(
+        [impl = impl_.get()](runtime::Scheduler& scheduler,
+            const runtime::SchedulerPhase) {
+            if (scheduler.at_safe_point())
+                impl->commit_net_delay_splits();
+        });
+    open_external_observation();
+}
+
+bool Simulation::net_delay_split_pending() const noexcept
+{
+    return !impl_->net_delay_split_requests.empty();
+}
+
+const std::vector<std::string>& Simulation::net_delay_split_refusals()
+    const noexcept
+{
+    return impl_->net_delay_split_refusals;
+}
+
+void Simulation::Impl::commit_net_delay_splits()
+{
+    auto requests = std::move(net_delay_split_requests);
+    net_delay_split_requests.clear();
+    safe_point_observers.erase(net_delay_split_observer);
+    net_delay_split_observer = 0U;
+    for (auto& record : requests) {
+        // A later put took the delay back to none before the split was made.
+        if (std::ranges::all_of(record.delays,
+                [](const runtime::SimulationTick tick) { return tick == 0U; }))
+            continue;
+        const auto key = net_delay_split_key(record);
+        const auto identity = record.identity;
+        std::string reason;
+        auto planned = elaboration::plan_sdf_net_delay_graft(
+            built.design, std::move(record), design_process_count,
+            [this](const runtime::simir::ProcessId process)
+                -> const runtime::simir::Process& {
+                return interpreter->sensitive_process_program(process);
+            },
+            reason);
+        std::vector<runtime::simir::ProcessId> planned_ids;
+        if (planned) {
+            for (const auto& process : planned->graft.processes)
+                planned_ids.push_back(process.id);
+            if (!interpreter->graft_net_delay(planned->graft, reason)
+                && reason.empty())
+                reason = "the simulation engine cannot add the delayed copy "
+                         "of a port to a running design";
+        }
+        if (!planned || !reason.empty()) {
+            net_delay_split_refused.insert(key);
+            net_delay_split_refusals.push_back(
+                (identity.empty() ? key : identity) + ": " + reason);
+            continue;
+        }
+        for (std::size_t index = 0U; index < planned_ids.size(); ++index) {
+            if (planned->graft.processes[index].id != planned_ids[index])
+                grafted_process_ids.emplace(planned_ids[index],
+                    planned->graft.processes[index].id);
+        }
+        built.design = std::move(*planned->grown);
+    }
 }
 
 void Simulation::install_execution_point_hooks()

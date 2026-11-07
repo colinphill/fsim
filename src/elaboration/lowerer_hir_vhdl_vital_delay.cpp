@@ -2,6 +2,7 @@
 #include "lowerer_internal.hpp"
 #include "lowerer_vhdl_vital_names.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <map>
 
@@ -135,8 +136,12 @@ bool Lowerer::lower_hir_vhdl_vital_delay_call(
         return hir_vital_static_string(actuals.find(formal, position),
             formal, fallback, "FSIM-ELAB-VITAL-018", "VITAL delay", valid);
     };
+    // `element` receives the element offset when the actual is a constant
+    // index of a bus signal, one expansion of a generate over the bus.
     const auto signal = [&](const std::string_view formal,
-                            const std::size_t position)
+                            const std::size_t position,
+                            std::optional<std::uint32_t>* const element
+                            = nullptr)
         -> std::optional<SignalId> {
         const auto expression = actuals.find(formal, position);
         auto binding = expression
@@ -186,8 +191,37 @@ bool Lowerer::lower_hir_vhdl_vital_delay_call(
             valid = false;
             return std::nullopt;
         }
-        if (binding->width != 1U
-            || binding->domain != frontend::ValueDomain::Logic9) {
+        // The port of a VHDL instance that a SystemVerilog net drives or
+        // reads is stored in the four-state domain; its VHDL type is still
+        // standard logic, and the runtime converts the value at the signal.
+        const auto declared_type = binding->domain
+                == frontend::ValueDomain::Logic4
+            ? hir_vhdl_expression_subtype(*expression)
+            : std::nullopt;
+        const bool four_state_storage = declared_type
+            && vital_standard_logic_type_name(
+                vital_simple_name(declared_type->type_mark.spelling));
+        bool selected_element { };
+        if (element != nullptr && binding->width > 1U && expression
+            && binding->domain == frontend::ValueDomain::Logic9
+            && !binding->signal_selection) {
+            const auto view = specialized_hir_unit_->find_expression(
+                *expression);
+            if (view && view->vhdl != nullptr
+                && view->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::index) {
+                const auto selection = hir_root_constant_selection(
+                    *expression, hir_process_scope_);
+                if (selection && selection->width == 1U
+                    && selection->offset < binding->width) {
+                    *element = static_cast<std::uint32_t>(selection->offset);
+                    selected_element = true;
+                }
+            }
+        }
+        if ((binding->width != 1U && !selected_element)
+            || (binding->domain != frontend::ValueDomain::Logic9
+                && !four_state_storage)) {
             report(
                 "FSIM-ELAB-VITAL-019",
                 "VITAL delay formal '" + std::string { formal }
@@ -315,8 +349,17 @@ bool Lowerer::lower_hir_vhdl_vital_delay_call(
         operation.kind = signal_delay
             ? VitalDelayKind::signal
             : VitalDelayKind::wire;
-        const auto output = signal("outsig", 0U);
-        const auto input = signal("insig", 1U);
+        std::optional<std::uint32_t> output_element;
+        std::optional<std::uint32_t> input_element;
+        const auto output = signal("outsig", 0U, &output_element);
+        const auto input = signal("insig", 1U, &input_element);
+        if (output_element.has_value() != input_element.has_value()) {
+            report("FSIM-ELAB-VITAL-019",
+                std::string { name } + " requires both signals to be "
+                    "scalar or both to be an element of a bus",
+                statement_span);
+            valid = false;
+        }
         const auto delay_expression = actuals.find(
             signal_delay ? "dly" : "twire", 2U);
         if (!delay_expression) {
@@ -347,6 +390,37 @@ bool Lowerer::lower_hir_vhdl_vital_delay_call(
                 return true;
             }
         }
+        if (wire_delay) {
+            // The generic that the delay actual names: the multiple source
+            // mode of the SDF annotation gives its call one location for
+            // each source of the input (IEEE 1076.4-2000 5.2.7.1.5, 6.4.1).
+            // An element of a vector generic (`tipd_A(i)`) names it by the
+            // prefix of the index and keeps the index.
+            auto named = specialized_hir_unit_->find_expression(
+                *delay_expression);
+            if (named && named->vhdl != nullptr && output_element
+                && named->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::index
+                && named->vhdl->operands.size() == 2U) {
+                operation.wire_index = hir_constant_integer(
+                    named->vhdl->operands.back());
+                named = specialized_hir_unit_->find_expression(
+                    named->vhdl->operands.front());
+                if (!operation.wire_index) {
+                    named.reset();
+                }
+            }
+            if (named && named->vhdl != nullptr
+                && named->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::name) {
+                operation.wire_generic = std::string { named->vhdl->text };
+                std::ranges::transform(operation.wire_generic,
+                    operation.wire_generic.begin(), [](const char c) {
+                        return static_cast<char>(std::tolower(
+                            static_cast<unsigned char>(c)));
+                    });
+            }
+        }
         operation.shape = count == 1U
             ? VitalDelayShape::single
             : count == 2U ? VitalDelayShape::delay01
@@ -365,10 +439,29 @@ bool Lowerer::lower_hir_vhdl_vital_delay_call(
             operation.output = *output;
         }
         if (input) {
+            // A concurrent procedure call waits on its signal actuals
+            // (IEEE 1076-2008 11.4), so the process wakes on the input.
+            if (!input_element) {
+                record_implicit_signal_dependency(*input);
+            }
             operation.source = allocate_register(
                 1U, frontend::ValueDomain::Logic9);
-            process_.operations.emplace_back(
-                ReadSignal { operation.source, *input });
+            if (input_element) {
+                // One element of the bus: the process wakes only on a change
+                // of that element, and the call reads it from the bus.
+                record_implicit_signal_dependency(*input, *input_element, 1U);
+                const auto bus = allocate_register(
+                    design_.signal_info_[*input].width,
+                    frontend::ValueDomain::Logic9);
+                process_.operations.emplace_back(ReadSignal { bus, *input });
+                process_.operations.emplace_back(
+                    Extract { operation.source, bus, *input_element, 1U });
+                operation.input_offset = input_element;
+                operation.output_offset = output_element;
+            } else {
+                process_.operations.emplace_back(
+                    ReadSignal { operation.source, *input });
+            }
         }
         if (delays) {
             operation.default_delays = *delays;

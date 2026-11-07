@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+sv p=x q=x
+vhdl p='U' q='X'
+sv @(p) p=1 at 5000000
+vhdl p='1' q='0'

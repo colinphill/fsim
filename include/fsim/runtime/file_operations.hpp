@@ -112,7 +112,15 @@ enum class InputScanFormat : std::uint8_t {
     unformatted2,
     unformatted4,
     hierarchy,
-    time
+    time,
+    // IEEE 1164 TextIO (IEEE 1076-2019 16.7) READ, OREAD and HREAD of
+    // STD_ULOGIC and STD_ULOGIC_VECTOR: the target holds nine-valued
+    // elements and the scan follows the package body, character by
+    // character. Used only with vhdl_textio_logic9_marker.
+    vhdl_logic9_scalar,
+    vhdl_logic9_vector,
+    vhdl_logic9_octal,
+    vhdl_logic9_hexadecimal
 };
 enum class InputScanTargetKind : std::uint8_t {
     packed_register,
@@ -153,6 +161,9 @@ struct FileScan {
     // digits stores zero or an empty string, one with characters illegal for
     // the conversion stores 'bx.
     bool plusarg_value { };
+    // A string register that receives the message the 1164 TextIO READ,
+    // OREAD or HREAD without GOOD reports (empty when the read succeeded).
+    std::optional<std::uint32_t> diagnostic;
     FileScan(
         std::uint32_t destination_value = 0,
         std::uint32_t handle_value = 0,
@@ -188,6 +199,9 @@ inline constexpr std::string_view vhdl_textio_radix_read_2008_marker
     = "\x1f" "fsim-vhdl-textio-radix-read-2008";
 inline constexpr std::string_view vhdl_textio_sread_marker
     = "\x1f" "fsim-vhdl-textio-sread";
+// READ, OREAD and HREAD of STD_ULOGIC(_VECTOR) (IEEE 1076-2019 16.7).
+inline constexpr std::string_view vhdl_textio_logic9_marker
+    = "\x1f" "fsim-vhdl-textio-logic9";
 
 /// The TextIO marker of a VHDL TextIO scan, or empty for any other scan.
 [[nodiscard]] inline std::string_view vhdl_textio_marker(
@@ -202,6 +216,7 @@ inline constexpr std::string_view vhdl_textio_sread_marker
             || prefix == vhdl_textio_read_2008_marker
             || prefix == vhdl_textio_radix_read_2008_marker
             || prefix == vhdl_textio_sread_marker
+            || prefix == vhdl_textio_logic9_marker
         ? prefix
         : std::string_view { };
 }
@@ -229,6 +244,11 @@ inline constexpr std::string_view vhdl_textio_sread_marker
 [[nodiscard]] inline bool vhdl_textio_sread(const FileScan& operation) noexcept
 {
     return vhdl_textio_marker(operation) == vhdl_textio_sread_marker;
+}
+
+[[nodiscard]] inline bool vhdl_textio_logic9(const FileScan& operation) noexcept
+{
+    return vhdl_textio_marker(operation) == vhdl_textio_logic9_marker;
 }
 
 enum class FileBinaryTargetKind : std::uint8_t {

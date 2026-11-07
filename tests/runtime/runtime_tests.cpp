@@ -264,6 +264,7 @@ int main(const int argc, const char* const* argv)
         test_transition_delay_selection();
         test_simir_runtime_value_delays();
         test_simir_inertial_transition_writes();
+        test_simir_net_delay_writes();
         test_simir_module_paths();
         test_simir_module_timing_checks();
         test_simir_projected_writes();

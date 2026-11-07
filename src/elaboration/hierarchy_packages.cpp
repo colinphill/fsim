@@ -8186,7 +8186,21 @@ namespace {
         std::vector<std::optional<PackedLogic4>> values(element_count);
         std::optional<semantic::ExpressionId> others;
         std::size_t positional { };
-        const auto value = [&](const semantic::ExpressionId id) {
+        const auto value = [&](const semantic::ExpressionId id)
+            -> std::optional<PackedLogic4> {
+            // An element that is itself an aggregate of an array subtype
+            // (a VitalDelayArrayType01 holds VitalDelayType01 aggregates)
+            // is packed the same way, element by element.
+            const auto nested = specialization.find_expression(id);
+            if (nested && nested->vhdl != nullptr
+                && nested->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::aggregate
+                && !nested->vhdl->associations.empty()) {
+                if (auto packed_element = compiled_vhdl_packed_aggregate_value(
+                        specialization, id, *element, use_scope)) {
+                    return packed_element;
+                }
+            }
             return compiled_vhdl_static_port_value(
                 specialization,
                 id,
@@ -14810,8 +14824,12 @@ HierarchyBuilder::connect_compiled_boundary_port(
         && (width_changed || signedness_changed
             || boolean_boundary || integer_boundary
             || variable_output_adapter);
+    // An inout whose actual resolves in its own language (a SystemVerilog
+    // net, a resolved VHDL signal) shares that signal; each side reads it
+    // through the value mapping. An unresolved actual needs a resolver.
     if (port.direction == frontend::PortDirection::Inout
-        && (binding == nullptr || !binding->resolver)) {
+        && (binding == nullptr || !binding->resolver)
+        && native_resolution(actual_info) == ResolutionKind::none) {
         report(
             "FSIM-ELAB-BIND-030",
             "cross-language inout '" + path + "." + port.name
@@ -15043,6 +15061,24 @@ HierarchyBuilder::connect_compiled_boundary_port(
         design_.append_process_record(std::move(undriven));
     }
 
+    // A SystemVerilog net on a VHDL std_logic inout keeps its sources' nine
+    // values, so a VHDL 'L', 'H' or 'W' resolves as a weak value on it: a
+    // bus pull-up resolves as it does in std_logic whichever language
+    // declares the net (the sv_wire resolution in the runtime).
+    if (port.direction == frontend::PortDirection::Inout
+        && state_domain_boundary && !needs_adapter && formal == actual
+        && port.domain == frontend::ValueDomain::Logic9
+        && actual_info.source_domain == frontend::ValueDomain::Logic4
+        && native_resolution(actual_info) == ResolutionKind::sv_wire) {
+        design_.signal_info_[actual].source_domain
+            = frontend::ValueDomain::Logic9;
+        auto& net = design_.signals_[actual];
+        if (net.value_kind != runtime::simir::ValueKind::logic9) {
+            vhdl_inout_nine_value_nets_.push_back(actual);
+        }
+        net.value_kind = runtime::simir::ValueKind::logic9;
+        net.initial_value = net.initial_value.promoted_to_logic9();
+    }
     design_.boundary_conversions_.push_back(BoundaryConversionInfo {
         boolean_boundary
             ? BoundaryConversionKind::boolean_adapter
@@ -18947,6 +18983,635 @@ HierarchyBuilder::compiled_vhdl_root_generic_actuals(
         actuals.push_back(std::move(actual));
     }
     return actuals;
+}
+
+// Backannotation of VITAL timing generics from SDF data (IEEE 1076.4-2000
+// 5.1.1, 5.2). The annotator names each generic by the VITAL SDF map and
+// supplies femtosecond delay lists; the generic's declared delay type decides
+// how the list fills it (5.2.6, Tables 1 and 7). The result replaces the
+// generic's actual, so the model is lowered with the annotated value and
+// starts from the same state as a model whose generics were set by a
+// configuration (5.1).
+void HierarchyBuilder::apply_compiled_vhdl_timing_annotations(
+    const std::string& path, const semantic::vhdl::Unit& entity,
+    std::vector<semantic::SpecializedHirActualIdentity>& actuals)
+{
+    if (timing_generic_annotations_.empty() || compiled_ == nullptr) {
+        return;
+    }
+    std::vector<const TimingGenericAnnotation*> instance_annotations;
+    for (const auto& annotation : timing_generic_annotations_) {
+        if (annotation.instance == path) {
+            instance_annotations.push_back(&annotation);
+        }
+    }
+    if (instance_annotations.empty()) {
+        return;
+    }
+    std::vector<std::string> handled;
+    for (const auto* first : instance_annotations) {
+        const auto key = support::ascii_lower(first->generic);
+        if (std::ranges::find(handled, key) != handled.end()) {
+            continue;
+        }
+        handled.push_back(key);
+        std::vector<const TimingGenericAnnotation*> sequence;
+        for (const auto* candidate : instance_annotations) {
+            if (support::ascii_lower(candidate->generic) == key) {
+                sequence.push_back(candidate);
+            }
+        }
+        // The generic the SDF map constructed must be a generic of the
+        // instance's entity (5.2).
+        std::optional<semantic::DeclarationId> declaration_id;
+        std::optional<semantic::CompiledDeclarationView> declaration;
+        for (const auto candidate_id : entity.declarations) {
+            const auto candidate = compiled_->find_declaration(candidate_id);
+            if (candidate && candidate->vhdl != nullptr
+                && candidate->vhdl->form
+                    == semantic::vhdl::DeclarationForm::generic_constant
+                && compiled_vhdl_name_equal(
+                    candidate->vhdl->name, first->generic)) {
+                declaration_id = candidate_id;
+                declaration = candidate;
+                break;
+            }
+        }
+        if (!declaration || !declaration->vhdl->subtype) {
+            report("FSIM-SDF-VITAL-002",
+                "SDF annotation names the generic '" + first->generic
+                    + "', which the entity of instance '" + path
+                    + "' does not declare (IEEE 1076.4-2000 5.2): "
+                    + first->source,
+                {});
+            continue;
+        }
+        const auto span = compiled_source_span(
+            *compiled_, declaration->vhdl->source);
+        const auto& subtype = *declaration->vhdl->subtype;
+        const auto scope = declaration->vhdl->scope;
+        const auto& generic_name = declaration->vhdl->name;
+
+        // The delay type class of the generic (5.2.6, 9.1): the number of
+        // transition delays one element holds, and whether the generic is
+        // the vector form (an array of such elements).
+        const auto type_name = std::string { simple_name_of(
+            subtype.type_mark.spelling) };
+        const auto lower_type = support::ascii_lower(type_name);
+        const bool vector_form = lower_type.starts_with("vitaldelayarraytype");
+        const auto class_suffix = vector_form
+            ? lower_type.substr(std::string_view { "vitaldelayarraytype" }.size())
+            : lower_type;
+        std::size_t count { };
+        if (class_suffix.empty() || class_suffix == "vitaldelaytype"
+            || lower_type == "time" || lower_type == "delay_length") {
+            count = 1U;
+        } else if (class_suffix == "01" || class_suffix == "vitaldelaytype01") {
+            count = 2U;
+        } else if (class_suffix == "01z"
+            || class_suffix == "vitaldelaytype01z") {
+            count = 6U;
+        } else if (class_suffix == "01zx"
+            || class_suffix == "vitaldelaytype01zx") {
+            count = 12U;
+        }
+        std::optional<semantic::SpecializedHirUnit> interim;
+        const auto make_interim = [&](const bool with_actuals) {
+            return semantic::make_specialized_hir_unit(validated_compiled_,
+                entity.id,
+                with_actuals
+                    ? std::span<const semantic::SpecializedHirActualIdentity> {
+                          actuals }
+                    : std::span<const semantic::SpecializedHirActualIdentity> { });
+        };
+        interim = make_interim(true);
+        if (!interim) {
+            interim = make_interim(false);
+        }
+        if (!interim) {
+            report("FSIM-SDF-VITAL-003",
+                "cannot evaluate the generic '" + generic_name
+                    + "' of instance '" + path + "'",
+                span);
+            continue;
+        }
+        const auto layout = compiled_vhdl_named_signal_layout(
+            *interim, subtype, scope);
+        std::size_t elements = 1U;
+        if (count == 0U && !vector_form && layout && layout->width % 64U == 0U) {
+            const auto slots = layout->width / 64U;
+            if (slots == 1U || slots == 2U || slots == 6U || slots == 12U) {
+                count = slots;
+            }
+        }
+        if (count != 0U && layout && layout->width % (count * 64U) == 0U) {
+            elements = layout->width / (count * 64U);
+        }
+        if (count == 0U || !layout || layout->width != elements * count * 64U
+            || (!vector_form && elements != 1U)) {
+            report("FSIM-SDF-VITAL-003",
+                "the generic '" + generic_name + "' of instance '" + path
+                    + "' is not a VITAL delay type (IEEE 1076.4-2000 "
+                    + "5.1.1, 9.1): " + first->source,
+                span);
+            continue;
+        }
+
+        // The index range (left, right) of an array subtype or port.
+        const auto bounds_of = [&](const semantic::vhdl::SubtypeIndication& type,
+                                   const semantic::ScopeId type_scope)
+            -> std::optional<std::pair<std::int64_t, std::int64_t>> {
+            const auto effective = semantic::CompiledDesignResolver {
+                *compiled_, entity.id }
+                .effective_vhdl_subtype(type, type_scope);
+            const auto& checked = effective ? *effective : type;
+            const auto range = std::ranges::find(checked.constraints,
+                semantic::vhdl::RangeKind::array_index,
+                &semantic::vhdl::RangeConstraint::kind);
+            if (range == checked.constraints.end()) {
+                return std::nullopt;
+            }
+            const auto evaluate = [&](const std::optional<std::int64_t> folded,
+                                      const auto& expression)
+                -> std::optional<std::int64_t> {
+                if (folded) {
+                    return folded;
+                }
+                return expression
+                    ? interim->evaluate_integral_expression(*expression)
+                    : std::nullopt;
+            };
+            const auto left = evaluate(range->left, range->left_expression);
+            const auto right = evaluate(range->right, range->right_expression);
+            if (!left || !right) {
+                return std::nullopt;
+            }
+            return std::pair { *left, *right };
+        };
+        std::pair<std::int64_t, std::int64_t> generic_bounds { 0, 0 };
+        if (vector_form) {
+            const auto found = bounds_of(subtype, scope);
+            if (!found) {
+                report("FSIM-SDF-VITAL-003",
+                    "the vector delay generic '" + generic_name
+                        + "' has no static index range: " + first->source,
+                    span);
+                continue;
+            }
+            generic_bounds = *found;
+        }
+
+        // Each SDF list fills slots of the generic (Table 1); a list of more
+        // values than the generic holds is an error (5.2.6). RETAIN values
+        // follow Table 2 and its restrictions.
+        bool list_valid = true;
+        bool needs_prior = vector_form;
+        for (const auto* annotation : sequence) {
+            const auto entries = annotation->values.size();
+            const auto retained = annotation->retain.size();
+            if (entries != 1U && entries != 2U && entries != 3U
+                && entries != 6U && entries != 12U) {
+                report("FSIM-SDF-VITAL-003",
+                    "SDF delay list for the generic '" + generic_name
+                        + "' has an unsupported length: " + annotation->source,
+                    span);
+                list_valid = false;
+            } else if (entries > count) {
+                report("FSIM-SDF-VITAL-004",
+                    "the generic '" + generic_name + "' holds "
+                        + std::to_string(count)
+                        + " delay value(s), fewer than the "
+                        + std::to_string(entries)
+                        + " of the SDF entry (IEEE 1076.4-2000 5.2.6): "
+                        + annotation->source,
+                    span);
+                list_valid = false;
+            }
+            if (retained != 0U) {
+                // The restrictions of 5.2.6: at most six delays; three
+                // retain values, or retain values with tristate delays
+                // (three or more delays), need VitalDelayType01ZX; any
+                // retain value needs the zero-to-Z transitions of 01Z.
+                const bool tristate = entries >= 3U;
+                if (retained > 3U || entries > 6U
+                    || (count < 12U && (retained == 3U || tristate))
+                    || count < 6U) {
+                    report("FSIM-SDF-VITAL-011",
+                        "the RETAIN delays of the SDF entry cannot map onto the generic '"
+                            + generic_name
+                            + "' (IEEE 1076.4-2000 5.2.6, Table 2): "
+                            + annotation->source,
+                        span);
+                    list_valid = false;
+                }
+            }
+            needs_prior = needs_prior || annotation->increment
+                || retained != 0U
+                || std::ranges::any_of(annotation->values,
+                    [](const auto& value) { return !value.has_value(); });
+        }
+        if (!list_valid) {
+            continue;
+        }
+
+        // The generic's value before the annotation: its actual from the
+        // instantiation, or its default. One row of `count` slots for each
+        // element, the first element leftmost.
+        std::vector<std::vector<std::int64_t>> current(
+            elements, std::vector<std::int64_t>(count, 0));
+        bool have_prior { };
+        const auto existing = std::ranges::find(actuals, *declaration_id,
+            &semantic::SpecializedHirActualIdentity::declaration);
+        const auto from_bits = [&](const PackedLogic4& bits) {
+            if (bits.width() != elements * count * 64U) {
+                return false;
+            }
+            for (std::size_t element = 0; element < elements; ++element) {
+                for (std::size_t slot { }; slot < count; ++slot) {
+                    const auto position = element * count + slot;
+                    const auto value = bits.extract_bits(
+                        (elements * count - 1U - position) * 64U, 64U)
+                                           .known_unsigned_value();
+                    if (!value) {
+                        return false;
+                    }
+                    current[element][slot] = static_cast<std::int64_t>(*value);
+                }
+            }
+            return true;
+        };
+        if (!vector_form && count == 1U) {
+            const auto value = interim->evaluate_integral_declaration(
+                *declaration_id);
+            if (value) {
+                current[0][0] = *value;
+                have_prior = true;
+            }
+        } else if (existing != actuals.end()) {
+            // An instantiation's own actual: known only when it was
+            // evaluated into bits.
+            have_prior = existing->vhdl_elaborated_bits
+                && from_bits(PackedLogic4::from_msb_string(
+                    *existing->vhdl_elaborated_bits));
+        } else if (declaration->vhdl->initializer) {
+            const auto bits = compiled_vhdl_packed_aggregate_value(
+                *interim, *declaration->vhdl->initializer, subtype, scope);
+            have_prior = bits && from_bits(*bits);
+        }
+        if (!have_prior && needs_prior) {
+            report("FSIM-SDF-VITAL-003",
+                "cannot evaluate the present value of the generic '"
+                    + generic_name + "' of instance '" + path
+                    + "' for an INCREMENT, null, RETAIN or element SDF value: "
+                    + first->source,
+                span);
+            continue;
+        }
+
+        // The elements an SDF entry selects (5.2.7.3.3): all of a scalar
+        // generic; for a vector generic the row-dominant index mapping of
+        // 5.2.7.3.3.1 and 5.2.7.3.3.2 applied to each index of each range.
+        const auto port_range = [&](const TimingGenericPort& port)
+            -> std::optional<std::pair<std::int64_t, std::int64_t>> {
+            for (const auto candidate_id : entity.declarations) {
+                const auto candidate = compiled_->find_declaration(candidate_id);
+                if (candidate && candidate->vhdl != nullptr
+                    && candidate->vhdl->form
+                        == semantic::vhdl::DeclarationForm::port
+                    && candidate->vhdl->subtype
+                    && compiled_vhdl_name_equal(
+                        candidate->vhdl->name, port.name)) {
+                    return bounds_of(
+                        *candidate->vhdl->subtype, candidate->vhdl->scope);
+                }
+            }
+            return std::nullopt;
+        };
+        const auto select_elements = [&](const TimingGenericAnnotation& annotation,
+                                         std::vector<std::size_t>& targets)
+            -> bool {
+            targets.clear();
+            if (!vector_form) {
+                // A port with an index or range is a vector, and its timing
+                // generic must be the vector form (5.2.7.3.3).
+                if (std::ranges::any_of(annotation.ports,
+                        [](const TimingGenericPort& port) {
+                            return port.indexed;
+                        })) {
+                    report("FSIM-SDF-VITAL-007",
+                        "the SDF entry selects a bit or range of a bus port, "
+                        "but the generic '" + generic_name
+                            + "' is not a vector delay type "
+                              "(IEEE 1076.4-2000 5.2.7.3.3): "
+                            + annotation.source,
+                        span);
+                    return false;
+                }
+                targets.push_back(0U);
+                return true;
+            }
+            std::vector<const TimingGenericPort*> indexed;
+            for (const auto& port : annotation.ports) {
+                if (port.indexed) {
+                    indexed.push_back(&port);
+                }
+            }
+            const auto fail = [&](const std::string& why) {
+                report("FSIM-SDF-VITAL-012",
+                    "the index mapping of the SDF entry onto the vector generic '"
+                        + generic_name + "' fails: " + why
+                        + " (IEEE 1076.4-2000 5.2.7.3.3): " + annotation.source,
+                    span);
+                return false;
+            };
+            if (indexed.empty()) {
+                return fail("no port of the entry has an index or range");
+            }
+            const auto g1 = generic_bounds.first;
+            const auto g2 = generic_bounds.second;
+            const auto direction = g1 == g2 ? std::int64_t { 1 }
+                                            : (g1 - g2) / std::abs(g1 - g2);
+            const auto values_of = [](const TimingGenericPort& port) {
+                std::vector<std::int64_t> result;
+                const auto step = port.left <= port.right ? 1 : -1;
+                for (auto at = port.left;; at += step) {
+                    result.push_back(at);
+                    if (at == port.right) {
+                        break;
+                    }
+                }
+                return result;
+            };
+            const auto place = [&](const std::int64_t x) {
+                if (x < std::min(g1, g2) || x > std::max(g1, g2)) {
+                    return fail("index " + std::to_string(x)
+                        + " is out of range for the generic");
+                }
+                targets.push_back(static_cast<std::size_t>(std::abs(x - g1)));
+                return true;
+            };
+            if (annotation.ports.size() == 2U && indexed.size() == 2U) {
+                const auto first_range = port_range(annotation.ports[0]);
+                const auto second_range = port_range(annotation.ports[1]);
+                if (!first_range || !second_range) {
+                    return fail("a port has no static index range");
+                }
+                const auto i2 = first_range->second;
+                const auto j1 = second_range->first;
+                const auto j2 = second_range->second;
+                const auto rows = values_of(annotation.ports[0]);
+                const auto columns = values_of(annotation.ports[1]);
+                const auto width_second = std::abs(j1 - j2) + 1;
+                const auto width_first = std::abs(first_range->first - i2) + 1;
+                // Equal scalar element counts and a generic as large as the
+                // first port: one element for each pair of the two ranges.
+                const bool paired = width_first == width_second
+                    && static_cast<std::int64_t>(elements) == width_first;
+                if (paired) {
+                    if (rows.size() != columns.size()) {
+                        return fail("the ranges differ in length");
+                    }
+                    for (std::size_t k { }; k < rows.size(); ++k) {
+                        if (std::abs(rows[k] - i2) != std::abs(columns[k] - j2)) {
+                            return fail("abs(r - i2) != abs(c - j2)");
+                        }
+                        if (!place(g2 + std::abs(columns[k] - j2) * direction)) {
+                            return false;
+                        }
+                    }
+                    return true;
+                }
+                for (const auto r : rows) {
+                    for (const auto c : columns) {
+                        if (!place(g2 + (std::abs(c - j2)
+                                    + std::abs(r - i2) * width_second)
+                                    * direction)) {
+                            return false;
+                        }
+                    }
+                }
+                return true;
+            }
+            // One indexed port: x = g2 + abs(c - j2) * (g1 - g2)/abs(g1 - g2).
+            const auto* port = indexed.front();
+            const auto range = port_range(*port);
+            if (!range) {
+                return fail("the port '" + port->name
+                    + "' has no static index range");
+            }
+            for (const auto c : values_of(*port)) {
+                if (!place(g2 + std::abs(c - range->second) * direction)) {
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        // Table 1: the position of the list value each of the six slots
+        // takes. A slot past the generic's count is dropped.
+        static constexpr std::array<int, 6> one { 0, 0, 0, 0, 0, 0 };
+        static constexpr std::array<int, 6> two { 0, 1, 0, 0, 1, 1 };
+        static constexpr std::array<int, 6> three { 0, 1, 2, 0, 2, 1 };
+        static constexpr std::array<int, 12> twelve { 0, 1, 2, 3, 4, 5, 6, 7,
+            8, 9, 10, 11 };
+        const auto apply_annotation = [&](auto& rows,
+                                          const TimingGenericAnnotation* annotation,
+                                          const std::vector<std::size_t>& targets) {
+            const auto entries = annotation->values.size();
+            for (const auto element : targets) {
+                auto& row = rows[element];
+                const auto apply = [&](const std::size_t slot,
+                                       const std::optional<std::int64_t>& value) {
+                    if (slot < count && value) {
+                        row[slot] = annotation->increment ? row[slot] + *value
+                                                          : *value;
+                    }
+                };
+                for (std::size_t slot { }; slot < count; ++slot) {
+                    const int position = entries == 12U ? twelve[slot]
+                        : slot >= 6U ? -1
+                        : entries == 1U ? one[slot]
+                        : entries == 2U ? two[slot]
+                        : entries == 3U ? three[slot]
+                                        : twelve[slot];
+                    if (position >= 0) {
+                        apply(slot, annotation->values[static_cast<std::size_t>(
+                                        position)]);
+                    }
+                }
+                // Table 2: the retain values replace the zero-to-Z and
+                // one-to-Z delays (one or two delays) or the transitions
+                // from and to X (three or more).
+                const auto& retain = annotation->retain;
+                if (!retain.empty()) {
+                    const auto r1 = retain[0];
+                    const auto r2 = retain.size() > 1U ? retain[1] : retain[0];
+                    if (entries >= 3U) {
+                        std::optional<std::int64_t> r3;
+                        if (retain.size() >= 3U) {
+                            r3 = retain[2];
+                        } else if (retain.size() == 2U && r1 && r2) {
+                            r3 = std::min(*r1, *r2);
+                        } else {
+                            r3 = r1;
+                        }
+                        apply(6U, r1);
+                        apply(8U, r2);
+                        apply(11U, r3);
+                    } else if (retain.size() == 3U) {
+                        apply(6U, retain[0]);
+                        apply(8U, retain[1]);
+                        apply(11U, retain[2]);
+                    } else {
+                        apply(2U, r1);
+                        apply(4U, r2);
+                    }
+                }
+                // A twelve-transition generic that a shorter list leaves
+                // without the transitions through X takes the others as the
+                // selection of a VitalDelayType01Z delay does (Table 7).
+                if (count == 12U && entries < 12U) {
+                    const bool retained_x = !retain.empty()
+                        && (entries >= 3U || retain.size() == 3U);
+                    const auto keep0x = row[6];
+                    const auto keep1x = row[8];
+                    const auto keepzx = row[11];
+                    row[6] = std::min(row[0], row[2]);
+                    row[7] = std::max(row[0], row[3]);
+                    row[8] = std::min(row[1], row[4]);
+                    row[9] = std::max(row[1], row[5]);
+                    row[10] = std::max(row[2], row[4]);
+                    row[11] = std::min(row[3], row[5]);
+                    if (retained_x) {
+                        row[6] = keep0x;
+                        row[8] = keep1x;
+                        row[11] = keepzx;
+                    }
+                }
+            }
+        };
+        // The multiple source mode of IEEE 1076.4-2000 5.2.7.1.5, for each
+        // element of the generic (a scalar generic has one). Rule a: a
+        // second source among the INTERCONNECT entries of one element
+        // enables the mode for it. Rule b: each location starts with the
+        // element's present value. Rule c: an INTERCONNECT updates the
+        // location of its source. Rule d: a PORT entry updates every
+        // location of the elements it names (and the generic, which stays
+        // the value of a source that no entry names).
+        struct SourceLocation {
+            std::string key;
+            std::string instance;
+            std::string port;
+            std::vector<std::vector<std::int64_t>> rows;
+        };
+        struct ElementSources {
+            std::string first_source;
+            std::string first_instance;
+            std::string first_port;
+            bool multiple { };
+            std::vector<SourceLocation> locations;
+        };
+        bool annotation_valid = true;
+        std::vector<ElementSources> sources_of(elements);
+        for (const auto* annotation : sequence) {
+            std::vector<std::size_t> targets;
+            if (!select_elements(*annotation, targets)) {
+                annotation_valid = false;
+                break;
+            }
+            if (!annotation->interconnect) {
+                apply_annotation(current, annotation, targets);
+                for (const auto element : targets) {
+                    for (auto& location : sources_of[element].locations) {
+                        apply_annotation(location.rows, annotation, { element });
+                    }
+                }
+                continue;
+            }
+            const auto source = support::ascii_lower(annotation->source_instance)
+                + '|' + support::ascii_lower(annotation->source_port);
+            for (const auto element : targets) {
+                auto& entry = sources_of[element];
+                if (!entry.multiple) {
+                    if (entry.first_source.empty()
+                        || entry.first_source == source) {
+                        entry.first_source = source;
+                        entry.first_instance = annotation->source_instance;
+                        entry.first_port = annotation->source_port;
+                        apply_annotation(current, annotation, { element });
+                        continue;
+                    }
+                    entry.multiple = true;
+                    entry.locations.push_back({ entry.first_source,
+                        entry.first_instance, entry.first_port, current });
+                }
+                auto found = std::ranges::find(entry.locations, source,
+                    &SourceLocation::key);
+                if (found == entry.locations.end()) {
+                    entry.locations.push_back({ source,
+                        annotation->source_instance, annotation->source_port,
+                        current });
+                    found = std::prev(entry.locations.end());
+                }
+                apply_annotation(found->rows, annotation, { element });
+            }
+        }
+        if (annotation_valid
+            && std::ranges::any_of(sources_of, &ElementSources::multiple)) {
+            VitalWireLocations record;
+            record.instance = path;
+            record.generic = support::ascii_lower(generic_name);
+            record.vector_form = vector_form;
+            record.left = generic_bounds.first;
+            for (std::size_t element { }; element < elements; ++element) {
+                VitalWireElement entry;
+                entry.slots = current[element];
+                for (const auto& location : sources_of[element].locations) {
+                    VitalWireSourceLocation each;
+                    each.source_instance = location.instance;
+                    each.source_port = location.port;
+                    each.slots = location.rows[element];
+                    entry.sources.push_back(std::move(each));
+                }
+                record.elements.push_back(std::move(entry));
+            }
+            vital_wire_locations_.push_back(std::move(record));
+        }
+        if (!annotation_valid) {
+            continue;
+        }
+
+        semantic::SpecializedHirActualIdentity actual;
+        actual.declaration = *declaration_id;
+        if (!vector_form && count == 1U) {
+            actual.identity = compiled_vhdl_integral_identity(
+                *declaration->vhdl, current[0][0]);
+        } else {
+            PackedLogic4 bits(elements * count * 64U, Logic4::zero);
+            for (std::size_t element = 0; element < elements; ++element) {
+                for (std::size_t slot { }; slot < count; ++slot) {
+                    const auto position = element * count + slot;
+                    bits.insert_bits(
+                        PackedLogic4::from_aval_bval(64U,
+                            static_cast<std::uint64_t>(current[element][slot]),
+                            0U),
+                        (elements * count - 1U - position) * 64U);
+                }
+            }
+            auto text = bits.to_msb_string();
+            actual.identity = "override;elaborated=" + text;
+            actual.vhdl_elaborated_bits = std::move(text);
+            const auto effective = semantic::CompiledDesignResolver {
+                *compiled_, entity.id }
+                .effective_vhdl_subtype(subtype, scope);
+            actual.vhdl_elaborated_subtype = effective ? *effective : subtype;
+        }
+        if (existing != actuals.end()) {
+            *existing = std::move(actual);
+        } else {
+            actuals.push_back(std::move(actual));
+        }
+    }
 }
 
 std::vector<semantic::SpecializedHirActualIdentity>
@@ -27739,6 +28404,41 @@ HierarchyBuilder::materialize_compiled_vhdl_generic_actuals(
                     std::move(*subtype));
             }
         }
+        // A composite aggregate actual that nothing above evaluated still
+        // names the enclosing region's objects: a generate parameter, or a
+        // constant of the region. The target unit cannot read them, so the
+        // actual takes the value it has in the region that instantiates the
+        // unit (IEEE 1076-2019 14.4.2.1: a generic actual is evaluated when
+        // the instance is elaborated, in its enclosing region, with the
+        // generate parameters of that region, 11.8).
+        if (formal && formal->vhdl != nullptr
+            && formal->vhdl->form
+                == semantic::vhdl::DeclarationForm::generic_constant
+            && formal->vhdl->subtype && binding.expression
+            && actual.actual.actual_expression
+            && !actual.actual.vhdl_packed_value
+            && !actual.actual.vhdl_elaborated_bits
+            && !actual.actual.vhdl_boolean_array_value
+            && !actual.actual.vhdl_record_value) {
+            const auto aggregate = working_specialization.find_expression(
+                *binding.expression);
+            if (aggregate && aggregate->vhdl != nullptr
+                && aggregate->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::aggregate) {
+                if (auto composite = elaborated_composite(binding, formal)) {
+                    if (!elaborated_composite_fits(
+                            formal, composite->second)) {
+                        report_composite_length(record.name, binding.source);
+                        child_actuals_valid = false;
+                        continue;
+                    }
+                    apply_elaborated_composite(actual, composite->second,
+                        std::move(composite->first));
+                    child_actuals.push_back(std::move(actual.actual));
+                    continue;
+                }
+            }
+        }
         if (!apply_named_constant_shape(actual, binding, formal)) {
             report_composite_length(record.name, binding.source);
             child_actuals_valid = false;
@@ -33585,6 +34285,10 @@ bool HierarchyBuilder::instantiate_compiled_vhdl_unit(
             continue;
         }
         auto child_actuals = std::move(child_actual_result.actuals);
+        if (target_entity != nullptr) {
+            apply_compiled_vhdl_timing_annotations(
+                child_path, *target_entity, child_actuals);
+        }
         if (component != nullptr && component->component
             && target_entity != nullptr) {
             append_compiled_vhdl_component_binding_identity(
@@ -36392,6 +37096,20 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_vhdl_child(
             }
             child_actuals.push_back(std::move(actual.actual));
         }
+        // An SDF file annotates the timing generics of a VITAL cell that a
+        // Verilog or SystemVerilog module instantiates as it does under a
+        // VHDL parent (IEEE 1076.4-2000 5.2.3).
+        for (const auto& candidate : compiled_->vhdl_units()) {
+            if (candidate.kind == semantic::vhdl::UnitKind::entity
+                && compiled_vhdl_library_equal(
+                    candidate.library, child->vhdl->library)
+                && compiled_vhdl_name_equal(
+                    candidate.name, child->vhdl->primary_name)) {
+                apply_compiled_vhdl_timing_annotations(
+                    child_path, candidate, child_actuals);
+                break;
+            }
+        }
         std::vector<CompiledSpecializationFailure>
             child_specialization_failures;
         auto child_specialization = compiled_specialization(
@@ -36675,14 +37393,15 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_vhdl_child(
             if (!formal_signal) {
                 return false;
             }
-            // An out or buffer formal sharing its actual's storage is a
-            // source of the actual whose driver starts at the port's
+            // An out, inout or buffer formal sharing its actual's storage is
+            // a source of the actual whose driver starts at the port's
             // default, or T'LEFT without one (IEEE 1076-2019 6.5.2,
             // 14.7.3.2): a source no process inside the instance drives
             // keeps that value. A resolved actual resolves it with its other
             // sources once resolutions are known; a variable takes it.
             if (*formal_signal == *actual_signal
                 && (direction == frontend::PortDirection::Output
+                    || direction == frontend::PortDirection::Inout
                     || direction == frontend::PortDirection::Buffer)) {
                 auto port_default = declaration.initializer
                     ? compiled_vhdl_static_port_value(*child_specialization,

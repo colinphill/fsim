@@ -76,6 +76,7 @@ else()
     reactive_reinactive_re_nba
     mixed_domain_boundary
     inertial_maturation_order
+    delayed_concat_select
     named_event_triggered_nba)
 endif()
 foreach(case_name IN LISTS cases)

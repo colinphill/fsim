@@ -30,12 +30,27 @@ struct SdfSessionPlan {
     const cli::Invocation& invocation, SdfControlPhase phase,
     project::DelayMode default_mode);
 
+/// Where the session finds the ports of the Verilog and SystemVerilog
+/// instances: NETDELAY on a net delays every input and inout port the net
+/// reaches (IEEE 1364-2005 16.2.4), and the ports and their directions are in
+/// the design IR and the SystemVerilog HIR, not in the elaborated design. A
+/// session without them finds no load for a NETDELAY on a net.
+struct SdfPortSource {
+    const semantic::design::DesignIr* design_ir { };
+    const semantic::sv::Hir* systemverilog_hir { };
+};
+
+/// `vital_applied` says the design was built with these SDF files, so the
+/// VHDL cells they name already have their VITAL timing generics (the build
+/// annotates them, IEEE 1076.4-2000 5.1.1); without it a file that names VHDL
+/// cells is rejected, because the generics are elaboration constants.
 [[nodiscard]] std::optional<SdfSessionPlan> plan_sdf_session_inputs(
     const elaboration::ElaboratedDesign& design,
     std::string_view time_resolution, std::string_view design_identity,
     SdfControlRequest request,
     std::span<const std::filesystem::path> resolved_paths,
-    diagnostic::Engine& diagnostics);
+    diagnostic::Engine& diagnostics, SdfPortSource ports = { },
+    bool vital_applied = false);
 
 [[nodiscard]] bool apply_sdf_session_inputs(BuiltProject& built,
     const SdfControlRequest& request, diagnostic::Engine& diagnostics);

@@ -6183,6 +6183,7 @@ fsim_register_simple_test(
     api/api_systemc_test.cpp
     api/api_mapped_library_test.cpp
     api/api_multiple_root_test.cpp
+    api/api_sdf_vital_test.cpp
   )
   fsim_configure_test(fsim_api_tests)
   target_compile_definitions(
@@ -6713,6 +6714,64 @@ set_tests_properties(fsim.application.vhdl-logic-port-from-systemverilog PROPERT
   LABELS "application;vhdl;systemverilog;positive"
   TIMEOUT 600)
 
+# SystemVerilog <-> VHDL std_logic ports under the cross-language contract:
+# in ports at time zero, VHDL out/inout drivers of SystemVerilog nets from
+# their port defaults, and weak 'L'/'H'/'W' on a shared bus.
+add_test(
+  NAME fsim.application.vhdl-port-time0-from-systemverilog
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/systemverilog/vhdl_port_time0"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/systemverilog/vhdl_port_time0/run_vhdl_port_time0.cmake"
+)
+set_tests_properties(fsim.application.vhdl-port-time0-from-systemverilog PROPERTIES
+  LABELS "application;vhdl;systemverilog;mixed-language;positive"
+  TIMEOUT 600)
+
+# 'H', 'L', 'W' and '-' computed, stored, compared and combined in the v4
+# kernel's registers, narrow and wide, against the IEEE 1164 tables; also
+# under FSIM_KERNEL_VERIFY.
+add_test(
+  NAME fsim.application.vhdl-weak-values
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/weak_values"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/weak_values/run_weak_values.cmake"
+)
+set_tests_properties(fsim.application.vhdl-weak-values PROPERTIES
+  LABELS "application;vhdl;positive"
+  TIMEOUT 600)
+
+# Weak std_logic values made at run time without a constant of their own:
+# std_ulogic'val of a signal and a TEXTIO read.
+add_test(
+  NAME fsim.application.vhdl-weak-sources
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/weak_sources"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/weak_sources/run_weak_sources.cmake"
+)
+set_tests_properties(fsim.application.vhdl-weak-sources PROPERTIES
+  LABELS "application;vhdl;positive"
+  TIMEOUT 600)
+
+# The TEXTIO subprograms of IEEE.STD_LOGIC_1164 for STD_ULOGIC and
+# STD_ULOGIC_VECTOR on every engine path.
+add_test(
+  NAME fsim.application.vhdl-std-logic-textio
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/std_logic_textio"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/std_logic_textio/run_std_logic_textio.cmake"
+)
+set_tests_properties(fsim.application.vhdl-std-logic-textio PROPERTIES
+  LABELS "application;vhdl;positive"
+  TIMEOUT 600)
+
 # Application cases can create Tcl interpreters directly or launch the CLI
 # from a temporary working directory. Cover both Tcl's native initializer and
 # fsim's override; the separate installed/relocation tests must remain unseeded.
@@ -6726,6 +6785,200 @@ if(FSIM_WITH_BUNDLED_TCL)
     endif()
   endforeach()
 endif()
+
+# SDF backannotation of VITAL models (IEEE 1076.4-2000 5.2): the cells in
+# fixtures/sdf/vital_annotation take their timing generics from SDF files at
+# `fsim elaborate`, and each simulated trace is compared with the trace that
+# the header comment of its test bench derives by hand (see docs/sdf.md,
+# "VITAL models").
+set(FSIM_SDF_VITAL_FIXTURES
+  "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/sdf/vital_annotation")
+# fsim_add_sdf_vital_case(NAME SOURCES SDF ROOT TOP EXPECTED [options]):
+# SOURCES and SDF are "|"-separated fixture file names; the case runs on both
+# engines and compares the trace with EXPECTED. The options ELABORATE_MESSAGE
+# (a failing `fsim elaborate`), SIMULATE_SDF with SIMULATE_MESSAGE (a failing
+# `fsim simulate --sdf`) and DELAY_MODE select the other forms; the option
+# ELABORATE_WARNING lists "|"-separated texts that `fsim elaborate` must report
+# as it succeeds.
+function(fsim_add_sdf_vital_case FSIM_NAME FSIM_SOURCES FSIM_SDF FSIM_ROOT
+    FSIM_TOP FSIM_EXPECTED)
+  cmake_parse_arguments(PARSE_ARGV 6 FSIM_CASE ""
+    "ELABORATE_MESSAGE;ELABORATE_WARNING;SIMULATE_SDF;SIMULATE_MESSAGE;DELAY_MODE;DEBUG_COMMAND" "")
+  set(FSIM_SOURCE_PATHS "")
+  foreach(FSIM_SOURCE IN LISTS FSIM_SOURCES)
+    string(APPEND FSIM_SOURCE_PATHS "|${FSIM_SDF_VITAL_FIXTURES}/${FSIM_SOURCE}")
+  endforeach()
+  string(SUBSTRING "${FSIM_SOURCE_PATHS}" 1 -1 FSIM_SOURCE_PATHS)
+  set(FSIM_SDF_PATHS "")
+  foreach(FSIM_FILE IN LISTS FSIM_SDF)
+    string(APPEND FSIM_SDF_PATHS "|${FSIM_SDF_VITAL_FIXTURES}/${FSIM_FILE}")
+  endforeach()
+  if(NOT "${FSIM_SDF_PATHS}" STREQUAL "")
+    string(SUBSTRING "${FSIM_SDF_PATHS}" 1 -1 FSIM_SDF_PATHS)
+  endif()
+  set(FSIM_SIMULATE_SDF_PATHS "")
+  if(NOT "${FSIM_CASE_SIMULATE_SDF}" STREQUAL "")
+    set(FSIM_SIMULATE_SDF_PATHS
+      "${FSIM_SDF_VITAL_FIXTURES}/${FSIM_CASE_SIMULATE_SDF}")
+  endif()
+  set(FSIM_EXPECTED_PATH "")
+  set(FSIM_ENGINES v4 interpreter)
+  if(NOT "${FSIM_EXPECTED}" STREQUAL "")
+    set(FSIM_EXPECTED_PATH "${FSIM_SDF_VITAL_FIXTURES}/${FSIM_EXPECTED}")
+  else()
+    set(FSIM_ENGINES v4)
+  endif()
+  foreach(FSIM_ENGINE IN LISTS FSIM_ENGINES)
+    add_test(
+      NAME fsim.sdf-vital.${FSIM_NAME}.${FSIM_ENGINE}
+      COMMAND
+        "${CMAKE_COMMAND}"
+        "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+        "-DFSIM_SOURCES=${FSIM_SOURCE_PATHS}"
+        "-DFSIM_SDF=${FSIM_SDF_PATHS}"
+        "-DFSIM_SDF_ROOT=${FSIM_ROOT}"
+        "-DFSIM_TOP=${FSIM_TOP}"
+        "-DFSIM_ENGINE=${FSIM_ENGINE}"
+        "-DFSIM_EXPECTED=${FSIM_EXPECTED_PATH}"
+        "-DFSIM_DELAY_MODE=${FSIM_CASE_DELAY_MODE}"
+        "-DFSIM_ELABORATE_MESSAGE=${FSIM_CASE_ELABORATE_MESSAGE}"
+        "-DFSIM_ELABORATE_WARNING=${FSIM_CASE_ELABORATE_WARNING}"
+        "-DFSIM_SIMULATE_SDF=${FSIM_SIMULATE_SDF_PATHS}"
+        "-DFSIM_SIMULATE_MESSAGE=${FSIM_CASE_SIMULATE_MESSAGE}"
+        "-DFSIM_DEBUG_COMMAND=${FSIM_CASE_DEBUG_COMMAND}"
+        "-DFSIM_WORK_DIR=${PROJECT_BINARY_DIR}/tests/sdf-vital/${FSIM_NAME}-${FSIM_ENGINE}"
+        -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunSdfVitalCase.cmake")
+    set_tests_properties(
+      fsim.sdf-vital.${FSIM_NAME}.${FSIM_ENGINE}
+      PROPERTIES LABELS "fast;sdf;vital;conformance")
+  endforeach()
+endfunction()
+fsim_add_sdf_vital_case(path-30 "cells.vhd;tb_path.vhd" "path_30.sdf"
+  tb_path tb_path path.expected)
+fsim_add_sdf_vital_case(path-30-max "cells.vhd;tb_path.vhd" "path_30.sdf"
+  tb_path tb_path path_max.expected DELAY_MODE max)
+fsim_add_sdf_vital_case(path-21 "cells.vhd;tb_path.vhd" "path_21.sdf"
+  tb_path tb_path path.expected)
+fsim_add_sdf_vital_case(increment "cells.vhd;tb_increment.vhd"
+  "increment_30.sdf" tb_increment tb_increment increment.expected)
+fsim_add_sdf_vital_case(generate "cells.vhd;tb_generate.vhd" "generate_30.sdf"
+  tb_generate tb_generate generate.expected)
+fsim_add_sdf_vital_case(check-30 "cells.vhd;tb_check.vhd" "check_30.sdf"
+  tb_check tb_check check.expected)
+fsim_add_sdf_vital_case(check-21 "cells.vhd;tb_check.vhd" "check_21.sdf"
+  tb_check tb_check check.expected)
+fsim_add_sdf_vital_case(device "cells.vhd;tb_device.vhd" "device_30.sdf"
+  tb_device tb_device device.expected)
+fsim_add_sdf_vital_case(interconnect "cells.vhd;tb_interconnect.vhd"
+  "interconnect_30.sdf" tb_interconnect tb_interconnect interconnect.expected)
+fsim_add_sdf_vital_case(names "cells_names.vhd;tb_names.vhd" "names_30.sdf"
+  tb_names tb_names names.expected)
+# No SDF file: the tipd_a delay of the concurrent VitalWireDelay must act on
+# the later edges (a rises at 10 ns, falls at 30 ns), not only at time 0.
+fsim_add_sdf_vital_case(wire-refire "cells.vhd;tb_path.vhd" ""
+  tb_path tb_path unannotated.expected)
+fsim_add_sdf_vital_case(vector-retain "cells_vector.vhd;tb_vector.vhd"
+  "vector_30.sdf" tb_vector tb_vector vector.expected)
+fsim_add_sdf_vital_case(error-retain-restriction
+  "cells_vector.vhd;tb_vector.vhd" "retain_bad_30.sdf" tb_vector tb_vector ""
+  ELABORATE_MESSAGE "FSIM-SDF-VITAL-011")
+fsim_add_sdf_vital_case(unsupported "cells.vhd;tb_path.vhd"
+  "unsupported_40.sdf" tb_path tb_path unannotated.expected)
+fsim_add_sdf_vital_case(error-missing-generic "cells.vhd;tb_path.vhd"
+  "missing_generic_30.sdf" tb_path tb_path ""
+  ELABORATE_MESSAGE "FSIM-SDF-VITAL-002")
+fsim_add_sdf_vital_case(error-too-few-values "cells.vhd;tb_path.vhd"
+  "too_few_30.sdf" tb_path tb_path ""
+  ELABORATE_MESSAGE "FSIM-SDF-VITAL-004")
+fsim_add_sdf_vital_case(error-illegal-identifier "cells.vhd;tb_path.vhd"
+  "bad_name_30.sdf" tb_path tb_path ""
+  ELABORATE_MESSAGE "FSIM-SDF-VITAL-001")
+# A VITAL model that a SystemVerilog module instantiates directly: its output
+# port is a standard-logic signal that a SystemVerilog net carries.
+fsim_add_sdf_vital_case(direct-from-systemverilog
+  "direct_core.vhd;direct_top.sv" "direct.sdf" direct_bench direct_bench
+  direct.expected)
+# An INTERCONNECT in the cell of a SystemVerilog parent whose destination is
+# the input port of a VHDL instance sets that instance's tipd_ generic
+# (IEEE 1076.4-2000 5.2.7.1.4).
+fsim_add_sdf_vital_case(systemverilog-parent-interconnect
+  "cells.vhd;boundary_interconnect.sv" "boundary_interconnect.sdf" bi_bench
+  bi_bench boundary_interconnect.expected)
+# The multiple source mode of INTERCONNECT (IEEE 1076.4-2000 5.2.7.1.5, 6.4.1):
+# each source of u2.a keeps its own delays and a change is delayed by the
+# source that made it.
+fsim_add_sdf_vital_case(multisource "cells.vhd;tb_multisource.vhd"
+  "multisource_30.sdf" tb_multisource tb_multisource multisource.expected)
+# The same for a vector interconnect delay generic (tipd_a of
+# VitalDelayArrayType01) whose bus port is delayed by a wire delay generate:
+# the mode is entered for each element that a second source reaches.
+fsim_add_sdf_vital_case(multisource-vector
+  "cells_vbus.vhd;tb_multisource_vector.vhd" "multisource_vector_30.sdf"
+  tb_multisource_vector tb_multisource_vector multisource_vector.expected)
+# A globally static aggregate generic actual with a generate parameter
+# (IEEE 1076-2019 14.4.2.1): the actual takes its value in the region that
+# instantiates the cell.
+fsim_add_sdf_vital_case(aggregate-generic "cells.vhd;tb_aggregate.vhd" ""
+  tb_aggregate tb_aggregate aggregate.expected)
+fsim_add_sdf_vital_case(error-generate-path "cells.vhd;tb_generate.vhd"
+  "generate_bad_30.sdf" tb_generate tb_generate ""
+  ELABORATE_MESSAGE "FSIM-SDF-RESOLVE-002")
+fsim_add_sdf_vital_case(error-simulate-time "cells.vhd;tb_path.vhd" ""
+  tb_path tb_path ""
+  SIMULATE_SDF path_30.sdf SIMULATE_MESSAGE "FSIM-SDF-VITAL-008")
+# The Tcl `fsim::sdf configure` command refuses the same file.
+fsim_add_sdf_vital_case(error-tcl-session "cells.vhd;tb_path.vhd" ""
+  tb_path tb_path ""
+  SIMULATE_SDF path_30.sdf SIMULATE_MESSAGE "FSIM-SDF-VITAL-008"
+  DEBUG_COMMAND "catch {fsim::sdf configure path_30.sdf tb_path tb_path.u1 typ}")
+
+# SDF net delays of Verilog and SystemVerilog loads (IEEE 1364-2005 16.2.4),
+# each case with the trace its header derives by hand: the drivers of one
+# source that differ in drive strength, a driver that also reads the net, a load
+# that drives its own port, the shapes of a source's drivers (a primitive, a
+# VHDL entity, a nested instance, a constant, a pull-up, selects, a port that is
+# not on the net) and the nets with bidirectional switches (no delay across a
+# switch).
+fsim_add_sdf_vital_case(net-strength "net_strength.sv" "net_strength.sdf"
+  top top net_strength.expected)
+# A force and release statement of a per-source delayed net outside the load
+# reaches the load after the smallest group delay (owner rule 2026-11-07).
+fsim_add_sdf_vital_case(net-hdl-force "net_hdl_force.sv" "net_hdl_force.sdf"
+  top top net_hdl_force.expected)
+fsim_add_sdf_vital_case(net-writer-reads "net_writer_reads.sv"
+  "net_writer_reads.sdf" top top net_writer_reads.expected)
+fsim_add_sdf_vital_case(net-load-drives "net_load_drives.sv"
+  "net_load_drives.sdf" top top net_load_drives.expected)
+fsim_add_sdf_vital_case(net-sources "net_sources_cells.vhd;net_sources.sv"
+  "net_sources.sdf" top top net_sources.expected
+  ELABORATE_WARNING "FSIM-SDF-SESSION-005")
+fsim_add_sdf_vital_case(net-switch "net_switch.sv" "net_switch.sdf"
+  top top net_switch.expected
+  ELABORATE_WARNING "defines no delay across a switch")
+
+# The shipped example: a VITAL cell below a SystemVerilog boundary, annotated
+# by the SDF file of its bench (examples/sdf_vital_mixed/README.md). The IOPATH
+# (1:2:3) selects 2 ns, so z follows a, which is 0 at 0 ns, 1 at 10 ns and 0 at
+# 30 ns, 2 ns later: 0 at 2 ns, 1 at 12 ns, 0 at 32 ns.
+foreach(FSIM_ENGINE IN ITEMS v4 interpreter)
+  set(FSIM_MIXED_EXAMPLE "${PROJECT_SOURCE_DIR}/examples/sdf_vital_mixed")
+  add_test(
+    NAME fsim.sdf-vital.example-mixed.${FSIM_ENGINE}
+    COMMAND
+      "${CMAKE_COMMAND}"
+      "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+      "-DFSIM_SOURCES=${FSIM_MIXED_EXAMPLE}/vital_cell.vhd|${FSIM_MIXED_EXAMPLE}/boundary.sv|${FSIM_MIXED_EXAMPLE}/bench.sv"
+      "-DFSIM_SDF=${FSIM_MIXED_EXAMPLE}/bench.sdf"
+      "-DFSIM_SDF_ROOT=mixed_bench"
+      "-DFSIM_TOP=mixed_bench"
+      "-DFSIM_ENGINE=${FSIM_ENGINE}"
+      "-DFSIM_EXPECTED=${FSIM_SDF_VITAL_FIXTURES}/mixed.expected"
+      "-DFSIM_WORK_DIR=${PROJECT_BINARY_DIR}/tests/sdf-vital/example-mixed-${FSIM_ENGINE}"
+      -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunSdfVitalCase.cmake")
+  set_tests_properties(
+    fsim.sdf-vital.example-mixed.${FSIM_ENGINE}
+    PROPERTIES LABELS "fast;sdf;vital;conformance")
+endforeach()
 
 # Windows does not search sibling build directories for dependent DLLs. Every
 # build-tree executable links the one process-wide fsim bridge, which in turn

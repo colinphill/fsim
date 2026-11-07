@@ -1,0 +1,15 @@
+// SPDX-License-Identifier: Apache-2.0
+// Two sources of a bus input: the multiple source mode of IEEE 1076.4-2000
+// 5.2.7.1.5 for the vector generic tipd_a, element by element. u1.y reaches
+// every element of u2.a with (rise 4 ns, fall 5 ns). u3.y reaches element 0
+// with (rise 2 ns, fall 3 ns) and element 2 with (rise 6 ns, fall 7 ns);
+// elements 1 and 3 have the one source u1.
+(DELAYFILE
+  (SDFVERSION "3.0")
+  (DESIGN "tb_multisource_vector")
+  (TIMESCALE 1ns)
+  (CELL (CELLTYPE "tb_multisource_vector") (INSTANCE tb_multisource_vector)
+    (DELAY (ABSOLUTE
+      (INTERCONNECT u1.y[0:3] u2.a[0:3] (4:4:4) (5:5:5))
+      (INTERCONNECT u3.y[0] u2.a[0] (2:2:2) (3:3:3))
+      (INTERCONNECT u3.y[2] u2.a[2] (6:6:6) (7:7:7))))))

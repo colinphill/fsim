@@ -1,0 +1,14 @@
+#c up t=10
+#c bus a=10 t=12
+#c put first 5.000 3.000
+#c put bit 4.000 2.000
+#c bus a=11 t=22
+#c down t=23 cnt=1
+#c bus a=01 t=34
+#c up t=35
+#c down t=43 cnt=2
+#c bus a=11 t=46
+#c put second 1.000 1.000
+#c up t=55
+#c down t=61 cnt=3
+#c up t=71

@@ -230,6 +230,7 @@ ReadRegisterFlow build_read_register_flow(const OperationList& operations)
                 || std::is_same_v<T, WriteUpdateSlice>
                 || std::is_same_v<T, WriteAfterSlice>
                 || std::is_same_v<T, WriteInertialSlice>
+                || std::is_same_v<T, WriteNetDelay>
                 || std::is_same_v<T, WriteProjectedSlice>) {
                 use(value.source);
             } else if constexpr (std::is_same_v<T, WriteBlockingDynamicSlice>
@@ -424,6 +425,7 @@ bool visit_known_region_accesses(
             || std::is_same_v<T, WriteUpdateSlice>
             || std::is_same_v<T, WriteAfterSlice>
             || std::is_same_v<T, WriteInertialSlice>
+            || std::is_same_v<T, WriteNetDelay>
             || std::is_same_v<T, WriteProjectedSlice>
             || std::is_same_v<T, WriteProjectedWaveformSlice>
             || std::is_same_v<T, WriteBlockingDynamicSlice>
@@ -486,6 +488,12 @@ bool visit_known_region_accesses(
             return true;
         } else if constexpr (std::is_same_v<T, VitalDelay>) {
             record_write(value.output);
+            for (const auto mirror : value.mirrors) {
+                record_write(mirror);
+            }
+            for (const auto& wire_source : value.wire_sources) {
+                observe(wire_source.shadow, RegionObservation::events);
+            }
             return true;
         } else if constexpr (std::is_same_v<T, ReadContainerObject>) {
             const auto* descriptor = find_container(value.object);

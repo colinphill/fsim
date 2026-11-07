@@ -63,6 +63,103 @@ void visit_slot_operands(Inst& inst, Visit&& visit)
         break;
     }
 }
+
+/// Whether two instructions of canonical bodies are the same; `shape` leaves
+/// open what units of one shape differ in (constants, field offsets).
+bool same_inst(const KInst& left, const KInst& right, const bool shape)
+{
+    const bool field = shape && binding_offset_field(left);
+    const bool open = shape && left.op == KOp::constant;
+    return left.op == right.op && left.sub == right.sub
+        && left.flags == right.flags && left.width == right.width
+        && left.d == right.d && left.x == right.x && left.y == right.y
+        && left.z == right.z && (field || left.offset == right.offset)
+        && left.aux == right.aux
+        && (open || (left.imm_a == right.imm_a && left.imm_b == right.imm_b));
+}
+
+bool same_body(const CompiledBody& left, const CompiledBody& right, const bool shape)
+{
+    if (left.code.size() != right.code.size()
+        || left.registers.size() != right.registers.size()
+        || left.entry != right.entry || left.shadow_base != right.shadow_base
+        || left.weak != right.weak || left.tracked != right.tracked || left.u_mode != right.u_mode
+        || left.u_operands != right.u_operands
+        || left.return_targets != right.return_targets
+        || left.indices.size() != right.indices.size()
+        || left.parts.size() != right.parts.size()
+        || left.concat.size() != right.concat.size()
+        || left.wide_base != right.wide_base
+        || left.wide_constants.size() != right.wide_constants.size()) {
+        return false;
+    }
+    for (std::size_t at = 0U; at < left.wide_constants.size(); ++at) {
+        if (left.wide_constants[at].a != right.wide_constants[at].a
+            || left.wide_constants[at].b != right.wide_constants[at].b) {
+            return false;
+        }
+    }
+    for (std::size_t at = 0U; at < left.code.size(); ++at) {
+        if (!same_inst(left.code[at], right.code[at], shape)) {
+            return false;
+        }
+    }
+    for (std::size_t at = 0U; at < left.indices.size(); ++at) {
+        const auto& a = left.indices[at];
+        const auto& b = right.indices[at];
+        if (a.index != b.index || a.left != b.left || a.right != b.right
+            || a.base_offset != b.base_offset || a.strict != b.strict) {
+            return false;
+        }
+    }
+    for (std::size_t at = 0U; at < left.parts.size(); ++at) {
+        const auto& a = left.parts[at];
+        const auto& b = right.parts[at];
+        if (a.left != b.left || a.right != b.right || a.base != b.base
+            || a.base_offset != b.base_offset || a.width != b.width
+            || a.increasing != b.increasing
+            || a.source_descending != b.source_descending) {
+            return false;
+        }
+    }
+    for (std::size_t at = 0U; at < left.concat.size(); ++at) {
+        if (left.concat[at].reg != right.concat[at].reg
+            || left.concat[at].width != right.concat[at].width
+            || left.concat[at].unknown != right.concat[at].unknown) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::uint64_t hash_body(const CompiledBody& body, const bool shape)
+{
+    std::uint64_t hash = 0xcbf29ce484222325ULL;
+    const auto mix = [&](const std::uint64_t value) {
+        hash = (hash ^ value) * 0x100000001b3ULL;
+        hash ^= hash >> 29U;
+    };
+    for (const auto& inst : body.code) {
+        mix(static_cast<std::uint64_t>(inst.op)
+            | static_cast<std::uint64_t>(inst.sub) << 8U
+            | static_cast<std::uint64_t>(inst.flags) << 16U
+            | static_cast<std::uint64_t>(inst.width) << 32U);
+        mix(inst.d | static_cast<std::uint64_t>(inst.x) << 32U);
+        mix(inst.y | static_cast<std::uint64_t>(inst.z) << 32U);
+        mix((shape && binding_offset_field(inst) ? 0U : inst.offset)
+            | static_cast<std::uint64_t>(inst.aux) << 32U);
+        if (!(shape && inst.op == KOp::constant)) {
+            mix(inst.imm_a);
+            mix(inst.imm_b);
+        }
+    }
+    mix(body.registers.size());
+    mix(body.entry | static_cast<std::uint64_t>(body.shadow_base) << 32U);
+    mix(body.u_operands.size() | body.indices.size() << 20U
+        | body.parts.size() << 40U);
+    mix(body.wide_base.size() | body.wide_constants.size() << 32U);
+    return hash;
+}
 } // namespace
 
 std::string static_kernel_canonical_identity()
@@ -924,148 +1021,13 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
             return it->second;
         };
         for (std::size_t unit = 0U; unit < units.size(); ++unit) {
-            const auto& instance = *units[unit].body;
             auto& state = canonicals[unit];
-            state.body = std::make_unique<CompiledBody>(instance);
-            auto& canonical = state.body;
-            const auto bind = [&](const std::uint64_t kind, const std::uint32_t value,
-                                  const std::uint32_t first, const std::uint32_t second) {
-                return bind_in(state, kind, value, first, second);
-            };
-            const auto bind_slot = [&](const std::uint32_t slot) {
-                return bind(1U, slot, slots_[slot].offset,
-                    slot | (slots_[slot].silent ? partition_tag : 0U));
-            };
-            for (auto& inst : canonical->code) {
-                // A silent slot's store is plain in the template (aux 1): part
-                // of its shape, so units whose slot is not silent get their
-                // own template (and a watched one, respecialize_silent).
-                if (inst.op == KOp::store_slot && inst.sub == 0U
-                    && slots_[inst.d].silent) {
-                    inst.aux = 1U;
-                }
-                visit_slot_operands(inst, [&](std::uint32_t& field, const bool offset) {
-                    field = bind_slot(offset ? slot_of_offset.at(field) : field);
-                });
-                switch (inst.op) {
-                case KOp::load_host:
-                    inst.x = bind(2U, inst.x, inst.x, 0U);
-                    break;
-                case KOp::store_host:
-                    inst.d = bind(2U, inst.d, inst.d, 0U);
-                    break;
-                case KOp::mem_read:
-                    inst.x = bind(3U, inst.x, inst.x, 0U);
-                    break;
-                case KOp::mem_write:
-                    inst.d = bind(3U, inst.d, inst.d, 0U);
-                    break;
-                case KOp::mem_copy:
-                    inst.d = bind(3U, inst.d, inst.d, 0U);
-                    inst.x = bind(3U, inst.x, inst.x, 0U);
-                    break;
-                case KOp::mark:
-                    inst.x = bind(4U, inst.x, inst.x, 0U);
-                    break;
-                default:
-                    break;
-                }
-            }
+            canonicalize_unit(*units[unit].body, slot_of_offset, state.body,
+                state.bindings, state.binding_of);
         }
         // Units are grouped by shape (constants and field offsets may differ)
         // and then by their exact canonical body: a 64-bit hash of the fields
         // picks the bucket and an exact comparison of the same fields decides.
-        const auto same_inst = [](const KInst& left, const KInst& right,
-                                   const bool shape) {
-            const bool field = shape && binding_offset_field(left);
-            const bool open = shape && left.op == KOp::constant;
-            return left.op == right.op && left.sub == right.sub
-                && left.flags == right.flags && left.width == right.width
-                && left.d == right.d && left.x == right.x && left.y == right.y
-                && left.z == right.z && (field || left.offset == right.offset)
-                && left.aux == right.aux
-                && (open || (left.imm_a == right.imm_a && left.imm_b == right.imm_b));
-        };
-        const auto same_body = [&](const CompiledBody& left, const CompiledBody& right,
-                                   const bool shape) {
-            if (left.code.size() != right.code.size()
-                || left.registers.size() != right.registers.size()
-                || left.entry != right.entry || left.shadow_base != right.shadow_base
-                || left.tracked != right.tracked || left.u_mode != right.u_mode
-                || left.u_operands != right.u_operands
-                || left.return_targets != right.return_targets
-                || left.indices.size() != right.indices.size()
-                || left.parts.size() != right.parts.size()
-                || left.concat.size() != right.concat.size()
-                || left.wide_base != right.wide_base
-                || left.wide_constants.size() != right.wide_constants.size()) {
-                return false;
-            }
-            for (std::size_t at = 0U; at < left.wide_constants.size(); ++at) {
-                if (left.wide_constants[at].a != right.wide_constants[at].a
-                    || left.wide_constants[at].b != right.wide_constants[at].b) {
-                    return false;
-                }
-            }
-            for (std::size_t at = 0U; at < left.code.size(); ++at) {
-                if (!same_inst(left.code[at], right.code[at], shape)) {
-                    return false;
-                }
-            }
-            for (std::size_t at = 0U; at < left.indices.size(); ++at) {
-                const auto& a = left.indices[at];
-                const auto& b = right.indices[at];
-                if (a.index != b.index || a.left != b.left || a.right != b.right
-                    || a.base_offset != b.base_offset || a.strict != b.strict) {
-                    return false;
-                }
-            }
-            for (std::size_t at = 0U; at < left.parts.size(); ++at) {
-                const auto& a = left.parts[at];
-                const auto& b = right.parts[at];
-                if (a.left != b.left || a.right != b.right || a.base != b.base
-                    || a.base_offset != b.base_offset || a.width != b.width
-                    || a.increasing != b.increasing
-                    || a.source_descending != b.source_descending) {
-                    return false;
-                }
-            }
-            for (std::size_t at = 0U; at < left.concat.size(); ++at) {
-                if (left.concat[at].reg != right.concat[at].reg
-                    || left.concat[at].width != right.concat[at].width
-                    || left.concat[at].unknown != right.concat[at].unknown) {
-                    return false;
-                }
-            }
-            return true;
-        };
-        const auto hash_body = [](const CompiledBody& body, const bool shape) {
-            std::uint64_t hash = 0xcbf29ce484222325ULL;
-            const auto mix = [&](const std::uint64_t value) {
-                hash = (hash ^ value) * 0x100000001b3ULL;
-                hash ^= hash >> 29U;
-            };
-            for (const auto& inst : body.code) {
-                mix(static_cast<std::uint64_t>(inst.op)
-                    | static_cast<std::uint64_t>(inst.sub) << 8U
-                    | static_cast<std::uint64_t>(inst.flags) << 16U
-                    | static_cast<std::uint64_t>(inst.width) << 32U);
-                mix(inst.d | static_cast<std::uint64_t>(inst.x) << 32U);
-                mix(inst.y | static_cast<std::uint64_t>(inst.z) << 32U);
-                mix((shape && binding_offset_field(inst) ? 0U : inst.offset)
-                    | static_cast<std::uint64_t>(inst.aux) << 32U);
-                if (!(shape && inst.op == KOp::constant)) {
-                    mix(inst.imm_a);
-                    mix(inst.imm_b);
-                }
-            }
-            mix(body.registers.size());
-            mix(body.entry | static_cast<std::uint64_t>(body.shadow_base) << 32U);
-            mix(body.u_operands.size() | body.indices.size() << 20U
-                | body.parts.size() << 40U);
-            mix(body.wide_base.size() | body.wide_constants.size() << 32U);
-            return hash;
-        };
         // 2. Units with the same shape share one template: the constants that
         // differ between them are loaded from their bindings (sub 1, x and y the
         // bindings of the aval and bval words as two 32-bit halves).
@@ -1131,8 +1093,10 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
                     // in any unit stays an immediate there.
                     const bool unknown = std::ranges::any_of(group,
                         [&](const std::uint32_t unit) {
+                            const auto& constant = canonicals[unit].body->code[at];
                             return units[unit].vhdl
-                                && canonicals[unit].body->code[at].imm_b != 0U;
+                                && (constant.imm_b != 0U
+                                    || constant_weak(constant.x, constant.y) != 0U);
                         });
                     if (!differs || unknown) {
                         continue;
@@ -1222,7 +1186,8 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
         return std::ranges::any_of(body.code, [](const KInst& inst) {
             return inst.op == KOp::constant && inst.sub == 0U
                 && (inst.imm_b != 0U
-                    || constant_unknown(inst.offset, inst.aux) != 0U);
+                    || constant_unknown(inst.offset, inst.aux) != 0U
+                    || constant_weak(inst.x, inst.y) != 0U);
         });
     };
     static const bool two_state = [] {
@@ -1257,7 +1222,10 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
             template_vhdl[index] != 0U,
             two_state
                 && ((template_vhdl[index] != 0U
-                        && templates_[index]->shadow_base != 0U)
+                        && templates_[index]->shadow_base != 0U
+                        // Weak elements need the full code (nothing holds
+                        // their masks in two-state code).
+                        && templates_[index]->weak == 0U)
                     || (two_state_sv && template_vhdl[index] == 0U))
                 && templates_[index]->resume_entries.empty()
                 && !unknown_constant(*templates_[index]) });
@@ -1590,6 +1558,390 @@ void Interpreter::Impl::StaticKernel::respecialize_silent(
     }
 }
 
+void Interpreter::Impl::StaticKernel::canonicalize_unit(const CompiledBody& instance,
+    const std::unordered_map<std::uint32_t, std::uint32_t>& slot_of_offset,
+    std::unique_ptr<CompiledBody>& body, std::vector<std::uint32_t>& bindings,
+    std::unordered_map<std::uint64_t, std::uint32_t>& binding_of) const
+{
+    body = std::make_unique<CompiledBody>(instance);
+    const auto bind = [&](const std::uint64_t kind, const std::uint32_t value,
+                          const std::uint32_t first, const std::uint32_t second) {
+        const auto key = (kind << 40U) | value;
+        const auto [it, inserted] = binding_of.emplace(
+            key, static_cast<std::uint32_t>(bindings.size() / 2U));
+        if (inserted) {
+            bindings.push_back(first);
+            bindings.push_back(second);
+        }
+        return it->second;
+    };
+    const auto bind_slot = [&](const std::uint32_t slot) {
+        return bind(1U, slot, slots_[slot].offset,
+            slot | (slots_[slot].silent ? partition_tag : 0U));
+    };
+    for (auto& inst : body->code) {
+        // A silent slot's store is plain in the template (aux 1): part
+        // of its shape, so units whose slot is not silent get their
+        // own template (and a watched one, respecialize_silent).
+        if (inst.op == KOp::store_slot && inst.sub == 0U
+            && slots_[inst.d].silent) {
+            inst.aux = 1U;
+        }
+        visit_slot_operands(inst, [&](std::uint32_t& field, const bool offset) {
+            field = bind_slot(offset ? slot_of_offset.at(field) : field);
+        });
+        switch (inst.op) {
+        case KOp::load_host:
+            inst.x = bind(2U, inst.x, inst.x, 0U);
+            break;
+        case KOp::store_host:
+            inst.d = bind(2U, inst.d, inst.d, 0U);
+            break;
+        case KOp::mem_read:
+            inst.x = bind(3U, inst.x, inst.x, 0U);
+            break;
+        case KOp::mem_write:
+            inst.d = bind(3U, inst.d, inst.d, 0U);
+            break;
+        case KOp::mem_copy:
+            inst.d = bind(3U, inst.d, inst.d, 0U);
+            inst.x = bind(3U, inst.x, inst.x, 0U);
+            break;
+        case KOp::mark:
+            inst.x = bind(4U, inst.x, inst.x, 0U);
+            break;
+        default:
+            break;
+        }
+    }
+}
+
+void Interpreter::Impl::StaticKernel::detach_native_unit(NativeUnit& unit)
+{
+    if (unit.lazy_template != no_slot) {
+        std::erase(lazy_templates_[unit.lazy_template].units, &unit);
+        unit.lazy_template = no_slot;
+    }
+    if (unit.full_template != no_slot) {
+        std::erase(full_templates_[unit.full_template].units, &unit);
+        unit.full_template = no_slot;
+    }
+    unit.full_entry = nullptr;
+}
+
+void Interpreter::Impl::StaticKernel::rebuild_unit_lists()
+{
+    for (auto& lazy : lazy_templates_) {
+        lazy.units.clear();
+    }
+    for (auto& full : full_templates_) {
+        full.units.clear();
+    }
+    const auto add = [&](NativeUnit& unit) {
+        if (unit.lazy_template != no_slot) {
+            lazy_templates_[unit.lazy_template].units.push_back(&unit);
+        }
+        if (unit.full_template != no_slot) {
+            full_templates_[unit.full_template].units.push_back(&unit);
+        }
+    };
+    for (auto& state : partitions_) {
+        add(state.native);
+    }
+    for (auto& member : members_) {
+        add(member.native);
+    }
+    for (auto& group : dispatch_groups_) {
+        add(group.native);
+    }
+}
+
+void Interpreter::Impl::StaticKernel::bind_native_unit(NativeUnit& unit,
+    std::unique_ptr<CompiledBody> canonical, std::vector<std::uint32_t> bindings,
+    const bool partition_like)
+{
+    detach_native_unit(unit);
+    unit.bindings = std::move(bindings);
+    unit.entry = nullptr;
+    unit.two_state = false;
+    unit.program = nullptr;
+    if (codegen_ == nullptr || template_codes_.size() != templates_.size()) {
+        // No native code (FSIM_STATIC_KERNEL_GENERIC): the unit runs its
+        // kernel bytecode.
+        return;
+    }
+    std::uint32_t index = no_slot;
+    for (std::uint32_t at = 0U; at < templates_.size(); ++at) {
+        if (same_body(*templates_[at], *canonical, false)) {
+            index = at;
+            break;
+        }
+    }
+    if (index == no_slot) {
+        index = static_cast<std::uint32_t>(templates_.size());
+        templates_.push_back(std::move(canonical));
+        const auto size = templates_.back()->code.size();
+        StaticKernelTemplate code;
+        code.body = templates_.back().get();
+        code.tier = static_cast<std::uint8_t>(
+            size < 64U ? 0U : partition_like ? 2U : 1U);
+        template_codes_.push_back(code);
+    }
+    unit.program = templates_[index].get();
+    // A unit of that template that has its code (or compiles it when it
+    // first runs) shares it.
+    NativeUnit* donor = nullptr;
+    const auto find = [&](NativeUnit& other) {
+        if (donor == nullptr && &other != &unit && other.program == unit.program
+            && (other.entry != nullptr || other.lazy_template != no_slot)) {
+            donor = &other;
+        }
+    };
+    for (auto& state : partitions_) {
+        find(state.native);
+    }
+    for (auto& member : members_) {
+        find(member.native);
+    }
+    for (auto& group : dispatch_groups_) {
+        find(group.native);
+    }
+    if (donor != nullptr) {
+        unit.entry = donor->entry;
+        unit.two_state = donor->two_state;
+        unit.full_entry = donor->full_entry;
+        unit.lazy_template = donor->lazy_template;
+        unit.full_template = donor->full_template;
+        if (unit.lazy_template != no_slot) {
+            lazy_templates_[unit.lazy_template].units.push_back(&unit);
+        }
+        if (unit.full_template != no_slot) {
+            full_templates_[unit.full_template].units.push_back(&unit);
+        }
+        if (unit.entry != nullptr) {
+            ++native_units_;
+        }
+        return;
+    }
+    // Full-semantics code, valid for any register values.
+    auto code = template_codes_[index];
+    code.two_state = false;
+    code.resume_points = nullptr;
+    const auto entries = codegen_->compile(
+        std::span<const StaticKernelTemplate> { &code, 1U }, native_helpers_);
+    if (!entries.empty() && entries.front() != nullptr) {
+        unit.entry = entries.front();
+        ++native_units_;
+    }
+}
+
+void Interpreter::Impl::StaticKernel::graft_rebind_native(
+    const std::vector<GraftCopy>& copies, const std::vector<std::uint32_t>& groups)
+{
+    // The units moved with members_ and dispatch_groups_.
+    rebuild_unit_lists();
+    std::unordered_map<std::uint32_t, std::uint32_t> slot_of_offset;
+    slot_of_offset.reserve(slots_.size());
+    for (std::uint32_t slot = 0U; slot < slots_.size(); ++slot) {
+        slot_of_offset.emplace(slots_[slot].offset, slot);
+    }
+    // The binding of a unit's template that names the slot (kind 1), if any.
+    const auto slot_binding = [&](const NativeUnit& unit, const std::uint32_t offset,
+                                  const std::uint32_t slot) -> std::optional<std::uint32_t> {
+        if (unit.program == nullptr) {
+            return std::nullopt;
+        }
+        std::optional<std::uint32_t> found;
+        for (const auto& inst : unit.program->code) {
+            visit_slot_operands(inst, [&](const std::uint32_t binding, const bool) {
+                if (!found && 2U * binding + 1U < unit.bindings.size()
+                    && unit.bindings[2U * binding] == offset
+                    && (unit.bindings[2U * binding + 1U] & ~partition_tag) == slot) {
+                    found = binding;
+                }
+            });
+        }
+        return found;
+    };
+    for (const auto& copy : copies) {
+        const auto net_offset = slots_[copy.net_slot].offset;
+        const auto copy_offset = slots_[copy.copy_slot].offset;
+        // Instance programs name a slot by arena offset (load_slot) or by
+        // index.
+        const auto retarget = [&](KInst& inst) {
+            visit_slot_operands(inst, [&](std::uint32_t& field, const bool offset) {
+                if (offset ? field == net_offset : field == copy.net_slot) {
+                    field = offset ? copy_offset : copy.copy_slot;
+                }
+            });
+        };
+        std::map<std::uint32_t, std::vector<std::uint32_t>> by_partition;
+        for (const auto load : copy.loads) {
+            auto& member = members_[load];
+            if (member.partition != no_slot) {
+                by_partition[member.partition].push_back(load);
+                continue;
+            }
+            // The member's own program and unit: no other member shares
+            // them, and every read of the net in them moves.
+            if (member.compiled) {
+                for (auto& inst : member.compiled->code) {
+                    retarget(inst);
+                }
+            }
+            if (const auto binding
+                = slot_binding(member.native, net_offset, copy.net_slot)) {
+                member.native.bindings[2U * *binding] = copy_offset;
+                member.native.bindings[2U * *binding + 1U] = copy.copy_slot;
+            }
+        }
+        for (const auto& [partition, partition_loads] : by_partition) {
+            auto& state = partitions_[partition];
+            auto& code = state.program.code;
+            // The members' instructions between their marks.
+            std::vector<std::pair<std::uint32_t, std::uint32_t>> ranges;
+            const auto size = static_cast<std::uint32_t>(code.size());
+            for (const auto load : partition_loads) {
+                std::uint32_t begin = size;
+                for (std::uint32_t at = 0U; at < size; ++at) {
+                    if (code[at].op == KOp::mark && code[at].x == load) {
+                        begin = at;
+                        break;
+                    }
+                }
+                if (begin == size) {
+                    throw std::logic_error("static kernel partition member has no mark");
+                }
+                auto end = begin + 1U;
+                while (end < size && code[end].op != KOp::mark) {
+                    ++end;
+                }
+                ranges.emplace_back(begin, end);
+            }
+            const auto in_ranges = [&](const std::uint32_t at) {
+                return std::ranges::any_of(ranges, [&](const auto& range) {
+                    return at >= range.first && at < range.second;
+                });
+            };
+            for (const auto& [begin, end] : ranges) {
+                for (auto at = begin; at < end; ++at) {
+                    retarget(code[at]);
+                }
+            }
+            // A load the partition forwarded from an earlier member's store
+            // of the net reads the copy again: the copy has no store in the
+            // pass.
+            std::vector<std::uint32_t> restored;
+            for (std::size_t at = 0U; at + 1U < state.forwarded.size(); at += 2U) {
+                const auto load = state.forwarded[at];
+                if (state.forwarded[at + 1U] != net_offset || !in_ranges(load)
+                    || code[load].op != KOp::copy) {
+                    continue;
+                }
+                code[load].op = KOp::load_slot;
+                code[load].x = copy_offset;
+                restored.push_back(load);
+            }
+            auto& unit = state.native;
+            const auto binding = slot_binding(unit, net_offset, copy.net_slot);
+            if (!binding) {
+                continue;
+            }
+            // The binding of the net is shared with the members that keep
+            // reading (or writing) it: the unit gets one for the copy and
+            // the rewritten members' instructions name that.
+            bool shared = false;
+            for (std::uint32_t at = 0U; at < size && !shared; ++at) {
+                if (in_ranges(at)) {
+                    continue;
+                }
+                visit_slot_operands(unit.program->code[at],
+                    [&](const std::uint32_t field, const bool) {
+                        shared = shared || field == *binding;
+                    });
+            }
+            if (!shared && restored.empty()) {
+                unit.bindings[2U * *binding] = copy_offset;
+                unit.bindings[2U * *binding + 1U] = copy.copy_slot;
+                continue;
+            }
+            const auto added = static_cast<std::uint32_t>(unit.bindings.size() / 2U);
+            unit.bindings.push_back(copy_offset);
+            unit.bindings.push_back(copy.copy_slot);
+            auto body = std::make_unique<CompiledBody>(*unit.program);
+            for (const auto& [begin, end] : ranges) {
+                for (auto at = begin; at < end; ++at) {
+                    visit_slot_operands(body->code[at],
+                        [&](std::uint32_t& field, const bool) {
+                            if (field == *binding) {
+                                field = added;
+                            }
+                        });
+                }
+            }
+            for (const auto load : restored) {
+                body->code[load].op = KOp::load_slot;
+                body->code[load].x = added;
+            }
+            const auto found = std::ranges::find_if(templates_,
+                [&](const auto& entry) { return entry.get() == unit.program; });
+            const auto at = static_cast<std::size_t>(found - templates_.begin());
+            if (at >= template_codes_.size() || codegen_ == nullptr) {
+                throw std::logic_error("static kernel partition template is unknown");
+            }
+            auto derived = template_codes_[at];
+            derived.body = body.get();
+            derived.two_state = false;
+            derived.resume_points = nullptr;
+            templates_.push_back(std::move(body));
+            template_codes_.push_back(derived);
+            const auto entries = codegen_->compile(
+                std::span<const StaticKernelTemplate> { &derived, 1U }, native_helpers_);
+            detach_native_unit(unit);
+            unit.program = derived.body;
+            unit.two_state = false;
+            unit.entry = entries.empty() ? nullptr : entries.front();
+            if (unit.entry != nullptr) {
+                ++native_units_;
+            }
+        }
+    }
+    // The groups whose members' programs changed, or whose members changed:
+    // their fused program is the members' bodies again.
+    for (const auto id : groups) {
+        auto& group = dispatch_groups_[id];
+        detach_native_unit(group.native);
+        group.native = NativeUnit { };
+        group.program = CompiledBody { };
+        if (!group.fused || group.members.size() < 2U) {
+            group.fused = false;
+            continue;
+        }
+        concatenate_members(group.program, group.members, false);
+        std::unique_ptr<CompiledBody> canonical;
+        std::vector<std::uint32_t> bindings;
+        std::unordered_map<std::uint64_t, std::uint32_t> binding_of;
+        canonicalize_unit(group.program, slot_of_offset, canonical, bindings, binding_of);
+        bind_native_unit(group.native, std::move(canonical), std::move(bindings), true);
+    }
+    // The drivers' new units.
+    for (const auto& copy : copies) {
+        for (const auto driver : copy.drivers) {
+            auto& member = members_[driver];
+            if (!member.compiled) {
+                continue;
+            }
+            std::unique_ptr<CompiledBody> canonical;
+            std::vector<std::uint32_t> bindings;
+            std::unordered_map<std::uint64_t, std::uint32_t> binding_of;
+            canonicalize_unit(*member.compiled, slot_of_offset, canonical, bindings,
+                binding_of);
+            bind_native_unit(member.native, std::move(canonical), std::move(bindings),
+                false);
+        }
+    }
+}
+
 void Interpreter::Impl::StaticKernel::note_partition_wake(const std::uint32_t partition,
     const std::uint32_t position)
 {
@@ -1744,7 +2096,9 @@ std::size_t Interpreter::Impl::StaticKernel::forward_partition_stores(
         }
         case KOp::store_slot: {
             forget_slot(inst.d);
-            if (!branching && (inst.flags & flag_linear) == 0U
+            // A resolved slot (sub 2 and 3) holds the resolution, not the
+            // stored value.
+            if (!branching && (inst.flags & flag_linear) == 0U && inst.sub < 2U
                 && whole_narrow(inst.d, inst.width)) {
                 forget_register(inst.x);
                 if (inst.x >= slot_of_register.size()) {
@@ -1767,10 +2121,13 @@ std::size_t Interpreter::Impl::StaticKernel::forward_partition_stores(
             forget_slot(inst.d);
             continue;
         case KOp::generic:
+        case KOp::net_delay:
         case KOp::mem_write:
         case KOp::mem_copy:
         case KOp::mem_read:
-            // May write any slot (or a memory a slot holds).
+            // May write any slot (or a memory a slot holds); a delayed
+            // interconnect write names its target only through the
+            // operation.
             forget_all();
             continue;
         default:
@@ -1902,7 +2259,6 @@ void Interpreter::Impl::StaticKernel::build_fused_groups()
         case KOp::call:
         case KOp::ret:
         case KOp::assert_check:
-        case KOp::deopt:
         case KOp::load_field9:
             return false;
         default:
@@ -2076,6 +2432,10 @@ void Interpreter::Impl::StaticKernel::concatenate_members(CompiledBody& program,
             case KOp::generic:
                 inst.y += register_base;
                 break;
+            case KOp::net_delay:
+                // y is the SimIR operation, not a register.
+                reg(inst.x);
+                break;
             case KOp::constant:
             case KOp::load_slot:
             case KOp::load_host:
@@ -2214,7 +2574,6 @@ void Interpreter::Impl::StaticKernel::concatenate_members(CompiledBody& program,
             case KOp::call:
             case KOp::ret:
             case KOp::assert_check:
-            case KOp::deopt:
             case KOp::load_field9:
                 throw std::logic_error(
                     "VHDL kernel instructions are not partitioned");

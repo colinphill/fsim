@@ -202,6 +202,9 @@ struct StaticKernelRuntimeSpec {
     /// bodies stop at each one (KOp::suspend), and the thread runner raises
     /// the execution-point hook there. Without it they compile to nothing.
     bool debug_points { };
+    /// A foreign library, a Tcl session or the debugger can write a weak
+    /// std_logic value at run time (StaticKernelAccessPlan::weak_sources).
+    bool weak_sources { };
     /// Writer ranges of owned signals in VHDL mode, merged per process; they
     /// replace the members' declared driver regions for publication.
     std::vector<StaticKernelWriterRegion> writer_regions;
@@ -237,6 +240,34 @@ struct StaticKernelRuntimeSpec {
     /// without hosted processes or debug points have one.
     std::shared_ptr<const std::string_view> kernel_image;
     std::shared_ptr<std::string> record_kernel_image;
+};
+
+/// A change of the running kernel's plan at a scheduler safe point (no member
+/// is mid-activation), for the cases the plan the constructor made cannot
+/// stay: a design that grows by a delayed copy of a load port, and a body
+/// that must be recompiled with another code shape. Every client appends;
+/// slots, members and partitions already there keep their order and ids, and what a re-plan does not name keeps its state (slot and arena
+/// values, pending timers including net-delay timers, queued and NBA writes,
+/// the pc, registers and waits of suspended members).
+struct ReplanRequest {
+    enum class Kind : std::uint8_t {
+        /// Append the delayed copy of a load port: its slot (started at the
+        /// net's current value), the copy drivers as compiled members
+        /// (KOp::net_delay, sensitive to the net), and point the read
+        /// bindings of the rewritten load members at the copy, recompiling
+        /// only those units and updating their sensitivities, partition
+        /// readers and levels. Uses `graft`.
+        graft_net_delay,
+    };
+    Kind kind { Kind::graft_net_delay };
+    NetDelayGraft graft;
+};
+
+/// The outcome of a re-plan: `done` is false, with the kernel unchanged, and
+/// `reason` says why when the plan could not be taken.
+struct ReplanResult {
+    bool done { };
+    std::string reason;
 };
 
 /// Identifies the kernel image format, the constructor that fills it, and
@@ -1035,6 +1066,9 @@ template <typename OperationAt, typename Types, typename NineValued = std::nullp
                 || std::is_same_v<T, WriteDelayed>
                 || std::is_same_v<T, WriteInertial>
                 || std::is_same_v<T, WriteInertialSlice>
+                // An interconnect delay (IEEE 1364-2005 16.2.4): the kernel
+                // holds its pending changes (StaticKernel::net_delay_write).
+                || std::is_same_v<T, WriteNetDelay>
                 // Between equal-shape private arrays (see the planner).
                 || std::is_same_v<T, CopyContainerRegister>
                 || std::is_same_v<T, PlusArgSelect>
@@ -1431,6 +1465,8 @@ template <typename OperationAt, typename Types, typename NineValued = std::nullp
             || std::is_same_v<T, WriteDelayed>
             || std::is_same_v<T, WriteInertial>
             || std::is_same_v<T, WriteInertialSlice>) {
+            // (An interconnect delay, WriteNetDelay, is the kernel's own:
+            // its target stays a kernel slot, StaticKernel::net_delay_write.)
             return value.signal;
         } else {
             return std::nullopt;

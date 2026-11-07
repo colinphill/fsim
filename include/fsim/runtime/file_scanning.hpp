@@ -25,6 +25,8 @@ struct InputScanResult {
     std::int32_t assignments { };
     std::vector<std::optional<InputScanValue>> values;
     std::size_t consumed { };
+    // The message an IEEE 1164 TextIO read without GOOD reports.
+    std::string diagnostic;
 };
 
 [[nodiscard]] PackedLogic4 pack_file_text(

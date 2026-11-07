@@ -1,0 +1,11 @@
+// SPDX-License-Identifier: Apache-2.0
+// NETDELAY and PATHPULSE are not supported by the VITAL SDF map: they have no
+// effect on the cell (IEEE 1076.4-2000 5.2, 5.2.7.1).
+(DELAYFILE
+  (SDFVERSION "4.0")
+  (DESIGN "tb_path")
+  (TIMESCALE 1ns)
+  (CELL (CELLTYPE "vbuf") (INSTANCE tb_path.u1)
+    (DELAY
+      (ABSOLUTE (NETDELAY a (9:9:9) (9:9:9)))
+      (PATHPULSE a y (1:1:1) (2:2:2)))))

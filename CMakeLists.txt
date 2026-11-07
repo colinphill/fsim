@@ -858,6 +858,7 @@ add_library(
     src/runtime/simir_files.cpp
     src/runtime/simir_format.cpp
     src/runtime/simir_interpreter.cpp
+    src/runtime/simir_foreign_net_delay.cpp
     src/runtime/simir_process_program.cpp
     src/runtime/simir_interpreter_profiles.cpp
     src/runtime/simir_logic.cpp
@@ -921,7 +922,9 @@ endif()
       src/elaboration/hierarchy_resolution.cpp
       src/elaboration/hierarchy_specify.cpp
       src/elaboration/hierarchy_specify_expression.cpp
+      src/elaboration/sdf_net_delay_dual_write.cpp
       src/elaboration/sdf_net_delay_split.cpp
+      src/elaboration/vital_wire_sources.cpp
       src/elaboration/hierarchy_sv_aliases.cpp
       src/elaboration/hierarchy_sv_configuration.cpp
       src/elaboration/hierarchy_sv_constant_evaluator.cpp
@@ -1318,6 +1321,7 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_sdf_reannotation.cpp
       src/app/application_sdf_control.cpp
       src/app/application_sdf_session.cpp
+      src/app/application_sdf_vital_generics.cpp
       src/app/application_sdf_effective_archive.cpp
       src/app/application_sdf_observability.cpp
       src/runtime/sdf_scheduling.cpp

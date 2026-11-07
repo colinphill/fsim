@@ -46,7 +46,7 @@ using SignalOperationGroup = OperationGroup<ReadSignal, SignalEvent, SignalLastV
     WriteProjectedWaveformDynamicSlice, SignalLastActive,
     SignalDriving, SignalDrivingValue, ReadSimulationTime,
     VitalTimingCheck, VitalDelay,
-    WriteInertialDynamicPartSlice, WriteDelayed>;
+    WriteInertialDynamicPartSlice, WriteDelayed, WriteNetDelay>;
 
 using StringOperationGroup = OperationGroup<LoadStringConstant, CopyStringRegister, ReadStringObject,
     WriteStringObject, ConcatenateStrings, CompareStrings,
@@ -331,7 +331,7 @@ static_assert(
         + std::variant_size_v<ControlOperationGroup::Storage>
         + std::variant_size_v<OutputOperationGroup::Storage>
         + std::variant_size_v<ClassOperationGroup::Storage>
-    == 202);
+    == 203);
 
 template <typename Alternative>
 [[nodiscard]] Alternative* operation_get_if(Operation* operation) noexcept

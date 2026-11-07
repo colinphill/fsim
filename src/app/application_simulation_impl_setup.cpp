@@ -265,6 +265,9 @@ void application_detail::plan_kernel_access(BuiltProject& built,
     built.kernel_access.admit = true;
     built.kernel_access.coverage = built.code_coverage_enabled;
     built.kernel_access.debug = debug_kernel || debug_points;
+    // The debugger and a foreign client may write any value.
+    built.kernel_access.weak_sources = built.kernel_access.weak_sources
+        || built.kernel_access.debug;
 }
 
 namespace {
@@ -503,6 +506,7 @@ std::unique_ptr<runtime::simir::Interpreter> create_simulation_interpreter(
                 }
             }
             plan.spec->debug_points = built.kernel_access.debug;
+            plan.spec->weak_sources = built.kernel_access.weak_sources;
             auto interpreter = std::move(built.design).create_interpreter(
                 options, built.seed, plan);
             if (stored_image && recorded_image && !recorded_image->empty()
@@ -543,6 +547,7 @@ std::unique_ptr<runtime::simir::Interpreter> create_simulation_interpreter(
             return interpreter;
 #else
             plan.spec->debug_points = built.kernel_access.debug;
+            plan.spec->weak_sources = built.kernel_access.weak_sources;
             return std::move(built.design).create_interpreter(
                 options, built.seed, plan);
 #endif
@@ -722,10 +727,12 @@ Simulation::Impl::Impl(
           built.compiled_systemverilog_class_specializations,
           built.systemverilog_hir,
           class_heap)
+    , design_process_count(built.design.process_count())
     , interpreter(create_simulation_interpreter(built, max_deltas, engine))
 {
     if (interpreter) {
         interpreter->retain_state_until_exit();
+        register_foreign_net_delays();
     }
     uvm_components.set_post_destroy_hook(
         [this](const runtime::SystemVerilogUvmComponentSnapshot& object) {

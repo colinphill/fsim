@@ -1,0 +1,14 @@
+// SPDX-License-Identifier: Apache-2.0
+// Instance paths through FOR and IF generate statements: a range of
+// expansions, one expansion again with an INCREMENT, and an IF generate
+// (IEEE 1076.4-2000 5.2.4).
+(DELAYFILE
+  (SDFVERSION "3.0")
+  (DESIGN "tb_generate")
+  (TIMESCALE 1ns)
+  (CELL (CELLTYPE "vbuf") (INSTANCE tb_generate.g[0:1].u)
+    (DELAY (ABSOLUTE (IOPATH a y (6:6:6) (7:7:7)))))
+  (CELL (CELLTYPE "vbuf") (INSTANCE tb_generate.g[1].u)
+    (DELAY (INCREMENT (IOPATH a y (1:1:1) (1:1:1)))))
+  (CELL (CELLTYPE "vbuf") (INSTANCE tb_generate.c.v)
+    (DELAY (ABSOLUTE (IOPATH a y (8:8:8) (9:9:9))))))

@@ -286,6 +286,13 @@ namespace {
                 stack.push_back(std::move(frame));
                 return;
             }
+            // A delval of several values, `((delay) (reject) (error))`: a
+            // value without atoms of its own, whose children are values.
+            if (file_.tokens[index].kind == SdfTokenKind::LeftParenthesis) {
+                frame.node.kind = SdfConstructKind::Value;
+                stack.push_back(std::move(frame));
+                return;
+            }
 
             const auto& head = file_.tokens[index++];
             if (head.kind == SdfTokenKind::Keyword
@@ -590,7 +597,10 @@ namespace {
             }
             if (parent == SdfConstructKind::Conditional
                 || parent == SdfConstructKind::ConditionalElse) {
+                // A port_tchk is `( COND [qstring] expr port_spec )` and a
+                // port_spec may be an edge `(posedge port)` (IEEE 1497).
                 return child == SdfConstructKind::Iopath
+                    || child == SdfConstructKind::Edge
                     || child == SdfConstructKind::ConditionExpression;
             }
             if (parent == SdfConstructKind::Interconnect
@@ -640,12 +650,33 @@ namespace {
             if (parent == SdfConstructKind::LabelEntry) {
                 return child == SdfConstructKind::Value;
             }
+            // The values of a delval with pulse limits.
+            if (parent == SdfConstructKind::Value) {
+                return child == SdfConstructKind::Value;
+            }
             if (parent == SdfConstructKind::StampCondition
                 || parent == SdfConstructKind::CheckCondition
                 || parent == SdfConstructKind::ConditionExpression) {
                 return child == SdfConstructKind::ConditionExpression;
             }
             return false;
+        }
+
+        // A delval of two or three values (IEEE 1497-2001 delval): the delay
+        // and its pulse reject limit, and with three the error limit too;
+        // the delays of INTERCONNECT and PORT take them.
+        [[nodiscard]] bool valid_delval_group(const SdfSyntaxNode& node,
+            const SdfConstructKind parent) const noexcept
+        {
+            return (parent == SdfConstructKind::Interconnect
+                       || parent == SdfConstructKind::Port)
+                && node.atoms.empty() && node.children.size() >= 2U
+                && node.children.size() <= 3U
+                && std::ranges::all_of(node.children,
+                    [&](const SdfSyntaxNode& child) {
+                        return child.kind == SdfConstructKind::Value
+                            && valid_value(child);
+                    });
         }
 
         [[nodiscard]] bool valid_value(const SdfSyntaxNode& node) const noexcept
@@ -793,7 +824,9 @@ namespace {
             const auto iopaths = child_count(node, SdfConstructKind::Iopath);
             const bool valid = timing_port
                 ? ((!node.atoms.empty() && condition_groups != 0U)
-                      || node.atoms.size() >= 2U)
+                      || node.atoms.size() >= 2U
+                      || (!node.atoms.empty()
+                          && child_count(node, SdfConstructKind::Edge) == 1U))
                     && iopaths == 0U
                 : (!node.atoms.empty() || condition_groups != 0U)
                     && iopaths == 1U
@@ -974,7 +1007,15 @@ namespace {
                 return;
             }
             if (node.kind == SdfConstructKind::Value) {
-                if (!valid_value(node)) {
+                if (!node.children.empty()) {
+                    if (!valid_delval_group(node, parent)) {
+                        diagnose("FSIM-SDF-PARSE-016",
+                            "a delay with pulse limits is two or three values, "
+                            "delay, reject limit and error limit, of an "
+                            "INTERCONNECT or PORT delay",
+                            node.span);
+                    }
+                } else if (!valid_value(node)) {
                     diagnose("FSIM-SDF-PARSE-016",
                         "delay or constraint value must be empty, decimal, or min:typ:max",
                         node.span);

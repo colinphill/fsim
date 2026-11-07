@@ -1134,6 +1134,35 @@ void Interpreter::Impl::release_slice(
         forced_values[signal_id].reset();
         forced_masks[signal_id].reset();
     }
+    // A released net takes the value of its drivers at once (IEEE 1800-2023
+    // 10.6.2), not a value deposited before the force; a net the v4 kernel
+    // owns gets it from its drivers' members (rerun_kernel_drivers).
+    const auto resolution = signal.resolution;
+    if ((resolution == ResolutionKind::sv_wire
+            || resolution == ResolutionKind::sv_wand
+            || resolution == ResolutionKind::sv_wor
+            || resolution == ResolutionKind::sv_user_first)
+        && (!driver_values.at(signal_id).empty()
+            || external_driver_values.at(signal_id))
+        && (signal_id >= static_kernel_owned_signal.size()
+            || static_kernel_owned_signal[signal_id] == 0U)) {
+        const auto resolved = resolved_driver_value(signal_id);
+        auto& stored = driven_values[signal_id];
+        if (resolved.width() == stored.width()) {
+            auto kept = stored;
+            for (auto bit = offset; bit < offset + width; ++bit) {
+                if (kept.is_logic9() && resolved.is_logic9()) {
+                    kept.set_logic9(bit, resolved.get_logic9(bit));
+                } else {
+                    kept.set(bit, resolved.get(bit));
+                }
+            }
+            if (kept != stored) {
+                stored = std::move(kept);
+                note_aggregate_leaf_stored_change(signal_id);
+            }
+        }
+    }
     publish_override_change(signal_id, origin);
 }
 
@@ -1419,11 +1448,17 @@ void Interpreter::Impl::force_slice_from_process(const ProcessId process,
     const auto forced_width = value.width();
     if (processes.scheduling_domain(process)
         == ProcessSchedulingDomain::systemverilog) {
+        const auto delayed_before = net_delay_force_before
+            ? net_delay_force_before(signal_id) : std::nullopt;
         if (driving_value) {
             apply(std::move(value), offset);
         } else {
             force_slice(signal_id, std::move(value), offset,
                 capture_signal_change_origin(process), port_segment);
+        }
+        if (delayed_before) {
+            net_delay_force_after(signal_id, ForeignNetDelayKind::force,
+                delayed_before, offset, forced_width);
         }
         if (force_statement_hook) {
             force_statement_hook(
@@ -1461,11 +1496,17 @@ void Interpreter::Impl::release_slice_from_process(const ProcessId process,
     };
     if (processes.scheduling_domain(process)
         == ProcessSchedulingDomain::systemverilog) {
+        const auto delayed_before = net_delay_force_before
+            ? net_delay_force_before(signal_id) : std::nullopt;
         if (driving_value) {
             apply();
         } else {
             release_slice(signal_id, offset, width,
                 capture_signal_change_origin(process), port_segment);
+        }
+        if (delayed_before) {
+            net_delay_force_after(signal_id, ForeignNetDelayKind::release,
+                delayed_before, offset, width);
         }
         if (force_statement_hook) {
             force_statement_hook(process, signal_id, offset, width, true);
@@ -2213,8 +2254,10 @@ void Interpreter::Impl::refresh_direct_single_driver_route(
         = std::numeric_limits<ProcessId>::max();
     const auto& signal = get_signal(signal_id);
     auto& values = driver_values.at(signal_id);
+    // A nine-value SystemVerilog net (on a VHDL inout) maps a sole 'H' to 1.
     const bool identity_single_driver_resolution
-        = signal.resolution == ResolutionKind::sv_wire
+        = (signal.resolution == ResolutionKind::sv_wire
+              && signal.value_kind != ValueKind::logic9)
         || signal.resolution == ResolutionKind::std_logic;
     const bool switch_adjacency_unknown = has_bidirectional_switches
         && (signal_id >= switch_endpoint_adjacency.size()
@@ -2267,8 +2310,10 @@ void Interpreter::Impl::refresh_direct_single_driver_route(
         return get_signal(signal_id).initial_value;
     }
     const auto& signal = get_signal(signal_id);
+    // A nine-value SystemVerilog net (on a VHDL inout) maps a sole 'H' to 1.
     const bool identity_single_driver_resolution
-        = signal.resolution == ResolutionKind::sv_wire
+        = (signal.resolution == ResolutionKind::sv_wire
+              && signal.value_kind != ValueKind::logic9)
         || signal.resolution == ResolutionKind::std_logic;
     const auto* sole_record = values.sole();
     if (identity_single_driver_resolution
@@ -2452,6 +2497,21 @@ void Interpreter::Impl::refresh_direct_single_driver_route(
                     *cold.charge_strength, *cold.charge_strength);
             }
             for (const auto& driver : strength_drivers) {
+                // A VHDL driver's 'L', 'H' and 'W' are weak on the net, so a
+                // pull-up resolves as it does in std_logic whichever language
+                // declares the net (the fsim logic mapping in
+                // docs/cross-language-semantics.md).
+                if (driver.value->is_logic9()) {
+                    const auto logic9 = driver.value->get_logic9(bit);
+                    if (logic9 == Logic9::l || logic9 == Logic9::h
+                        || logic9 == Logic9::w) {
+                        include(logic9 == Logic9::l ? Logic4::zero
+                                : logic9 == Logic9::h ? Logic4::one
+                                                      : Logic4::x,
+                            StrengthRank::weak, StrengthRank::weak);
+                        continue;
+                    }
+                }
                 include(driver.value->get(bit),
                     driver.strength.zero, driver.strength.one);
             }
@@ -2973,7 +3033,8 @@ void Interpreter::Impl::register_driver(
     const std::span<const Process::DriverRegion> regions,
     const DriveStrength strength,
     std::shared_ptr<const std::vector<Process::DriverRegion>> scalar_regions,
-    const bool delayed_writer)
+    const bool delayed_writer,
+    const bool vhdl_writer)
 {
     const auto& signal = get_signal(signal_id);
     for (const auto& region : regions) {
@@ -2991,6 +3052,40 @@ void Interpreter::Impl::register_driver(
         return;
     }
     auto initial = initial_driver_value(signal_id);
+    // A VHDL driver of a SystemVerilog net (a net on a VHDL out or inout
+    // port) starts at the port's default (IEEE 1076-2019 14.7.2), which the
+    // net holds as its initial value; its SystemVerilog drivers start at z
+    // also when the net keeps nine values.
+    if ((signal.resolution == ResolutionKind::sv_wire
+            || signal.resolution == ResolutionKind::sv_wand
+            || signal.resolution == ResolutionKind::sv_wor)
+        && signal.initial_value.width() == initial.width()) {
+        if (vhdl_writer) {
+            const auto elaborated
+                = elaborated_net_initial_values.find(signal_id);
+            const auto& value = elaborated != elaborated_net_initial_values.end()
+                ? elaborated->second
+                : signal.initial_value;
+            if (regions.empty()
+                || std::ranges::any_of(regions, &Process::DriverRegion::whole)) {
+                initial = value;
+            } else {
+                // A driver of some elements is z on the others.
+                initial = PackedLogic4 { initial.width(), Logic4::z };
+                if (value.is_logic9()) {
+                    initial.fill(Logic9::z);
+                }
+                for (const auto& region : regions) {
+                    initial = insert_value(std::move(initial),
+                        extract_value(value, region.offset, region.width),
+                        region.offset);
+                }
+            }
+        } else if (signal.value_kind == ValueKind::logic9) {
+            initial = PackedLogic4 { initial.width(), Logic4::z };
+            initial.fill(Logic9::z);
+        }
+    }
     if (signal.resolution == ResolutionKind::std_logic
         && !regions.empty()
         && std::ranges::none_of(
@@ -3043,6 +3138,15 @@ void Interpreter::Impl::register_driver(
     const bool stored_changed = driven_values[signal_id] != resolved;
     const bool current_changed
         = signals[signal_id].initial_value != resolved;
+    if (current_changed && !vhdl_writer
+        && (signal.resolution == ResolutionKind::sv_wire
+            || signal.resolution == ResolutionKind::sv_wand
+            || signal.resolution == ResolutionKind::sv_wor)) {
+        // Until the first change the net holds its elaborated value: the
+        // defaults of the VHDL ports that drive it.
+        elaborated_net_initial_values.try_emplace(
+            signal_id, signals[signal_id].initial_value);
+    }
     driven_values[signal_id] = resolved;
     signals[signal_id].initial_value = resolved;
     if (stored_changed) {

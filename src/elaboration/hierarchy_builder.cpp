@@ -432,6 +432,7 @@ bool remap_operation_signals(
             || std::is_same_v<Type, WriteProjectedWaveform>
             || std::is_same_v<Type, WriteAfterSlice>
             || std::is_same_v<Type, WriteInertialSlice>
+            || std::is_same_v<Type, WriteNetDelay>
             || std::is_same_v<Type, WriteAfterDynamicSlice>
             || std::is_same_v<Type, WriteBlockingDynamicPartSlice>
             || std::is_same_v<Type, WriteAfterDynamicPartSlice>

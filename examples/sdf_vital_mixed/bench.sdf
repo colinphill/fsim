@@ -1,0 +1,11 @@
+// SPDX-License-Identifier: Apache-2.0
+// The annotation of mixed.sdf for the cell below mixed_bench.
+(DELAYFILE
+  (SDFVERSION "4.0")
+  (DESIGN "mixed_bench")
+  (TIMESCALE 1 ns)
+  (CELL
+    (CELLTYPE "vital_core")
+    (INSTANCE mixed_bench.dut.u_vital.u_core)
+    (DELAY (ABSOLUTE (IOPATH A Z (1:2:3)))))
+)

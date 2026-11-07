@@ -568,7 +568,7 @@ namespace codec_detail {
         } else if constexpr (
             std::same_as<T, runtime::simir::InputScanFormat>) {
             return value >= runtime::simir::InputScanFormat::binary
-                && value <= runtime::simir::InputScanFormat::time;
+                && value <= runtime::simir::InputScanFormat::vhdl_logic9_hexadecimal;
         } else if constexpr (std::same_as<T, runtime::simir::OutputFormat>) {
             return value >= runtime::simir::OutputFormat::binary
                 && value <= runtime::simir::OutputFormat::unformatted4;
@@ -592,7 +592,7 @@ namespace codec_detail {
             std::same_as<T, runtime::simir::StringMethodOperator>) {
             return value >= runtime::simir::StringMethodOperator::getc
                 && value
-                    <= runtime::simir::StringMethodOperator::vhdl_string_fill;
+                    <= runtime::simir::StringMethodOperator::vhdl_logic9_ostring;
         } else if constexpr (
             std::same_as<T, runtime::simir::VhdlReflectionClass>) {
             return value >= runtime::simir::VhdlReflectionClass::enumeration
@@ -989,7 +989,7 @@ namespace codec_detail {
             value.conversions, value.trailing_text, value.require_assignments,
             value.success, value.consume_string_source,
             value.hierarchy_path, value.time_unit_femtoseconds,
-            value.runtime_format, value.plusarg_value);
+            value.runtime_format, value.plusarg_value, value.diagnostic);
     }
 
     template <typename T>

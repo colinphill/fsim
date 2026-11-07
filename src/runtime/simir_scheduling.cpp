@@ -571,6 +571,128 @@ void Interpreter::Impl::schedule_inertial(
     }
 }
 
+Interpreter::Impl::NetDelayLimits Interpreter::Impl::net_delay_limits(
+    const ProcessId process, const WriteNetDelay& operation) const
+{
+    // A table given to the driver replaces the operation's.
+    if (const auto put = net_delay_overrides.empty()
+            ? net_delay_overrides.end()
+            : net_delay_overrides.find(process);
+        put != net_delay_overrides.end()) {
+        return { put->second.delay, put->second.reject, put->second.error };
+    }
+    if (operation.table.size() != 36U) {
+        throw std::invalid_argument(
+            "interconnect delay write has no delay table");
+    }
+    const std::span<const SimulationTick> stored { operation.table };
+    return { stored.first(12U), stored.subspan(12U, 12U),
+        stored.subspan(24U, 12U) };
+}
+
+void Interpreter::Impl::schedule_net_delay(
+    const ProcessId process,
+    const WriteNetDelay& operation,
+    PackedLogic4 value)
+{
+    const auto signal = operation.signal;
+    const auto origin = capture_signal_change_origin(process, operation.domain);
+    (void)get_signal(signal);
+    const auto target_width = driven_values[signal].width();
+    const std::size_t offset = operation.offset.value_or(0U);
+    if (value.width() == 0
+        || value.width() > std::numeric_limits<std::uint32_t>::max()
+        || offset > std::numeric_limits<std::uint32_t>::max()
+        || (operation.offset
+            && (offset > target_width || value.width() > target_width - offset))
+        || (!operation.offset && value.width() != target_width)) {
+        throw std::invalid_argument(
+            "interconnect delay write range is outside its target signal");
+    }
+    value = coerce_value_kind(std::move(value), get_signal(signal).value_kind);
+    const auto width = static_cast<std::uint32_t>(value.width());
+    const InertialDriverKey key { process, signal,
+        static_cast<std::uint32_t>(offset), width, origin.process_domain,
+        origin.phase };
+    const auto& driver_current = switch_process(process)
+        ? get_signal(signal).initial_value
+        : get_signal(signal).resolution == ResolutionKind::none
+        ? driven_values[signal]
+        : driver_slot(process, signal);
+    const auto [delays, rejects, errors] = net_delay_limits(process, operation);
+    auto pending = pending_net_delay_writes.find(key);
+    if (pending == pending_net_delay_writes.end()) {
+        // Nothing pending and nothing to change: the usual case.
+        const auto current = extract_value(driver_current, offset, width);
+        if (current == value) {
+            return;
+        }
+        pending = pending_net_delay_writes.try_emplace(key).first;
+        pending->second.bits.resize(width);
+    }
+    auto& state = pending->second;
+    const auto now = scheduler.now();
+    const auto mature = [this, key, process, signal, origin](Scheduler&) {
+        mature_net_delay(key, process, signal, origin);
+    };
+    for (std::uint32_t bit = 0U; bit < width; ++bit) {
+        state.change(
+            bit, driver_current.get(offset + bit), value.get(bit), now, delays,
+            rejects, errors,
+            [&](const SimulationTick delay, const SimulationTick,
+                PendingNetDelayWrites::Wake& wake) {
+                wake.handle = origin.process_domain
+                        == ProcessSchedulingDomain::systemverilog
+                    ? scheduler.schedule_systemverilog_after_cancelable(
+                        delay, origin.phase, process, mature)
+                    : scheduler.schedule_after_cancelable(
+                        delay, SchedulerPhase::update, process, mature);
+            },
+            [&](PendingNetDelayWrites::Wake& wake) {
+                scheduler.cancel(wake.handle);
+            });
+    }
+    if (state.wakes.empty()) {
+        pending_net_delay_writes.erase(pending);
+    }
+}
+
+void Interpreter::Impl::mature_net_delay(const InertialDriverKey& key,
+    const ProcessId process,
+    const SignalId signal,
+    const SignalChangeOrigin origin)
+{
+    const auto pending = pending_net_delay_writes.find(key);
+    if (pending == pending_net_delay_writes.end()) {
+        return;
+    }
+    auto& state = pending->second;
+    const auto matured = state.mature(scheduler.now());
+    if (state.wakes.empty()) {
+        pending_net_delay_writes.erase(pending);
+    }
+    if (matured.empty()) {
+        return;
+    }
+    const auto low = matured.front().first;
+    const auto high = matured.back().first;
+    const auto& driver_current = switch_process(process)
+        ? get_signal(signal).initial_value
+        : get_signal(signal).resolution == ResolutionKind::none
+        ? driven_values[signal]
+        : driver_slot(process, signal);
+    auto slice = extract_value(driver_current, key.offset + low, high - low + 1U);
+    for (const auto& [bit, value] : matured) {
+        slice.set(bit - low, value);
+    }
+    if (origin.process_domain == ProcessSchedulingDomain::systemverilog) {
+        commit_driver_slice(
+            process, signal, std::move(slice), key.offset + low, origin, false);
+    } else {
+        stage_update_slice(process, signal, std::move(slice), key.offset + low);
+    }
+}
+
 void Interpreter::Impl::schedule_projected_scalar_waveform(
     const ProcessId process,
     const SignalId signal,

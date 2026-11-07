@@ -1,0 +1,14 @@
+#c sink a=1 t=10
+#c bus a=10 t=12
+#c put first 5.000 3.000
+#c put bit 4.000 2.000
+#c bus a=11 t=20
+#c sink a=0 t=23
+#c bus a=01 t=32
+#c sink a=1 t=35
+#c sink a=0 t=43
+#c bus a=11 t=44
+#c put second 1.000 1.000
+#c sink a=1 t=55
+#c sink a=0 t=61
+#c sink a=1 t=71

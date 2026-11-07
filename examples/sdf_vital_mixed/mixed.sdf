@@ -4,7 +4,7 @@
   (DESIGN "mixed_top")
   (TIMESCALE 1 ns)
   (CELL
-    (CELLTYPE "vital_cell")
-    (INSTANCE mixed_top.u_vital)
+    (CELLTYPE "vital_core")
+    (INSTANCE mixed_top.u_vital.u_core)
     (DELAY (ABSOLUTE (IOPATH A Z (1:2:3)))))
 )

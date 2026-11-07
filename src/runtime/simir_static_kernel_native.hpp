@@ -19,8 +19,17 @@
 namespace fsim::runtime::simir {
 
 /// One deferred VHDL signal assignment (ABI). Word writes carry the value,
-/// its 'U' mask and the bit range of their slot; kind 1 refers to a
-/// reference-evaluated assignment by index.
+/// its 'U' mask, its weak mask (a design that can hold 'H', 'L', 'W' or '-',
+/// see kernel_word::UWord) and the bit range of their slot; kind 1 refers to a
+/// reference-evaluated assignment by index; kind 2 to a memory element write
+/// by index; kind 3 writes nine-value codes no register holds ('H', 'L', 'W',
+/// '-') to a resolved slot: `a` indexes the writing member's
+/// CompiledBody::wide_constants, two words ({p0, p1}, {p2, p3}) per chunk;
+/// kind 4 is a word write (as kind 0, 'U' mask included) to a resolved slot.
+/// A VHDL assignment to a resolved slot (kinds 3 and 4) has resolved into the
+/// slot's next block when the write is queued (Slot::net_processes): the
+/// queued write only marks the slot (write marks, transactions) for the
+/// update phase, which makes the next block the slot's value.
 struct StaticKernelWrite {
     std::uint32_t slot { };
     std::uint32_t offset { };
@@ -31,8 +40,9 @@ struct StaticKernelWrite {
     std::uint64_t unknown { };
     std::uint32_t kind { };
     std::uint32_t instruction { };
+    std::uint64_t weak { };
 };
-static_assert(sizeof(StaticKernelWrite) == 48U);
+static_assert(sizeof(StaticKernelWrite) == 56U);
 
 /// Shape of a kernel-owned SystemVerilog memory for inline element access
 /// (ABI). Generated code sends every access of a memory with `storage` 0, and
@@ -170,6 +180,10 @@ struct StaticKernelNativeHelpers {
     std::array<void (*)(StaticKernelNativeFrame*, kernel_word::Word* registers,
                    std::uint32_t at),
         256> generic_ops { };
+    /// An interconnect delay write (`fsim_sk_net_delay`, KOp::net_delay):
+    /// instruction `at` against the caller's registers.
+    void (*net_delay)(StaticKernelNativeFrame*, kernel_word::Word* registers,
+        std::uint32_t at) { };
     /// Wide-register instructions by kind (`fsim_sk_wide_<op>`): instruction
     /// `at` with the caller's register file, where wide values live, and the
     /// narrow operand words x, y and z; `out` receives a narrow result and

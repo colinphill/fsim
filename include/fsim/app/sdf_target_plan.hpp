@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <span>
 #include <string>
@@ -31,6 +32,11 @@ enum class SdfDelayApplicationMode {
     Increment,
 };
 
+/// The mark of a delay that gives no pulse reject or error limit in
+/// SdfPlannedAnnotation::reject_ticks and error_ticks.
+inline constexpr std::uint64_t sdf_no_pulse_limit
+    = std::numeric_limits<std::uint64_t>::max();
+
 struct SdfPlannedAnnotation {
     std::uint64_t node_id { };
     std::uint64_t cell_id { };
@@ -47,6 +53,12 @@ struct SdfPlannedAnnotation {
     std::vector<runtime::simir::SignalId> endpoint_signals;
     std::vector<std::uint64_t> before_ticks;
     std::vector<std::uint64_t> after_ticks;
+    /// The pulse reject and error limits of an INTERCONNECT or PORT delay
+    /// that gives them (a delval of two or three values, IEEE 1497-2001),
+    /// one for each of `after_ticks`, or sdf_no_pulse_limit where there is
+    /// none; both empty when no delay gives a limit.
+    std::vector<std::uint64_t> reject_ticks;
+    std::vector<std::uint64_t> error_ticks;
     std::vector<std::int64_t> before_check_ticks;
     std::vector<std::int64_t> after_check_ticks;
     std::vector<std::uint64_t> retain_ticks;
@@ -61,7 +73,7 @@ struct SdfPlannedAnnotation {
 
 class SdfAnnotationPlan final {
 public:
-    static constexpr std::uint32_t schema_version = 4U;
+    static constexpr std::uint32_t schema_version = 5U;
 
     [[nodiscard]] const std::shared_ptr<const SdfAnnotationSummary>& summary()
         const noexcept;

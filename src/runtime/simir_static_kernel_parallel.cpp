@@ -254,6 +254,8 @@ void Interpreter::Impl::StaticKernel::build_parallel_plan()
     const auto unit_total = member_count + static_cast<std::uint32_t>(partitions_.size());
     unit_parallel_.assign(unit_total, 0U);
     unit_cost_.assign(unit_total, 0U);
+    // A re-plan (a graft added units) starts from no domains.
+    domains_.clear();
     // The units that may share a batch form a group: the combinational
     // units of one level (settle snapshots), and all sequential members
     // (triggered rounds), after the levels.
@@ -333,6 +335,9 @@ void Interpreter::Impl::StaticKernel::build_parallel_plan()
             if (slot >= slot_count) {
                 return;
             }
+            // A resolved slot's writes update its shared sources (resolve_net):
+            // the leader's.
+            ok = ok && !(write && slots_[slot].resolved);
             touches[slot].push_back({ group[unit], unit, write });
             if (container_of_slot[slot] != no_slot) {
                 touches[slot_count + container_of_slot[slot]].push_back(
@@ -405,10 +410,13 @@ void Interpreter::Impl::StaticKernel::build_parallel_plan()
                     || std::is_same_v<T, FormatDisplay>
                     || std::is_same_v<T, TimeDisplay>
                     || std::is_same_v<T, SystemVerilogMath>
-                    || std::is_same_v<T, SystemVerilogScalarBinary>) {
+                    || std::is_same_v<T, SystemVerilogScalarBinary>
+                    || std::is_same_v<T, WriteNetDelay>) {
                     // Output only (a worker logs it for the replay,
-                    // LaneOutput), or a register written from the time or
-                    // from a real-number computation.
+                    // LaneOutput), a register written from the time or
+                    // from a real-number computation, or an interconnect
+                    // delay, whose write reaches its target later through
+                    // the kernel's timers (a worker logs it for the replay).
                     return true;
                 } else if constexpr (std::is_same_v<T, IntegerBinary>
                     || std::is_same_v<T, IntegerUnary>
@@ -560,6 +568,13 @@ void Interpreter::Impl::StaticKernel::build_parallel_plan()
                 touch_operation(current, inst.x);
                 ok = false;
                 break;
+            case KOp::net_delay:
+                // The delayed write's timers belong to the kernel: a worker
+                // logs the write (LaneOutput::Kind::net_delay) and the
+                // leader's replay schedules it at the unit's place in the
+                // serial order.
+                touch_operation(current, inst.y);
+                break;
             case KOp::suspend:
                 if (opaque_level[group[unit]] == 0U && std::getenv("FSIM_KERNEL_MT_STATS") != nullptr) {
                     std::cerr << "fsim-kernel: mt-plan opaque group=" << group[unit] << " suspend\n";
@@ -567,7 +582,6 @@ void Interpreter::Impl::StaticKernel::build_parallel_plan()
                 opaque_level[group[unit]] = 1U;
                 ok = false;
                 break;
-            case KOp::deopt:
             case KOp::store_vhdl:
             case KOp::assert_check:
             case KOp::integer_check:
@@ -1217,7 +1231,9 @@ void Interpreter::Impl::StaticKernel::build_parallel_plan()
     if (const char* minimum = std::getenv("FSIM_KERNEL_MT_COMMIT_MIN")) {
         mt_commit_min_ = std::strtoull(minimum, nullptr, 10);
     }
-    pool_ = std::make_unique<KernelPool>(mt_threads_, spin);
+    if (pool_ == nullptr) {
+        pool_ = std::make_unique<KernelPool>(mt_threads_, spin);
+    }
     // Lanes queue writes without marks: every assignment is queued.
     write_marks_.clear();
 }

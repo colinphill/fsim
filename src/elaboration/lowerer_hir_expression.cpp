@@ -2692,6 +2692,57 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_attribute(
         || !attribute->lower_bound || !attribute->upper_bound) {
         return std::nullopt;
     }
+    // The enumeration value of position `ordinal` in the result's domain: the
+    // low bits for the Boolean, bit and character-like domains; for a
+    // std_ulogic value the element of that position (U, X, 0, 1, Z, W, L, H,
+    // -; IEEE 1164), chosen among the nine literals. The literals 'W', 'L',
+    // 'H' and '-' are constants of this process, so the design counts as one
+    // that can hold weak elements (StaticKernel::design_may_hold_weak).
+    const auto narrow_ordinal = [&](const RegisterId ordinal_register) {
+        if (attribute->domain == frontend::ValueDomain::Logic9
+            && attribute->width == 1U) {
+            const auto ordinal_width = register_width(ordinal_register);
+            auto element = allocate_register(1U, frontend::ValueDomain::Logic9);
+            process_.operations.emplace_back(LoadConstant {
+                element, PackedLogic4::from_logic9_msb_string("U") });
+            for (std::uint8_t state = 1U;
+                state <= static_cast<std::uint8_t>(runtime::Logic9::dont_care);
+                ++state) {
+                const auto literal = allocate_register(
+                    1U, frontend::ValueDomain::Logic9);
+                process_.operations.emplace_back(LoadConstant {
+                    literal,
+                    PackedLogic4::from_logic9_msb_string(std::string(
+                        1U,
+                        runtime::to_char(static_cast<runtime::Logic9>(state)))),
+                });
+                const auto matches = allocate_register(
+                    1U, frontend::ValueDomain::Boolean);
+                process_.operations.emplace_back(Binary {
+                    BinaryOperator::equal,
+                    matches,
+                    ordinal_register,
+                    load_constant(unsigned_value(state, ordinal_width),
+                        frontend::ValueDomain::Integer),
+                });
+                const auto selected = allocate_register(
+                    1U, frontend::ValueDomain::Logic9);
+                process_.operations.emplace_back(ConditionalSelect {
+                    selected, matches, literal, element });
+                element = selected;
+            }
+            return element;
+        }
+        const auto narrowed = allocate_register(
+            attribute->width, attribute->domain);
+        process_.operations.emplace_back(Extract {
+            narrowed,
+            ordinal_register,
+            0U,
+            static_cast<std::uint32_t>(attribute->width),
+        });
+        return narrowed;
+    };
     const auto value = lower_hir_expression(
         *attribute->value, attribute->value_width);
     // A BOOLEAN loop parameter is held in its integer loop counter, which
@@ -2750,14 +2801,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_attribute(
                       resize_register(ordinal, result_width, true)
                   };
         }
-        const auto narrowed = allocate_register(
-            attribute->width, attribute->domain);
-        process_.operations.emplace_back(Extract {
-            narrowed,
-            ordinal,
-            0U,
-            static_cast<std::uint32_t>(attribute->width),
-        });
+        const auto narrowed = narrow_ordinal(ordinal);
         return result_width != attribute->width
             ? std::optional {
                   resize_register(narrowed, result_width, false)
@@ -2807,19 +2851,45 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_attribute(
         ordinal,
         one,
     });
-    const auto narrowed = allocate_register(
-        attribute->width, attribute->domain);
-    process_.operations.emplace_back(Extract {
-        narrowed,
-        adjusted,
-        0U,
-        static_cast<std::uint32_t>(attribute->width),
-    });
+    const auto narrowed = narrow_ordinal(adjusted);
     return result_width != attribute->width
         ? std::optional {
               resize_register(narrowed, result_width, false)
           }
         : std::optional { narrowed };
+}
+
+std::optional<Lowerer::HirVhdlSignalAttributeProfile>
+Lowerer::hir_vhdl_implicit_state_attribute(
+    const semantic::ExpressionId expression,
+    const semantic::ScopeId scope) const
+{
+    // S'STABLE(T) and S'QUIET(T) are signals of their own (IEEE 1076-2019
+    // 16.2.4): a wait on them resumes on their events, among them the return
+    // to TRUE one cycle (T = 0) or T after the event or transaction on S,
+    // which no event of S marks (10.2).
+    auto attribute = hir_vhdl_signal_attribute_profile(expression, scope);
+    if (!attribute
+        || (attribute->kind != HirVhdlSignalAttributeKind::stable
+            && attribute->kind != HirVhdlSignalAttributeKind::quiet)
+        || attribute->implicit_prefix || attribute->delayed_prefix
+        || attribute->signal >= design_.signal_info_.size()
+        || (attribute->selection
+            && attribute->selection->width
+                < design_.signal_info_[attribute->signal].width)) {
+        return std::nullopt;
+    }
+    return attribute;
+}
+
+std::optional<SignalId> Lowerer::vhdl_implicit_state_signal(
+    const HirVhdlSignalAttributeProfile& attribute,
+    const frontend::SourceSpan span)
+{
+    return vhdl_implicit_signal_attribute(attribute.signal,
+        attribute.kind == HirVhdlSignalAttributeKind::stable ? "stable"
+                                                              : "quiet",
+        attribute.duration, span);
 }
 
 std::optional<SignalId> Lowerer::vhdl_implicit_signal_attribute(
@@ -3703,8 +3773,18 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_signal_attribute(
                 resize_register(*derived, 1U, false), unchanged });
             return resize(destination);
         }
-        // S'STABLE(0) and S'QUIET(0) are FALSE only in the cycle of an
-        // event or transaction on S (IEEE 1076-2008 16.2.3); a settle
+        // S'STABLE(0) and S'QUIET(0) of a whole signal read the implicit
+        // signal itself, so a process woken by it reads the value that woke
+        // it, also when S changed in SystemVerilog work of the previous
+        // delta (IEEE 1076-2019 16.2.4, 14.7.4).
+        if (!attribute->selection) {
+            return read_derived(
+                attribute->kind == HirVhdlSignalAttributeKind::stable
+                    ? "stable"
+                    : "quiet");
+        }
+        // S(i)'STABLE(0) and S(i)'QUIET(0) are FALSE only in the cycle of
+        // an event or transaction on S(i) (IEEE 1076-2008 16.2.3); a settle
         // signal makes a waiter sensitive to their return to TRUE.
         if (!vhdl_implicit_signal_attribute(attribute->signal,
                 attribute->kind == HirVhdlSignalAttributeKind::stable
@@ -15089,6 +15169,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         }
         return result;
     }
+    hierarchical_last_found_ = false;
     if (const auto signal = hir_direct_signal(expression_id)) {
         const auto& info = design_.signal_info_[*signal];
         auto destination = allocate_register(
@@ -15100,6 +15181,13 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 ? SignalReadKind::sampled
                 : SignalReadKind::current,
         });
+        // A read through a hierarchical name is kept for SDF net delays: it
+        // is the read of a delayed load port when the name is one.
+        if (hierarchical_last_found_ && hierarchical_last_signal_ == *signal
+            && hierarchical_reference_used_) {
+            hierarchical_marks_.push_back({ 0U, destination, *signal, false,
+                hierarchical_last_path_ });
+        }
         record_implicit_signal_dependency(*signal);
         if (expected_width != 0U && expected_width != info.width) {
             // A collapsed port shares its actual's signal but keeps its
@@ -27403,10 +27491,15 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_element_event(
                 static_cast<std::uint32_t>(selection->offset),
                 static_cast<std::uint32_t>(selection->width),
             });
-            const auto changed = allocate_register(
+            // Values compare as enumeration literals (IEEE 1076-2008 9.2.3):
+            // 'U' /= '0' is TRUE, never an unknown.
+            const auto same = allocate_register(
                 1U, frontend::ValueDomain::Boolean);
             process_.operations.emplace_back(Binary {
-                BinaryOperator::not_equal, changed, current, previous });
+                BinaryOperator::case_equal, same, current, previous });
+            const auto changed = allocate_register(
+                1U, frontend::ValueDomain::Boolean);
+            process_.operations.emplace_back(LogicalNot { changed, same });
             const auto result = allocate_register(
                 1U, frontend::ValueDomain::Boolean);
             process_.operations.emplace_back(Binary {
@@ -27454,10 +27547,13 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_element_event(
         width, register_domain(*current));
     process_.operations.emplace_back(
         Extract { previous, whole, offset, width });
-    const auto changed = allocate_register(
+    const auto same = allocate_register(
         1U, frontend::ValueDomain::Boolean);
     process_.operations.emplace_back(Binary {
-        BinaryOperator::not_equal, changed, *current, previous });
+        BinaryOperator::case_equal, same, *current, previous });
+    const auto changed = allocate_register(
+        1U, frontend::ValueDomain::Boolean);
+    process_.operations.emplace_back(LogicalNot { changed, same });
     const auto result = allocate_register(
         1U, frontend::ValueDomain::Boolean);
     process_.operations.emplace_back(Binary {
@@ -32818,7 +32914,8 @@ bool Lowerer::lower_hir_vhdl_aggregate_copy_out(
 bool Lowerer::lower_hir_packed_copy_out(
     const semantic::ExpressionId target,
     const RegisterId copied_source,
-    const HirPackedCopyOutMode mode)
+    const HirPackedCopyOutMode mode,
+    const std::optional<TransitionDelays> delays)
 {
     const auto expression = specialized_hir_unit_ != nullptr
         ? specialized_hir_unit_->find_expression(target)
@@ -33227,6 +33324,9 @@ bool Lowerer::lower_hir_packed_copy_out(
                     converted, value });
                 value = converted;
             }
+            if (delays && (update.element || update.path)) {
+                return false;
+            }
             if (update.element) {
                 const auto& element = *update.element;
                 const auto write_guard = begin_hir_fixed_array_write(
@@ -33271,7 +33371,30 @@ bool Lowerer::lower_hir_packed_copy_out(
                         update.binding.integer_range->right),
                 });
             }
-            if (update.dynamic_bit) {
+            if (delays) {
+                // A delayed continuous assignment to net selects: each part
+                // keeps its own pending transition (IEEE 1800-2023 10.3.3).
+                if (update.dynamic_bit) {
+                    return false;
+                }
+                const bool delayed = *delays != TransitionDelays { };
+                initialize_delayed_net_driver(*update.binding.signal,
+                    update.destination_offset.value_or(0U), update.width,
+                    delayed);
+                if (update.destination_offset) {
+                    process_.operations.emplace_back(WriteInertialSlice {
+                        *update.binding.signal,
+                        value,
+                        *update.destination_offset,
+                        *delays,
+                        staged_domain,
+                    });
+                } else {
+                    process_.operations.emplace_back(WriteInertial {
+                        *update.binding.signal, value, *delays,
+                        staged_domain });
+                }
+            } else if (update.dynamic_bit) {
                 process_.operations.emplace_back(WriteUpdateDynamicSlice {
                     *update.binding.signal,
                     value,

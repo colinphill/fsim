@@ -185,7 +185,8 @@ struct WriterRegion {
     return kernel_word::logic9_word(plane(0U), plane(1U), plane(2U), plane(3U), width);
 }
 
-/// A narrow value as a Logic4 word plus 'U' mask.
+/// A narrow value as a Logic4 word plus 'U' and weak masks (every Logic9
+/// code is representable; only a width outside 1 to 64 is not).
 [[nodiscard]] inline std::optional<kernel_word::UWord> exact_uword(
     const PackedLogic4& value)
 {
@@ -320,16 +321,38 @@ struct WriterRegion {
     return map;
 }
 
-/// A word plus 'U' mask as a value of the given kind.
+/// Whether a Logic9 value has an element 'H', 'L', 'W' or '-'.
+[[nodiscard]] inline bool has_weak_codes(const PackedLogic4& value)
+{
+    if (!value.is_logic9()) {
+        return false;
+    }
+    const auto p0 = value.logic9_plane_words(0U);
+    const auto p1 = value.logic9_plane_words(1U);
+    const auto p2 = value.logic9_plane_words(2U);
+    const auto p3 = value.logic9_plane_words(3U);
+    for (std::size_t word = 0U; word < p0.size(); ++word) {
+        const auto upper = (word < p3.size() ? p3[word] : 0U)
+            | ((word < p2.size() ? p2[word] : 0U)
+                & ((word < p1.size() ? p1[word] : 0U) | p0[word]));
+        if (upper != 0U) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// A word plus 'U' and weak masks (kernel_word::UWord) as a value of the
+/// given kind.
 [[nodiscard]] inline PackedLogic4 uword_value(const kernel_word::Word value,
     const std::uint64_t unknown, const std::uint32_t width,
-    const ValueKind kind)
+    const ValueKind kind, const std::uint64_t weak = 0U)
 {
-    if (unknown == 0U) {
+    if (unknown == 0U && weak == 0U) {
         auto result = PackedLogic4::from_aval_bval(width, value.a, value.b);
         return kind == ValueKind::logic9 ? result.promoted_to_logic9() : result;
     }
-    const auto planes = kernel_word::logic9_planes(value, width, unknown);
+    const auto planes = kernel_word::logic9_planes(value, width, unknown, weak);
     const std::uint64_t words[4] = { planes.p0, planes.p1, planes.p2, planes.p3 };
     return PackedLogic4::from_logic9_word_planes(width,
         std::span { &words[0], 1U }, std::span { &words[1], 1U },
@@ -573,6 +596,12 @@ public:
         return host_program_ && process == host_process_ ? &*host_program_
                                                          : nullptr;
     }
+    /// A member the planner made inert has no static sensitivity in the
+    /// interpreter's copy of its program (the kernel wakes it from its own
+    /// tables). This is that program with the sensitivity the tables hold
+    /// now (a lazy MIPD graft plans from it); null for a process that is
+    /// not such a member, or has none. Valid until the next re-plan.
+    [[nodiscard]] const Process* sensitive_program(ProcessId process);
     /// A member's own program: the host process's original, every other
     /// member's scheduler program.
     [[nodiscard]] ProcessProgramView member_program(const std::uint32_t member) const
@@ -950,6 +979,23 @@ private:
         bool tracks_writer { };
         /// A mirror of a host signal members read; refreshed by scan_inputs.
         bool mirror { };
+        /// A SystemVerilog net on a VHDL inout whose sources overlap: the slot
+        /// holds four states, the resolution of the sources' values, and
+        /// every write resolves it (resolve_net_words, and generated code).
+        bool resolved { };
+        /// A resolved slot's sources, in the host's driver order: source k's
+        /// value is four Logic9 code planes of `words` words each at arena
+        /// offset + (2 + 4 k) * words, right after the slot's two planes.
+        /// With K sources these (2 + 4 K) * words words are the slot's
+        /// current block; the next block of the same layout follows at
+        /// offset + (2 + 4 K) * words, and one flag word after it, at
+        /// offset + 2 * (2 + 4 K) * words (the pending flag). A VHDL
+        /// assignment resolves into the next block at the write (the flag
+        /// copies the current block there first); the update phase copies
+        /// the next block over the current one (commit_writes). A
+        /// SystemVerilog write lands in the current block and, while the
+        /// flag is set, in the next one.
+        std::vector<ProcessId> net_processes;
     };
 
     struct Input {
@@ -1175,12 +1221,14 @@ private:
         std::optional<std::uint32_t> offset, std::uint32_t member,
         InstructionIndex instruction);
     /// Stores a Logic4 word into any slot (Logic9 slots get its codes, with
-    /// 'U' for the `unknown` elements; Logic4 slots read those as X).
+    /// 'U' for the `unknown` elements and 'H', 'L', 'W', '-' for the `weak`
+    /// ones; Logic4 slots read 'U', 'W' and '-' as X).
     void store_planes_word(std::uint64_t* base, std::uint32_t words,
         std::uint32_t planes, Word value, std::uint32_t offset,
-        std::uint32_t width, std::uint64_t unknown);
+        std::uint32_t width, std::uint64_t unknown, std::uint64_t weak = 0U);
     void store_slot_word(std::uint32_t slot, Word value, std::uint32_t offset,
-        std::uint32_t width, std::uint64_t unknown = 0U);
+        std::uint32_t width, std::uint64_t unknown = 0U,
+        std::uint64_t weak = 0U);
     /// VHDL delta mode: compiled execution met an unrepresentable value;
     /// the reference evaluator finishes the activation.
     void handle_deopt(std::uint32_t member, CompiledBody& body,
@@ -1336,6 +1384,21 @@ private:
     template <std::size_t K>
     static void native_generic_kind(StaticKernelNativeFrame* frame,
         Word* registers, std::uint32_t at);
+    /// Register `reg` of the member's body at storage index base + reg, as
+    /// the reference holds its value: narrow with its 'U' mask, chunked
+    /// wide, or a wide register of the reference store.
+    [[nodiscard]] PackedLogic4 register_operand(
+        const static_kernel_detail::CompiledBody& body, const Word* registers,
+        std::uint32_t member, std::uint32_t base, RegisterId reg) const;
+    /// KOp::net_delay: the delayed write (net_delay_write) of operation y
+    /// with register x.
+    void execute_net_delay(const static_kernel_detail::CompiledBody& body,
+        const Word* registers, const static_kernel_detail::KInst& inst,
+        std::uint32_t member);
+    /// fsim_sk_net_delay: execute_net_delay for instruction `at`, with the
+    /// caller's register file.
+    static void native_net_delay(StaticKernelNativeFrame* frame,
+        Word* registers, std::uint32_t at);
     /// A generic instruction's operands into the member's reference
     /// registers, and its result back (true: two-state code got X or 'U').
     void generic_load_operands(CompiledBody& body, const Word* registers,
@@ -1423,6 +1486,63 @@ private:
     /// Compiles the units writing the given (no longer silent) slots with
     /// notifying stores in place of plain ones.
     void respecialize_silent(const std::vector<std::uint8_t>& unsilenced);
+    /// Re-plans the running kernel at a scheduler safe point (ReplanRequest):
+    /// the delayed-copy graft of a late split (Interpreter::graft_net_delay).
+public:
+    [[nodiscard]] ReplanResult replan_at_safe_point(const ReplanRequest& request);
+private:
+    /// One delayed copy a graft adds (graft_net_delay): the net it follows,
+    /// the load members that read it instead of the net, and its drivers.
+    struct GraftCopy {
+        SignalId net_signal { };
+        SignalId copy_signal { };
+        std::uint32_t net_slot { };
+        std::uint32_t copy_slot { };
+        /// Members whose reads of the net move to the copy, ascending.
+        std::vector<std::uint32_t> loads;
+        /// The new members that write the copy.
+        std::vector<std::uint32_t> drivers;
+    };
+    /// Appends the copies' slots and driver members to the running kernel,
+    /// points the load members at the copies and rebuilds the tables that
+    /// derive from them; nothing changes when the graft is refused.
+    [[nodiscard]] ReplanResult graft_net_delay(const NetDelayGraft& graft);
+    /// Moves the sensitivity, readers, edges, waiters and operations of a
+    /// copy's load members from the net to the copy. `groups` collects the
+    /// dispatch groups whose fused program must be built again.
+    void graft_move_loads(const GraftCopy& copy, std::vector<std::uint32_t>& groups);
+    /// Rebinds the native units of the load members, their partitions and
+    /// groups to the copies, and binds the drivers' new units.
+    void graft_rebind_native(const std::vector<GraftCopy>& copies,
+        const std::vector<std::uint32_t>& groups);
+    /// Slots whose changes a member now has to hear: their stores announce
+    /// them from now on (apply_watches does the same for a watched slot).
+    void unsilence_slots(const std::vector<std::uint32_t>& slots);
+    /// The notify tables derived from the slots' targets (build_schedule_targets).
+    void rebuild_notify_tables();
+    /// The level queues over the members and partitions (build_schedule_targets).
+    void build_level_queues();
+    /// Orders a slot's ranged readers by the target that wakes them, groups
+    /// them (Slot::ranged) and indexes them.
+    void group_ranged_readers(Slot& slot, std::vector<Reader> ranged);
+    /// Slot::last_writer, tracks_writer and disjoint_writers from its writers.
+    static void classify_writers(Slot& slot, std::vector<WriterRegion>& scratch);
+    /// A unit's canonical template body and bindings: slots, host signals,
+    /// memories and marks become bindings (build_native).
+    void canonicalize_unit(const CompiledBody& instance,
+        const std::unordered_map<std::uint32_t, std::uint32_t>& slot_of_offset,
+        std::unique_ptr<CompiledBody>& body, std::vector<std::uint32_t>& bindings,
+        std::unordered_map<std::uint64_t, std::uint32_t>& binding_of) const;
+    /// Gives `unit` the template with `canonical`'s body and its native code:
+    /// an equal template that exists shares its units' code, else a new
+    /// template is compiled.
+    void bind_native_unit(NativeUnit& unit, std::unique_ptr<CompiledBody> canonical,
+        std::vector<std::uint32_t> bindings, bool partition_like);
+    /// Takes `unit` off the lazy and full template lists.
+    void detach_native_unit(NativeUnit& unit);
+    /// Fills the lazy and full templates' unit lists again from the units'
+    /// own records (members_ and dispatch_groups_ moved their units).
+    void rebuild_unit_lists();
     /// Whether every register's X plane and 'U' mask is zero (clearing them
     /// for registers each activation writes before reading).
     [[nodiscard]] static bool registers_known(CompiledBody& body) noexcept;
@@ -1488,12 +1608,12 @@ private:
         std::uint32_t member_index, std::uint32_t source_slot, Word base,
         std::uint32_t target_slot);
     /// Wide-register instructions (KOp::wide_load .. wide_part_insert) on
-    /// the register file `registers`, with narrow operands y (its 'U' mask
-    /// y_unknown) and z; `resolved` is the slot of a load or store.
+    /// the register file `registers`, with narrow operands y (its 'U' and
+    /// weak masks y_masks) and z; `resolved` is the slot of a load or store.
     void execute_wide(const static_kernel_detail::CompiledBody& body,
         Word* registers, const static_kernel_detail::KInst& inst,
         std::uint32_t at, std::uint32_t member_index, std::uint32_t body_begin,
-        Word y, std::uint64_t y_unknown, Word z, std::uint32_t resolved);
+        Word y, Word y_masks, Word z, std::uint32_t resolved);
     /// fsim_sk_wide_<op>: a wide-register instruction, or a selection from a
     /// wide register (sub 3), with the caller's register file.
     template <static_kernel_detail::KOp Op>
@@ -1502,15 +1622,23 @@ private:
         std::uint64_t yb, std::uint64_t za, std::uint64_t zb,
         std::uint64_t* out);
     /// The value of wide register `reg` (storage CompiledBody::wide_base)
-    /// as the reference holds it, and back (false: a value with codes the
-    /// registers cannot hold, other than 0, 1, X, Z and 'U').
+    /// as the reference holds it, and back (every Logic9 code has a register
+    /// representation: the word, its 'U' mask and its weak mask).
     [[nodiscard]] static PackedLogic4 wide_value(const CompiledBody& body,
         const Word* registers, std::uint32_t reg, ValueKind kind);
-    [[nodiscard]] static bool set_wide_value(const CompiledBody& body,
-        Word* registers, std::uint32_t reg, const PackedLogic4& value);
+    static void set_wide_value(const CompiledBody& body, Word* registers,
+        std::uint32_t reg, const PackedLogic4& value);
     static void native_fail(StaticKernelNativeFrame* frame, std::uint32_t at,
         std::uint32_t reason);
     void compile_members();
+    /// Whether the design can hold 'H', 'L', 'W' or '-' in a register: a
+    /// VHDL constant, an initial value, a driver strength, a conversion or
+    /// attribute that makes Logic9 values at run time, a file read, or a
+    /// foreign library can make one (design_may_hold_weak lists them).
+    /// Decided once, before any body compiles; without it no code carries a
+    /// weak mask and no weak element can arise.
+    [[nodiscard]] bool design_may_hold_weak();
+    std::optional<bool> weak_possible_;
     /// The constructor's work up to the native code; `stage` times its
     /// steps (FSIM_PROFILE_PHASES).
     void build_fresh(StaticKernelRuntimeSpec& spec,
@@ -1550,7 +1678,6 @@ private:
     /// Appends a VHDL member's body specialized on its constant control
     /// flow and enters it from then on; false when not applicable.
     bool specialize_member(std::uint32_t member);
-    void eliminate_dead_constants(CompiledBody& body, std::uint32_t member);
     void track_unknowns(CompiledBody& body, std::uint32_t member) const;
     void prune_operations(std::uint32_t member,
         std::vector<std::uint8_t>& skip,
@@ -1582,6 +1709,8 @@ private:
         const std::string& message) const;
 
     Impl& impl_;
+    /// sensitive_program's programs.
+    std::unordered_map<ProcessId, Process> sensitive_programs_;
     std::vector<Member> members_;
     std::vector<Partition> partitions_;
     /// The sensitivity entries of partition members (build_schedule_targets
@@ -1845,6 +1974,11 @@ private:
         std::uint64_t sequence { };
         std::uint32_t thread { };
         std::uint64_t epoch { };
+        /// A delayed write's maturity (net_delay_write): `thread` is the
+        /// site (net_delay_sites_), `order` its writer's process, so the
+        /// matured bits are written in the writer's stable order among the
+        /// threads that resume at the same time (IEEE 1800-2023 4.7).
+        bool net_delay { };
         friend bool operator>(const Timer& left, const Timer& right)
         {
             if (left.time != right.time) {
@@ -1897,6 +2031,42 @@ private:
     void resume_yielded();
     std::priority_queue<Timer, std::vector<Timer>, std::greater<>> timers_;
     std::uint64_t timer_sequence_ { };
+    /// One WriteNetDelay operation of a member (IEEE 1364-2005 16.2.4): the
+    /// target run it drives and the changes of its bits that wait to mature.
+    /// The sites are made at the operation's first execution; they hold run
+    /// time state only (a kernel image restores none).
+    struct NetDelaySite {
+        std::uint32_t member { };
+        std::uint32_t pc { };
+        std::uint32_t slot { };
+        /// The run's first bit in the slot, and its width.
+        std::uint32_t offset { };
+        std::uint32_t width { };
+        PendingNetDelayWrites pending;
+    };
+    std::vector<NetDelaySite> net_delay_sites_;
+    /// Site by member << 32 | operation index.
+    std::unordered_map<std::uint64_t, std::uint32_t> net_delay_site_of_;
+    /// The write of a WriteNetDelay operation of `member` at `pc` with
+    /// `source`: each bit's change matures after the delay of its own
+    /// transition, any number pending, with the pulse limits of the shared
+    /// algorithm (Impl::PendingNetDelayWrites). Maturities are timers in
+    /// timers_, so they take part in warp mode and in activation like the
+    /// threads' delays.
+    void net_delay_write(std::uint32_t member, std::uint32_t pc,
+        const WriteNetDelay& operation, const PackedLogic4& source);
+    /// Writes the bits of a site that mature by `now` as a write by its
+    /// member (the update event of a delayed net, IEEE 1800-2023 4.4.2.2).
+    void net_delay_mature(std::uint32_t site, SimulationTick now);
+    /// The value the member's driver last wrote to the site's slot: the
+    /// slot itself, or the member's source of a resolved slot.
+    [[nodiscard]] PackedLogic4 net_delay_driver_value(
+        std::uint32_t slot, ProcessId process) const;
+    /// Whether a delayed-write timer still has a change waiting at its time.
+    [[nodiscard]] bool net_delay_timer_live(const Timer& timer) const;
+    /// Drops the lapsed delayed-write timers at the top of timers_ (a wake
+    /// whose changes were all deleted).
+    void drop_lapsed_net_delay_timers();
     /// The wake time of the scheduler task that will activate the kernel.
     std::optional<SimulationTick> armed_timer_;
     /// VHDL behavioral threads (IEEE 1076-2019 14.7.5.3): threads ready to
@@ -2413,6 +2583,8 @@ private:
         bool two_state_running { };
         /// 'U' mask of the last slow-path result (U-aware instructions).
         std::uint64_t last_unknown { };
+        /// The weak mask beside last_unknown.
+        std::uint64_t last_weak { };
         /// The register file sub 3 selections read (evaluate_slow_op).
         const Word* wide_file { };
         std::exception_ptr native_exception;
@@ -2427,9 +2599,10 @@ private:
     /// Output a worker's unit made, which the leader emits in the replay at
     /// the unit's place in the serial order: text, a %t argument (formatted
     /// at the replay, after any earlier $timeformat), a $time display, or a
-    /// severity message (the member's Report at `pc`).
+    /// severity message (the member's Report at `pc`), or an interconnect
+    /// delay's write of `value` (the member's WriteNetDelay at `pc`).
     struct LaneOutput {
-        enum class Kind : std::uint8_t { text, format, time, report };
+        enum class Kind : std::uint8_t { text, format, time, report, net_delay };
         Kind kind { Kind::text };
         bool newline { };
         std::uint32_t member { };
@@ -2673,6 +2846,8 @@ private:
     bool vhdl_ { };
     /// Debugger plan (StaticKernelRuntimeSpec::debug_points).
     bool debug_points_ { };
+    /// StaticKernelRuntimeSpec::weak_sources (or a debugger plan).
+    bool weak_sources_ { };
     /// Debugger plan: the program the host member ran before its scheduler
     /// program became the kernel stub.
     std::optional<Process> host_original_;
@@ -2791,8 +2966,51 @@ private:
         std::uint8_t planes { };
         bool touched { };
         bool tracks_writer { };
+        bool resolved { };
     };
     std::vector<CommitSlot> commit_slots_;
+    /// The source of `process` on a resolved slot (Slot::net_processes).
+    [[nodiscard]] std::uint32_t net_source_index(std::uint32_t slot,
+        ProcessId process) const;
+    /// The codes of a kind 3 write (StaticKernelWrite).
+    [[nodiscard]] kernel_word::Logic9Planes net_constant_codes(
+        const StaticKernelWrite& write) const;
+    /// Records bits [offset, offset + width) of `process`'s source value on
+    /// a resolved slot (Logic9 code planes, one word each, or `value`) and
+    /// resolves the slot's words they touch in the arena: the sv_wire
+    /// resolution, with the VHDL 'L', 'H' and 'W' weak (logic mapping). A
+    /// SystemVerilog write (`vhdl` false) lands in the current block, and
+    /// in the next one while the slot is pending; a VHDL assignment lands
+    /// in the next block, which it starts first when the slot is not
+    /// pending (Slot::net_processes).
+    void set_net_bits(std::uint32_t slot, ProcessId process, std::uint32_t offset,
+        std::uint32_t width, const kernel_word::Logic9Planes& codes,
+        bool vhdl = false);
+    void set_net_value(std::uint32_t slot, ProcessId process, std::uint32_t offset,
+        const PackedLogic4& value, bool vhdl = false);
+    /// Resolves words [first, last] of a resolved slot's current or next
+    /// block over that block's sources.
+    void resolve_net_words(std::uint32_t slot, std::uint32_t first,
+        std::uint32_t last, bool next = false);
+    /// A resolved slot's blocks: words of one block, the first word of the
+    /// next block, and its pending flag (Slot::net_processes).
+    [[nodiscard]] std::size_t net_block_words(const Slot& slot) const noexcept
+    {
+        return (2U + 4U * slot.net_processes.size()) * slot.words;
+    }
+    [[nodiscard]] std::uint64_t& net_pending(const Slot& slot) noexcept
+    {
+        return arena_[slot.offset + 2U * net_block_words(slot)];
+    }
+    /// Starts a VHDL assignment round on a resolved slot: the next block
+    /// takes the current one unless the slot is pending already.
+    void begin_net_pending(const Slot& slot);
+    /// The update phase: the next block becomes the current one.
+    void commit_net_pending(const Slot& slot) noexcept;
+    /// Commits (or, with `domain`, stages) each source of a resolved slot as
+    /// its process's driver value, so the host resolves the slot's value.
+    void publish_net_sources(std::uint32_t slot,
+        std::optional<SignalUpdateDomain> domain);
     /// Kernel wiring (static_kernel_wiring): the update phase that changes
     /// `source` copies its bits [offset, offset + width) into `target` at
     /// `target_offset` in the same delta cycle, so an input formal

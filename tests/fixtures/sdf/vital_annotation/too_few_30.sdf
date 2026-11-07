@@ -1,0 +1,8 @@
+// SPDX-License-Identifier: Apache-2.0
+// Three delays for tpd_a_y, which holds two: an error (IEEE 1076.4-2000 5.2.6).
+(DELAYFILE
+  (SDFVERSION "3.0")
+  (DESIGN "tb_path")
+  (TIMESCALE 1ns)
+  (CELL (CELLTYPE "vbuf") (INSTANCE tb_path.u1)
+    (DELAY (ABSOLUTE (IOPATH a y (1:1:1) (2:2:2) (3:3:3))))))

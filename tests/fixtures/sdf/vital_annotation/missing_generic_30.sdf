@@ -1,0 +1,8 @@
+// SPDX-License-Identifier: Apache-2.0
+// The cell has no generic tpd_a_z: an error (IEEE 1076.4-2000 5.2).
+(DELAYFILE
+  (SDFVERSION "3.0")
+  (DESIGN "tb_path")
+  (TIMESCALE 1ns)
+  (CELL (CELLTYPE "vbuf") (INSTANCE tb_path.u1)
+    (DELAY (ABSOLUTE (IOPATH a z (1:1:1) (2:2:2))))))

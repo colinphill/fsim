@@ -1813,6 +1813,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                         || std::is_same_v<T, WriteDelayed>
                         || std::is_same_v<T, WriteInertial>
                         || std::is_same_v<T, WriteInertialSlice>
+                        || std::is_same_v<T, WriteNetDelay>
                         || std::is_same_v<T, ForceSignalSlice>
                         || std::is_same_v<T, ReleaseSignalSlice>
                         || std::is_same_v<T, DisableBlock>
@@ -2920,6 +2921,59 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                        && candidates[writer.process];
                });
     };
+    // A nine-value SystemVerilog net on a VHDL inout (several sources: one
+    // that VHDL alone drives is four-state since validate_process_drivers):
+    // the kernel resolves its members' sources (Slot::resolved), with the
+    // VHDL 'L', 'H' and 'W' weak.
+    // The signals a candidate drives with an interconnect delay
+    // (WriteNetDelay, IEEE 1364-2005 16.2.4): the load copy of an SDF net.
+    // Its drivers are members, and with several (one for each group of
+    // sources) the kernel resolves them like the nine-value net above
+    // (StaticKernel::build_fresh makes the slot resolved).
+    std::vector<std::uint8_t> net_delayed(signal_count, 0U);
+    std::vector<std::vector<SignalId>> net_delay_targets(process_count);
+    {
+        SharedBodyOperationScan net_delay_operations {
+            [](const Operation& operation) {
+                return operation_holds<WriteNetDelay>(operation);
+            }
+        };
+        for (std::size_t index = 0U; index < process_count; ++index) {
+            if (!candidates[index]) {
+                continue;
+            }
+            net_delay_operations.visit(views[index].operations(),
+                [&](const std::size_t, const Operation& operation) {
+                if (const auto* write = operation_get_if<WriteNetDelay>(&operation);
+                    write != nullptr && write->signal < signal_count) {
+                    net_delayed[write->signal] = 1U;
+                    net_delay_targets[index].push_back(write->signal);
+                }
+            });
+        }
+    }
+    const auto several_net_delay_writers = [&](const SignalId signal) {
+        if (net_delayed[signal] == 0U) {
+            return false;
+        }
+        const auto& info = signals_[signal];
+        if (info.value_kind != ValueKind::logic4
+            || info.resolution != ResolutionKind::sv_wire
+            || !info.vhdl_conversion_drivers.empty()) {
+            return false;
+        }
+        const auto& writers = graph_signals[signal].writers;
+        return std::ranges::any_of(writers, [&](const auto& writer) {
+            return writer.process != writers.front().process;
+        });
+    };
+    const auto resolved_net = [&](const SignalId signal) {
+        const auto& info = signals_[signal];
+        return several_net_delay_writers(signal)
+            || (vhdl_mode && mixed && info.value_kind == ValueKind::logic9
+                && info.resolution == ResolutionKind::sv_wire
+                && info.vhdl_conversion_drivers.empty());
+    };
     const auto basic_ok = [&](const SignalId signal) {
         const auto& node = graph_signals[signal];
         const auto& info = signals_[signal];
@@ -2929,11 +2983,17 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             && (vhdl_mode || !node.partial_projected_transactions)
             && host_touched[signal] == 0U
             && (info.value_kind == ValueKind::logic4
-                || (vhdl_mode && (!mixed || vhdl_written(signal))))
+                || (vhdl_mode && (!mixed || vhdl_written(signal)))
+                || resolved_net(signal))
             && info.systemverilog_scalar == runtime::SystemVerilogScalarKind::None
             && !info.event_variable && !info.implicit_driver
             && !info.charge_strength
             && signals_[signal].initial_value.width() != 0U
+            // Any other nine-value SystemVerilog net maps even a sole
+            // driver's 'H' to 1, so its resolution is not the identity.
+            && (resolved_net(signal)
+                || !(info.value_kind == ValueKind::logic9
+                    && info.resolution == ResolutionKind::sv_wire))
             && (info.resolution == ResolutionKind::none
                 || info.resolution == ResolutionKind::sv_wire
                 || (vhdl_mode && info.resolution == ResolutionKind::std_logic));
@@ -2973,6 +3033,14 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         const auto resolution = signals_[signal].resolution;
         const auto width = static_cast<std::uint32_t>(
             signals_[signal].initial_value.width());
+        if (resolved_net(signal)) {
+            // Its sources overlap: every writer is a member (the kernel holds
+            // each one's value) with the default strength.
+            return std::ranges::all_of(node.writers, [&](const auto& writer) {
+                return candidates[writer.process]
+                    && views[writer.process].drive_strength() == DriveStrength { };
+            });
+        }
         if (vhdl_mode && (resolution == ResolutionKind::sv_wire
                 || resolution == ResolutionKind::std_logic)) {
             // Each element must have exactly one driving process, so the
@@ -3375,6 +3443,19 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 }
                 candidates[index].reset();
                 reject(index, "container_unowned");
+                changed = true;
+            }
+        }
+        // A member's interconnect delay matures in its target's kernel slot
+        // (StaticKernel::net_delay_write); a target the host keeps (a host
+        // member reads or writes it, or the host resolves it by strength)
+        // keeps its delay drivers on the host.
+        for (std::size_t index = 0U; index < process_count; ++index) {
+            if (candidates[index]
+                && std::ranges::any_of(net_delay_targets[index],
+                    [&](const SignalId signal) { return owned[signal] == 0U; })) {
+                candidates[index].reset();
+                reject(index, "net_delay_unowned");
                 changed = true;
             }
         }
@@ -4369,6 +4450,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                     || operation_holds<WriteAfterDynamicPartSlice>(operation)
                     || operation_holds<WriteInertial>(operation)
                     || operation_holds<WriteInertialSlice>(operation)
+                    || operation_holds<WriteNetDelay>(operation)
                     || operation_holds<WriteInertialDynamicSlice>(operation)
                     || operation_holds<WriteInertialDynamicPartSlice>(operation)
                     || operation_holds<WriteProjectedWaveform>(operation)
@@ -5104,6 +5186,65 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             mark(operation_get_if<SignalStrengthText>(&operation));
         });
     }
+    // A signal a member writes both at once (an Active update) and after a
+    // delay (a delayed or inertial write) changes more than once in a time
+    // step, at the host's commits. A mirrored update would wake the readers
+    // for the first change and again for the later one, where the host wakes
+    // them once for the changes of the same batch (IEEE 1800-2023 4.4, 4.5).
+    std::vector<std::uint8_t> update_written(signal_count, 0U);
+    std::vector<std::uint8_t> delayed_written(signal_count, 0U);
+    SharedBodyOperationScan mixed_writes { [](const Operation& operation) {
+        return operation_holds<WriteUpdate>(operation)
+            || operation_holds<WriteUpdateSlice>(operation)
+            || operation_holds<WriteUpdateDynamicSlice>(operation)
+            || operation_holds<WriteUpdateDynamicPartSlice>(operation)
+            || operation_holds<WriteAfter>(operation)
+            || operation_holds<WriteAfterSlice>(operation)
+            || operation_holds<WriteAfterDynamicSlice>(operation)
+            || operation_holds<WriteAfterDynamicPartSlice>(operation)
+            || operation_holds<WriteDelayed>(operation)
+            || operation_holds<WriteInertial>(operation)
+            || operation_holds<WriteInertialSlice>(operation)
+            || operation_holds<WriteInertialDynamicSlice>(operation)
+            || operation_holds<WriteInertialDynamicPartSlice>(operation);
+    } };
+    for (std::size_t index = 0U; index < process_count; ++index) {
+        if (member[index] == 0U || !views[index].valid()) {
+            continue;
+        }
+        mixed_writes.visit(views[index].operations(),
+            [&](std::size_t, const Operation& operation) {
+            const auto mark = [&](const auto* write,
+                                  std::vector<std::uint8_t>& marks) {
+                if (write != nullptr && write->signal < signal_count) {
+                    marks[write->signal] = 1U;
+                }
+            };
+            mark(operation_get_if<WriteUpdate>(&operation), update_written);
+            mark(operation_get_if<WriteUpdateSlice>(&operation),
+                update_written);
+            mark(operation_get_if<WriteUpdateDynamicSlice>(&operation),
+                update_written);
+            mark(operation_get_if<WriteUpdateDynamicPartSlice>(&operation),
+                update_written);
+            mark(operation_get_if<WriteAfter>(&operation), delayed_written);
+            mark(operation_get_if<WriteAfterSlice>(&operation),
+                delayed_written);
+            mark(operation_get_if<WriteAfterDynamicSlice>(&operation),
+                delayed_written);
+            mark(operation_get_if<WriteAfterDynamicPartSlice>(&operation),
+                delayed_written);
+            mark(operation_get_if<WriteDelayed>(&operation), delayed_written);
+            mark(operation_get_if<WriteInertial>(&operation),
+                delayed_written);
+            mark(operation_get_if<WriteInertialSlice>(&operation),
+                delayed_written);
+            mark(operation_get_if<WriteInertialDynamicSlice>(&operation),
+                delayed_written);
+            mark(operation_get_if<WriteInertialDynamicPartSlice>(&operation),
+                delayed_written);
+        });
+    }
     for (SignalId signal = 0U; signal < signal_count; ++signal) {
         const auto& node = graph_signals[signal];
         // A foreign library's deposit into such a signal makes it a written
@@ -5133,6 +5274,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         if (!forces && !host_all && path_destination[signal] == 0U
             && container_aliased[signal] == 0U
             && path_source[signal] == 0U && history_read[signal] == 0U
+            && (update_written[signal] == 0U || delayed_written[signal] == 0U)
             && owned[signal] == 0U && virtual_owned[signal] == 0U
             && !node.writers.empty()
             // One driver of an unresolved variable or a plain net (no pull,
@@ -5207,7 +5349,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
 namespace detail {
 namespace {
 
-constexpr std::string_view plan_magic { "fsim-static-kernel-plan-v9" };
+constexpr std::string_view plan_magic { "fsim-static-kernel-plan-v10" };
 
 class PlanWriter {
 public:

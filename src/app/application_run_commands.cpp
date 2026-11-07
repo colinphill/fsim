@@ -512,6 +512,11 @@ int run_built_project(
     // static kernel serves them with its default plan (they watch and write
     // its signals at run time).
     plan_kernel_access(built, engine, foreign && config.run.foreign_probes);
+    // A VPI, VHPI, PLI or DPI library may write any std_logic value. A
+    // design without nine-value signals keeps its access plan (and so the
+    // kernel image elaborate --aot recorded).
+    built.kernel_access.weak_sources = built.kernel_access.weak_sources
+        || (foreign && built.design.has_nine_value_signals());
     // Only a run with a library compiles the primitive delay slots in
     // (vpi_put_delays, acc_replace_delays); the others keep the constant
     // delayed writes. A design without primitives keeps the kernel planned

@@ -1,0 +1,3 @@
+TRACE z='0' @6000000 fs
+TRACE z='1' @16000000 fs
+TRACE z='0' @36000000 fs

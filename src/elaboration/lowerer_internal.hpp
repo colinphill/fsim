@@ -1005,6 +1005,10 @@ private:
         // @(vif.d)`): the body begins by waiting on them (IEEE 1800-2017
         // 9.2.2.1, 9.4.2).
         std::vector<semantic::sv::Sensitivity> leading_wait;
+        // Sensitivities to S'STABLE(T) or S'QUIET(T): their value signals
+        // are created with the process (IEEE 1076-2019 16.2.4).
+        std::vector<std::pair<semantic::ExpressionId, frontend::SourceSpan>>
+            implicit_state_sensitivities;
         bool always_comb_or_latch { };
         // A source always_comb or always_latch first runs after every
         // initial and always procedure has started (IEEE 1800-2017
@@ -2955,6 +2959,15 @@ private:
         runtime::SimulationTick duration,
         frontend::SourceSpan span,
         std::optional<HirConstantSelection> selection = std::nullopt);
+    // S'STABLE(T) or S'QUIET(T) of a whole signal S as a sensitivity: the
+    // attribute when `expression` is one, and the value signal a wait on it
+    // waits on (created on first use; nullopt when that failed, reported).
+    [[nodiscard]] std::optional<HirVhdlSignalAttributeProfile>
+    hir_vhdl_implicit_state_attribute(semantic::ExpressionId expression,
+        semantic::ScopeId scope) const;
+    [[nodiscard]] std::optional<SignalId> vhdl_implicit_state_signal(
+        const HirVhdlSignalAttributeProfile& attribute,
+        frontend::SourceSpan span);
     [[nodiscard]] std::optional<RegisterId>
     lower_hir_vhdl_signal_attribute(
         semantic::ExpressionId expression,
@@ -3664,6 +3677,11 @@ private:
         const HirRuntimeBinding& binding);
     [[nodiscard]] std::optional<HirRuntimeBinding>
     hir_direct_signal_binding(semantic::ExpressionId expression) const;
+    // The value domain a reader sees `signal` in: a SystemVerilog output
+    // port may share a std_logic signal with VHDL, whose nine values
+    // SystemVerilog code reads as four.
+    [[nodiscard]] frontend::ValueDomain hir_signal_reader_domain(
+        SignalId signal, bool systemverilog_reader) const;
     [[nodiscard]] std::optional<HirRuntimeBinding> hir_runtime_binding(
         semantic::DeclarationId declaration,
         semantic::ScopeId process_scope,
@@ -4220,7 +4238,11 @@ private:
     [[nodiscard]] bool lower_hir_packed_copy_out(
         semantic::ExpressionId target,
         RegisterId source,
-        HirPackedCopyOutMode mode = HirPackedCopyOutMode::blocking);
+        HirPackedCopyOutMode mode = HirPackedCopyOutMode::blocking,
+        // Rise, fall and turn-off delays of a continuous assignment to a
+        // concatenation: every part is written with its own inertial delay
+        // (IEEE 1800-2023 10.3.3).
+        std::optional<TransitionDelays> delays = std::nullopt);
     [[nodiscard]] bool lower_hir_output_actual_write(
         semantic::ExpressionId target,
         RegisterId source);
@@ -4544,6 +4566,10 @@ private:
     // Whether `declaration` is a class function other than a constructor.
     [[nodiscard]] bool hir_class_function_declaration(
         semantic::DeclarationId declaration) const;
+    [[nodiscard]] std::optional<Process> lower_hir_process_body_attempts(
+        const HirProcessDescription& description,
+        frontend::Language language,
+        std::string_view hierarchy);
     [[nodiscard]] std::optional<Process> lower_hir_process_body_once(
         const HirProcessDescription& description,
         frontend::Language language,
@@ -5983,6 +6009,16 @@ private:
     // a task or function of another instance (`a.t()`) is lowered inline.
     [[nodiscard]] std::string hir_instance_path() const;
     mutable bool hierarchical_reference_used_ { };
+    // The signal and full path of the last name that resolved
+    // hierarchically (hir_hierarchical_signal), for the read it leads to.
+    mutable bool hierarchical_last_found_ { };
+    mutable SignalId hierarchical_last_signal_ { };
+    mutable std::string hierarchical_last_path_;
+    // The reads of the process being lowered that went through a
+    // hierarchical name; the finished process takes them into the design's
+    // table (ElaboratedDesign::hierarchical_reads), where SDF net delays find
+    // the reads of a delayed load port.
+    std::vector<HierarchicalSignalRead> hierarchical_marks_;
     mutable std::uint64_t hir_instance_path_uses_ { };
     mutable bool hierarchical_reference_missed_ { };
     // A virtual call whose overrides include classes of design element

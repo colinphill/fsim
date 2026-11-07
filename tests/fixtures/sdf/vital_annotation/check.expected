@@ -1,0 +1,8 @@
+TRACE q='0' @8000000 fs
+vff: VitalSetupHoldCheck(d,clk)
+TRACE setup/hold violation @21000000 fs
+TRACE q='1' @22000000 fs
+vff: VitalSetupHoldCheck(d,clk)
+TRACE setup/hold violation @33000000 fs
+vff: VitalPeriodPulseCheck(clk)
+TRACE pulse violation @36000000 fs

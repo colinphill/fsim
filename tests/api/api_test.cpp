@@ -239,6 +239,7 @@ fsim_string_view_t text(const char* value)
 
 void test_multiple_root_api(const std::filesystem::path& directory);
 void test_mapped_library_api(const std::filesystem::path& directory);
+void test_sdf_vital_api(const std::filesystem::path& directory);
 void test_systemc_api(
     const std::filesystem::path& workspace, const char* snapshot);
 
@@ -1891,6 +1892,7 @@ endmodule
 
     test_multiple_root_api(directory);
     test_mapped_library_api(directory);
+    test_sdf_vital_api(directory);
 
     std::error_code cleanup_error;
     std::filesystem::remove_all(directory, cleanup_error);

@@ -51,6 +51,8 @@ namespace fsim::runtime::simir {
                 return std::optional { value.signal };
             } else if constexpr (std::is_same_v<OperationType, WriteInertialSlice>) {
                 return std::optional { value.signal };
+            } else if constexpr (std::is_same_v<OperationType, WriteNetDelay>) {
+                return std::optional { value.signal };
             } else if constexpr (std::is_same_v<OperationType, WriteProjectedSlice>) {
                 return std::optional { value.signal };
             } else if constexpr (std::is_same_v<OperationType, WriteProjectedWaveformSlice>) {

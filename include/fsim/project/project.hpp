@@ -98,6 +98,50 @@ struct SystemVerilogUvmCompatibility {
       const SystemVerilogUvmCompatibility&) = default;
 };
 
+/// One SDF backannotation of a VITAL timing generic (IEEE 1076.4-2000 5.2),
+/// made at elaboration. See elaboration::TimingGenericAnnotation.
+struct TimingGenericPort {
+  std::string name;
+  bool indexed{false};
+  std::int64_t left{0};
+  std::int64_t right{0};
+
+  friend bool operator==(const TimingGenericPort&,
+                         const TimingGenericPort&) = default;
+};
+
+struct TimingGenericAnnotation {
+  std::string instance;
+  std::string generic;
+  bool increment{false};
+  std::vector<std::optional<std::int64_t>> values;
+  std::string source;
+  std::vector<TimingGenericPort> ports;
+  std::vector<std::optional<std::int64_t>> retain;
+  /// An INTERCONNECT entry (IEEE 1076.4-2000 5.2.7.1.4), with the elaborated
+  /// path of the instance that holds its source port and the source port's
+  /// name (with its bit or range select); two sources of one generic make
+  /// the multiple source mode of 5.2.7.1.5.
+  bool interconnect{false};
+  std::string source_instance;
+  std::string source_port;
+
+  friend bool operator==(const TimingGenericAnnotation&,
+                         const TimingGenericAnnotation&) = default;
+};
+
+/// One SDF file of the command line that annotates at elaboration, the VITAL
+/// timing generics of the VHDL cells it names (IEEE 1076.4-2000 5.1.1).
+struct SdfInput {
+  std::string file;
+  std::string root{"*"};
+  std::string cell{"*"};
+  std::uint64_t file_precedence{0};
+  std::uint64_t cell_precedence{0};
+
+  friend bool operator==(const SdfInput&, const SdfInput&) = default;
+};
+
 struct ProjectSection {
   struct TopLevel {
     std::string target;
@@ -114,6 +158,13 @@ struct ProjectSection {
   // Top-level generic and parameter overrides (`--generic NAME=VALUE`),
   // applied to every root that declares a generic of that name.
   std::vector<std::pair<std::string, std::string>> generics;
+  // SDF backannotation of VITAL timing generics, made when the design is
+  // elaborated (`elaborate --sdf`).
+  std::vector<TimingGenericAnnotation> timing_generics;
+  // The SDF files whose VITAL cells the build annotates, and the delay
+  // selection that picks one of each min:typ:max triple.
+  std::vector<SdfInput> sdf_inputs;
+  DelayMode sdf_delay_mode{DelayMode::typical};
   std::string time_resolution{"auto"};
   std::uint64_t seed{1};
   bool random_seed{false};

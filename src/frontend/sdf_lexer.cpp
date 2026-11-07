@@ -403,7 +403,12 @@ namespace {
         {
             const auto begin = current_location();
             bool escaped = false;
-            while (!at_end() && !identifier_terminator(peek())) {
+            // The colon of a part select (`a[3:2]`, a bus port of IEEE
+            // 1497-2001 5.3) belongs to the identifier.
+            bool in_select = false;
+            while (!at_end()
+                && (!identifier_terminator(peek())
+                    || (in_select && peek() == ':'))) {
                 if (peek() == '/' && (peek(1U) == '/' || peek(1U) == '*')) {
                     break;
                 }
@@ -416,6 +421,10 @@ namespace {
                             current_location());
                         break;
                     }
+                } else if (peek() == '[') {
+                    in_select = true;
+                } else if (peek() == ']') {
+                    in_select = false;
                 }
                 advance();
                 if (token_limit_exceeded(begin)) {

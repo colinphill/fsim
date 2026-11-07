@@ -1817,6 +1817,11 @@ void Interpreter::Impl::StaticKernel::emit_lane_output(const LaneOutput& output)
                 op.source, kernel_now(), warp_time_ ? 0U : impl_.scheduler.delta());
         }
         break;
+    case LaneOutput::Kind::net_delay:
+        net_delay_write(output.member, output.pc,
+            operation_get<WriteNetDelay>(member.operations()[output.pc]),
+            output.value);
+        break;
     }
 }
 
@@ -2756,6 +2761,12 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             }
             impl_.schedule_inertial(member.process, op.signal,
                 packed_register(op.source), offset, op.delays, op.domain);
+        } else if constexpr (std::is_same_v<T, WriteNetDelay>) {
+            // An interconnect delay (IEEE 1364-2005 16.2.4): the kernel
+            // holds the pending changes per bit and matures them with its
+            // timers (net_delay_write), by the algorithm of the reference
+            // process (Impl::schedule_net_delay).
+            net_delay_write(member_index, pc, op, packed_register(op.source));
         } else if constexpr (std::is_same_v<T, CoverageSample>) {
             // A covergroup sample (IEEE 1800-2023 19.8) into the host's
             // coverage database, as the reference samples it.
@@ -4699,6 +4710,13 @@ void Interpreter::Impl::StaticKernel::collect_timers()
     while (!timers_.empty() && timers_.top().time <= now) {
         const auto timer = timers_.top();
         timers_.pop();
+        if (timer.net_delay) {
+            // A delayed write's changes land before the threads of this
+            // time step run: the update event of a delayed net (IEEE
+            // 1800-2023 4.4.2.2).
+            net_delay_mature(timer.thread, now);
+            continue;
+        }
         const auto& thread = threads_[timer.thread];
         if (thread.alive && !thread.queued && thread.epoch == timer.epoch) {
             ready_thread(timer.thread);
@@ -4777,6 +4795,7 @@ void Interpreter::Impl::StaticKernel::arm_timer()
     if (stopped_) {
         return;
     }
+    drop_lapsed_net_delay_timers();
     if (timers_.empty()) {
         if (warp_time_ && *warp_time_ > impl_.scheduler.now()) {
             // The last warped step ended the run: time must still reach it,
@@ -4820,10 +4839,124 @@ std::optional<SimulationTick> Interpreter::Impl::StaticKernel::next_timer()
 {
     // Lapsed timers included (arm_timer): the time steps they hold are the
     // reference's too.
+    drop_lapsed_net_delay_timers();
     if (timers_.empty()) {
         return std::nullopt;
     }
     return timers_.top().time;
+}
+
+bool Interpreter::Impl::StaticKernel::net_delay_timer_live(const Timer& timer) const
+{
+    return timer.thread < net_delay_sites_.size()
+        && net_delay_sites_[timer.thread].pending.wakes.contains(timer.time);
+}
+
+void Interpreter::Impl::StaticKernel::drop_lapsed_net_delay_timers()
+{
+    // A delayed change that a later one superseded or a pulse filter
+    // deleted leaves no wake; the reference cancels its task, so the time
+    // step it held is not reached.
+    while (!timers_.empty() && timers_.top().net_delay
+        && !net_delay_timer_live(timers_.top())) {
+        timers_.pop();
+    }
+}
+
+PackedLogic4 Interpreter::Impl::StaticKernel::net_delay_driver_value(
+    const std::uint32_t slot_index, const ProcessId process) const
+{
+    const auto& slot = slots_[slot_index];
+    if (!slot.resolved) {
+        return slot_value(slot_index);
+    }
+    // The member's own source of a net with several (Slot::net_processes).
+    const auto words = slot.words;
+    const auto* planes = arena_.data() + slot.offset
+        + (2U + 4U * net_source_index(slot_index, process)) * words;
+    const auto plane = [&](const std::uint32_t index) {
+        return std::span<const std::uint64_t> { planes + index * words, words };
+    };
+    return Impl::coerce_value_kind(
+        PackedLogic4::from_logic9_word_planes(
+            slot.width, plane(0U), plane(1U), plane(2U), plane(3U)),
+        ValueKind::logic4);
+}
+
+void Interpreter::Impl::StaticKernel::net_delay_write(
+    const std::uint32_t member_index, const std::uint32_t pc,
+    const WriteNetDelay& operation, const PackedLogic4& source)
+{
+    const auto signal = operation.signal;
+    if (signal >= slot_of_signal_.size() || slot_of_signal_[signal] == no_slot) {
+        fail(member_index, pc,
+            "static kernel interconnect delay target is not kernel-owned");
+    }
+    const auto slot_index = slot_of_signal_[signal];
+    const auto& slot = slots_[slot_index];
+    const std::uint32_t offset = operation.offset.value_or(0U);
+    const auto width = static_cast<std::uint32_t>(source.width());
+    if (width == 0U || offset > slot.width || width > slot.width - offset
+        || (!operation.offset && width != slot.width)) {
+        fail(member_index, pc,
+            "interconnect delay write range is outside its target signal");
+    }
+    const auto value = Impl::coerce_value_kind(source, ValueKind::logic4);
+    const auto process = member_process_[member_index];
+    const auto current = net_delay_driver_value(slot_index, process);
+    const auto key = (std::uint64_t { member_index } << 32U) | pc;
+    auto found = net_delay_site_of_.find(key);
+    if (found == net_delay_site_of_.end()) {
+        // Nothing pending and nothing to change: the usual case.
+        if (current.extract_bits(offset, width) == value) {
+            return;
+        }
+        found = net_delay_site_of_.emplace(key,
+            static_cast<std::uint32_t>(net_delay_sites_.size())).first;
+        auto& made = net_delay_sites_.emplace_back();
+        made.member = member_index;
+        made.pc = pc;
+        made.slot = slot_index;
+        made.offset = offset;
+        made.width = width;
+        made.pending.bits.resize(width);
+    } else if (net_delay_sites_[found->second].pending.wakes.empty()
+        && current.extract_bits(offset, width) == value) {
+        return;
+    }
+    const auto site_index = found->second;
+    auto& site = net_delay_sites_[site_index];
+    const auto limits = impl_.net_delay_limits(process, operation);
+    const auto now = kernel_now();
+    for (std::uint32_t bit = 0U; bit < width; ++bit) {
+        site.pending.change(bit, current.get(offset + bit), value.get(bit), now,
+            limits.delays, limits.rejects, limits.errors,
+            [&](const SimulationTick, const SimulationTick time,
+                PendingNetDelayWrites::Wake&) {
+                timers_.push({ time, process, timer_sequence_++, site_index, 0U,
+                    true });
+            },
+            [](PendingNetDelayWrites::Wake&) { });
+    }
+}
+
+void Interpreter::Impl::StaticKernel::net_delay_mature(
+    const std::uint32_t site_index, const SimulationTick now)
+{
+    auto& site = net_delay_sites_[site_index];
+    const auto matured = site.pending.mature(now);
+    if (matured.empty()) {
+        return;
+    }
+    const auto process = member_process_[site.member];
+    const auto low = matured.front().first;
+    const auto high = matured.back().first;
+    auto slice = net_delay_driver_value(site.slot, process)
+                     .extract_bits(site.offset + low, high - low + 1U);
+    for (const auto& [bit, value] : matured) {
+        slice.set(bit - low, value);
+    }
+    write_slot_value(site.slot, slice, site.offset + low, site.member, site.pc);
 }
 
 void Interpreter::Impl::StaticKernel::schedule_stop_at(const SimulationTick time)

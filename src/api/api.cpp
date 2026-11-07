@@ -349,7 +349,8 @@ fsim_status_t start_design(Session& value, fsim::app::BuiltProject built)
         auto planned = fsim::app::plan_sdf_session_inputs(
             built.design, built.time_resolution, built.cache_key,
             value.sdf_control->request(), value.sdf_resolved_paths,
-            value.diagnostics);
+            value.diagnostics,
+            { &built.design_ir, &built.systemverilog_hir });
         if (!planned)
             return FSIM_STATUS_COMPILE_ERROR;
         built.design = std::move(planned->design);
@@ -554,11 +555,13 @@ fsim_status_t fsim_session_configure_sdf(
                 *value.sdf_baseline_design,
                 value.simulation->time_resolution(), "c-api-sdf-session",
                 std::move(effective_request), resolved_paths,
-                value.diagnostics);
+                value.diagnostics,
+                { &value.simulation->design_ir(),
+                    &value.simulation->systemverilog_hir() });
             if (!planned)
                 return FSIM_STATUS_INVALID_ARGUMENT;
             auto committed = value.simulation->commit_sdf_reannotation(
-                *planned->control->effective());
+                *planned->control->effective(), &planned->design);
             if (!committed.ok()) {
                 for (const auto& entry : committed.diagnostics)
                     value.diagnostics.error(entry.code, entry.message);

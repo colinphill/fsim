@@ -1020,9 +1020,15 @@ function(fsim_add_foreign_conformance_test FSIM_NAME FSIM_INTERFACE
   # --dpi-header` must write and ELABORATE_ARGS more `fsim elaborate`
   # arguments. DEBUG_COMMANDS names a Tcl script that `fsim debug`
   # evaluates in place of `fsim simulate`; the case then runs on the debug
-  # engine only.
+  # engine only. ENVIRONMENT lists NAME=value entries every step runs with,
+  # and RERUN_ENVIRONMENT more entries for a second `fsim simulate` that must
+  # print the same trace.
   cmake_parse_arguments(PARSE_ARGV 9 FSIM_OPTION ""
-    "MESSAGE;SDF;ELABORATE_MESSAGE;DPI_HEADER;ELABORATE_ARGS;DEBUG_COMMANDS" "")
+    "MESSAGE;SDF;ELABORATE_MESSAGE;DPI_HEADER;ELABORATE_ARGS;DEBUG_COMMANDS"
+    "ENVIRONMENT;RERUN_ENVIRONMENT")
+  string(REPLACE ";" "|" FSIM_ENVIRONMENT_TEXT "${FSIM_OPTION_ENVIRONMENT}")
+  string(REPLACE ";" "|" FSIM_RERUN_ENVIRONMENT_TEXT
+    "${FSIM_OPTION_RERUN_ENVIRONMENT}")
   set(FSIM_DEBUG_COMMANDS_PATH "")
   if(NOT "${FSIM_OPTION_DEBUG_COMMANDS}" STREQUAL "")
     set(FSIM_DEBUG_COMMANDS_PATH
@@ -1060,6 +1066,8 @@ function(fsim_add_foreign_conformance_test FSIM_NAME FSIM_INTERFACE
         "-DFSIM_DPI_HEADER=${FSIM_DPI_HEADER_PATH}"
         "-DFSIM_ELABORATE_ARGS=${FSIM_OPTION_ELABORATE_ARGS}"
         "-DFSIM_DEBUG_COMMANDS=${FSIM_DEBUG_COMMANDS_PATH}"
+        "-DFSIM_ENVIRONMENT=${FSIM_ENVIRONMENT_TEXT}"
+        "-DFSIM_RERUN_ENVIRONMENT=${FSIM_RERUN_ENVIRONMENT_TEXT}"
         "-DFSIM_WORK_DIR=${PROJECT_BINARY_DIR}/tests/foreign/${FSIM_NAME}-${FSIM_ENGINE}"
         -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunForeignConformanceCase.cmake")
     set_tests_properties(
@@ -1113,6 +1121,77 @@ fsim_add_foreign_conformance_test(
   vpi-sdf-delays vpi foreign_vpi_sdf_delays.sv foreign_vpi_sdf_delays.expected
   "" fsim_foreign_vpi_sdf_delays_plugin "" OFF ""
   SDF foreign_vpi_sdf_delays.sdf)
+# A module input port delay put on a port no SDF annotation split: the first
+# put splits the port's net at a safe point, the second retimes the copy (IEEE
+# 1800-2023 38.32, IEEE 1364-2005 16.2.4), on a port and on a port bit.
+add_library(fsim_foreign_vpi_mipd_split_plugin SHARED
+  foreign_vpi_mipd_split_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_mipd_split_plugin)
+target_link_libraries(fsim_foreign_vpi_mipd_split_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_mipd_split_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-mipd-split vpi foreign_vpi_mipd_split.sv foreign_vpi_mipd_split.expected
+  "" fsim_foreign_vpi_mipd_split_plugin)
+# The same split on the kernel's other shapes: parallel batches, a persisted
+# kernel image (the second run restores it and splits afresh), no dispatch
+# groups, and a load of edge-triggered processes (foreign_vpi_mipd_split_groups).
+fsim_add_foreign_conformance_test(
+  vpi-mipd-split-mt vpi foreign_vpi_mipd_split.sv
+  foreign_vpi_mipd_split.expected "" fsim_foreign_vpi_mipd_split_plugin "" ""
+  v4 ENVIRONMENT FSIM_KERNEL_THREADS=4 FSIM_KERNEL_MT_FORCE=1)
+if(FSIM_WITH_LLVM)
+  fsim_add_foreign_conformance_test(
+    vpi-mipd-split-aot vpi foreign_vpi_mipd_split.sv
+    foreign_vpi_mipd_split.expected "" fsim_foreign_vpi_mipd_split_plugin "" ""
+    v4 ELABORATE_ARGS "--aot" RERUN_ENVIRONMENT FSIM_KERNEL_IMAGE_REQUIRED=1)
+endif()
+fsim_add_foreign_conformance_test(
+  vpi-mipd-split-nogroups vpi foreign_vpi_mipd_split.sv
+  foreign_vpi_mipd_split.expected "" fsim_foreign_vpi_mipd_split_plugin "" ""
+  v4 ENVIRONMENT FSIM_STATIC_KERNEL_DISPATCH_GROUPS=0)
+fsim_add_foreign_conformance_test(
+  vpi-mipd-split-groups vpi foreign_vpi_mipd_split_groups.sv
+  foreign_vpi_mipd_split_groups.expected "" fsim_foreign_vpi_mipd_split_plugin)
+fsim_add_foreign_conformance_test(
+  vpi-mipd-split-groups-mt vpi foreign_vpi_mipd_split_groups.sv
+  foreign_vpi_mipd_split_groups.expected "" fsim_foreign_vpi_mipd_split_plugin
+  "" "" v4 ENVIRONMENT FSIM_KERNEL_THREADS=4 FSIM_KERNEL_MT_FORCE=1)
+fsim_add_foreign_conformance_test(
+  vpi-mipd-split-groups-nogroups vpi foreign_vpi_mipd_split_groups.sv
+  foreign_vpi_mipd_split_groups.expected "" fsim_foreign_vpi_mipd_split_plugin
+  "" "" v4 ENVIRONMENT FSIM_STATIC_KERNEL_DISPATCH_GROUPS=0)
+# The lazy split equals the elaboration-time one: the plug-in puts 1 ps into
+# the run, before any change, the delays that an SDF PORT annotation gives at
+# elaboration, and both runs print the same trace.
+add_library(fsim_foreign_vpi_mipd_split_early_plugin SHARED
+  foreign_vpi_mipd_split_early_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_mipd_split_early_plugin)
+target_link_libraries(
+  fsim_foreign_vpi_mipd_split_early_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_mipd_split_early_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-mipd-split-early vpi foreign_vpi_mipd_split.sv
+  foreign_vpi_mipd_split_early.expected "" fsim_foreign_vpi_mipd_split_early_plugin)
+fsim_add_foreign_conformance_test(
+  vpi-mipd-split-early-sdf vpi foreign_vpi_mipd_split.sv
+  foreign_vpi_mipd_split_early.expected "" fsim_foreign_vpi_mipd_split_early_plugin
+  "" "" "" SDF foreign_vpi_mipd_split_early.sdf)
+# A foreign write (deposit, force, release) of a net whose load has per-source
+# INTERCONNECT delays reaches the load after the smallest delay of its sources
+# for each bit's transition (the group-mode shadows carry only the sources'
+# writes).
+add_library(fsim_foreign_vpi_net_foreign_plugin SHARED
+  foreign_vpi_net_foreign_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_net_foreign_plugin)
+target_link_libraries(fsim_foreign_vpi_net_foreign_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_net_foreign_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-net-foreign vpi foreign_vpi_net_foreign.sv
+  foreign_vpi_net_foreign.expected "" fsim_foreign_vpi_net_foreign_plugin
+  "" OFF "" SDF foreign_vpi_net_foreign.sdf)
 # Clocking blocks and nettype declarations (IEEE 1800-2023 37.23, 37.48).
 add_library(fsim_foreign_vpi_clocking_plugin SHARED
   foreign_vpi_clocking_plugin.c)
@@ -1680,6 +1759,17 @@ target_include_directories(
 fsim_add_foreign_conformance_test(
   vhpi-values vhpi foreign_vhpi_values.vhd foreign_vhpi_values.expected ""
   fsim_foreign_vhpi_values_plugin)
+# A VHPI deposit of 'H' into a design with no weak value of its own: the
+# kernel's registers carry it as the foreign library wrote it (IEEE 1164).
+add_library(fsim_foreign_vhpi_weak_plugin SHARED
+  foreign_vhpi_weak_plugin.c)
+fsim_configure_library(fsim_foreign_vhpi_weak_plugin)
+target_link_libraries(fsim_foreign_vhpi_weak_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vhpi_weak_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vhpi-weak vhpi foreign_vhpi_weak.vhd foreign_vhpi_weak.expected ""
+  fsim_foreign_vhpi_weak_plugin)
 # A foreign architecture (IEEE 1076-2019 14.5.1, 20.2.4, 20.4, 20.5, 22.5.4,
 # 22.6, 23.6, 23.34), and the error of a design whose foreign architecture no
 # loaded library registers.

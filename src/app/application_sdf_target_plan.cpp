@@ -235,7 +235,18 @@ namespace {
             return false;
         }
         const auto nodes = annotation_value_nodes(ir, mapping.node_id);
-        if (nodes.empty() || nodes.size() > limits.max_values_per_annotation) {
+        // The values of a delval with pulse limits are the delay and its
+        // limits: only the delay counts as a value of the annotation.
+        const auto limit_position = [&](const SdfIrNode& node) -> std::size_t {
+            const auto* const parent = ir.find_node(node.parent_id);
+            return parent != nullptr && parent->kind == SdfConstructKind::Value
+                ? node.sibling_index : 0U;
+        };
+        const auto delay_values = static_cast<std::size_t>(std::ranges::count(
+            nodes, 0U, [&](const SdfIrNode* node) {
+                return limit_position(*node);
+            }));
+        if (nodes.empty() || delay_values > limits.max_values_per_annotation) {
             const auto* root = ir.find_node(mapping.node_id);
             diagnose(diagnostics, nodes.empty() ? "FSIM-SDF-PLAN-002" : "FSIM-SDF-PLAN-004",
                 nodes.empty()
@@ -273,6 +284,38 @@ namespace {
                 annotation.after_percentages.push_back(*selected.selected);
                 continue;
             }
+            // A pulse limit of the delay before it: the reject limit, which
+            // an error limit that is not given follows, and the error limit.
+            if (const auto position = limit_position(*node); position != 0U) {
+                if (node->exact_value->kind
+                        == frontend::SdfExactValueKind::Empty
+                    || annotation.after_ticks.empty()) {
+                    continue;
+                }
+                const auto selected = select_sdf_delay(*node->exact_value,
+                    *ir.timescale(), policy, node->span);
+                if (!selected.ok()) {
+                    diagnostics.insert(diagnostics.end(),
+                        selected.diagnostics.begin(),
+                        selected.diagnostics.end());
+                    valid = false;
+                    continue;
+                }
+                annotation.reject_ticks.resize(
+                    annotation.after_ticks.size(), sdf_no_pulse_limit);
+                annotation.error_ticks.resize(
+                    annotation.after_ticks.size(), sdf_no_pulse_limit);
+                auto& error = annotation.error_ticks.back();
+                if (position == 1U) {
+                    annotation.reject_ticks.back() = selected.selected->ticks;
+                    if (error == sdf_no_pulse_limit) {
+                        error = selected.selected->ticks;
+                    }
+                } else {
+                    error = selected.selected->ticks;
+                }
+                continue;
+            }
             // An empty `()` delay leaves that transition's delay unchanged
             // (IEEE 1497-2001 5.4.1).
             if (node->exact_value->kind == frontend::SdfExactValueKind::Empty
@@ -301,6 +344,13 @@ namespace {
             } else {
                 annotation.after_ticks.push_back(selected.selected->ticks);
             }
+        }
+        // One limit slot for each delay once any delay gives a limit.
+        if (!annotation.reject_ticks.empty()) {
+            annotation.reject_ticks.resize(
+                annotation.after_ticks.size(), sdf_no_pulse_limit);
+            annotation.error_ticks.resize(
+                annotation.after_ticks.size(), sdf_no_pulse_limit);
         }
         return valid;
     }
@@ -410,6 +460,12 @@ namespace {
             append_field(result, std::to_string(value));
         result.push_back('|');
         for (const auto value : annotation.after_ticks)
+            append_field(result, std::to_string(value));
+        result.push_back('|');
+        for (const auto value : annotation.reject_ticks)
+            append_field(result, std::to_string(value));
+        result.push_back('|');
+        for (const auto value : annotation.error_ticks)
             append_field(result, std::to_string(value));
         result.push_back('|');
         for (const auto value : annotation.before_check_ticks)

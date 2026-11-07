@@ -1,0 +1,7 @@
+TRACE a=1 t=22
+TRACE a=0 t=42
+TRACE a=x t=65
+TRACE a=1 t=82
+TRACE a=0 t=125
+TRACE v=We1 t=204
+TRACE v=We0 t=224

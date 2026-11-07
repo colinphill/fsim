@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+weak val(0)='U'
+weak val(1)='X'
+weak val(2)='0'
+weak val(3)='1'
+weak val(4)='Z'
+weak val(5)='W'
+weak val(6)='L'
+weak val(7)='H'
+weak val(8)='-'

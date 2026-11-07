@@ -1,0 +1,8 @@
+// SPDX-License-Identifier: Apache-2.0
+// A DEVICE delay maps to tdevice_<InstanceName>_<OutputPort> (5.2.7.1.6).
+(DELAYFILE
+  (SDFVERSION "3.0")
+  (DESIGN "tb_device")
+  (TIMESCALE 1ns)
+  (CELL (CELLTYPE "vdev") (INSTANCE tb_device.p1)
+    (DELAY (ABSOLUTE (DEVICE z (6:6:6))))))

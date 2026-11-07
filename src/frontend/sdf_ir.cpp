@@ -201,6 +201,7 @@ namespace {
             }
             if (item.source->canonical_identity.empty()
                 || (item.source->kind == SdfConstructKind::Value
+                    && item.source->children.empty()
                     && !item.source->exact_value)) {
                 diagnose("FSIM-SDF-IR-001",
                     "normalized SDF syntax node is incomplete", item.source->span);

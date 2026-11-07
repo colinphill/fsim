@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_sdf_session.hpp"
 #include "application_internal.hpp"
+#include "application_sdf_vital_generics.hpp"
 
 #include "fsim/app/sdf_annotation_scope.hpp"
 #include "fsim/app/sdf_cell_resolution.hpp"
@@ -104,23 +105,32 @@ std::optional<std::uint64_t> resolution_femtoseconds(
     return parsed->magnitude * *factor;
 }
 
-// The persistent record of an INTERCONNECT or PORT annotation: its terminals
-// and the twelve effective transition delays (IEEE 1800-2023 37.37, 37.45).
+elaboration::SdfNetDelayTerminal net_delay_terminal(
+    const SdfResolvedEndpoint& endpoint)
+{
+    elaboration::SdfNetDelayTerminal result;
+    result.instance = endpoint.instance_path;
+    result.object = endpoint.object_path;
+    result.signal = endpoint.signal;
+    result.port = endpoint.object_kind == SdfEndpointObjectKind::HdlPort;
+    if (endpoint.select) {
+        result.select_width = static_cast<std::uint32_t>(endpoint.select->width);
+        result.select_left = endpoint.select->left;
+        result.select_right = endpoint.select->right;
+    }
+    return result;
+}
+
+// The persistent record of an INTERCONNECT, PORT or NETDELAY annotation: its
+// terminals and the twelve effective transition delays (IEEE 1800-2023 37.37,
+// 37.45). A NETDELAY is a PORT delay on each load it reaches (IEEE 1364-2005
+// 16.2.4), so its record names the first endpoint until the loads replace it
+// (net_delay_records).
 std::optional<elaboration::SdfNetDelayInfo> net_delay_record(
     const SdfPlannedAnnotation& annotation,
     const SdfPrecedenceApplication& precedence)
 {
-    const auto terminal = [](const SdfResolvedEndpoint& endpoint) {
-        elaboration::SdfNetDelayTerminal result;
-        result.instance = endpoint.instance_path;
-        result.object = endpoint.object_path;
-        result.signal = endpoint.signal;
-        result.port = endpoint.object_kind == SdfEndpointObjectKind::HdlPort;
-        result.select_width = endpoint.select
-            ? static_cast<std::uint32_t>(endpoint.select->width)
-            : 0U;
-        return result;
-    };
+    const auto terminal = net_delay_terminal;
     const auto with_role = [&](const SdfEndpointRole role) {
         return std::ranges::find(
             annotation.endpoints, role, &SdfResolvedEndpoint::role);
@@ -128,7 +138,13 @@ std::optional<elaboration::SdfNetDelayInfo> net_delay_record(
     elaboration::SdfNetDelayInfo result;
     result.instance = annotation.target_instance_path;
     result.identity = annotation.target_identity;
-    if (annotation.target_kind == SdfTimingTargetKind::Interconnect) {
+    if (annotation.construct_kind == frontend::SdfConstructKind::NetDelay) {
+        if (annotation.endpoints.empty())
+            return std::nullopt;
+        result.kind = elaboration::SdfNetDelayKind::port;
+        result.source = terminal(annotation.endpoints.front());
+        result.destination = result.source;
+    } else if (annotation.target_kind == SdfTimingTargetKind::Interconnect) {
         const auto source = with_role(SdfEndpointRole::InterconnectSource);
         const auto destination
             = with_role(SdfEndpointRole::InterconnectDestination);
@@ -144,6 +160,32 @@ std::optional<elaboration::SdfNetDelayInfo> net_delay_record(
         result.kind = elaboration::SdfNetDelayKind::port;
         result.source = terminal(annotation.endpoints.front());
         result.destination = result.source;
+    }
+    // The pulse limits of a delay that gives them (a delval of two or three
+    // values): each as the twelve transitions by the rules of the delays; a
+    // limit that is not given follows its delay, and an error limit its
+    // reject limit (IEEE 1364-2005 14.6, 16.2.4).
+    if (!annotation.reject_ticks.empty()
+        && annotation.reject_ticks.size() == annotation.after_ticks.size()
+        && annotation.error_ticks.size() == annotation.after_ticks.size()) {
+        std::vector<std::uint64_t> reject;
+        std::vector<std::uint64_t> error;
+        for (std::size_t index = 0U; index < annotation.after_ticks.size();
+            ++index) {
+            const auto given = [&](const std::uint64_t limit,
+                                   const std::uint64_t otherwise) {
+                return limit != sdf_no_pulse_limit ? limit : otherwise;
+            };
+            reject.push_back(given(
+                annotation.reject_ticks[index], annotation.after_ticks[index]));
+            error.push_back(given(annotation.error_ticks[index], reject.back()));
+        }
+        const auto rejects = expand_sdf_transition_delays(reject);
+        const auto errors = expand_sdf_transition_delays(error);
+        if (rejects && errors) {
+            result.reject.assign(rejects->begin(), rejects->end());
+            result.error.assign(errors->begin(), errors->end());
+        }
     }
     const auto effective
         = precedence.find_target(annotation.target_kind, annotation.target_identity);
@@ -164,6 +206,186 @@ std::optional<elaboration::SdfNetDelayInfo> net_delay_record(
     return result;
 }
 
+
+// An INCREMENT adds to the delay the earlier files annotated to the same load
+// (IEEE 1364-2005 16.3: the constructs apply in order of occurrence, an
+// INCREMENT to what is there): the delays and, when either record gives pulse
+// limits, the limits, each a delay when it is not given.
+void add_to_previous(elaboration::SdfNetDelayInfo& record,
+    const elaboration::SdfNetDelayInfo& previous)
+{
+    if (record.delays.size() != 12U || previous.delays.size() != 12U)
+        return;
+    const auto limit = [](const std::vector<runtime::SimulationTick>& given,
+                           const std::vector<runtime::SimulationTick>& otherwise,
+                           const std::size_t index) {
+        return given.size() == 12U ? given[index] : otherwise[index];
+    };
+    const bool limited = !record.reject.empty() || !previous.reject.empty();
+    std::vector<runtime::SimulationTick> reject;
+    std::vector<runtime::SimulationTick> error;
+    for (std::size_t index = 0U; index < 12U; ++index) {
+        if (limited) {
+            const auto new_reject = limit(record.reject, record.delays, index);
+            const auto old_reject = limit(previous.reject, previous.delays, index);
+            reject.push_back(old_reject + new_reject);
+            error.push_back(limit(previous.error, previous.reject.empty()
+                                      ? previous.delays : previous.reject, index)
+                + limit(record.error, record.reject.empty()
+                          ? record.delays : record.reject, index));
+        }
+        record.delays[index] += previous.delays[index];
+    }
+    record.reject = std::move(reject);
+    record.error = std::move(error);
+}
+
+// One input or inout port, or an output port, of a Verilog or SystemVerilog
+// instance, by the signal its path names.
+struct DeclaredPort {
+    std::string instance;
+    std::string path;
+    frontend::PortDirection direction { frontend::PortDirection::Unknown };
+};
+
+using DeclaredPorts
+    = std::map<runtime::simir::SignalId, std::vector<DeclaredPort>>;
+
+// The ports of the instances (IEEE 1800-2023 37.14), from the same design IR
+// and HIR records the VPI port objects come from. A port that shares its
+// actual's net names the net's signal; one with an adapter of its own (a
+// different width) names its own, so it is not a load of the net.
+DeclaredPorts declared_ports(const elaboration::ElaboratedDesign& design,
+    const SdfPortSource& source)
+{
+    DeclaredPorts result;
+    if (source.design_ir == nullptr || source.systemverilog_hir == nullptr)
+        return result;
+    const auto& ir = *source.design_ir;
+    const auto& hir = *source.systemverilog_hir;
+    for (const auto& instance : ir.instances()) {
+        const auto& specialization
+            = ir.specializations().at(instance.specialization.value());
+        const auto unit = std::ranges::find(
+            hir.units(), specialization.unit, &semantic::sv::Unit::id);
+        if (unit == hir.units().end())
+            continue;
+        const std::string instance_path { ir.path(instance.path) };
+        for (const auto declaration_id : unit->declarations) {
+            const auto* const declaration = hir.find_declaration(declaration_id);
+            if (declaration == nullptr
+                || declaration->form != semantic::sv::DeclarationForm::port
+                || !declaration->interface_type.empty())
+                continue;
+            DeclaredPort port;
+            port.instance = instance_path;
+            port.path = instance_path + "." + declaration->name;
+            switch (declaration->direction) {
+            case semantic::sv::Direction::input:
+                port.direction = frontend::PortDirection::Input;
+                break;
+            case semantic::sv::Direction::output:
+                port.direction = frontend::PortDirection::Output;
+                break;
+            case semantic::sv::Direction::inout:
+                port.direction = frontend::PortDirection::Inout;
+                break;
+            default:
+                continue;
+            }
+            if (const auto signal = design.find_signal(port.path))
+                result[*signal].push_back(std::move(port));
+        }
+    }
+    return result;
+}
+
+// The records of a NETDELAY (IEEE 1364-2005 16.2.4): on an input or inout
+// port the delay is that port's interconnect delay from all its sources, on
+// a net it is the delay of every input and inout port the net reaches; an
+// output port is an error. Each record is a PORT-kind record of one load
+// whose identity names the load, so that a later record of the same load
+// replaces it (16.3). False with `problem` set for an output port; a net
+// that reaches no load gives no record and sets `warning`.
+bool net_delay_records(const SdfPlannedAnnotation& annotation,
+    const elaboration::SdfNetDelayInfo& base, const DeclaredPorts& ports,
+    std::vector<elaboration::SdfNetDelayInfo>& records, std::string& problem,
+    std::string& warning, const bool design_has_vhdl)
+{
+    constexpr std::string_view vital
+        = "NETDELAY is unsupported for VHDL/VITAL targets and has no effect "
+          "on them (IEEE 1076.4-2000 5.2.7.1, 5.2)";
+    // The delay device belongs to the module of the load port.
+    const auto add = [&](elaboration::SdfNetDelayTerminal terminal,
+                         std::string instance) {
+        auto record = base;
+        record.instance = std::move(instance);
+        record.identity = annotation.target_identity + '\x1f' + terminal.object;
+        if (std::ranges::any_of(records, [&](const auto& each) {
+                return each.identity == record.identity;
+            }))
+            return;
+        record.source = terminal;
+        record.destination = std::move(terminal);
+        records.push_back(std::move(record));
+    };
+    for (const auto& endpoint : annotation.endpoints) {
+        if (endpoint.language == SdfScopeRootLanguage::Vhdl) {
+            warning = "NETDELAY " + endpoint.object_path
+                + " names a VHDL object: " + std::string { vital };
+            continue;
+        }
+        auto terminal = net_delay_terminal(endpoint);
+        const DeclaredPort* named { };
+        if (const auto found = ports.find(endpoint.signal);
+            found != ports.end()) {
+            const auto port = std::ranges::find(
+                found->second, endpoint.object_path, &DeclaredPort::path);
+            if (port != found->second.end())
+                named = &*port;
+        }
+        const auto direction = named != nullptr ? named->direction
+            : endpoint.object_kind == SdfEndpointObjectKind::HdlPort
+            ? endpoint.direction : frontend::PortDirection::Unknown;
+        if (direction == frontend::PortDirection::Output) {
+            problem = "NETDELAY " + endpoint.object_path
+                + " names an output port; it annotates only input or inout "
+                  "ports or nets (IEEE 1364-2005 16.2.4)";
+            return false;
+        }
+        if (named != nullptr
+            || endpoint.object_kind == SdfEndpointObjectKind::HdlPort) {
+            auto instance = named != nullptr ? named->instance
+                                             : annotation.target_instance_path;
+            add(std::move(terminal), std::move(instance));
+            continue;
+        }
+        bool reached { };
+        if (const auto found = ports.find(endpoint.signal);
+            found != ports.end()) {
+            for (const auto& port : found->second) {
+                if (port.direction == frontend::PortDirection::Output
+                    || port.path == endpoint.object_path)
+                    continue;
+                auto load = terminal;
+                load.instance = port.instance;
+                load.object = port.path;
+                load.port = true;
+                add(std::move(load), port.instance);
+                reached = true;
+            }
+        }
+        if (!reached)
+            warning = "NETDELAY " + endpoint.object_path
+                + (design_has_vhdl
+                        ? " reaches no input or inout port of a Verilog or "
+                          "SystemVerilog instance, and its VHDL loads get no "
+                          "delay: " + std::string { vital }
+                        : std::string { " reaches no input or inout port of "
+                                        "a Verilog or SystemVerilog instance" });
+    }
+    return true;
+}
 } // namespace
 
 SdfControlRequest make_cli_sdf_request(const cli::Invocation& invocation,
@@ -194,7 +416,8 @@ std::optional<SdfSessionPlan> plan_sdf_session_inputs(
     const std::string_view time_resolution,
     const std::string_view design_identity, SdfControlRequest request,
     const std::span<const std::filesystem::path> resolved_paths,
-    diagnostic::Engine& diagnostics)
+    diagnostic::Engine& diagnostics, const SdfPortSource ports,
+    const bool vital_applied)
 {
     if (!resolved_paths.empty()
         && resolved_paths.size() != request.inputs.size()) {
@@ -262,6 +485,10 @@ std::optional<SdfSessionPlan> plan_sdf_session_inputs(
     // The interconnect and port delays the files create; a later file
     // replaces an earlier delay of the same target.
     std::vector<elaboration::SdfNetDelayInfo> net_delays;
+    // The ports of the instances, found when the first NETDELAY needs them.
+    DeclaredPorts declared;
+    bool declared_loaded { };
+    bool design_has_vhdl { };
 
     for (const auto* selected_input : ordered) {
         const auto& input = *selected_input;
@@ -341,6 +568,20 @@ std::optional<SdfSessionPlan> plan_sdf_session_inputs(
                     target.instance_path);
             selected_cells.push_back(std::move(selected));
         }
+        // VHDL cells are annotated through their VITAL timing generics when
+        // the design is elaborated (IEEE 1076.4-2000 5.1.1); a session that
+        // runs later cannot change those elaboration constants.
+        const auto vital_count = remove_sdf_vital_targets(selected_cells);
+        selected_count -= vital_count;
+        if (vital_count != 0U && !vital_applied) {
+            diagnostics.error("FSIM-SDF-VITAL-008",
+                "SDF input names VHDL cells whose VITAL timing generics are "
+                "annotated when the design is elaborated; give the file to "
+                "`fsim elaborate --sdf`: " + input.source_identity);
+            return std::nullopt;
+        }
+        if (selected_count == 0U && vital_count != 0U)
+            continue;
         if (selected_count == 0U) {
             diagnostics.error("FSIM-SDF-SESSION-002",
                 "SDF cell selector matches no resolved timing target: "
@@ -420,19 +661,99 @@ std::optional<SdfSessionPlan> plan_sdf_session_inputs(
         for (const auto& annotation : plan.plan->annotations()) {
             if (annotation.target_kind == SdfTimingTargetKind::Interconnect
                 || annotation.target_kind == SdfTimingTargetKind::Port) {
+                // An interconnect or port delay that ends at an input port
+                // of a VHDL instance is the tipd_ generic of that instance
+                // (IEEE 1076.4-2000 5.2.7.1.3, 5.2.7.1.4): the VITAL map
+                // annotated it when the design was elaborated, and the net
+                // is not delayed a second time.
+                const SdfResolvedEndpoint* load { };
+                if (annotation.target_kind == SdfTimingTargetKind::Interconnect) {
+                    const auto destination = std::ranges::find(
+                        annotation.endpoints,
+                        SdfEndpointRole::InterconnectDestination,
+                        &SdfResolvedEndpoint::role);
+                    if (destination != annotation.endpoints.end())
+                        load = &*destination;
+                } else if (annotation.endpoints.size() == 1U) {
+                    load = &annotation.endpoints.front();
+                }
+                // The endpoint takes the language of the cell; a port of a
+                // VHDL instance below a Verilog or SystemVerilog cell is
+                // found by the instance that owns it.
+                const auto vhdl_load = [&](const SdfResolvedEndpoint& endpoint) {
+                    if (endpoint.language == SdfScopeRootLanguage::Vhdl)
+                        return true;
+                    const auto dot = endpoint.object_path.rfind('.');
+                    if (dot == std::string::npos)
+                        return false;
+                    const std::string_view instance {
+                        endpoint.object_path.data(), dot };
+                    return std::ranges::any_of(design.specializations(),
+                        [&](const auto& specialization) {
+                            return specialization.language
+                                    == frontend::Language::Vhdl2008
+                                && specialization.instance == instance;
+                        });
+                };
+                if (load != nullptr && vhdl_load(*load)
+                    && annotation.construct_kind
+                        != frontend::SdfConstructKind::NetDelay) {
+                    if (!vital_applied) {
+                        diagnostics.error("FSIM-SDF-VITAL-008",
+                            "SDF input names VHDL ports whose VITAL timing "
+                            "generics are annotated when the design is "
+                            "elaborated; give the file to `fsim elaborate "
+                            "--sdf`");
+                        return std::nullopt;
+                    }
+                    continue;
+                }
                 auto record = net_delay_record(annotation, *precedence.application);
                 if (!record) {
                     diagnostics.error("FSIM-SDF-SESSION-003",
                         "SDF interconnect or port delay has no complete effective timing");
                     return std::nullopt;
                 }
-                const auto same = std::ranges::find(net_delays,
-                    record->identity, &elaboration::SdfNetDelayInfo::identity);
-                // A repeated record applies at its later place (IEEE
-                // 1364-2005 16.3: in order of occurrence).
-                if (same != net_delays.end())
-                    net_delays.erase(same);
-                net_delays.push_back(std::move(*record));
+                std::vector<elaboration::SdfNetDelayInfo> records;
+                if (annotation.construct_kind
+                    == frontend::SdfConstructKind::NetDelay) {
+                    if (!declared_loaded) {
+                        design_has_vhdl = std::ranges::any_of(
+                            design.specializations(),
+                            [](const auto& specialization) {
+                                return specialization.language
+                                    == frontend::Language::Vhdl2008;
+                            });
+                        declared = declared_ports(design, ports);
+                        declared_loaded = true;
+                    }
+                    std::string problem;
+                    std::string warning;
+                    if (!net_delay_records(annotation, *record, declared,
+                            records, problem, warning, design_has_vhdl)) {
+                        diagnostics.error("FSIM-SDF-INTERCONNECT-002", problem);
+                        return std::nullopt;
+                    }
+                    if (!warning.empty())
+                        diagnostics.warning("FSIM-SDF-SESSION-004",
+                            "SDF interconnect or port delay is recorded but "
+                            "does not delay the net in simulation: " + warning);
+                } else {
+                    records.push_back(std::move(*record));
+                }
+                for (auto& each : records) {
+                    const auto same = std::ranges::find(net_delays,
+                        each.identity, &elaboration::SdfNetDelayInfo::identity);
+                    // A repeated record applies at its later place (IEEE
+                    // 1364-2005 16.3: in order of occurrence).
+                    if (same != net_delays.end()) {
+                        if (annotation.delay_mode
+                            == SdfDelayApplicationMode::Increment)
+                            add_to_previous(each, *same);
+                        net_delays.erase(same);
+                    }
+                    net_delays.push_back(std::move(each));
+                }
                 continue;
             }
             if (annotation.target_kind != SdfTimingTargetKind::SpecifyPath
@@ -514,6 +835,14 @@ std::optional<SdfSessionPlan> plan_sdf_session_inputs(
             "SDF interconnect or port delay is recorded but does not delay "
             "the net in simulation: " + reason);
     }
+    // An INTERCONNECT whose source port is not on the load's net is
+    // annotated anyway, as the delay from all sources (IEEE 1364-2005
+    // 16.2.4: a warning is issued).
+    for (const auto& note : split.from_all_sources) {
+        diagnostics.warning("FSIM-SDF-SESSION-005",
+            "SDF interconnect delay is annotated as the delay from all "
+            "sources, like a PORT delay: " + note);
+    }
     auto result_design = elaboration::ElaboratedDesign::from_state(
         std::move(result_state));
     if (!result_design) {
@@ -531,7 +860,9 @@ bool apply_sdf_session_inputs(BuiltProject& built,
     if (request.inputs.empty())
         return true;
     auto planned = plan_sdf_session_inputs(built.design,
-        built.time_resolution, built.cache_key, request, { }, diagnostics);
+        built.time_resolution, built.cache_key, request, { }, diagnostics,
+        { &built.design_ir, &built.systemverilog_hir },
+        built.sdf_vital_applied);
     if (!planned)
         return false;
     built.design = std::move(planned->design);

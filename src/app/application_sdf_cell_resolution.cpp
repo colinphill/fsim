@@ -4,9 +4,12 @@
 #include "sdf_resolution_helpers.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <limits>
 #include <optional>
 #include <ranges>
+#include <string_view>
+#include <system_error>
 #include <unordered_map>
 #include <utility>
 
@@ -239,11 +242,38 @@ namespace {
             // 5.6.1); the SDF name is compared without its escapes.
             auto segment = candidate.resolved.instance_path.substr(
                 parent_candidate_value.resolved.instance_path.size() + 1U);
-            if (segment.starts_with('\\')) {
+            const bool escaped = segment.starts_with('\\');
+            if (escaped) {
                 segment.erase(0U, 1U);
                 while (!segment.empty() && segment.back() == ' ') {
                     segment.pop_back();
                 }
+            }
+            // The labels of the VHDL block and generate statements between
+            // two instances are not instances: an SDF path names each of them
+            // as a path element (IEEE 1076.4-2000 5.2.4).
+            if (!escaped
+                && parent_candidate_value.resolved.language
+                    == SdfScopeRootLanguage::Vhdl
+                && segment.find('\\') == std::string::npos
+                && segment.find('.') != std::string::npos) {
+                std::size_t begin { };
+                int depth { };
+                for (std::size_t at { }; at <= segment.size(); ++at) {
+                    const bool end = at == segment.size();
+                    if (!end && segment[at] == '[')
+                        ++depth;
+                    else if (!end && segment[at] == ']')
+                        --depth;
+                    if (end || (segment[at] == '.' && depth == 0)) {
+                        candidate.segments.push_back(
+                            segment.substr(begin, at - begin));
+                        candidate.segment_policies.push_back(
+                            parent_candidate_value.resolved.case_policy);
+                        begin = at + 1U;
+                    }
+                }
+                continue;
             }
             candidate.segments.push_back(std::move(segment));
             candidate.segment_policies.push_back(
@@ -270,6 +300,57 @@ namespace {
         return true;
     }
 
+    // A bit spec of the form `label[left:right]` names the expansions of a
+    // FOR generate statement between the two indices, in either direction
+    // (IEEE 1076.4-2000 5.2.4); the elaborated label is `label[index]`.
+    bool generate_range_matches(const std::string_view elaborated,
+        const std::string_view sdf)
+    {
+        const auto sdf_open = sdf.find('[');
+        const auto sdf_colon = sdf.find(':');
+        const auto open = elaborated.find('[');
+        if (sdf_open == std::string_view::npos
+            || sdf_colon == std::string_view::npos || sdf_colon < sdf_open
+            || open == std::string_view::npos || sdf.back() != ']'
+            || elaborated.back() != ']'
+            || !equal_under_case_policy(elaborated.substr(0U, open),
+                sdf.substr(0U, sdf_open),
+                SdfHierarchyCasePolicy::AsciiInsensitive)) {
+            return false;
+        }
+        const auto number = [](const std::string_view text)
+            -> std::optional<long long> {
+            long long value { };
+            const auto [end, error] = std::from_chars(
+                text.data(), text.data() + text.size(), value);
+            if (error != std::errc { } || end != text.data() + text.size())
+                return std::nullopt;
+            return value;
+        };
+        const auto left = number(sdf.substr(sdf_open + 1U, sdf_colon - sdf_open - 1U));
+        const auto right = number(sdf.substr(sdf_colon + 1U, sdf.size() - sdf_colon - 2U));
+        const auto index = number(elaborated.substr(open + 1U, elaborated.size() - open - 2U));
+        if (!left || !right || !index)
+            return false;
+        return *index >= std::min(*left, *right)
+            && *index <= std::max(*left, *right);
+    }
+
+    // An instance path with a `label[left:right]` element names every
+    // expansion in the range (IEEE 1076.4-2000 5.2.4), not one instance.
+    bool names_generate_range(const SdfIrCell& cell)
+    {
+        return cell.instance_kind == SdfInstanceSelectorKind::Exact
+            && cell.instance
+            && std::ranges::any_of(cell.instance->segments,
+                [](const std::string& segment) {
+                    const auto open = segment.find('[');
+                    return open != std::string::npos
+                        && segment.find(':', open) != std::string::npos
+                        && segment.back() == ']';
+                });
+    }
+
     bool path_matches(const Candidate& candidate,
         const std::span<const std::string> sdf_segments, const bool relative)
     {
@@ -281,7 +362,9 @@ namespace {
         for (std::size_t index = 0U; index < sdf_segments.size(); ++index) {
             if (!equal_under_case_policy(
                     candidate.segments[index + offset], sdf_segments[index],
-                    candidate.segment_policies[index + offset])) {
+                    candidate.segment_policies[index + offset])
+                && !generate_range_matches(
+                    candidate.segments[index + offset], sdf_segments[index])) {
                 return false;
             }
         }
@@ -349,7 +432,7 @@ namespace {
                     + candidate_summary(candidates, limits),
                 cell.span);
         } else if (cell.instance_kind != SdfInstanceSelectorKind::Wildcard
-            && matches.size() != 1U) {
+            && matches.size() != 1U && !names_generate_range(cell)) {
             std::string message = "SDF cell '" + cell.cell_type
                 + "' resolves ambiguously to";
             for (const auto& match : matches)

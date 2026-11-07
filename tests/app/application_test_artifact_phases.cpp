@@ -31,7 +31,7 @@ void ApplicationTestFixture::test_artifact_phase_semantics()
 {
     install_governed_process_address_space_ceiling();
     const ScopedCurrentDirectory source_root { directory / "work" };
-    static_assert(app::kRuntimeStateSchema == 101);
+    static_assert(app::kRuntimeStateSchema == 102);
     static_assert(app::kSemanticStateSchema == 5);
     static_assert(app::kDesignIrStateSchema == 5);
     static_assert(app::kCompiledHirBundleSchema == 3);

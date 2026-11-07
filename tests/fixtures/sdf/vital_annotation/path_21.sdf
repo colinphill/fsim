@@ -1,0 +1,10 @@
+// SPDX-License-Identifier: Apache-2.0
+// SDF 2.1: the same annotation with single values.
+(DELAYFILE
+  (SDFVERSION "2.1")
+  (DESIGN "tb_path")
+  (TIMESCALE 1 ns)
+  (CELL (CELLTYPE "vbuf") (INSTANCE tb_path.u1)
+    (DELAY (ABSOLUTE
+      (PORT a (1) (2))
+      (IOPATH a y (3) (4))))))

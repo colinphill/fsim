@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_simulation_internal.hpp"
 
+#include <algorithm>
+#include <string>
+#include <string_view>
+
 namespace fsim::app {
 // Included by application_simulation.cpp after Simulation::Impl is complete.
 
@@ -30,9 +34,26 @@ std::vector<fsim_vpi_handle_v1> Simulation::vpi_signal_object_handles(
     const SignalId signal) const
 {
     const auto found = impl_->vpi_signal_handles.find(signal);
-    return found == impl_->vpi_signal_handles.end()
+    auto handles = found == impl_->vpi_signal_handles.end()
         ? std::vector<fsim_vpi_handle_v1> { }
         : found->second;
+    // The objects at or below a delayed load read its copy of the net but
+    // still name the net (SDF INTERCONNECT and PORT delays).
+    for (const auto& delay : impl_->built.design.sdf_net_delays()) {
+        if (!delay.delayed || delay.destination.signal != signal
+            || delay.load_signal == signal) {
+            continue;
+        }
+        if (const auto copy = impl_->vpi_signal_handles.find(delay.load_signal);
+            copy != impl_->vpi_signal_handles.end()) {
+            for (const auto handle : copy->second) {
+                if (std::ranges::find(handles, handle) == handles.end()) {
+                    handles.push_back(handle);
+                }
+            }
+        }
+    }
+    return handles;
 }
 
 std::vector<std::pair<fsim_vpi_handle_v1, runtime::simir::ProcessId>>
@@ -45,7 +66,15 @@ Simulation::vpi_driver_objects(const fsim_vpi_handle_v1 object)
     if (signal == impl_->vpi_handle_signals.end()) {
         return found;
     }
-    const auto drivers = impl_->vpi_driver_bindings.find(signal->second);
+    // The drivers of a delayed load's copy are those of the net it delays.
+    auto net = signal->second;
+    for (const auto& delay : impl_->built.design.sdf_net_delays()) {
+        if (delay.delayed && delay.load_signal == net) {
+            net = delay.destination.signal;
+            break;
+        }
+    }
+    const auto drivers = impl_->vpi_driver_bindings.find(net);
     if (drivers == impl_->vpi_driver_bindings.end()) {
         return found;
     }
@@ -162,6 +191,57 @@ Simulation::verilog_driver_delays(const runtime::simir::ProcessId process) const
             const auto turnoff = write->turnoff ? write->turnoff->delay
                                                 : std::min(rise, fall);
             return runtime::simir::TransitionDelays { rise, fall, turnoff };
+        }
+    }
+    return std::nullopt;
+}
+
+bool Simulation::set_verilog_net_delay_table(
+    const runtime::simir::ProcessId process,
+    const runtime::simir::NetDelayTable& table)
+{
+    if (!impl_->interpreter->set_net_delay_table(
+            impl_->running_process(process), table)) {
+        return false;
+    }
+    // The drivers of one run of bits that differ only in drive strength
+    // (split_sdf_net_delays gives each strength of a source its own copy
+    // driver) follow the process in the design's order, named after it with
+    // ".<number>" appended.
+    const auto stem = [&](const runtime::simir::ProcessId each) {
+        return process_program(impl_->running_process(each)).name;
+    };
+    const auto first = stem(process);
+    for (auto next = static_cast<std::size_t>(process) + 1U;
+        next < impl_->design_process_count; ++next) {
+        const auto sibling = stem(static_cast<runtime::simir::ProcessId>(next));
+        if (sibling.size() <= first.size() + 1U || !sibling.starts_with(first)
+            || sibling[first.size()] != '.'
+            || !std::ranges::all_of(
+                std::string_view { sibling }.substr(first.size() + 1U),
+                [](const char digit) { return digit >= '0' && digit <= '9'; })) {
+            break;
+        }
+        (void)impl_->interpreter->set_net_delay_table(
+            impl_->running_process(
+                static_cast<runtime::simir::ProcessId>(next)),
+            table);
+    }
+    return true;
+}
+
+std::optional<runtime::simir::NetDelayTable>
+Simulation::verilog_net_delay_table(const runtime::simir::ProcessId process) const
+{
+    const auto running = impl_->running_process(process);
+    if (const auto set = impl_->interpreter->net_delay_table(running)) {
+        return set;
+    }
+    for (const auto& operation : process_program(running).operations) {
+        if (const auto* write
+            = runtime::simir::operation_get_if<runtime::simir::WriteNetDelay>(
+                &operation)) {
+            return runtime::simir::NetDelayTable::from_values(write->table);
         }
     }
     return std::nullopt;

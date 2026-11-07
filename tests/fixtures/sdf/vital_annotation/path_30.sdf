@@ -1,0 +1,10 @@
+// SPDX-License-Identifier: Apache-2.0
+// SDF 3.0: a port delay and a path delay of one cell, min:typ:max triples.
+(DELAYFILE
+  (SDFVERSION "3.0")
+  (DESIGN "tb_path")
+  (TIMESCALE 1ns)
+  (CELL (CELLTYPE "vbuf") (INSTANCE tb_path.u1)
+    (DELAY (ABSOLUTE
+      (PORT a (0.5:1:1.5) (1:2:3))
+      (IOPATH a y (2:3:4) (3:4:5))))))

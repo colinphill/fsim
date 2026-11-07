@@ -573,8 +573,9 @@ void Interpreter::Impl::StaticKernel::track_unknowns(CompiledBody& body,
             || operation == BinaryOperator::bit_or
             || operation == BinaryOperator::bit_xor;
     };
-    // Registers that may hold 'U': exact Logic9 loads, 'U' constants,
-    // reference-evaluated results, and moves or logic of tracked values.
+    // Registers that may hold 'U' or a weak element ('H', 'L', 'W', '-'):
+    // exact Logic9 loads, constants with either, reference-evaluated
+    // results, and moves, shifts or logic of tracked values.
     for (bool changed = true; changed;) {
         changed = false;
         for (std::uint32_t at = 0U; at < size; ++at) {
@@ -594,10 +595,16 @@ void Interpreter::Impl::StaticKernel::track_unknowns(CompiledBody& body,
                 source = inst.sub == 1U;
                 break;
             case KOp::constant:
-                source = constant_unknown(inst.offset, inst.aux) != 0U;
+                source = constant_unknown(inst.offset, inst.aux) != 0U
+                    || constant_weak(inst.x, inst.y) != 0U;
                 break;
             case KOp::generic:
                 source = true;
+                break;
+            // A shift moves the weak elements of its value with their
+            // words.
+            case KOp::shift:
+                source = body.weak != 0U && inst.x < count && tracked[inst.x] != 0U;
                 break;
             case KOp::extract:
                 source = inst.sub >= 2U
@@ -662,6 +669,8 @@ void Interpreter::Impl::StaticKernel::track_unknowns(CompiledBody& body,
         case KOp::concat:
         case KOp::store_vhdl:
         case KOp::generic:
+        // Reads its source's 'U' mask itself; defines nothing.
+        case KOp::net_delay:
         // Wide registers hold their own 'U' masks.
         case KOp::wide_load:
         case KOp::wide_copy:
@@ -721,6 +730,13 @@ void Interpreter::Impl::StaticKernel::track_unknowns(CompiledBody& body,
         case KOp::unary_not:
             mode = u_aware;
             break;
+        // The weak elements shift with their words; 'U' operands (and
+        // shifts with a 'U' amount) leave compiled execution.
+        case KOp::shift:
+            mode = body.weak != 0U && inst.x < count && tracked[inst.x] != 0U
+                ? static_cast<std::uint8_t>(u_check | u_aware)
+                : static_cast<std::uint8_t>(u_check | u_clear);
+            break;
         default:
             mode = u_check | u_clear;
             break;
@@ -747,78 +763,6 @@ void Interpreter::Impl::StaticKernel::track_unknowns(CompiledBody& body,
     body.shadow_base = count;
     body.registers.resize(2U * count, Word { });
     body.register_widths.resize(2U * count, 0U);
-}
-
-void Interpreter::Impl::StaticKernel::eliminate_dead_constants(
-    CompiledBody& body, const std::uint32_t member_index)
-{
-    // Unrepresentable constants (all-'U' variable initializers, typically)
-    // are usually overwritten before any read. Backward liveness over the
-    // compiled body finds them. Registers persist across activations, so the
-    // exit flows to the entry of the next activation; nothing else reads a
-    // member's registers.
-    const auto size = static_cast<std::uint32_t>(body.code.size());
-    if (std::ranges::none_of(body.code,
-            [](const KInst& inst) { return inst.op == KOp::deopt; })) {
-        return;
-    }
-    const auto registers = body.registers.size();
-    const auto words = (registers + 63U) / 64U;
-    std::vector<std::uint64_t> live_in((size + 1U) * words, 0U);
-    const auto entry = std::min(member_index < members_.size()
-            ? members_[member_index].body_begin : 0U, size);
-    std::vector<std::vector<std::uint32_t>> uses(size);
-    std::vector<std::optional<std::uint32_t>> defs(size);
-    std::vector<std::vector<std::uint32_t>> successors(size);
-    const auto& member = members_[member_index];
-    for (std::uint32_t at = 0U; at < size; ++at) {
-        kinst_flow(body.code[at], at, body, member.operations(), member.body_end,
-            uses[at], defs[at], successors[at]);
-    }
-    std::vector<std::uint64_t> live(words);
-    for (bool changed = true; changed;) {
-        changed = false;
-        for (std::size_t word = 0U; word < words; ++word) {
-            live_in[size * words + word] = live_in[entry * words + word];
-        }
-        for (std::uint32_t at = size; at-- > 0U;) {
-            std::ranges::fill(live, 0U);
-            for (const auto successor : successors[at]) {
-                for (std::size_t word = 0U; word < words; ++word) {
-                    live[word] |= live_in[successor * words + word];
-                }
-            }
-            if (defs[at] && *defs[at] < registers) {
-                live[*defs[at] / 64U] &= ~(std::uint64_t { 1 } << (*defs[at] % 64U));
-            }
-            for (const auto reg : uses[at]) {
-                if (reg < registers) {
-                    live[reg / 64U] |= std::uint64_t { 1 } << (reg % 64U);
-                }
-            }
-            for (std::size_t word = 0U; word < words; ++word) {
-                if (live_in[at * words + word] != live[word]) {
-                    live_in[at * words + word] = live[word];
-                    changed = true;
-                }
-            }
-        }
-    }
-    for (std::uint32_t at = 0U; at < size; ++at) {
-        auto& inst = body.code[at];
-        if (inst.op != KOp::deopt) {
-            continue;
-        }
-        bool live_out = false;
-        for (const auto successor : successors[at]) {
-            live_out = live_out
-                || (live_in[successor * words + inst.d / 64U]
-                       >> (inst.d % 64U) & 1U) != 0U;
-        }
-        if (!live_out) {
-            inst.op = KOp::nop;
-        }
-    }
 }
 
 const char* Interpreter::Impl::StaticKernel::collapse_impurity(const Member& member,
@@ -915,7 +859,8 @@ const char* Interpreter::Impl::StaticKernel::collapse_impurity(const Member& mem
             break;
         case KOp::store_vhdl:
         case KOp::wide_store:
-            allowed = deferred_store(inst);
+            // A resolved slot's value depends on its other sources too.
+            allowed = deferred_store(inst) && !slots_[inst.d].resolved;
             break;
         // Fixed-register calls; the dynamic call stack (z 0) is the host's.
         case KOp::call:
@@ -1884,6 +1829,15 @@ const char* Interpreter::Impl::StaticKernel::prove_collapse_ranges(const Member&
             }
             return true;
         case KOp::constant:
+            // A 'U' or weak element is no known Logic4 value (the
+            // enumeration compare tells it from the one its word holds).
+            if (constant_unknown(inst.offset, inst.aux) != 0U
+                || constant_weak(inst.x, inst.y) != 0U) {
+                if (inst.d < registers) {
+                    values[inst.d] = AbstractValue { };
+                }
+                return true;
+            }
             set(kw::Word { inst.imm_a, inst.imm_b }, inst.width);
             return true;
         case KOp::copy:
@@ -3167,10 +3121,10 @@ void Interpreter::Impl::StaticKernel::report_mt_plan() const
                     break;
                 }
                 return "generic";
+            case KOp::net_delay:
+                return "net_delay";
             case KOp::step:
                 return "step";
-            case KOp::deopt:
-                return "deopt";
             case KOp::suspend:
                 return "suspend";
             case KOp::mem_copy:

@@ -1,0 +1,11 @@
+// SPDX-License-Identifier: Apache-2.0
+// The IOPATH of the VITAL cell that a SystemVerilog module instantiates
+// directly: (1:2:3) selects 2 ns.
+(DELAYFILE
+  (SDFVERSION "4.0")
+  (DESIGN "direct_bench")
+  (TIMESCALE 1 ns)
+  (CELL
+    (CELLTYPE "vital_core")
+    (INSTANCE direct_bench.dut.u_vital)
+    (DELAY (ABSOLUTE (IOPATH A Z (1:2:3))))))
