@@ -11,7 +11,7 @@
 #include "fsim/runtime/run_state_image.hpp"
 #include "../../src/app/application_foreign_run_state.hpp"
 #include "../../src/app/application_simulation_internal.hpp"
-#include "fsim/runtime/run_state_archive.hpp"
+#include "../../src/runtime/run_state_archive.hpp"
 #include "fsim/runtime/run_state_sections.hpp"
 #include "fsim/runtime/scheduler_events.hpp"
 #include "fsim/runtime/vpi_callback.hpp"

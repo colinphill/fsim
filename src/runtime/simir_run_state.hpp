@@ -12,10 +12,10 @@
 // scripts/check_run_state_classification.py reads them to fail when a member
 // has no writer (or a writer names a member the table does not list as saved).
 
-#include "fsim/runtime/run_state_archive.hpp"
+#include "run_state_archive.hpp"
 #include "fsim/runtime/run_state_image.hpp"
 #include "fsim/runtime/run_state_sections.hpp"
-#include "fsim/runtime/run_state_value_codecs.hpp"
+#include "run_state_value_codecs.hpp"
 #include "simir_events.hpp"
 #include "simir_internal.hpp"
 

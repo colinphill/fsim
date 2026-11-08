@@ -2416,6 +2416,17 @@ set_tests_properties(
     LABELS "artifact;sdf;trace;transaction;coverage;assertion;uvm;checkpoint;scv;schema;resources;positive;negative;fast"
 )
 add_test(
+  NAME fsim.public-headers-no-boost
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckPublicHeadersNoBoost.cmake"
+)
+set_tests_properties(
+  fsim.public-headers-no-boost
+  PROPERTIES LABELS "schema;resources;fast"
+)
+add_test(
   NAME fsim.portable-stale-schema-policy
   COMMAND
     "${CMAKE_COMMAND}"
@@ -4510,6 +4521,7 @@ if(TARGET fsim_application)
         ${test_host}
         PRIVATE
           fsim_application
+          fsim_boost_pfr_headers
           fsim_cli
       )
     endforeach()
@@ -5989,7 +6001,7 @@ fsim_register_simple_test(
   fsim_configure_test(fsim_run_state_application_tests)
   target_link_libraries(
     fsim_run_state_application_tests
-    PRIVATE fsim_application
+    PRIVATE fsim_application fsim_boost_pfr_headers
   )
   fsim_register_simple_test(
     fsim.application.run_state

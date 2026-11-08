@@ -4,7 +4,7 @@
 #include "application_vhpi_foreign.hpp"
 #include "application_vpi_foreign.hpp"
 
-#include "fsim/runtime/run_state_archive.hpp"
+#include "../runtime/run_state_archive.hpp"
 
 #include <exception>
 #include <type_traits>

@@ -2,6 +2,7 @@
 #include "application_vpi_foreign.hpp"
 
 #include "fsim/runtime/run_state_sections.hpp"
+#include "../runtime/run_state_archive.hpp"
 
 #include "application_dpi_foreign.hpp"
 #include "application_foreign_signal.hpp"

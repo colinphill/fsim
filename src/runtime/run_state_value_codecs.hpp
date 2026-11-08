@@ -8,7 +8,7 @@
 // every user (IEEE 1800-2023 D.9).
 
 #include "fsim/runtime/class_heap.hpp"
-#include "fsim/runtime/run_state_archive.hpp"
+#include "run_state_archive.hpp"
 #include "fsim/runtime/simir_container_value.hpp"
 
 #include <iterator>

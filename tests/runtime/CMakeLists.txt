@@ -111,7 +111,9 @@ add_executable(
   runtime_vital_memory_path_tests.cpp
 )
 target_compile_features(fsim_runtime_tests PRIVATE c_std_11)
-target_link_libraries(fsim_runtime_tests PRIVATE fsim_runtime)
+# runtime_run_state_tests.cpp includes the private archive header, which
+# walks aggregates with Boost.PFR.
+target_link_libraries(fsim_runtime_tests PRIVATE fsim_runtime fsim_boost_pfr_headers)
 add_library(fsim_vpi_test_plugin SHARED vpi_test_plugin.cpp)
 fsim_configure_library(fsim_vpi_test_plugin)
 target_include_directories(

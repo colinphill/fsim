@@ -60,6 +60,7 @@ cmake/CheckNonProjectRestartability.cmake
 cmake/CheckObservabilityQualification.cmake
 cmake/CheckPortableObjectFreeze.cmake
 cmake/CheckPortableStaleSchemaPolicy.cmake
+cmake/CheckPublicHeadersNoBoost.cmake
 cmake/CheckReleaseCandidateLogAudit.cmake
 cmake/CheckRequiredCTestSet.cmake
 cmake/CheckRequiredIdSet.cmake
@@ -432,10 +433,8 @@ include/fsim/runtime/native_plugin.hpp
 include/fsim/runtime/native_plugin_abi.h
 include/fsim/runtime/output_format.hpp
 include/fsim/runtime/packed_value.hpp
-include/fsim/runtime/run_state_archive.hpp
 include/fsim/runtime/run_state_image.hpp
 include/fsim/runtime/run_state_sections.hpp
-include/fsim/runtime/run_state_value_codecs.hpp
 include/fsim/runtime/scheduler.hpp
 include/fsim/runtime/scheduler_events.hpp
 include/fsim/runtime/scope_randomize.hpp
@@ -1142,8 +1141,10 @@ src/runtime/fst_writer.cpp
 src/runtime/native_plugin.cpp
 src/runtime/packed_value.cpp
 src/runtime/run_state_archive.cpp
+src/runtime/run_state_archive.hpp
 src/runtime/run_state_image.cpp
 src/runtime/run_state_sections.cpp
+src/runtime/run_state_value_codecs.hpp
 src/runtime/scheduler.cpp
 src/runtime/scheduler_dispatch.cpp
 src/runtime/scheduler_events.cpp

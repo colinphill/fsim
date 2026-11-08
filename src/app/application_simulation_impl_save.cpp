@@ -10,10 +10,10 @@
 // application keeps beside the engine.
 #include "application_simulation_internal.hpp"
 
-#include "fsim/runtime/run_state_archive.hpp"
+#include "../runtime/run_state_archive.hpp"
 #include "fsim/runtime/run_state_image.hpp"
 #include "fsim/runtime/run_state_sections.hpp"
-#include "fsim/runtime/run_state_value_codecs.hpp"
+#include "../runtime/run_state_value_codecs.hpp"
 #include "fsim/runtime/scheduler_events.hpp"
 #include "fsim/support/native_filesystem.hpp"
 

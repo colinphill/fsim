@@ -10,7 +10,7 @@
 
 #include "fsim/runtime/sva_engine.hpp"
 
-#include "fsim/runtime/run_state_archive.hpp"
+#include "run_state_archive.hpp"
 
 #include <algorithm>
 #include <array>

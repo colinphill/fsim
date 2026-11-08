@@ -10,10 +10,10 @@
 
 #include "fsim/runtime/class_heap.hpp"
 #include "fsim/runtime/class_static.hpp"
-#include "fsim/runtime/run_state_archive.hpp"
+#include "../../src/runtime/run_state_archive.hpp"
 #include "fsim/runtime/run_state_image.hpp"
 #include "fsim/runtime/run_state_sections.hpp"
-#include "fsim/runtime/run_state_value_codecs.hpp"
+#include "../../src/runtime/run_state_value_codecs.hpp"
 #include "fsim/runtime/scheduler.hpp"
 #include "fsim/runtime/scheduler_events.hpp"
 #include "fsim/runtime/simir.hpp"

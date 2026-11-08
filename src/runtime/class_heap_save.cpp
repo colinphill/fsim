@@ -4,7 +4,7 @@
 // design holds names the same object after a restart.
 #include "fsim/runtime/class_heap.hpp"
 #include "fsim/runtime/class_static.hpp"
-#include "fsim/runtime/run_state_value_codecs.hpp"
+#include "run_state_value_codecs.hpp"
 
 #include <exception>
 #include <utility>
