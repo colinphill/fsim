@@ -1049,16 +1049,8 @@ void Interpreter::Impl::ExecutionContext::write_after(
             process, signal, value, std::nullopt, nullptr, delay)) {
         return;
     }
-    owner.scheduler.schedule_after(
-        delay,
-        SchedulerPhase::update,
-        process,
-        [&owner = owner, driver = process, signal,
-            value = std::move(value)](
-            Scheduler&) mutable {
-            owner.stage_update(
-                driver, signal, std::move(value));
-        });
+    owner.schedule_delayed_update(Impl::DelayedUpdateKind::whole, process,
+        signal, std::move(value), { }, 0U, delay);
 }
 
 void Interpreter::Impl::ExecutionContext::write_after_in_domain(
@@ -1080,16 +1072,8 @@ void Interpreter::Impl::ExecutionContext::write_after_word(
     const SimulationTick delay){
     if (owner.can_publish_blocking_word(signal)
         && value.width == owner.signals[signal].initial_value.width()) {
-        owner.scheduler.schedule_after(
-            delay,
-            SchedulerPhase::update,
-            process,
-            [&owner = owner, driver = process, signal, value](Scheduler&) {
-                const auto update = ProcessUpdateWord {
-                    signal, value, 0U, false };
-                owner.stage_validated_update_words(
-                    driver, std::span { &update, 1U });
-            });
+        owner.schedule_delayed_update(Impl::DelayedUpdateKind::word, process,
+            signal, PackedLogic4 { }, value, 0U, delay);
         return;
     }
     auto packed = PackedLogic4::from_aval_bval(
@@ -1098,16 +1082,8 @@ void Interpreter::Impl::ExecutionContext::write_after_word(
             process, signal, packed, std::nullopt, nullptr, delay)) {
         return;
     }
-    owner.scheduler.schedule_after(
-        delay,
-        SchedulerPhase::update,
-        process,
-        [&owner = owner, driver = process, signal,
-            value = std::move(packed)](
-            Scheduler&) mutable {
-            owner.stage_update(
-                driver, signal, std::move(value));
-        });
+    owner.schedule_delayed_update(Impl::DelayedUpdateKind::whole, process,
+        signal, std::move(packed), { }, 0U, delay);
 }
 
 void Interpreter::Impl::ExecutionContext::write_after_slice(
@@ -1119,18 +1095,8 @@ void Interpreter::Impl::ExecutionContext::write_after_slice(
             process, signal, value, offset, nullptr, delay)) {
         return;
     }
-    owner.scheduler.schedule_after(
-        delay,
-        SchedulerPhase::update,
-        process,
-        [&owner = owner,
-            driver = process,
-            signal,
-            value = std::move(value),
-            offset](Scheduler&) mutable {
-            owner.stage_update_slice(
-                driver, signal, std::move(value), offset);
-        });
+    owner.schedule_delayed_update(Impl::DelayedUpdateKind::slice, process,
+        signal, std::move(value), { }, offset, delay);
 }
 
 void Interpreter::Impl::ExecutionContext::write_after_slice_in_domain(
@@ -1156,17 +1122,9 @@ void Interpreter::Impl::ExecutionContext::write_after_slice_word(
         const auto width = owner.signals[signal].initial_value.width();
         if (value.width != 0U && offset <= width
             && value.width <= width - offset) {
-            owner.scheduler.schedule_after(
-                delay,
-                SchedulerPhase::update,
-                process,
-                [&owner = owner, driver = process, signal, value, offset](
-                    Scheduler&) {
-                    const auto update = ProcessUpdateWord {
-                        signal, value, offset, true };
-                    owner.stage_validated_update_words(
-                        driver, std::span { &update, 1U });
-                });
+            owner.schedule_delayed_update(
+                Impl::DelayedUpdateKind::slice_word, process, signal, PackedLogic4 { },
+                value, offset, delay);
             return;
         }
     }

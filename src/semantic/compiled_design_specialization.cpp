@@ -7798,7 +7798,10 @@ private:
                             ? evaluate(*range->left_expression)
                             : std::nullopt)
                     : std::optional<std::int64_t> {
-                          std::numeric_limits<std::int32_t>::min() };
+                          unit_.design().vhdl_wide_integer()
+                              ? std::numeric_limits<std::int64_t>::min()
+                              : static_cast<std::int64_t>(
+                                    std::numeric_limits<std::int32_t>::min()) };
                 if (!left) {
                     return std::nullopt;
                 }
@@ -12831,11 +12834,9 @@ private:
             const bool positive = support::equal_ignoring_ascii_case(
                 predefined_name, "positive");
             if (integer || natural || positive) {
-                const auto selected_unit
-                    = unit_.design().find_unit(unit_.unit());
-                const bool vhdl_2019 = selected_unit
-                    && selected_unit->vhdl != nullptr
-                    && selected_unit->vhdl->standard == "2019";
+                // INTEGER is 64 bits for every unit of a design that has a
+                // VHDL-2019 unit (IEEE 1076-2019 5.2.3.1).
+                const bool vhdl_2019 = unit_.design().vhdl_wide_integer();
                 const auto first = integer
                     ? vhdl_2019
                         ? std::numeric_limits<std::int64_t>::min()

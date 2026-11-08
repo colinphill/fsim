@@ -4404,7 +4404,7 @@ Lowerer::lower_hir_vhdl_reflection_expression(
                 result.type_class = VhdlReflectionClass::physical;
                 if (result.packed_width == 0U) {
                     result.packed_width
-                        = vhdl_standard_ == frontend::VhdlStandard::Vhdl2019
+                        = vhdl_wide_integer_
                         ? 64U
                         : 32U;
                 }

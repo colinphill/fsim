@@ -4,7 +4,9 @@
 # `fsim compile`, `fsim elaborate` and `fsim simulate`, and compares the
 # lines the plug-in marks with "#c " against an expected trace.
 # FSIM_SOURCE may list several files separated by "|", compiled one per
-# step in order (one language per compile); FSIM_INTERFACE "mixed" loads
+# step in order (one language per compile); a file name may end in
+# "@STANDARD" (for example "leaf.vhd@2008") to compile that file with
+# `--standard STANDARD`; FSIM_INTERFACE "mixed" loads
 # the plug-in as both a VPI and a VHPI library. FSIM_SIMULATE_STATUS is the
 # exit status `fsim simulate` must return (0 when unset); a true
 # FSIM_ELABORATE_PLUGIN also loads the VPI plug-in at `fsim elaborate`; a
@@ -13,6 +15,8 @@
 # FSIM_DPI_HEADER, when set, is the header `fsim compile --dpi-header` must
 # write, and FSIM_ELABORATE_MESSAGE text a failing `fsim elaborate` must
 # report; either ends the case there.
+# FSIM_COMPILE_MESSAGE, when set, is text the one failing `fsim compile`
+# must report; the case ends there.
 # FSIM_ELABORATE_ARGS holds more `fsim elaborate` arguments, separated as a
 # shell would.
 # FSIM_ENVIRONMENT holds NAME=value entries, separated by "|", that every
@@ -49,11 +53,19 @@ endif()
 file(MAKE_DIRECTORY "${FSIM_WORK_DIR}")
 string(REPLACE "|" ";" FSIM_SOURCES "${FSIM_SOURCE}")
 set(FSIM_SOURCE_NAMES "")
+# The standard each source compiles with; "-" keeps the default.
+set(FSIM_SOURCE_STANDARDS "")
 foreach(FSIM_SOURCE_FILE IN LISTS FSIM_SOURCES)
+  set(FSIM_SOURCE_STANDARD "-")
+  if(FSIM_SOURCE_FILE MATCHES "^(.*)@([0-9]+)$")
+    set(FSIM_SOURCE_FILE "${CMAKE_MATCH_1}")
+    set(FSIM_SOURCE_STANDARD "${CMAKE_MATCH_2}")
+  endif()
   get_filename_component(FSIM_SOURCE_NAME "${FSIM_SOURCE_FILE}" NAME)
   configure_file("${FSIM_SOURCE_FILE}" "${FSIM_WORK_DIR}/${FSIM_SOURCE_NAME}"
     COPYONLY)
   list(APPEND FSIM_SOURCE_NAMES "${FSIM_SOURCE_NAME}")
+  list(APPEND FSIM_SOURCE_STANDARDS "${FSIM_SOURCE_STANDARD}")
 endforeach()
 
 function(fsim_step FSIM_STEP_NAME)
@@ -67,6 +79,10 @@ function(fsim_step FSIM_STEP_NAME)
   if(FSIM_STEP_NAME STREQUAL "simulate" AND DEFINED FSIM_SIMULATE_STATUS
       AND NOT FSIM_SIMULATE_STATUS STREQUAL "")
     set(FSIM_WANTED "${FSIM_SIMULATE_STATUS}")
+  elseif(FSIM_STEP_NAME STREQUAL "compile"
+      AND DEFINED FSIM_COMPILE_MESSAGE
+      AND NOT FSIM_COMPILE_MESSAGE STREQUAL "")
+    set(FSIM_WANTED 1)
   elseif(FSIM_STEP_NAME STREQUAL "elaborate"
       AND DEFINED FSIM_ELABORATE_MESSAGE
       AND NOT FSIM_ELABORATE_MESSAGE STREQUAL "")
@@ -84,8 +100,30 @@ set(FSIM_COMPILE_ARGUMENTS "")
 if(DEFINED FSIM_DPI_HEADER AND NOT FSIM_DPI_HEADER STREQUAL "")
   set(FSIM_COMPILE_ARGUMENTS --dpi-header dpi.h)
 endif()
-foreach(FSIM_SOURCE_NAME IN LISTS FSIM_SOURCE_NAMES)
-  fsim_step(compile compile ${FSIM_COMPILE_ARGUMENTS} "${FSIM_SOURCE_NAME}")
+# FSIM_COMPILE_ARGS holds more `fsim compile` arguments (a language
+# standard), separated as a shell would.
+if(DEFINED FSIM_COMPILE_ARGS AND NOT "${FSIM_COMPILE_ARGS}" STREQUAL "")
+  separate_arguments(FSIM_COMPILE_EXTRA UNIX_COMMAND "${FSIM_COMPILE_ARGS}")
+  list(APPEND FSIM_COMPILE_ARGUMENTS ${FSIM_COMPILE_EXTRA})
+endif()
+foreach(FSIM_SOURCE_NAME FSIM_SOURCE_STANDARD
+    IN ZIP_LISTS FSIM_SOURCE_NAMES FSIM_SOURCE_STANDARDS)
+  set(FSIM_SOURCE_COMPILE_ARGUMENTS ${FSIM_COMPILE_ARGUMENTS})
+  if(NOT FSIM_SOURCE_STANDARD STREQUAL "-")
+    list(APPEND FSIM_SOURCE_COMPILE_ARGUMENTS --standard
+      "${FSIM_SOURCE_STANDARD}")
+  endif()
+  fsim_step(compile compile ${FSIM_SOURCE_COMPILE_ARGUMENTS}
+    "${FSIM_SOURCE_NAME}")
+  if(DEFINED FSIM_COMPILE_MESSAGE AND NOT FSIM_COMPILE_MESSAGE STREQUAL "")
+    string(FIND "${FSIM_STEP_OUTPUT}${FSIM_STEP_ERROR}"
+      "${FSIM_COMPILE_MESSAGE}" FSIM_MESSAGE_OFFSET)
+    if(FSIM_MESSAGE_OFFSET EQUAL -1)
+      message(FATAL_ERROR
+        "fsim compile did not report \"${FSIM_COMPILE_MESSAGE}\":\n${FSIM_STEP_OUTPUT}${FSIM_STEP_ERROR}")
+    endif()
+    return()
+  endif()
 endforeach()
 if(DEFINED FSIM_DPI_HEADER AND NOT FSIM_DPI_HEADER STREQUAL "")
   file(READ "${FSIM_WORK_DIR}/dpi.h" FSIM_HEADER)

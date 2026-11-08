@@ -32,6 +32,26 @@ architecture model of foreign_buf is
   -- its own by the user function (14.7.3.2).
   type summed_pair is array (0 to 1) of summed;
   signal p : summed_pair := (10, 20);
+  -- A record resolved as a whole by a function whose parameter is an array of
+  -- the record type (4.6): lo is the sum of the sources' lo and hi the OR of
+  -- their hi. Every source, created ones included, starts at the signal's
+  -- default (1, "01") (14.7.2).
+  type pair is record
+    lo : integer;
+    hi : bit_vector(1 downto 0);
+  end record;
+  type pair_array is array (natural range <>) of pair;
+  function merge_pairs (s : pair_array) return pair is
+    variable result : pair := (0, "00");
+  begin
+    for i in s'range loop
+      result.lo := result.lo + s(i).lo;
+      result.hi := result.hi or s(i).hi;
+    end loop;
+    return result;
+  end function;
+  subtype merged is merge_pairs pair;
+  signal rr : merged := (1, "01");
 begin
 end architecture;
 

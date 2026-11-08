@@ -186,6 +186,43 @@ implementation, package source or design provenance produces a deterministic
 miss. Unsupported future object/design schemas retain the established
 `FSIM-ART-0001` and `FSIM-ART-0010` diagnostics.
 
+### Mixing VHDL standards in one design
+
+VHDL units compiled with different `--standard` values elaborate together when
+their standards lie in one IEEE package family:
+
+| Family | Standards | Why |
+| --- | --- | --- |
+| Old | 1987, 1993, 2000, 2002 | `STD_LOGIC_VECTOR` is a distinct type |
+| New | 2008, 2019 | `STD_LOGIC_VECTOR` is a subtype of `STD_ULOGIC_VECTOR` |
+
+Units of different families (for example VHDL-1993 with VHDL-2008) are refused
+with `FSIM-ART-VHDEP-001`: IEEE 1164 and `numeric_std` changed their type
+relations between the two families, so one copy of the packages cannot serve
+both. Recompile the units with standards from one family.
+
+Within a family the design has one set of compiler-supplied STD and IEEE
+packages, the set of the newest standard present, so a type such as
+`std_logic_vector` is the same type in every unit and ports connect. Each unit
+is still analyzed and lowered under its own standard: a VHDL-2008 unit does
+not see VHDL-2019 declarations such as `range_direction`, and a VHDL-1987 unit
+does not see `file_open_kind`. An architecture must still have its entity's standard and a package body its
+declaration's (`FSIM-FE-VHORDER-011`), and a user-written STD package is still
+refused (`FSIM-FE-VHSTD-004`).
+Objects of one design must also share a compatibility profile.
+
+INTEGER is one type per design. When any unit is VHDL-2019, STD.STANDARD
+`INTEGER`, `NATURAL`, `POSITIVE` and every type derived from INTEGER's range
+are 64 bits wide for all units, VHDL-2008 ones included (IEEE 1076-2019
+5.2.3.1 requires the range to include +-2**63; IEEE 1076-2008 5.2.3.1 sets only
+a minimum of +-(2**31-1), so 64 bits is legal there too). `integer'high`,
+range and overflow checks, the kernel and interpreter widths, and the
+`vhpiLongIntVal` format VHPI reports follow. A design without a VHDL-2019 unit
+keeps the 32-bit INTEGER. A user subtype of a VHDL-2008 unit that spells
+exactly the 32-bit range of its base (`subtype word is integer range
+-2147483648 to 2147483647`) widens with it in such a design. Mapped `.fsimlib`
+libraries still have to share one standard with each other.
+
 Older-revision execution uses that retained identity end to end. VHDL-87,
 VHDL-93, VHDL-2000 and VHDL-2002 component hierarchies execute on both the
 interpreter and LLVM engines at O0 and O2 when either a SystemVerilog parent
@@ -963,6 +1000,41 @@ instance's exact time unit and precision. Relative and `$root` hierarchy names
 resolve against stable instance paths, and interpreter plus compiled execution
 share the same application service rather than embedding hierarchy pointers in
 SimIR.
+
+Interactive scope status update: `$scope(hierarchical_name)`, `$showscopes
+[(n)]` and `$showvars [(list)]` (IEEE 1800-2023 D.11-D.13, 1364-2005
+C.10-C.12) run on the interpreter and the compiled kernel through the same
+application service as `$printtimescale`. `$scope` sets the one interactive
+scope of the simulation, the setting `vpi_control(vpiSetInteractiveScope)`,
+`acc_set_interactive_scope` and the debugger `scope` command also move, and it
+fires the same scope-change announcement (VPI `cbInteractiveScopeChange`,
+PLI `reason_scope`, VHPI); the scope before any change is the first top-level
+module. The name must denote a module instance, task, function or named block
+(a generate block is not a scope); a literal or other expression is an
+elaboration error (`FSIM-ELAB-SVSCOPE-001`), and a name that matches no scope,
+a generate block or a variable stops the run (`FSIM-RUN-0002`). A relative
+name resolves from the task or named block that holds the call outward, then
+from the instance outward (23.8). Annex D gives no output
+format, so fsim prints these lines, to stdout and the log like `$display`:
+`$showscopes` prints `$showscopes: scopes at <scope>` (with a nonzero argument
+`scopes in or below <scope>`), then one line `  <module|interface|program|task|
+function|named block> <hierarchical name>` per scope,
+sorted by name (with a nonzero argument, instances inside generate blocks are
+included), or `  (none)`. `$showvars` prints `$showvars: variables in
+<scope>` (`$showvars: listed variables` with a list), then one line per
+object: `  <kind> [left:right] <hierarchical name> = <value>`, where kind is the
+net type (`wire`, `tri`, ...) or the variable type (`reg`, `logic`, `bit`,
+`int`, `integer`, `real`, `time`, `string`), the range appears for vectors,
+and the value is `<width>'b<bits>` (reals in decimal, strings quoted). A net
+adds ` strength0=<s> strength1=<s>`, its strongest active zero and one drive
+strengths. Without arguments it lists the nets and variables of the
+interactive scope by name; with a list, the listed objects in order, where a
+bit-select or part-select names the whole vector. Names in the list resolve
+from the calling task, block or instance outward, then from the interactive
+scope. `$list` (D.6)
+is not supported and stops elaboration (`FSIM-ELAB-SVSCOPE-002`). A run
+without a foreign interface builds its VPI design on the first of these tasks,
+so a design that does not use them pays nothing.
 
 `$time`, `$stime` and `$realtime` accept both bare and empty-parentheses
 forms. Each query carries the executing specialization's retained time unit
@@ -2479,6 +2551,22 @@ revisions, the complete explicit profile, 137-bit X/Z values, mixed VHDL and
 SystemC, hidden artifact producers, cache reuse and the governed 6-GiB,
 delta-1000 and VCD-64 ceilings. A passing child exit without those transcript
 tokens cannot satisfy the matrix.
+
+### Mixed Verilog and SystemVerilog standards
+
+Verilog and SystemVerilog units compiled under different standards mix in one
+design: a Verilog-2005 module under a SystemVerilog-2023 top, a 2017 package
+imported (`import p::*;`) or referenced (`p::name`) by a 2023 unit, a class
+in a 2009 package extended by a 2012 class. Every unit keeps the standard it
+was compiled under. A package's own members (typedefs, parameters, functions,
+tasks, classes, covergroups, nettypes, `let` and DPI imports) are analyzed and
+lowered under the package's standard, never the importer's, so a
+SystemVerilog-2023 package function behaves as 2023 when a 2017 module calls
+it. Only a differing compatibility profile (`--compatibility` switches) is
+refused, with `FSIM-FE-STANDARD-003`; one source file consumed under two
+standards (`FSIM-FE-STANDARD-001`) and one design-unit name analyzed under two
+standards (`FSIM-FE-STANDARD-002`) remain errors. The `fsim.mixed-standard.*`
+tests cover both engines.
 
 ### Verilog and SystemVerilog SDF timing application in v2
 

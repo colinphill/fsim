@@ -1,0 +1,20 @@
+#c warm kind=vhpienumrangek left=red kind=vhpienumliteralk right=green
+#c short kind=vhpiphysrangek left=5 mm right=2 cm
+#c frac kind=vhpifloatrangek left=0 right=1
+#c group template pairt entries=2
+#c   entry class=signal unconstrained=0
+#c   entry class=signal unconstrained=1
+#c group g1 template=pairt designators=2
+#c   designator vhpisigdeclk a1
+#c   designator vhpisigdeclk a2
+#c attrspec tag designators=2 class=signal
+#c   designator vhpisigdeclk a1
+#c   designator vhpisigdeclk a2
+#c base unit mm
+#c unit mm literal=- back=-
+#c unit cm literal=10 mm back=mm
+#c a1 attrspec=vhpiattrspeck attrdecl=tag
+#c dynamic kind=vhpiindexednamek status=0 value=1
+#c config cfg entity=work.top
+#c   block spec=a items=1
+#c   item kind=vhpicompconfigk compname=leaf instnames=u1 open=0 default=0 aspect=work.rtl

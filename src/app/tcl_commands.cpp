@@ -367,10 +367,11 @@ namespace fsim::app::tcl_detail {
             *context.built, engine, context.config.run.foreign_probes);
         // The session may deposit and force any std_logic value.
         context.built->kernel_access.weak_sources = true;
-        // Only a session with a library compiles the primitive delay slots in.
         const bool foreign = application_detail::foreign_libraries_requested(context.config);
-        if (foreign
-            && context.built->design.bind_primitive_delay_slots() != 0U) {
+        // A session may reannotate SDF at any safe point, so its delayed
+        // primitives take their delays from slots that a later DEVICE delay
+        // replaces (IEEE 1497-2001 5.4.1), as with a library's puts.
+        if (context.built->design.bind_primitive_delay_slots() != 0U) {
             context.built->kernel_access.delay_slots = true;
         }
         const auto design_process_count
@@ -1084,7 +1085,8 @@ namespace fsim::app::tcl_detail {
             }
             if (context.simulation) {
                 auto committed = context.simulation->commit_sdf_reannotation(
-                    *planned->control->effective(), &planned->design);
+                    *planned->control->effective(), &planned->design,
+                    planned->device_gates);
                 if (!committed.ok()) {
                     for (const auto& entry : committed.diagnostics)
                         context.diagnostics.error(entry.code, entry.message);
@@ -1429,6 +1431,70 @@ namespace fsim::app::tcl_detail {
             return command_error(interpreter, error);
         }
         Tcl_SetObjResult(interpreter, result);
+        return TCL_OK;
+    }
+
+    // fsim::save FILE ?incremental?: write the run state of the loaded
+    // simulation to FILE (IEEE 1800-2023 D.9 $save, $incsave). The session
+    // must be at a save point: between run commands, at the end of a time
+    // slot.
+    int save_command(
+        TclContext& context,
+        Tcl_Interp* const interpreter,
+        const Tcl_Size argument_count,
+        Tcl_Obj* const arguments[])
+    {
+        if (argument_count < 2 || argument_count > 3) {
+            Tcl_WrongNumArgs(interpreter, 1, arguments, "FILE ?incremental?");
+            return TCL_ERROR;
+        }
+        bool incremental = false;
+        if (argument_count == 3) {
+            if (std::string_view { Tcl_GetString(arguments[2]) } != "incremental") {
+                return command_error(
+                    interpreter, "the optional argument must be incremental");
+            }
+            incremental = true;
+        }
+        if (!ensure_simulation(context, interpreter)) {
+            return TCL_ERROR;
+        }
+        const std::string file { Tcl_GetString(arguments[1]) };
+        const auto saved = context.simulation->save_state(
+            fsim::support::path_from_utf8(file), incremental);
+        if (!saved.ok) {
+            return command_error(interpreter, saved.error);
+        }
+        Tcl_SetObjResult(interpreter, Tcl_NewStringObj(file.data(),
+            tcl_size(file.size())));
+        return TCL_OK;
+    }
+
+    // fsim::restart FILE: restore the run state of the loaded simulation from
+    // a file written by fsim::save, $save or --save-at (IEEE 1800-2023 D.9
+    // $restart). The simulation must have been loaded with the same design
+    // and the same command line.
+    int restart_command(
+        TclContext& context,
+        Tcl_Interp* const interpreter,
+        const Tcl_Size argument_count,
+        Tcl_Obj* const arguments[])
+    {
+        if (argument_count != 2) {
+            Tcl_WrongNumArgs(interpreter, 1, arguments, "FILE");
+            return TCL_ERROR;
+        }
+        if (!ensure_simulation(context, interpreter)) {
+            return TCL_ERROR;
+        }
+        const std::string file { Tcl_GetString(arguments[1]) };
+        const auto restored = context.simulation->restore_state(
+            fsim::support::path_from_utf8(file));
+        if (!restored.ok) {
+            return command_error(interpreter, restored.error);
+        }
+        Tcl_SetObjResult(interpreter, Tcl_NewStringObj(file.data(),
+            tcl_size(file.size())));
         return TCL_OK;
     }
 
@@ -1828,6 +1894,14 @@ namespace fsim::app::tcl_detail {
             }
             if (command == "::fsim::run" || command == "fsim::run") {
                 return run_command(
+                    context, interpreter, argument_count, arguments);
+            }
+            if (command == "::fsim::save" || command == "fsim::save") {
+                return save_command(
+                    context, interpreter, argument_count, arguments);
+            }
+            if (command == "::fsim::restart" || command == "fsim::restart") {
+                return restart_command(
                     context, interpreter, argument_count, arguments);
             }
             if (command == "::fsim::get_simulation"

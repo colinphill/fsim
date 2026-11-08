@@ -147,10 +147,7 @@ VhdlVhpiWriteResult VhdlVhpiDriverSystem::prepare_write(
               delay,
               SchedulerPhase::update,
               next_ordinal_++,
-              [this, identity](Scheduler&) {
-                std::scoped_lock lock{mutex_};
-                commit_write(identity);
-              });
+              write_task(identity));
     } catch (...) {
       operations_.erase(identity);
       return {{}, VhdlVhpiDriverError::ResourceLimit};

@@ -852,7 +852,7 @@ Lowerer::hir_vhdl_fixed_function_profile(
         return HirVhdlIntrinsicProfile {
             static_cast<std::size_t>(
                 frontend::vhdl_predefined_integer_storage_width(
-                    vhdl_standard_)),
+                    vhdl_integer_standard())),
             frontend::ValueDomain::Integer,
             true,
         };
@@ -965,7 +965,7 @@ Lowerer::HirVhdlIntrinsicAttempt Lowerer::lower_hir_vhdl_fixed_function(
     const auto name = lowercase_vhdl_simple_name(source.text);
     const auto conversion = name == "to_ufixed" || name == "to_sfixed";
     const auto integer_width = static_cast<std::size_t>(
-        frontend::vhdl_predefined_integer_storage_width(vhdl_standard_));
+        frontend::vhdl_predefined_integer_storage_width(vhdl_integer_standard()));
     if (fixed_bound_function(name)) {
         // (LEFT, RIGHT [, OPERATION [, LEFT2, RIGHT2]]) or
         // (SIZE_RES [, OPERATION [, SIZE_RES2]]).

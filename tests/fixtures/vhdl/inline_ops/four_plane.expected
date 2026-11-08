@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
+inl p4 t1 q=00001000
+inl p4 t2 q=01001000
+inl p4 t3 q=01000000

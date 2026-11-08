@@ -659,10 +659,10 @@ Lowerer::HirVhdlAccessHeap* Lowerer::hir_vhdl_access_heap(
         const auto& allocator_range = normalized_allocator_ranges.front();
         const auto integer_index_base
             = frontend::vhdl_predefined_integer_range(
-                vhdl_standard_, "integer");
+                vhdl_integer_standard(), "integer");
         const auto natural_index_subtype
             = frontend::vhdl_predefined_integer_range(
-                vhdl_standard_, "natural");
+                vhdl_integer_standard(), "natural");
         const bool endpoints_in_integer_base
             = allocator_range.left && allocator_range.right
             && integer_index_base.contains(*allocator_range.left)
@@ -673,7 +673,7 @@ Lowerer::HirVhdlAccessHeap* Lowerer::hir_vhdl_access_heap(
             && natural_index_subtype.contains(*allocator_range.right);
         const auto positive_index_subtype
             = frontend::vhdl_predefined_integer_range(
-                vhdl_standard_, "positive");
+                vhdl_integer_standard(), "positive");
         const bool endpoints_in_positive
             = allocator_range.left && allocator_range.right
             && positive_index_subtype.contains(*allocator_range.left)

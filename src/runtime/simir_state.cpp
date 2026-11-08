@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "simir_internal.hpp"
+#include "simir_events.hpp"
 #include "fsim/runtime/systemverilog_string.hpp"
 
 #include <algorithm>
@@ -47,6 +48,7 @@ namespace fsim::runtime::simir {
 void Interpreter::Impl::discard_scheduler_work() noexcept
 {
     clear_systemverilog_update_pool();
+    clear_delayed_update_pool();
     cohort_snapshots.discard();
     active_cohort_ready.clear();
     for (auto& cohort : static_sensitivity_cohorts) {
@@ -1222,46 +1224,15 @@ void Interpreter::Impl::begin_wait_timeout(
     dynamic_wait.wait_timeout_result = result;
     set_wait_timeout_result(process, false);
 
-    struct WaitTimeoutTask {
-        Interpreter::Impl* owner { };
-        ProcessId process { };
-        InstructionIndex origin { };
-        std::uint64_t generation { };
-        bool after_updates { };
-    };
     // IEEE 1076-2008 14.7.5.1: a VHDL process whose timeout expires resumes
     // after the signal updates of that time, as queue_timeout does.
     const bool after_updates
         = process.program().scheduling_domain()
             != ProcessSchedulingDomain::systemverilog
         && !process.program().postponed() && delay != 0;
-    const auto task =
-        fsim::runtime::detail::make_scheduler_task_descriptor<
-            WaitTimeoutTask,
-            +[](Scheduler&, const WaitTimeoutTask& scheduled) {
-                auto& state = scheduled.owner->get_process(
-                    scheduled.process);
-                auto* const timeout
-                    = state.cold().dynamic_wait_state_if_present();
-                if (timeout == nullptr
-                    || timeout->wait_timeout_generation
-                        != scheduled.generation
-                    || state.wait_timeout_origin
-                        != std::optional { scheduled.origin }) {
-                    return;
-                }
-                scheduled.owner->set_wait_timeout_result(state, true);
-                state.wait_timeout_origin.reset();
-                timeout->wait_timeout_deadline.reset();
-                timeout->wait_timeout_result.reset();
-                if (scheduled.after_updates) {
-                    scheduled.owner->queue_next_delta(scheduled.process);
-                } else {
-                    scheduled.owner->queue_active_current(
-                        scheduled.process);
-                }
-            }>(WaitTimeoutTask {
-                this, process.id, origin, generation, after_updates });
+    const auto task = events::make<events::WaitTimeout>(
+        events::WaitTimeout::Payload {
+            this, process.id, origin, generation, after_updates });
     const bool systemverilog_process
         = process.program().scheduling_domain()
         == ProcessSchedulingDomain::systemverilog;
@@ -1740,27 +1711,8 @@ void Interpreter::Impl::queue_at(
         }
         compact->queued = true;
         const auto phase = compact->execution_phase;
-        struct ProcessQueueTask {
-            Interpreter::Impl* owner { };
-            ProcessId process { };
-        };
-        const auto task =
-            fsim::runtime::detail::make_scheduler_task_descriptor<
-                ProcessQueueTask,
-                +[](Scheduler&, const ProcessQueueTask& scheduled) {
-                    if (auto* state = scheduled.owner->processes
-                            .compact_constant(scheduled.process)) {
-                        state->queued = false;
-                        state->waiting_on_static = false;
-                    } else {
-                        auto& full_state = scheduled.owner->get_process(
-                            scheduled.process);
-                        full_state.queued = false;
-                        full_state.waiting_on_static = false;
-                        scheduled.owner->remove_dynamic_wait(full_state);
-                    }
-                    scheduled.owner->execute(scheduled.process);
-                }>(ProcessQueueTask { this, id });
+        const auto task = events::make<events::ProcessQueueCompact>(
+            events::ProcessQueueCompact::Payload { this, id });
         if (processes.program_view(id).scheduling_domain()
             == ProcessSchedulingDomain::systemverilog) {
             scheduler.schedule_internal_systemverilog_at(
@@ -1783,33 +1735,9 @@ void Interpreter::Impl::queue_at(
     process.queued = true;
     process.timer_wake = time > scheduler.now();
     const auto phase = process.execution_phase;
-    struct ProcessQueueTask {
-        Interpreter::Impl* owner { };
-        ProcessId process { };
-        std::uint32_t epoch { };
-    };
-    const auto task =
-        fsim::runtime::detail::make_scheduler_task_descriptor<
-            ProcessQueueTask,
-            +[](Scheduler&, const ProcessQueueTask& scheduled) {
-                if (auto* compact = scheduled.owner->processes
-                        .compact_constant(scheduled.process)) {
-                    compact->queued = false;
-                    compact->waiting_on_static = false;
-                } else {
-                    auto& state = scheduled.owner->get_process(
-                        scheduled.process);
-                    // A disable abandoned this timer (IEEE 1800-2017 9.6.2).
-                    if (state.timer_epoch != scheduled.epoch) {
-                        return;
-                    }
-                    state.queued = false;
-                    state.timer_wake = false;
-                    state.waiting_on_static = false;
-                    scheduled.owner->remove_dynamic_wait(state);
-                }
-                scheduled.owner->execute(scheduled.process);
-            }>(ProcessQueueTask { this, id, process.timer_epoch });
+    const auto task = events::make<events::ProcessQueueTimed>(
+        events::ProcessQueueTimed::Payload {
+            this, id, process.timer_epoch });
     if (process.program().scheduling_domain()
         == ProcessSchedulingDomain::systemverilog) {
         scheduler.schedule_internal_systemverilog_at(
@@ -1839,17 +1767,10 @@ void Interpreter::Impl::queue_timeout(
     }
     process.queued = true;
     process.timer_wake = true;
-    scheduler.schedule_after(time - scheduler.now(), SchedulerPhase::update,
-        process.id,
-        [this, id = process.id, epoch = process.timer_epoch](Scheduler&) {
-            auto& state = get_process(id);
-            if (state.timer_epoch != epoch) {
-                return;
-            }
-            state.queued = false;
-            state.timer_wake = false;
-            queue_next_delta(id);
-        });
+    scheduler.schedule_internal_at(time, SchedulerPhase::update, process.id,
+        events::make<events::ProcessTimeoutUpdate>(
+            events::ProcessTimeoutUpdate::Payload {
+                this, process.id, process.timer_epoch }));
 }
 
 void Interpreter::Impl::queue_next_delta(
@@ -1874,21 +1795,8 @@ void Interpreter::Impl::queue_next_delta(
     process.queued = true;
     process.timer_wake = false;
     const auto phase = process.execution_phase;
-    struct ProcessQueueTask {
-        Interpreter::Impl* owner { };
-        ProcessId process { };
-    };
-    const auto task =
-        fsim::runtime::detail::make_scheduler_task_descriptor<
-            ProcessQueueTask,
-            +[](Scheduler&, const ProcessQueueTask& scheduled) {
-                auto& state = scheduled.owner->get_process(
-                    scheduled.process);
-                state.queued = false;
-                state.waiting_on_static = false;
-                scheduled.owner->remove_dynamic_wait(state);
-                scheduled.owner->execute(scheduled.process);
-            }>(ProcessQueueTask { this, id });
+    const auto task = events::make<events::ProcessWake>(
+        events::ProcessWake::Payload { this, id });
     if (processes.scheduling_domain(id)
         == ProcessSchedulingDomain::systemverilog) {
         if (origin.process_domain
@@ -1896,21 +1804,11 @@ void Interpreter::Impl::queue_next_delta(
             scheduler.schedule_internal_systemverilog_next_delta(
                 phase, id, task);
         } else {
-            scheduler.schedule_next_delta(
+            scheduler.schedule_internal_next_delta(
                 SchedulerPhase::active, id,
-                [this, id, phase](Scheduler& runtime) {
-                    auto& state = get_process(id);
-                    state.queued = true;
-                    runtime.schedule_systemverilog(
-                        phase, id,
-                        [this, id](Scheduler&) {
-                            auto& state = get_process(id);
-                            state.queued = false;
-                            state.waiting_on_static = false;
-                            remove_dynamic_wait(state);
-                            execute(id);
-                        });
-                });
+                events::make<events::ProcessWakeDomainCross>(
+                    events::ProcessWakeDomainCross::Payload {
+                        this, id, phase }));
         }
         return;
     }
@@ -1951,21 +1849,8 @@ void Interpreter::Impl::queue_zero_delay_resume(
     }
 
     process.queued = true;
-    struct ProcessResumeTask {
-        Interpreter::Impl* owner { };
-        ProcessId process { };
-    };
-    const auto task =
-        fsim::runtime::detail::make_scheduler_task_descriptor<
-            ProcessResumeTask,
-            +[](Scheduler&, const ProcessResumeTask& scheduled) {
-                auto& state = scheduled.owner->get_process(
-                    scheduled.process);
-                state.queued = false;
-                state.waiting_on_static = false;
-                scheduled.owner->remove_dynamic_wait(state);
-                scheduled.owner->execute(scheduled.process);
-            }>(ProcessResumeTask { this, process.id });
+    const auto task = events::make<events::ProcessWake>(
+        events::ProcessWake::Payload { this, process.id });
     scheduler.schedule_internal_systemverilog(
         SchedulerPhase::inactive, process.id, task);
 }
@@ -2043,17 +1928,18 @@ void Interpreter::Impl::queue_static_cohort_next_delta(
     const auto phase = process.execution_phase;
     const auto order = cohort.ready.front();
     const auto snapshot = cohort_snapshots.acquire(cohort.ready);
-    const auto execute_one = [this, cohort_id](Scheduler&) {
-        execute_queued_static_cohort(cohort_id);
-    };
+    // A registered event (#128), also as the fallback of a batched member.
+    static_assert(sizeof(std::size_t) <= sizeof(std::uint64_t));
+    const auto execute_one = events::make<events::CohortWake>(
+        events::CohortWake::Payload { this,
+            static_cast<std::uint64_t>(cohort_id) });
     try {
         if (static_phase_batches_enabled) {
-            static_assert(sizeof(std::size_t) <= sizeof(std::uint64_t));
             scheduler.schedule_next_delta_batchable(
                 phase, order, *this,
                 static_cast<std::uint64_t>(cohort_id), execute_one);
         } else {
-            scheduler.schedule_next_delta(phase, order, execute_one);
+            scheduler.schedule_internal_next_delta(phase, order, execute_one);
         }
     } catch (...) {
         cohort_snapshots.release(snapshot);
@@ -2109,23 +1995,8 @@ void Interpreter::Impl::queue_current(ProcessId id)
         compact->queued = true;
         const auto phase
             = scheduler.current_phase().value_or(SchedulerPhase::active);
-        struct ProcessQueueTask {
-            Interpreter::Impl* owner { };
-            ProcessId process { };
-        };
-        const auto task =
-            fsim::runtime::detail::make_scheduler_task_descriptor<
-                ProcessQueueTask,
-                +[](Scheduler&, const ProcessQueueTask& scheduled) {
-                    if (auto* state = scheduled.owner->processes
-                            .compact_constant(scheduled.process)) {
-                        state->queued = false;
-                    } else {
-                        scheduled.owner->get_process(
-                            scheduled.process).queued = false;
-                    }
-                    scheduled.owner->execute(scheduled.process);
-                }>(ProcessQueueTask { this, id });
+        const auto task = events::make<events::ProcessRunCurrent>(
+            events::ProcessRunCurrent::Payload { this, id });
         if (processes.program_view(id).scheduling_domain()
             == ProcessSchedulingDomain::systemverilog) {
             scheduler.schedule_internal_systemverilog(phase, id, task);
@@ -2140,23 +2011,8 @@ void Interpreter::Impl::queue_current(ProcessId id)
     }
     process.queued = true;
     const auto phase = scheduler.current_phase().value_or(SchedulerPhase::active);
-    struct ProcessQueueTask {
-        Interpreter::Impl* owner { };
-        ProcessId process { };
-    };
-    const auto task =
-        fsim::runtime::detail::make_scheduler_task_descriptor<
-            ProcessQueueTask,
-            +[](Scheduler&, const ProcessQueueTask& scheduled) {
-                if (auto* compact = scheduled.owner->processes
-                        .compact_constant(scheduled.process)) {
-                    compact->queued = false;
-                } else {
-                    scheduled.owner->get_process(
-                        scheduled.process).queued = false;
-                }
-                scheduled.owner->execute(scheduled.process);
-            }>(ProcessQueueTask { this, id });
+    const auto task = events::make<events::ProcessRunCurrent>(
+        events::ProcessRunCurrent::Payload { this, id });
     if (process.program().scheduling_domain()
         == ProcessSchedulingDomain::systemverilog) {
         scheduler.schedule_internal_systemverilog(phase, id, task);
@@ -2184,21 +2040,8 @@ void Interpreter::Impl::queue_active_current_at(
     process.queued = true;
     process.timer_wake = false;
     const auto phase = process.execution_phase;
-    struct ProcessQueueTask {
-        Interpreter::Impl* owner { };
-        ProcessId process { };
-    };
-    const auto task =
-        fsim::runtime::detail::make_scheduler_task_descriptor<
-            ProcessQueueTask,
-            +[](Scheduler&, const ProcessQueueTask& scheduled) {
-                auto& state = scheduled.owner->get_process(
-                    scheduled.process);
-                state.queued = false;
-                state.waiting_on_static = false;
-                scheduled.owner->remove_dynamic_wait(state);
-                scheduled.owner->execute(scheduled.process);
-            }>(ProcessQueueTask { this, id });
+    const auto task = events::make<events::ProcessWake>(
+        events::ProcessWake::Payload { this, id });
     if (process.program().scheduling_domain()
         == ProcessSchedulingDomain::systemverilog) {
         scheduler.schedule_internal_systemverilog(phase, order, task);
@@ -2689,30 +2532,9 @@ void Interpreter::Impl::notify_event(
         state.kind = PendingEventKind::delta;
         state.due = scheduler.now();
         state.origin = origin;
-        struct PendingEventTask {
-            Interpreter::Impl* owner { };
-            SignalId event { };
-            std::uint64_t generation { };
-        };
-        const auto task =
-            fsim::runtime::detail::make_scheduler_task_descriptor<
-                PendingEventTask,
-                +[](Scheduler&, const PendingEventTask& scheduled) {
-                    auto& pending
-                        = scheduled.owner->event_states[scheduled.event];
-                    if (pending.generation != scheduled.generation
-                        || pending.kind
-                            != PendingEventKind::delta) {
-                        return;
-                    }
-                    pending.kind = PendingEventKind::none;
-                    pending.due = 0;
-                    const auto origin = pending.origin;
-                    pending.origin = { };
-                    scheduled.owner->trigger_event(
-                        scheduled.event, origin);
-                }>(PendingEventTask {
-                    this, notified_event, generation });
+        const auto task = events::make<events::EventNotifyDelta>(
+            events::EventNotifyDelta::Payload {
+                this, notified_event, generation });
         if (origin.process_domain
             == ProcessSchedulingDomain::systemverilog) {
             scheduler.schedule_internal_systemverilog_next_delta(
@@ -2746,31 +2568,9 @@ void Interpreter::Impl::notify_event(
     state.kind = PendingEventKind::timed;
     state.due = due;
     state.origin = origin;
-    struct PendingEventTask {
-        Interpreter::Impl* owner { };
-        SignalId event { };
-        std::uint64_t generation { };
-        SimulationTick due { };
-    };
-    const auto task =
-        fsim::runtime::detail::make_scheduler_task_descriptor<
-            PendingEventTask,
-            +[](Scheduler&, const PendingEventTask& scheduled) {
-                auto& pending = scheduled.owner->event_states[
-                    scheduled.event];
-                if (pending.generation != scheduled.generation
-                    || pending.kind != PendingEventKind::timed
-                    || pending.due != scheduled.due) {
-                    return;
-                }
-                pending.kind = PendingEventKind::none;
-                pending.due = 0;
-                const auto origin = pending.origin;
-                pending.origin = { };
-                scheduled.owner->trigger_event(
-                    scheduled.event, origin);
-            }>(PendingEventTask {
-                this, notified_event, generation, due });
+    const auto task = events::make<events::EventNotifyTimed>(
+        events::EventNotifyTimed::Payload {
+            this, notified_event, generation, due });
     if (origin.process_domain
         == ProcessSchedulingDomain::systemverilog) {
         scheduler.schedule_internal_systemverilog_at(
@@ -2975,27 +2775,9 @@ void Interpreter::Impl::schedule_monitor_publication()
         monitor_systemverilog_publication = publication;
         scheduler.schedule_end_of_time_slot(
             process,
-            [this, generation, process](Scheduler& runtime) {
-                if (generation != monitor_generation
-                    || !monitor_enabled || !monitor) {
-                    return;
-                }
-                monitor_systemverilog_publication.reset();
-                if (monitor_file_handle) {
-                    write_file(
-                        process,
-                        *monitor_file_handle,
-                        render_monitor(*monitor),
-                        monitor->newline);
-                } else if (output_hook) {
-                    output_hook(
-                        process,
-                        render_monitor(*monitor),
-                        monitor->newline,
-                        runtime.now(),
-                        runtime.delta());
-                }
-            });
+            events::make<events::MonitorPublishSv>(
+                events::MonitorPublishSv::Payload {
+                    this, generation, process }));
         return;
     }
     const auto publication = std::pair { scheduler.now(), scheduler.delta() };
@@ -3003,30 +2785,12 @@ void Interpreter::Impl::schedule_monitor_publication()
         return;
     }
     monitor_publication = publication;
-    scheduler.schedule(
+    scheduler.schedule_internal(
         SchedulerPhase::postponed,
         process,
-        [this, generation, process](Scheduler& runtime) {
-            if (generation != monitor_generation
-                || !monitor_enabled || !monitor) {
-                return;
-            }
-            monitor_publication.reset();
-            if (monitor_file_handle) {
-                write_file(
-                    process,
-                    *monitor_file_handle,
-                    render_monitor(*monitor),
-                    monitor->newline);
-            } else if (output_hook) {
-                output_hook(
-                    process,
-                    render_monitor(*monitor),
-                    monitor->newline,
-                    runtime.now(),
-                    runtime.delta());
-            }
-        });
+        events::make<events::MonitorPublishVhdl>(
+            events::MonitorPublishVhdl::Payload {
+                this, generation, process }));
 }
 
 void Interpreter::Impl::install_monitor(

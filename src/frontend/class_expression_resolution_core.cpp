@@ -343,6 +343,9 @@ void Resolver::run() {
       for (auto& sensitivity : process.sensitivities) {
         resolve_member_sensitivity(sensitivity, process_scope);
         resolve_expression(sensitivity.expression, process_scope);
+        if (sensitivity.guard) {
+          resolve_expression(*sensitivity.guard, process_scope);
+        }
       }
       for (auto& statement : process.statements) {
         resolve_statement(statement, process_scope, std::nullopt);
@@ -689,6 +692,9 @@ void Resolver::resolve_generate_body(
     for (auto& sensitivity : process.sensitivities) {
       resolve_member_sensitivity(sensitivity, process_scope);
       resolve_expression(sensitivity.expression, process_scope);
+      if (sensitivity.guard) {
+        resolve_expression(*sensitivity.guard, process_scope);
+      }
     }
     for (auto& statement : process.statements) {
       resolve_statement(statement, process_scope, std::nullopt);

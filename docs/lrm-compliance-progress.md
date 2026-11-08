@@ -5641,8 +5641,9 @@ prints positions), so the VHDL fixture follows nvc's `predef1` and
     non-constant attribute values (`-417`), and compilation-unit typedefs
     that name undefined types or forward types never defined (`-418`);
   - `$unit` functions and tasks report undeclared identifiers;
-  - event controls with an `iff` guard (`@(e iff g)`); several guarded
-    events in one control are reported (`FSIM-SV-UNSUPPORTED-048`);
+  - event controls with an `iff` guard (`@(e iff g)`); each event of a
+    control of several carries its own guard (the diagnostic
+    `FSIM-SV-UNSUPPORTED-048` is retired);
   - tagged unions: `void` members, `tagged X` without a value, `if (e
     matches p)`, and a run-time error for reading a member other than
     the current tag;

@@ -126,6 +126,7 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-VPI-LOAD-001` | error | A `--vpi` module could not be loaded, or does not export its bootstrap entry point. |
 | `FSIM-DPI-LOAD-001` | error | An `--sv-lib` DPI-C library could not be loaded, or this build has no DPI-C call support (libffi was not found when it was configured). |
 | `FSIM-VPI-001` | error | The code `vpi_chk_error` reports for a failed VPI routine call made by a `--vpi` module (IEEE 1800-2023 38.2). |
+| `FSIM-VPI-SPLIT-001` | error | A `vpi_put_delays` on a gate, switch or load port declared without a delay returned success, but the split it asked for failed at the next safe point (the engine cannot give the driver a delay slot or the control a delayed copy), so the old timing kept running. `vpi_chk_error` reports it after the safe point and `simulate` exits non-zero when the run ends; the run itself continues (IEEE 1800-2023 38.32). |
 | `FSIM-VHPI-LOAD-001` | error | A `--vhpi` module could not be loaded, or does not export its bootstrap entry point, or a `--vhpi-registry` file has an entry that is malformed, names an object library or entry point that cannot be found, or registers a model again (IEEE 1076-2019 20.2.2), or a standard direct binding (`VHPIDIRECT`) names an object library or entry point that cannot be found (IEEE 1076-2019 20.2.4.3), or an instance of an architecture decorated with the `FOREIGN` attribute has no registered `vhpiArchF` model with an execution function (IEEE 1076-2019 20.2.4.2). |
 | `FSIM-VHPI-ASSERT` | error | The prefix of a message a `--vhpi` module reports with `vhpi_assert`; error, failure and system severities fail the run (IEEE 1076-2019 23.2). |
 
@@ -211,7 +212,7 @@ are no longer emitted.
 | `FSIM-FE-CU-0001` | warning | A VHDL source set requested Verilog-style compilation-unit grouping; VHDL files remain independent analysis units. |
 | `FSIM-FE-STANDARD-001` | error | One physical root or included dependency is consumed under incompatible Verilog/SystemVerilog standard revisions. |
 | `FSIM-FE-STANDARD-002` | error | A Verilog/SystemVerilog design-unit identity is reanalyzed under a different standard revision. |
-| `FSIM-FE-STANDARD-003` | error | A SystemVerilog package is imported by a unit analyzed under a different standard revision. |
+| `FSIM-FE-STANDARD-003` | error | A compiled SystemVerilog package is imported or referenced by a unit analyzed under a different compatibility profile. Different standard revisions mix. |
 | `FSIM-FE-VHORDER-001` | error | A VHDL architecture appears before its entity in manifest analysis order. |
 | `FSIM-FE-VHORDER-002` | error | A VHDL package body appears before its matching package declaration. |
 | `FSIM-FE-VHORDER-003` | error | A VHDL context reference names a context that has not yet been analyzed. |
@@ -510,6 +511,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SDF-REANNOTATION-002` | error | Two SDF file/cell scopes annotate the same target with identical values at equal precedence. |
 | `FSIM-SDF-REANNOTATION-003` | error | SDF reannotation finds conflicting equal-precedence values, incompatible timing topology or an invalid effective timing design. |
 | `FSIM-SDF-REANNOTATION-004` | error | SDF reannotation exceeds its configured file, target, scope-byte or semantic-identity resource limit. |
+| `FSIM-SDF-REANNOTATION-005` | error | A running simulation cannot take a reannotated SDF delay: the engine refuses the new delays of a gate that a `DEVICE` entry sets for its output (IEEE 1497-2001 5.4.1), and no part of the reannotation is applied; or it refuses the split of a load that a net delay delays for the first time (IEEE 1364-2005 16.2.4), and the timing committed before the split stays. |
 | `FSIM-SDF-CONTROL-001` | error | SDF control receives an invalid surface, phase, delay selection, empty input identity, missing elaborate/simulate input, or zero policy/resource limit. |
 | `FSIM-SDF-CONTROL-002` | error | SDF control repeats or conflicts on one source/root/cell input scope. |
 | `FSIM-SDF-CONTROL-003` | error | Annotation is requested during compile, or effective annotation phase, generation, or source/object provenance does not match the control request. |
@@ -519,6 +521,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SDF-SESSION-003` | error | A session SDF request contains a planned target family outside connected specify-path, timing-check, `INTERCONNECT`, `PORT` and `NETDELAY` support, or an `INTERCONNECT`, `PORT` or `NETDELAY` annotation without a complete effective delay. |
 | `FSIM-SDF-SESSION-004` | warning | An SDF `INTERCONNECT`, `PORT` or `NETDELAY` delay is recorded and published through VPI but does not delay the net in simulation: its load is a select outside the port's range, a port of the design itself that a process of the design also drives, or a port no process of whose instance reads, or whose net no process outside the instance drives; a `NETDELAY` net reaches no input or inout port of a Verilog or SystemVerilog instance; a driver writes the net with an operation the per-source dual write does not cover, or a port connection process uses an operation that cannot be remapped; or a switch (`tran`, `rtran`, `tranif`) sits inside the load instance on the port or on a net with per-source delays, which IEEE 1364-2005 16.2.4 (a delay only between module ports, never between primitive pins) gives no delay across. |
 | `FSIM-SDF-SESSION-005` | warning | An SDF `INTERCONNECT` names a source port that drives nothing on its load's net (the port is not on the net), so the delay is annotated anyway as the delay from all sources, like a `PORT` delay (IEEE 1364-2005 16.2.4). |
+| `FSIM-SDF-SESSION-006` | warning | An SDF `DEVICE` delay (IEEE 1497-2001 5.4.1) names an output port that no module path ends at and no primitive of the instance drives, so it delays nothing. |
 | `FSIM-SDF-EFFECTIVE-001` | error | Effective SDF persistence receives incomplete identities, generation, policy, exact-value records, or producer-relative provenance. |
 | `FSIM-SDF-EFFECTIVE-002` | error | An effective SDF object, design, library, native-cache, or checkpoint archive has a stale schema, wrong artifact kind, malformed/truncated envelope, trailing data, or checksum corruption. |
 | `FSIM-SDF-EFFECTIVE-003` | error | Effective SDF persistence finds duplicate target ownership or a producer, policy, generation, target, or provenance identity incompatible with the consumer. |
@@ -1612,6 +1615,8 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SV-SEM-198` | error | A restrict property action or cover property failure action is not permitted. |
 | `FSIM-SV-SEM-199` | error | An executable property or sequence has an invalid actual/formal profile, duplicate attempt-local name, unsupported local type or initializer, or a match assignment that does not target an attempt local. |
 | `FSIM-SV-SEM-200` | error | An executable concurrent-property predicate is outside the supported packed scalar/vector expression subset. |
+| `FSIM-SV-SEM-470` | error | A concurrent assertion statement in an always or initial procedure has no clocking event: no clock is inferred from the procedure (a blocking timing control, not exactly one event control, or not exactly one event expression that is an edge expression, event variable or clocking block the body leaves unused; IEEE 1800-2023 16.14.6) and the scope has no default clocking. |
+| `FSIM-SV-SEM-471` | error | The clocking event of a procedural concurrent assertion uses an automatic variable of the procedure (IEEE 1800-2023 16.14.6). |
 | `FSIM-SV-SEM-201` | error | An executable concurrent-property clock is not one direct design-unit object with an optional edge. |
 | `FSIM-SV-SEM-203` | error | A covergroup declaration is used outside SystemVerilog-2017. |
 | `FSIM-SV-SEM-204` | error | A covergroup closing name does not match its declaration name. |
@@ -1655,7 +1660,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SV-SEM-247` | error | A return statement is nested in a `fork...join` branch. |
 | `FSIM-SV-SEM-248` | error | A task or function formal uses `const` without the required following `ref` direction. |
 | `FSIM-SV-SEM-249` | error | A task or function body assigns to a read-only `const ref` formal. |
-| `FSIM-SV-SEM-250` | error | A deferred immediate assertion action is not a permitted null, severity-system-task, or observed subroutine-call action. |
+| `FSIM-SV-SEM-250` | error | A deferred immediate assertion action is not null or a single subroutine call (a begin-end block or another statement, or a built-in container method in a final action) (IEEE 1800-2023 16.4). |
 | `FSIM-SV-SEM-251` | error | A concurrent `sequence` directive is used with `assert`, `assume`, or `restrict` instead of `cover`. |
 | `FSIM-SV-SEM-252` | error | A checker connection list mixes ordered and named forms. |
 | `FSIM-SV-SEM-253` | error | A checker instance or named connection does not resolve to a visible declaration or formal. |
@@ -1922,7 +1927,6 @@ scheduler.
 | `FSIM-SV-UNSUPPORTED-045` | error | A class member is outside the current property, method, constraint, typedef, or nested-class foundation. |
 | `FSIM-SV-UNSUPPORTED-046` | error | A `randsequence` production is recursive or returns a value; productions expand inline and only `void` productions are supported. |
 | `FSIM-SV-UNSUPPORTED-047` | error | An assignment within an expression (IEEE 1800-2017 11.3.6) appears in a loop control expression; such assignments run once before their statement. |
-| `FSIM-SV-UNSUPPORTED-048` | error | An event control with an `iff` guard has more than one event, or more than one guard; only a single guarded event is executable. |
 | `FSIM-SV-UNSUPPORTED-050` | error | `$bits` of an anonymous aggregate data type requires a statically known width. |
 | `FSIM-SV-UNSUPPORTED-051` | error | A non-ANSI selected port must exactly match its declared packed range; partial selections are not supported. |
 
@@ -2396,7 +2400,7 @@ scheduler.
 | `FSIM-ELAB-VHACCESS-023` | error | A VHDL allocator's access subtype does not identify its resolved access type. |
 | `FSIM-ELAB-VHACCESS-024` | error | A VHDL access type designates a string-domain subtype other than the predefined STRING. |
 | `FSIM-ELAB-VHPHYSICAL-001` | error | A VHDL physical type lacks its range or primary unit. |
-| `FSIM-ELAB-VHPHYSICAL-002` | error | A physical range is nonstatic or outside signed 32-bit primary-unit ticks. |
+| `FSIM-ELAB-VHPHYSICAL-002` | error | A physical range is nonstatic, or before VHDL-2019 outside signed 32-bit primary-unit ticks. |
 | `FSIM-ELAB-VHPHYSICAL-003` | error | A physical primary unit incorrectly carries a secondary-unit scale. |
 | `FSIM-ELAB-VHPHYSICAL-004` | error | A secondary physical unit has a nonpositive, nonstatic, forward, or overflowing scale (IEEE 1076-1993 3.1.3). |
 | `FSIM-ELAB-VHPHYSICAL-005` | error | A bounded physical value does not use the signed 32-bit runtime representation. |
@@ -2636,6 +2640,9 @@ scheduler.
 | `FSIM-ELAB-SVMATH-002` | error | A scalar math or bit-preserving conversion operand has an incompatible type or no representable executable width. |
 | `FSIM-ELAB-SVTIME-001` | error | `$timeformat` is used outside SystemVerilog or without integral units, precision, and minimum-width operands plus a string suffix. |
 | `FSIM-ELAB-SVTIME-002` | error | `$printtimescale` is used outside SystemVerilog or with more than one, named, or non-hierarchical argument. |
+| `FSIM-ELAB-SVSCOPE-001` | error | `$scope` is used without exactly one hierarchical name, `$showvars` with an argument that is not a variable or net name (optionally with a bit-select or part-select), or `$showscopes` with more than one or a non-constant argument. |
+| `FSIM-ELAB-SVSCOPE-002` | error | The Annex D task `$list` (IEEE 1800-2023 D.6) is not supported. |
+| `FSIM-ELAB-SVSIMCTL-001` | error | `$save`, `$incsave` or `$restart` is used outside SystemVerilog or without exactly one file name written as a string literal (IEEE 1800-2023 D.9), `$reset` with more than stop_value, reset_value and diagnostics_value or with named arguments (D.8), or `$reset_count` or `$reset_value` with an argument or outside SystemVerilog. |
 | `FSIM-ELAB-SVTIME-003` | error | `$time`, `$stime`, or `$realtime` is used outside SystemVerilog or with arguments. |
 | `FSIM-ELAB-SVCOV-001` | error | `$get_coverage` or `$get_inst_coverage` is used outside SystemVerilog or with arguments. |
 | `FSIM-ELAB-SVCOV-002` | error | `$set_coverage_db_name` or `$load_coverage_db` is used outside SystemVerilog or without exactly one positional filename expression. |
@@ -2811,6 +2818,8 @@ scheduler.
 | `FSIM-ELAB-SVSELECT-001` | error | A bit-select or part-select is applied to a scalar (1-bit, rangeless) unpacked array element (IEEE 1800-2017 11.5.1). |
 | `FSIM-ELAB-SVASSERT-001` | error | A concurrent assertion incorrectly carries an immediate-assertion deferred qualifier. |
 | `FSIM-ELAB-SVASSERT-002` | error | A deferred immediate assertion action cannot be lowered to its scheduler-region handoff. |
+| `FSIM-ELAB-SVASSERT-003` | error | An automatic or dynamic variable is the actual of a `ref` or `const ref` formal of a deferred assertion action (IEEE 1800-2023 16.4). |
+| `FSIM-ELAB-SVASSERT-004` | error | A final deferred assertion action calls a user subroutine that cannot be called in the Postponed region: it writes a net or variable other than its automatic locals, has an output or inout formal, makes a nonblocking or timed assignment, or suspends or schedules an event (IEEE 1800-2023 16.4, 4.4.2.9). Decided statically from the callee bodies. |
 | `FSIM-ELAB-SVSTREAM-001` | error | A streaming assignment target is malformed, uses the wrong language, or is nested inside another assignment target. |
 | `FSIM-ELAB-SVSTREAM-002` | error | The source of a streaming assignment contains fewer bits than its target requires. |
 | `FSIM-ELAB-SVTOLERANCE-001` | error | An inside tolerance range is used outside the exact SystemVerilog-2023 profile. |
@@ -2941,7 +2950,28 @@ scheduler.
 | `FSIM-TIME-0003` | error | An HDL delay is invalid or not representable at project resolution. |
 | `FSIM-TIME-0004` | error | A declared SystemVerilog time precision is not representable at project resolution. |
 | `FSIM-RUN-0001` | error | The SimIR interpreter failed during a CLI run. |
-| `FSIM-RUN-0002` | error | Another exception terminated a CLI run. |
+| `FSIM-RUN-0002` | error | Another exception terminated a CLI run, such as a `$scope` or `$showvars` name that matches no scope or object, or a `$scope` name that is not a module instance, task, function or named block (IEEE 1800-2023 D.11, D.13). |
+| `FSIM-SAVE-0001` | error | A save of the run state was requested where the scheduler is not at a save point (inside a callback of a time slot). The request waits for the end of the time slot or of the simulation cycle (IEEE 1800-2023 D.9, IEEE 1076-2019 20.7). |
+| `FSIM-SAVE-0002` | error | A pending scheduler event is a closure that no registered event kind describes, so it cannot be written. A closure of the current time slot runs before the slot ends and the save waits for it; one at a later time is an internal error. |
+| `FSIM-SAVE-0003` | error | A pending scheduler event is a batch or ticket entry without a registered fallback, or its event kind is not registered. |
+| `FSIM-SAVE-0004` | error | A pending scheduler event belongs to the embedding program (a host closure, a native callback, a SystemC primitive-channel update), which cannot be written to a file. The message names it; the save succeeds once it has run. |
+| `FSIM-SAVE-0005` | error | The payload of a pending scheduler event cannot be written, for example because it points outside the owner the event kind names. |
+| `FSIM-SAVE-0006` | error | A pending cancelable scheduler event of a registered kind has no cancel key, so a restart could not give its handle back to its owner. |
+| `FSIM-SAVE-0007` | error | A process (or a fork child, whose executor is a clone of its parent's) runs under an executor that keeps its registers and program counter in its own storage (a SystemC or foreign model, compiled process code), which the run-state image does not describe; IEEE 1800-2023 D.9 and IEEE 1076-2019 20.7 require the whole state, so the save is refused rather than restarting the process from another point. An executor that keeps no state of its own (the static kernel's host stub) is saved. The message names the process. |
+| `FSIM-SAVE-0008` | error | The save file has no section that this build restores (`sched.state`, `host.*`, `kernel.*` or a registered application section). |
+| `FSIM-SAVE-0009` | error | A run-state file, or one of its sections, has another layout version than this build reads. There is no reader of an older version; save again with this build. |
+| `FSIM-SAVE-0010` | error | A section does not fit the design it is restored into: a table size differs, an id is out of range, structure that the saved run created after start (a foreign driver) differs from the design's own, the section ends early or has trailing bytes, the engine could not restore its state, or a reset could not replay a late net-delay split of the run onto its twin (the split followed fork children or foreign drivers, so its drivers would get other ids). |
+| `FSIM-SAVE-0011` | error | A table, flag or counter that is at rest at a save point is not: a queue (staged signal updates, the kernel's nonblocking queue, the hosted queues, ...), a flag of a step in progress (a commit, a replay, a host region, a delayed-NBA event not yet run), a group-batch reservation or a live readiness ticket of the scheduler, a mid-dispatch queue, a pending foreign watch request, or, in the application and the foreign interfaces, a VPI or VHPI routine or callback delivery in progress, forces and disables a safe point has not delivered, a `vhpi_put_value` update not yet applied, or a `$reset`, `$restart` or save error still pending. Every such member is class S in `docs/run-state-classification.tsv` and has an exact test (`FSIM_RS_IDLE`) in the audit of its owner (`Scheduler::Impl::audit_rest_state`, `audit_host`, `Kernel::audit_run_state`, and for the foreign scopes `LiveService::audit_rest_state` of each interface, `SystemVerilogVpiCallbackManager::audit_rest_state`, the `app.control` audit; the foreign registry runs them through `RunStateSectionOwner::audit`); members that hold nothing at rest are class W or D and have no test. The save waits for the end of the time slot; this code means the member did not return to rest, which is an internal error. |
+| `FSIM-SAVE-0012` | retired | Formerly: the run held concurrent assertion monitors, which the engine did not save. Their plan, bounds and flat attempt block are saved in `host.run`; the code is no longer emitted. |
+| `FSIM-SAVE-0013` | error | The static kernel warps time (`FSIM_STATIC_KERNEL_TIME_WARP`), so its timers are not at their own times; run with time warp off to save. |
+| `FSIM-SAVE-0014` | error | A run-state file cannot be written: its directory cannot be created, or the file cannot be written or renamed into place. An older file of the same name is left unchanged. |
+| `FSIM-SAVE-0015` | error | A run-state file cannot be read, is not a run-state file, or is damaged: a section or the trailer checksum does not match. |
+| `FSIM-SAVE-0016` | error | A run-state file was saved by another design, build or command line. A restart repeats the command line of the save: the same design and the same VPI, VHPI and DPI libraries (the identity holds a content hash of each library file, so a rebuilt library is another build), plusargs and engine (IEEE 1800-2023 D.9). It is also reported when a saved restart-callback registration (stored as library module and routine offset; Linux, macOS and Windows) names a library that is not loaded (IEEE 1076-2019 20.7, IEEE 1800-2023 38.36.3). |
+| `FSIM-SAVE-0017` | error | `$incsave` has no full `$save` earlier in the run, or an incremental file cannot be restored because the full file it extends is missing, has changed since, or does not match (IEEE 1800-2023 D.9). |
+| `FSIM-SAVE-0018` | error | The engine cannot do what was asked of it: it cannot write its run state (a design with a SystemC part), or cannot reset the run for `$reset`, `vpi_control(vpiReset)` or `vhpi_control(vhpiReset)`. A design with a SystemC part never resets: the SystemC kernel has no operation that returns its modules, channels and suspended processes to their elaborated state, so the time-zero state of IEEE 1800-2023 D.8 cannot be reached. The request is refused (`vpi_control` and `vhpi_control` report the error, `$reset` ends the run with this diagnostic) instead of resetting part of the design. A run is also refused once a foreign interface created structure that the artifact does not hold (a process or driver owner made by `vhpi_create`, a host driver added with `add_foreign_driver`): the twin is built from the artifact and cannot recreate it, and the message names which structure it was (IEEE 1800-2023 D.8, IEEE 1076-2019 20.9). A run that holds UVM component or phase state is refused as well: those services live in the host and are not returned to their time-zero state yet. Also reported when the twin a reset builds from the artifact cannot be built or written. |
+| `FSIM-SAVE-0020` | error | `--save-at` and `--save-file` are not used together. |
+| `FSIM-SAVE-0021` | error | A section of the run state cannot be written, for example a live chandle holds a foreign identity that a file cannot carry, or UVM component, phase and objection state (host services that no section writes yet) is live. The message names the section. |
+| `FSIM-SAVE-0022` | error | `--save-at` is after `--duration`, or the simulation ended before `--save-at`, so no file was written. |
 | `FSIM-UVM-CLI-001` | error | A recognized UVM command-line plusarg is malformed, exceeds a bound, or cannot be applied to the simulation-owned factory/config/resource state. |
 | `FSIM-UVM-PHASE-001` | error | A UVM phase or domain handle is empty, stale, or owned by another simulation. |
 | `FSIM-UVM-PHASE-002` | error | A UVM phase/domain identity, standard kind, registration, root participation, or graph edge is malformed or duplicated. |
@@ -3067,7 +3097,7 @@ one stable diagnostic from the five-code FST reader family.
 | `FSIM-ART-0005` | error | Ordered object loading found no input, corruption, duplicate/colliding identities, inconsistent library or language-profile ownership, or an invalid restored semantic projection. |
 | `FSIM-ART-0006` | warning | An object outside a workspace names a source, relative to the consumer's base directory, that exists with other contents than were compiled: the object is elaborated from another directory than it was compiled in (pass `--base-directory`), or the source was edited. Shown once per object; a missing source is not reported. |
 | `FSIM-ART-HIR-001` | error | A compiled-HIR bundle, source-relocation map, or linked compiled design is malformed, inconsistent, or unsafe to publish or load. |
-| `FSIM-ART-VHDEP-001` | error | A portable object, design, or mapped-library artifact names a stale, unavailable, incomplete, or source-digest-mismatched compiler-supplied VHDL package dependency, or an object set combines incompatible compiler-supplied VHDL package environments. |
+| `FSIM-ART-VHDEP-001` | error | A portable object, design, or mapped-library artifact names a stale, unavailable, incomplete, or source-digest-mismatched compiler-supplied VHDL package dependency, or an object set combines incompatible compiler-supplied VHDL package environments. VHDL units of different standards in one design are refused only across the two IEEE package families, VHDL-1987 to 2002 and VHDL-2008 to 2019; the message names the two standards: `VHDL-1993 and VHDL-2008 units cannot be mixed: IEEE 1164/numeric_std changed type relations between the 1987–2002 and 2008–2019 package families; recompile with standards from one family`. Units of one family mix and share the newest standard's packages. |
 | `FSIM-ART-0010` | error | `.fsimdesign` metadata has an unsupported, truncated, trailing, or runtime-ABI-incompatible encoding; identity mismatches name found/required format and ABI and direct current-build regeneration. |
 | `FSIM-ART-0011` | error | `.fsimdesign` metadata has invalid roots, bindings, paths, checksums, object provenance, ordered VHDL or Verilog/SystemVerilog semantic-unit provenance, counts, or design digest. |
 | `FSIM-ART-0012` | error | `.fsimdesign` publication/loading failed, including overwrite, staging, permissions, or exact-payload-set failures. |

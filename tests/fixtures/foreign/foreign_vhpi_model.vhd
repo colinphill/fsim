@@ -41,6 +41,10 @@ architecture a of top is
   begin
     null;
   end procedure;
+  -- vhpiLogicalNameP of this file declaration is its literal "vhpi_model_out.dat"
+  -- (6.4.2.5, 19.4.3 Figure 10). vhpiEntityClassP of the attribute
+  -- specification of NOTE above is vhpiSignalEC = 1010 (7.2, 23.10).
+  file fo : int_file open write_mode is "vhpi_model_out.dat";
 begin
   v <= "10110010";
   c <= green;

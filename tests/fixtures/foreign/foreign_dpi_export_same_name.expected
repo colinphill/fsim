@@ -1,0 +1,5 @@
+#c run scope=top
+#c module note value=1
+#c block note value=2
+#c module note value=3
+#c run done

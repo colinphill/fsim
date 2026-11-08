@@ -168,21 +168,25 @@ void Simulation::schedule_class_method(
             "class methods may only be scheduled on a ready simulation"
         };
     }
+    // The method call and its completion belong to the embedding program, so
+    // a run-state save refuses while it is pending (FSIM-SAVE-0004).
     impl_->interpreter->scheduler().schedule_at(
         time,
         runtime::SchedulerPhase::active,
         stable_order,
-        [implementation = impl_.get(),
-            canonical_method = std::move(canonical_method),
-            this_handle,
-            actuals = std::move(actuals),
-            virtual_slot,
-            completion = std::move(completion)](runtime::Scheduler&) mutable {
-            const auto result = implementation->invoke_class_method(
-                canonical_method, this_handle, actuals, virtual_slot);
-            if (completion)
-                completion(result, actuals);
-        });
+        runtime::host_closure_task("Simulation::schedule_class_method",
+            [implementation = impl_.get(),
+                canonical_method = std::move(canonical_method),
+                this_handle,
+                actuals = std::move(actuals),
+                virtual_slot,
+                completion = std::move(completion)](
+                runtime::Scheduler&) mutable {
+                const auto result = implementation->invoke_class_method(
+                    canonical_method, this_handle, actuals, virtual_slot);
+                if (completion)
+                    completion(result, actuals);
+            }));
 }
 
 std::uint32_t Simulation::mcd_open(const std::string_view name)
@@ -291,6 +295,7 @@ runtime::RunResult Simulation::run(
         runtime::simir::InterpreterProgramAccess::set_static_kernel_time_warp(
             *impl_->interpreter,
             !until && !(impl_->vhdl_psl && impl_->vhdl_psl->active())
+                && !impl_->simulation_control_tasks
                 && !impl_->signal_change_hook
                 && impl_->signal_observers.empty()
                 && !impl_->scalar_signal_change_hook
@@ -305,9 +310,28 @@ runtime::RunResult Simulation::run(
         auto result = impl_->interpreter->run(until);
         // A reset ends the run at a safe point; the design then starts over
         // at time zero (IEEE 1800-2023 D.8, 38.36.3).
-        while (!impl_->reset_requests.empty()
-            && impl_->vpi_control->state()
-                != runtime::SystemVerilogVpiControlState::Finished) {
+        for (;;) {
+            // A save that failed at the end of its time slot, or a restart
+            // that did not take, ends the run with its FSIM-SAVE error.
+            if (impl_->save_failure) {
+                throw std::runtime_error { std::move(*impl_->save_failure) };
+            }
+            // $restart (IEEE 1800-2023 D.9) takes effect once the calling
+            // task has returned: the state of the file replaces the run's,
+            // and the run goes on from the saved time.
+            if (impl_->restart_request) {
+                if (!impl_->perform_restart()) {
+                    throw std::runtime_error {
+                        std::move(*impl_->save_failure) };
+                }
+                result = impl_->interpreter->run(until);
+                continue;
+            }
+            if (impl_->reset_requests.empty()
+                || impl_->vpi_control->state()
+                    == runtime::SystemVerilogVpiControlState::Finished) {
+                break;
+            }
             if (!impl_->perform_reset()) {
                 result = runtime::RunResult { runtime::RunStatus::stopped,
                     now(), delta(), 0, std::nullopt };
@@ -405,9 +429,83 @@ void Simulation::notify_lifecycle(
     }
 }
 
+void Simulation::set_reset_source(
+    std::function<std::unique_ptr<runtime::simir::Interpreter>()> source)
+{
+    impl_->interpreter->set_reset_source(std::move(source));
+}
+
+bool Simulation::restoring_state() const noexcept
+{
+    return impl_->restoring_state;
+}
+
+void Simulation::set_foreign_run_state_sections(
+    runtime::RunStateSectionRegistry sections)
+{
+    impl_->foreign_section_registry = std::move(sections);
+}
+
+void Simulation::set_reset_design_source(
+    std::function<std::optional<BuiltProject>()> reload,
+    const std::uint64_t max_deltas, const SimulationEngine engine)
+{
+    auto* const impl = impl_.get();
+    const auto effective = engine == SimulationEngine::compiled
+        ? SimulationEngine::v4 : engine;
+    impl->interpreter->set_reset_source(
+        [impl, reload = std::move(reload), max_deltas, effective]()
+            -> std::unique_ptr<runtime::simir::Interpreter> {
+            auto fresh = reload();
+            if (!fresh) {
+                return nullptr;
+            }
+            return impl->make_reset_twin(
+                std::move(*fresh), max_deltas, effective);
+        });
+}
+
 bool Simulation::reset_supported() const noexcept
 {
-    return impl_->interpreter->can_reset_run_state();
+    return !impl_->has_systemc()
+        && impl_->interpreter->can_reset_run_state();
+}
+
+std::string Simulation::reset_refusal() const
+{
+    return impl_->reset_refusal();
+}
+
+std::string Simulation::Impl::reset_refusal() const
+{
+    if (has_systemc()) {
+        return "FSIM-SAVE-0018: the design has a SystemC part, which cannot "
+               "be reset: the SystemC kernel has no operation that returns "
+               "its modules, channels and suspended processes to their "
+               "elaborated state, so the time-zero state of IEEE 1800-2023 "
+               "D.8 cannot be reached";
+    }
+    if (uvm_state_live()) {
+        return "FSIM-SAVE-0018: the run holds UVM component or phase state, "
+               "which lives in host services that a reset does not return to "
+               "their time-zero state yet (IEEE 1800-2023 D.8)";
+    }
+    if (!foreign_structure.empty()) {
+        // The twin is the design as the artifact builds it; processes,
+        // drivers and sources a library added are not in it, and the library
+        // cannot be asked to make them again (IEEE 1800-2023 D.8, IEEE
+        // 1076-2019 20.9).
+        return "FSIM-SAVE-0018: the run holds structure a foreign interface "
+               "created (" + foreign_structure + "), which a reset does not "
+               "rebuild from the artifact (IEEE 1800-2023 D.8, IEEE 1076-2019 "
+               "20.9)";
+    }
+    if (!interpreter->can_reset_run_state()) {
+        return "FSIM-SAVE-0018: this engine cannot reset the run (IEEE "
+               "1800-2023 D.8): no reset source is installed, or a process "
+               "runs under an executor that keeps its own state";
+    }
+    return { };
 }
 
 bool Simulation::request_reset(const ResetRequest request)
@@ -460,6 +558,11 @@ std::optional<runtime::SimulationTick> Simulation::next_pending_time()
         return scheduler.now();
     }
     return scheduler.next_pending_time();
+}
+
+std::vector<runtime::SimulationTick> Simulation::pending_times() const
+{
+    return impl_->interpreter->pending_times();
 }
 
 bool Simulation::finished() const noexcept
@@ -523,12 +626,6 @@ Simulation::concurrent_assertion_coverage() const
     std::ranges::sort(
         result, { }, &ConcurrentAssertionCoverage::process);
     return result;
-}
-
-const std::vector<ConcurrentAssertionEvent>&
-Simulation::concurrent_assertion_events() const noexcept
-{
-    return impl_->concurrent_assertion_events;
 }
 
 const runtime::SystemVerilogCoverageState&
@@ -769,7 +866,8 @@ void Simulation::remove_driver_transaction_hook(
 
 SdfReannotationCommitResult Simulation::commit_sdf_reannotation(
     const SdfReannotationApplication& application,
-    const elaboration::ElaboratedDesign* annotated)
+    const elaboration::ElaboratedDesign* annotated,
+    const std::span<const elaboration::SdfDeviceGateDelay> device_gates)
 {
     static_assert(std::is_nothrow_move_assignable_v<
         elaboration::ElaboratedDesign>);
@@ -782,10 +880,56 @@ SdfReannotationCommitResult Simulation::commit_sdf_reannotation(
     if (annotated != nullptr)
         retiming = elaboration::sdf_net_delay_retiming(
             impl_->built.design, *annotated);
-    auto replacement = elaboration::ElaboratedDesign::from_state(
-        retiming ? annotated->state() : application.design().state());
-    if (!replacement)
-        throw std::invalid_argument("SDF reannotation has invalid design state");
+    // Without a retiming the running design keeps its own net delay state (the
+    // loads it split, with their copy signals and driver processes, and the
+    // processes it grafted), because the interpreter runs those: only the
+    // module path and timing check timing is the application's. Replacing
+    // the whole design would forget the earlier splits, and the loads that
+    // are delayed already would be split a second time.
+    std::optional<elaboration::ElaboratedDesign> replacement;
+    if (retiming) {
+        replacement = elaboration::ElaboratedDesign::from_state(
+            annotated->state());
+        if (!replacement)
+            throw std::invalid_argument(
+                "SDF reannotation has invalid design state");
+    }
+    // A DEVICE delay of an output that no module path ends at is the delay
+    // of the gates that drive it (IEEE 1497-2001 5.4.1). Every gate is
+    // checked before anything is committed, so a gate the engine cannot
+    // retime fails the reannotation with the run untouched.
+    std::vector<std::pair<runtime::simir::ProcessId,
+        runtime::simir::TransitionDelays>> gate_puts;
+    SdfReannotationCommitResult refused;
+    for (const auto& device : device_gates) {
+        for (const auto& primitive : impl_->built.design.verilog_primitives()) {
+            if (primitive.instance != device.instance)
+                continue;
+            const bool drives = std::ranges::any_of(primitive.terminals,
+                [&](const elaboration::VerilogPrimitiveTerminalInfo& terminal) {
+                    return terminal.direction
+                            == frontend::VerilogPrimitiveTerminalDirection::Output
+                        && terminal.signal == device.signal;
+                });
+            if (!drives)
+                continue;
+            for (const auto driver : gate_driver_processes(primitive.full_name)) {
+                std::string reason;
+                if (!gate_delays_accepted(driver, device.delays, reason)) {
+                    refused.diagnostics.push_back(frontend::Diagnostic {
+                        frontend::DiagnosticSeverity::Error,
+                        "FSIM-SDF-REANNOTATION-005",
+                        "SDF DEVICE delay of " + device.object
+                            + " cannot retime gate " + primitive.full_name
+                            + ": " + reason,
+                        { }, { } });
+                }
+                gate_puts.emplace_back(driver, device.delays);
+            }
+        }
+    }
+    if (!refused.diagnostics.empty())
+        return refused;
     auto result = fsim::app::commit_sdf_reannotation(
         application, *impl_->interpreter);
     if (result.ok()) {
@@ -794,7 +938,19 @@ SdfReannotationCommitResult Simulation::commit_sdf_reannotation(
                 (void)impl_->interpreter->set_net_delay_table(
                     impl_->running_process(driver), table);
         }
-        impl_->built.design = std::move(*replacement);
+        // The design's net delay records are the annotation's now, so the
+        // values vpi_put_delays stored for the old ones are stale (38.32).
+        if (annotated != nullptr)
+            ++impl_->sdf_net_delay_epoch;
+        if (replacement)
+            impl_->built.design = std::move(*replacement);
+        else
+            impl_->built.design.replace_module_timing(
+                application.design().verilog_specify_paths(),
+                application.design().verilog_timing_checks());
+        // The gates take their DEVICE delays (checked above).
+        for (const auto& [driver, delays] : gate_puts)
+            (void)put_gate_driver_delays(driver, delays);
         if (!retiming && annotated != nullptr) {
             // The annotation changes which loads are delayed: a load that
             // had no delay is split now, at this safe point
@@ -820,10 +976,24 @@ SdfReannotationCommitResult Simulation::commit_sdf_reannotation(
                     }
                     continue;
                 }
-                if (std::ranges::any_of(running, [&](const auto& each) {
+                const auto kept = std::ranges::find_if(running,
+                    [&](const auto& each) {
                         return each.delayed && same_load(each, record);
-                    }))
+                    });
+                if (kept != running.end()) {
+                    // A load that stays delayed takes the new delays for its
+                    // later transitions when its copy driver serves this
+                    // record alone (a driver shared by per-source records has
+                    // one table per source group, which only a retiming of
+                    // identical splits maps).
+                    if (std::ranges::count(running, kept->driver,
+                            &elaboration::SdfNetDelayInfo::driver) == 1)
+                        (void)impl_->interpreter->set_net_delay_table(
+                            impl_->running_process(kept->driver),
+                            elaboration::sdf_net_delay_table(
+                                record.delays, record.reject, record.error));
                     continue;
+                }
                 // Later records to one load replace earlier ones (16.3).
                 std::erase_if(fresh, [&](const auto& each) {
                     return same_load(each, record);
@@ -836,11 +1006,28 @@ SdfReannotationCommitResult Simulation::commit_sdf_reannotation(
                 record.driver = { };
                 request_net_delay_split(std::move(record));
             }
-            if (!fresh.empty())
-                impl_->commit_net_delay_splits();
+            // A split the engine refuses fails the reannotation; the timing
+            // committed above stays.
+            if (!fresh.empty()) {
+                std::vector<std::string> failures;
+                impl_->commit_net_delay_splits(&failures);
+                for (const auto& failure : failures) {
+                    result.diagnostics.push_back(frontend::Diagnostic {
+                        frontend::DiagnosticSeverity::Error,
+                        "FSIM-SDF-REANNOTATION-005",
+                        "SDF net delay of " + failure
+                            + " (the load was not split at the safe point)",
+                        { }, { } });
+                }
+            }
         }
     }
     return result;
+}
+
+std::uint64_t Simulation::sdf_net_delay_epoch() const noexcept
+{
+    return impl_->sdf_net_delay_epoch;
 }
 
 bool Simulation::at_sdf_reannotation_safe_point() const noexcept
@@ -888,6 +1075,351 @@ void Simulation::request_net_delay_split(elaboration::SdfNetDelayInfo record)
     open_external_observation();
 }
 
+Simulation::GateDelayPut Simulation::put_gate_driver_delays(
+    const runtime::simir::ProcessId driver,
+    const runtime::simir::TransitionDelays delays)
+{
+    if (set_verilog_driver_delays(driver, delays)) {
+        return GateDelayPut::applied;
+    }
+    // A gate whose output write is a net delay (split here, or delayed by an
+    // SDF DEVICE entry before the run) takes the delays as its table.
+    if (set_verilog_net_delay_table(driver,
+            runtime::simir::NetDelayTable::from_gate_delays(delays))) {
+        return GateDelayPut::applied;
+    }
+    if (impl_->gate_delay_split.contains(driver)) {
+        return GateDelayPut::refused;
+    }
+    if (impl_->gate_delay_refused.contains(driver)) {
+        return GateDelayPut::refused;
+    }
+    // The split is checked now, so that a put the engine cannot take fails
+    // visibly in the caller (vpi_chk_error) instead of at the safe point.
+    {
+        std::string reason;
+        auto program = impl_->gate_delay_program(driver, delays, reason);
+        if (program) {
+            (void)impl_->interpreter->split_gate_delay(
+                impl_->running_process(driver), std::move(*program), reason, true);
+        }
+        if (!reason.empty()) {
+            impl_->gate_delay_error = reason;
+            impl_->gate_delay_refused.insert(driver);
+            impl_->gate_delay_split_refusals.push_back(
+                process_program(impl_->running_process(driver)).name + ": " + reason);
+            return GateDelayPut::refused;
+        }
+    }
+    // A later put before the safe point replaces the first one's delays.
+    impl_->gate_delay_requests.insert_or_assign(driver, delays);
+    if (impl_->gate_delay_observer == 0U) {
+        impl_->gate_delay_observer = add_safe_point_hook(
+            [impl = impl_.get()](runtime::Scheduler& scheduler,
+                const runtime::SchedulerPhase) {
+                if (scheduler.at_safe_point())
+                    impl->commit_gate_delay_splits();
+            });
+        open_external_observation();
+    }
+    return GateDelayPut::split_requested;
+}
+
+bool Simulation::gate_delays_accepted(const runtime::simir::ProcessId driver,
+    const runtime::simir::TransitionDelays delays, std::string& reason)
+{
+    using namespace runtime::simir;
+    // As put_gate_driver_delays, changing nothing: a slotted write takes the
+    // delays, a net delay write their table, and a delay-free gate the split
+    // the engine accepts.
+    if (impl_->gate_delay_split.contains(driver))
+        return true;
+    for (const auto& operation :
+        process_program(impl_->running_process(driver)).operations) {
+        const auto* const write = operation_get_if<WriteDelayed>(&operation);
+        if ((write != nullptr && write->slotted)
+            || operation_get_if<WriteNetDelay>(&operation) != nullptr)
+            return true;
+    }
+    if (impl_->gate_delay_refused.contains(driver)) {
+        reason = impl_->gate_delay_error;
+        return false;
+    }
+    auto program = impl_->gate_delay_program(driver, delays, reason);
+    if (program
+        && !impl_->interpreter->split_gate_delay(
+            impl_->running_process(driver), std::move(*program), reason, true)
+        && reason.empty())
+        reason = "the simulation engine cannot give the gate a delay slot";
+    return reason.empty();
+}
+
+namespace {
+
+// The labels the front end gives a gate's drivers: `g`, `g$one`,
+// `g$output<n>`.
+bool gate_driver_stem_matches(const std::string& name, const std::string_view full_name)
+{
+    if (!name.starts_with(full_name)) {
+        return false;
+    }
+    const auto rest = std::string_view { name }.substr(full_name.size());
+    return rest.empty() || rest == "$one" || rest.starts_with("$output");
+}
+
+} // namespace
+
+std::vector<runtime::simir::ProcessId> Simulation::undelayed_gate_drivers(
+    const std::string_view full_name) const
+{
+    using namespace runtime::simir;
+    std::vector<ProcessId> found;
+    for (ProcessId id = 0U; id < impl_->design_process_count; ++id) {
+        const auto& program = process_program(impl_->running_process(id));
+        if (!gate_driver_stem_matches(program.name, full_name)) {
+            continue;
+        }
+        const bool writes = std::ranges::any_of(program.operations,
+            [](const Operation& operation) {
+                return operation_get_if<WriteUpdate>(&operation) != nullptr
+                    || operation_get_if<WriteUpdateSlice>(&operation) != nullptr;
+            });
+        if (writes) {
+            found.push_back(id);
+        }
+    }
+    return found;
+}
+
+std::vector<runtime::simir::ProcessId> Simulation::gate_driver_processes(
+    const std::string_view full_name) const
+{
+    std::vector<runtime::simir::ProcessId> found;
+    for (runtime::simir::ProcessId id = 0U; id < impl_->design_process_count; ++id) {
+        if (gate_driver_stem_matches(
+                process_program(impl_->running_process(id)).name, full_name)) {
+            found.push_back(id);
+        }
+    }
+    return found;
+}
+
+bool Simulation::put_tranif_control_delays(
+    const std::string_view full_name, const runtime::simir::TransitionDelays delays)
+{
+    using namespace runtime::simir;
+    const std::string name { full_name };
+    const auto table = NetDelayTable::from_gate_delays(delays);
+    if (const auto known = impl_->tranif_controls.find(name);
+        known != impl_->tranif_controls.end()) {
+        return set_verilog_net_delay_table(known->second, table);
+    }
+    if (impl_->tranif_requests.empty() || impl_->tranif_observer == 0U) {
+        impl_->tranif_observer = add_safe_point_hook(
+            [impl = impl_.get()](runtime::Scheduler& scheduler,
+                const runtime::SchedulerPhase) {
+                if (scheduler.at_safe_point())
+                    impl->commit_tranif_control_splits();
+            });
+        open_external_observation();
+    }
+    impl_->tranif_requests.insert_or_assign(name, table);
+    return true;
+}
+
+void Simulation::Impl::commit_tranif_control_splits()
+{
+    auto requests = std::move(tranif_requests);
+    tranif_requests.clear();
+    safe_point_observers.erase(tranif_observer);
+    tranif_observer = 0U;
+    for (auto& [name, table] : requests) {
+        std::string reason;
+        if (!split_tranif_now(name, table, reason, nullptr)) {
+            report_deferred_split_failure(name, reason);
+        }
+    }
+}
+
+bool Simulation::Impl::split_tranif_now(const std::string& name,
+    const runtime::simir::NetDelayTable& table, std::string& reason,
+    const std::vector<runtime::simir::ProcessId>* const expected_ids)
+{
+    auto planned = elaboration::plan_tranif_control_graft(
+        built.design, name, table, design_process_count,
+        [this](const runtime::simir::ProcessId process)
+            -> const runtime::simir::Process& {
+            return interpreter->sensitive_process_program(process);
+        },
+        reason);
+    std::vector<runtime::simir::ProcessId> planned_ids;
+    if (planned) {
+        for (const auto& process : planned->graft.processes)
+            planned_ids.push_back(process.id);
+        if (!interpreter->graft_net_delay(planned->graft, reason)
+            && reason.empty())
+            reason = "the simulation engine cannot add the delayed copy "
+                     "of a switch control to a running design";
+    }
+    if (!planned || !reason.empty()) {
+        gate_delay_split_refusals.push_back(name + ": " + reason);
+        return false;
+    }
+    std::vector<runtime::simir::ProcessId> run_ids;
+    for (std::size_t index = 0U; index < planned_ids.size(); ++index) {
+        run_ids.push_back(planned->graft.processes[index].id);
+        if (planned->graft.processes[index].id != planned_ids[index])
+            grafted_process_ids.emplace(planned_ids[index],
+                planned->graft.processes[index].id);
+    }
+    if (expected_ids != nullptr && *expected_ids != run_ids) {
+        reason = "the switch control copy of the saved run had other "
+                 "process ids (the run created fork children or foreign "
+                 "drivers before it)";
+        return false;
+    }
+    tranif_controls.emplace(name, planned->driver);
+    built.design = std::move(*planned->grown);
+    LateSplit record;
+    record.kind = 1U;
+    record.name = name;
+    record.table = table;
+    record.run_ids = std::move(run_ids);
+    late_splits.push_back(std::move(record));
+    return true;
+}
+
+const std::string& Simulation::gate_delay_error() const noexcept
+{
+    return impl_->gate_delay_error;
+}
+
+const std::vector<std::string>& Simulation::gate_delay_split_refusals()
+    const noexcept
+{
+    return impl_->gate_delay_split_refusals;
+}
+
+std::optional<runtime::simir::Process> Simulation::Impl::gate_delay_program(
+    const runtime::simir::ProcessId driver,
+    const runtime::simir::TransitionDelays delays, std::string& reason)
+{
+    using namespace runtime::simir;
+    Process program = interpreter->sensitive_process_program(running_process(driver));
+    const auto table = NetDelayTable::from_gate_delays(delays).values();
+    bool rewritten { };
+    for (auto& operation : program.operations) {
+        if (const auto* const update = operation_get_if<WriteUpdate>(&operation)) {
+            operation = WriteNetDelay { update->signal, update->source,
+                std::nullopt, table, update->domain };
+            rewritten = true;
+        } else if (const auto* const slice
+            = operation_get_if<WriteUpdateSlice>(&operation)) {
+            operation = WriteNetDelay { slice->signal, slice->source,
+                slice->offset, table, slice->domain };
+            rewritten = true;
+        }
+    }
+    if (!rewritten) {
+        reason = "the driver has no delay-free write of its output";
+        return std::nullopt;
+    }
+    return program;
+}
+
+void Simulation::Impl::commit_gate_delay_splits()
+{
+    auto requests = std::move(gate_delay_requests);
+    gate_delay_requests.clear();
+    safe_point_observers.erase(gate_delay_observer);
+    gate_delay_observer = 0U;
+    for (const auto& [driver, delays] : requests) {
+        std::string reason;
+        if (!split_gate_now(driver, delays, reason)) {
+            report_deferred_split_failure(
+                interpreter->process_program(running_process(driver)).name, reason);
+        }
+    }
+}
+
+bool Simulation::Impl::split_gate_now(const runtime::simir::ProcessId driver,
+    const runtime::simir::TransitionDelays delays, std::string& reason)
+{
+    using namespace runtime::simir;
+    const auto running = running_process(driver);
+    auto program = gate_delay_program(driver, delays, reason);
+    const std::string name = program ? program->name : std::string {};
+    if (program
+        && !interpreter->split_gate_delay(running, std::move(*program), reason)
+        && reason.empty()) {
+        reason = "the simulation engine cannot give the gate a delay slot";
+    }
+    if (!reason.empty()) {
+        gate_delay_refused.insert(driver);
+        gate_delay_split_refusals.push_back(name + ": " + reason);
+        return false;
+    }
+    gate_delay_split.insert(driver);
+    LateSplit record;
+    record.kind = 0U;
+    record.driver = driver;
+    record.delays = delays;
+    late_splits.push_back(std::move(record));
+    return true;
+}
+
+bool Simulation::Impl::replay_late_splits(
+    const std::vector<LateSplit>& splits, std::string& reason)
+{
+    // The saved run made these puts after it started; this fresh run has made
+    // none. Each is applied as the safe point applied it, in order, so the
+    // engine's plan (the rewritten gate programs, the control copies and the
+    // ids they took) is the saved run's before the saved state replaces the
+    // tables (IEEE 1800-2023 D.9, 38.32).
+    struct Replaying {
+        runtime::simir::Interpreter& engine;
+        explicit Replaying(runtime::simir::Interpreter& value) : engine(value)
+        {
+            engine.set_plan_replay(true);
+        }
+        ~Replaying() { engine.set_plan_replay(false); }
+    } replaying { *interpreter };
+    for (const auto& split : splits) {
+        if (split.kind == 0U) {
+            if (gate_delay_split.contains(split.driver)) {
+                continue;
+            }
+            if (!split_gate_now(split.driver, split.delays, reason)) {
+                reason = "FSIM-SAVE-0010: a gate delay split of the saved "
+                         "run cannot be rebuilt: " + reason;
+                return false;
+            }
+        } else if (split.kind == 2U) {
+            if (std::ranges::any_of(late_splits, [&](const LateSplit& done) {
+                    return done.kind == 2U && done.name == split.name;
+                })) {
+                continue;
+            }
+            if (!split_net_delay_now(split.net_delay, reason, &split.run_ids)) {
+                reason = "FSIM-SAVE-0010: a port delay split of the saved "
+                         "run cannot be rebuilt: " + reason;
+                return false;
+            }
+        } else {
+            if (tranif_controls.contains(split.name)) {
+                continue;
+            }
+            if (!split_tranif_now(split.name, split.table, reason,
+                    &split.run_ids)) {
+                reason = "FSIM-SAVE-0010: a switch control split of the "
+                         "saved run cannot be rebuilt: " + reason;
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 bool Simulation::net_delay_split_pending() const noexcept
 {
     return !impl_->net_delay_split_requests.empty();
@@ -899,7 +1431,7 @@ const std::vector<std::string>& Simulation::net_delay_split_refusals()
     return impl_->net_delay_split_refusals;
 }
 
-void Simulation::Impl::commit_net_delay_splits()
+void Simulation::Impl::commit_net_delay_splits(std::vector<std::string>* const failures)
 {
     auto requests = std::move(net_delay_split_requests);
     net_delay_split_requests.clear();
@@ -910,38 +1442,94 @@ void Simulation::Impl::commit_net_delay_splits()
         if (std::ranges::all_of(record.delays,
                 [](const runtime::SimulationTick tick) { return tick == 0U; }))
             continue;
-        const auto key = net_delay_split_key(record);
-        const auto identity = record.identity;
         std::string reason;
-        auto planned = elaboration::plan_sdf_net_delay_graft(
-            built.design, std::move(record), design_process_count,
-            [this](const runtime::simir::ProcessId process)
-                -> const runtime::simir::Process& {
-                return interpreter->sensitive_process_program(process);
-            },
-            reason);
-        std::vector<runtime::simir::ProcessId> planned_ids;
-        if (planned) {
-            for (const auto& process : planned->graft.processes)
-                planned_ids.push_back(process.id);
-            if (!interpreter->graft_net_delay(planned->graft, reason)
-                && reason.empty())
-                reason = "the simulation engine cannot add the delayed copy "
-                         "of a port to a running design";
+        const auto key = net_delay_split_key(record);
+        const auto label = record.identity.empty() ? key : record.identity;
+        if (!split_net_delay_now(std::move(record), reason, nullptr)) {
+            report_deferred_split_failure(label, reason);
+            if (failures != nullptr)
+                failures->push_back(key + ": " + reason);
         }
-        if (!planned || !reason.empty()) {
-            net_delay_split_refused.insert(key);
-            net_delay_split_refusals.push_back(
-                (identity.empty() ? key : identity) + ": " + reason);
-            continue;
-        }
-        for (std::size_t index = 0U; index < planned_ids.size(); ++index) {
-            if (planned->graft.processes[index].id != planned_ids[index])
-                grafted_process_ids.emplace(planned_ids[index],
-                    planned->graft.processes[index].id);
-        }
-        built.design = std::move(*planned->grown);
     }
+}
+
+void Simulation::Impl::report_deferred_split_failure(
+    const std::string& what, const std::string& reason)
+{
+    // The put returned success when it was made; the split it asked for
+    // failed at the safe point, so the old timing stays. That is an error of
+    // the run (IEEE 1800-2023 38.32): the next vpi_chk_error reports it and
+    // the run ends with a failure status.
+    deferred_split_errors.push_back("vpi_put_delays on " + what
+        + " took no effect at the safe point: " + reason);
+}
+
+const std::vector<std::string>& Simulation::deferred_split_errors()
+    const noexcept
+{
+    return impl_->deferred_split_errors;
+}
+
+std::optional<std::string> Simulation::take_deferred_split_error()
+{
+    if (impl_->deferred_split_errors_taken
+        >= impl_->deferred_split_errors.size()) {
+        return std::nullopt;
+    }
+    return impl_->deferred_split_errors[impl_->deferred_split_errors_taken++];
+}
+
+bool Simulation::Impl::split_net_delay_now(elaboration::SdfNetDelayInfo record,
+    std::string& reason,
+    const std::vector<runtime::simir::ProcessId>* const expected_ids)
+{
+    const auto key = net_delay_split_key(record);
+    const auto identity = record.identity;
+    // The request as the safe point took it, for the saved plan.
+    const elaboration::SdfNetDelayInfo request = record;
+    auto planned = elaboration::plan_sdf_net_delay_graft(
+        built.design, std::move(record), design_process_count,
+        [this](const runtime::simir::ProcessId process)
+            -> const runtime::simir::Process& {
+            return interpreter->sensitive_process_program(process);
+        },
+        reason);
+    std::vector<runtime::simir::ProcessId> planned_ids;
+    if (planned) {
+        for (const auto& process : planned->graft.processes)
+            planned_ids.push_back(process.id);
+        if (!interpreter->graft_net_delay(planned->graft, reason)
+            && reason.empty())
+            reason = "the simulation engine cannot add the delayed copy "
+                     "of a port to a running design";
+    }
+    if (!planned || !reason.empty()) {
+        net_delay_split_refused.insert(key);
+        net_delay_split_refusals.push_back(
+            (identity.empty() ? key : identity) + ": " + reason);
+        return false;
+    }
+    std::vector<runtime::simir::ProcessId> run_ids;
+    for (std::size_t index = 0U; index < planned_ids.size(); ++index) {
+        run_ids.push_back(planned->graft.processes[index].id);
+        if (planned->graft.processes[index].id != planned_ids[index])
+            grafted_process_ids.emplace(planned_ids[index],
+                planned->graft.processes[index].id);
+    }
+    if (expected_ids != nullptr && *expected_ids != run_ids) {
+        reason = "the delayed copy of the saved run had other process ids "
+                 "(the run created fork children or foreign drivers "
+                 "before it)";
+        return false;
+    }
+    built.design = std::move(*planned->grown);
+    LateSplit split;
+    split.kind = 2U;
+    split.name = key;
+    split.net_delay = request;
+    split.run_ids = std::move(run_ids);
+    late_splits.push_back(std::move(split));
+    return true;
 }
 
 void Simulation::install_execution_point_hooks()
@@ -970,7 +1558,9 @@ void Simulation::install_execution_point_hooks()
                 && point.kind != Kind::thread_start
                 && point.kind != Kind::thread_end
                 && point.kind != Kind::thread_enter
-                && point.kind != Kind::object_created) {
+                && point.kind != Kind::object_created
+                && point.kind != Kind::assertion_pass
+                && point.kind != Kind::assertion_fail) {
                 impl->execution_point_primary(scheduler, point);
             }
         });
@@ -1111,7 +1701,37 @@ void Simulation::set_concurrent_assertion_hook(
 
 void Simulation::set_assertion_attempt_hook(AssertionAttemptHook hook)
 {
+    // The first library callback that needs attempt starts (cbAssertionStart,
+    // IEEE 1800-2023 39.4.2) turns the evaluators' start reports on, at the
+    // point of the call (before time 0 for a startup routine); a run that
+    // never registers one never binds them.
+    if (hook && impl_->interpreter) {
+        impl_->interpreter->bind_assertion_start_reports();
+    }
     impl_->assertion_attempt_hook = std::move(hook);
+}
+
+void Simulation::set_assertion_step_hook(AssertionStepHook hook)
+{
+    impl_->assertion_step_hook = std::move(hook);
+}
+
+Simulation::AssertionStepResult Simulation::set_assertion_step(
+    const std::uint64_t assertion, const runtime::SimulationTick start,
+    const bool enable)
+{
+    const auto processes = impl_->vpi_assertion_processes.find(assertion);
+    if (processes == impl_->vpi_assertion_processes.end()
+        || !impl_->interpreter) {
+        return AssertionStepResult::no_assertion;
+    }
+    const std::vector<runtime::simir::ProcessId> selected {
+        processes->second.begin(), processes->second.end()
+    };
+    return impl_->interpreter->set_sva_step(
+               selected, static_cast<std::int64_t>(start), enable)
+        ? AssertionStepResult::done
+        : AssertionStepResult::attempt_started;
 }
 
 bool Simulation::kill_assertion_attempt(

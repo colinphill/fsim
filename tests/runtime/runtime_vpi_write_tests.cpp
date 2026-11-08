@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/vpi_value_control.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <limits>
@@ -440,6 +441,65 @@ void test_systemverilog_vpi_checked_writes() {
           && control.status(cancelled.value).error
               == SystemVerilogVpiWriteControlError::NotFound,
       "VPI scheduled-write handles preserve controller ownership and independent release");
+
+  // The pending writes survive a run-state file (#128; IEEE 1800-2023 38.34):
+  // the object by its full name, the value as plain fields and the due time.
+  // A second controller of the same design takes them back with the ids, and
+  // saving it again gives the same records.
+  const auto already_pending = control.pending();
+  const auto saved_deposit = control.schedule(variable.value,
+      SystemVerilogVpiWriteKind::Deposit, one, 40,
+      SystemVerilogVpiDelayPolicy::Transport);
+  const auto saved_force = control.schedule(variable.value,
+      SystemVerilogVpiWriteKind::Force, unknown, 50,
+      SystemVerilogVpiDelayPolicy::Transport);
+  const auto saved_release = control.schedule(variable.value,
+      SystemVerilogVpiWriteKind::Release, std::nullopt, 60,
+      SystemVerilogVpiDelayPolicy::Transport);
+  const auto saved = control.save_pending();
+  require_vpi_write(
+      saved_deposit && saved_force && saved_release
+          && saved.writes.size() == already_pending + 3U
+          && saved.next_id > saved.writes.back().id,
+      "VPI scheduled writes save every pending record and the next id");
+  const auto& last = saved.writes.back();
+  require_vpi_write(last.object == "top.value"
+          && last.kind == static_cast<std::uint8_t>(
+                 SystemVerilogVpiWriteKind::Release)
+          && last.value_kind == 0U && last.due == scheduler.now() + 60U,
+      "a saved release names the object by full name, holds no value and "
+      "keeps its due time");
+  SystemVerilogVpiValueControl restored{registry, scheduler, 3000};
+  std::string restore_error;
+  require_vpi_write(
+      restored.restore_pending(saved, restore_error)
+          && restored.pending() == saved.writes.size(),
+      "a controller takes the saved pending writes back");
+  const auto again = restored.save_pending();
+  require_vpi_write(
+      again.next_id == saved.next_id
+          && again.writes.size() == saved.writes.size()
+          && std::ranges::equal(again.writes, saved.writes,
+              [](const auto& left, const auto& right) {
+                return left.id == right.id && left.object == right.object
+                    && left.kind == right.kind
+                    && left.value_kind == right.value_kind
+                    && left.text == right.text && left.bits == right.bits
+                    && left.has_strength == right.has_strength
+                    && left.due == right.due
+                    && left.retained == right.retained;
+              }),
+      "saving the restored controller gives the saved records");
+  auto unknown_object = saved;
+  unknown_object.writes.front().object = "top.nothing";
+  SystemVerilogVpiValueControl refused{registry, scheduler, 4000};
+  require_vpi_write(
+      !refused.restore_pending(unknown_object, restore_error)
+          && restore_error.find("top.nothing") != std::string::npos,
+      "a saved write whose object is not in the design is refused");
+  restored.reset_records();
+  require_vpi_write(restored.pending() == 0U,
+      "a reset drops every record");
 }
 
 }  // namespace fsim::tests::runtime

@@ -3,6 +3,7 @@
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
+#include "fsim/support/vhdl_identifier.hpp"
 
 namespace fsim::app::application_detail {
 
@@ -889,9 +890,18 @@ end context ieee_std_context;
             ? std::string { "  constant CopyRightNotice : STRING :=\n"
                             "    \"Copyright IEEE P1076 WG. Licensed Apache 2.0\";\n" }
             : std::string { };
+        // STD_LOGIC_1164's X01, X01Z, UX01 and UX01Z are ordinary resolved
+        // subtypes of the intrinsic STD_ULOGIC (IEEE 1076-2019 16.7), so they
+        // are declared as such rather than named intrinsically.
+        const auto members = package == "std_logic_1164"
+            ? std::string { "  subtype X01 is resolved std_ulogic range 'X' to '1';\n"
+                            "  subtype X01Z is resolved std_ulogic range 'X' to 'Z';\n"
+                            "  subtype UX01 is resolved std_ulogic range 'U' to '1';\n"
+                            "  subtype UX01Z is resolved std_ulogic range 'U' to 'Z';\n" }
+            : std::string { };
         const auto declaration_projection = dependency
             + "package " + std::string { package } + " is\n" + copyright
-            + "end package " + std::string { package } + ";\n";
+            + members + "end package " + std::string { package } + ";\n";
         const auto body_projection = "package body " + std::string { package } + " is\n"
             + "end package body " + std::string { package } + ";\n";
         std::vector<std::pair<std::filesystem::path, std::string_view>> sources;
@@ -972,10 +982,6 @@ end context ieee_std_context;
                     "std_ulogic_vector",
                     "std_logic",
                     "std_logic_vector",
-                    "x01",
-                    "x01z",
-                    "ux01",
-                    "ux01z",
                     "resolved",
                     "and",
                     "nand",
@@ -1921,9 +1927,19 @@ vhdl_package_dependencies(const CheckedProject& checked)
         append(vhdl_standard, package,
             identity->revision, identity->source_digest);
     }
-    std::ranges::sort(result, {}, &library::VhdlPackageDependency::package);
-    result.erase(std::ranges::unique(result, {},
-        &library::VhdlPackageDependency::package).begin(), result.end());
+    // Objects of several standards in one package family each keep their
+    // own entry for a shared package.
+    std::ranges::sort(result, [](const library::VhdlPackageDependency& left,
+                                  const library::VhdlPackageDependency& right) {
+        return std::tie(left.package, left.standard)
+            < std::tie(right.package, right.standard);
+    });
+    result.erase(std::ranges::unique(result,
+        [](const library::VhdlPackageDependency& left,
+            const library::VhdlPackageDependency& right) {
+            return left.package == right.package
+                && left.standard == right.standard;
+        }).begin(), result.end());
     return result;
 }
 
@@ -1973,6 +1989,113 @@ bool validate_vhdl_package_dependencies(
         return false;
     }
     return true;
+}
+
+std::string vhdl_mixed_family_message(
+    const std::string_view first, const std::string_view second)
+{
+    return "VHDL-" + std::string { first } + " and VHDL-"
+        + std::string { second }
+        + " units cannot be mixed: IEEE 1164/numeric_std changed type "
+          "relations between the 1987\u20132002 and 2008\u20132019 package "
+          "families; recompile with standards from one family";
+}
+
+int vhdl_package_family(const std::string_view standard) noexcept
+{
+    if (standard == "1987" || standard == "1993" || standard == "2000"
+        || standard == "2002") {
+        return 1;
+    }
+    return standard == "2008" || standard == "2019" ? 2 : 0;
+}
+
+std::optional<VhdlMixedEnvironmentPlan> plan_vhdl_mixed_environment(
+    const std::span<const VhdlObjectEnvironment> objects,
+    diagnostic::Engine& diagnostics)
+{
+    VhdlMixedEnvironmentPlan plan;
+    std::string first;
+    for (const auto& object : objects) {
+        if (object.standard.empty()) {
+            continue;
+        }
+        if (first.empty()) {
+            first = object.standard;
+            continue;
+        }
+        if (vhdl_package_family(object.standard)
+            != vhdl_package_family(first)) {
+            diagnostics.error("FSIM-ART-VHDEP-001",
+                vhdl_mixed_family_message(first, object.standard));
+            return std::nullopt;
+        }
+        if (object.standard != first) {
+            plan.mixed = true;
+        }
+    }
+    if (!plan.mixed) {
+        return plan;
+    }
+    // The compatibility profile versions the compiler-owned Synopsys
+    // surface independently of the standard; mixed packages come from one.
+    const VhdlObjectEnvironment* profile_owner { };
+    for (const auto& object : objects) {
+        if (object.standard.empty()) {
+            continue;
+        }
+        if (profile_owner == nullptr) {
+            profile_owner = &object;
+        } else if (object.compatibility_profile
+            != profile_owner->compatibility_profile) {
+            diagnostics.error(
+                "FSIM-ART-VHDEP-001",
+                "workspace objects select different VHDL compatibility "
+                "profiles ('" + profile_owner->compatibility_profile
+                    + "' and '" + object.compatibility_profile
+                    + "'); recompile them with one profile");
+            return std::nullopt;
+        }
+    }
+    // Four-digit years order as text.
+    std::string newest;
+    for (const auto& object : objects) {
+        if (!object.standard.empty() && object.standard > newest) {
+            newest = object.standard;
+        }
+    }
+    plan.newest = newest;
+    std::map<std::string, std::pair<const library::VhdlPackageDependency*,
+        std::string>> chosen;
+    for (std::size_t index { }; index < objects.size(); ++index) {
+        for (const auto& dependency : objects[index].dependencies) {
+            auto key = support::ascii_lower(dependency.package);
+            const auto found = chosen.find(key);
+            if (found == chosen.end()) {
+                chosen.emplace(key, std::pair { &dependency,
+                    objects[index].standard });
+                plan.winner.emplace(std::move(key), index);
+                continue;
+            }
+            if (found->second.first->revision != dependency.revision
+                || found->second.first->source_digest
+                    != dependency.source_digest) {
+                diagnostics.error(
+                    "FSIM-ART-VHDEP-001",
+                    "workspace objects contain incompatible compiler-supplied "
+                    "VHDL package '" + dependency.package
+                        + "' (different revision or source digest); "
+                          "recompile them with this fsim build");
+                return std::nullopt;
+            }
+            if (objects[index].standard > found->second.second) {
+                found->second = std::pair { &dependency,
+                    objects[index].standard };
+                plan.winner[key] = index;
+            }
+        }
+    }
+    return plan;
 }
 
 bool compiled_vhdl_package_dependencies_match(

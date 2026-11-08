@@ -64,6 +64,16 @@ enum class NodeKind : std::uint8_t {
     reject,
     // `@(c) s`: s on clock `clock` of a multiclocked sequence (16.13.1).
     clocked,
+    // A named sequence or property instance kept as such (the published
+    // tree, IEEE 1800-2023 37.50-37.54) instead of expanded.
+    instance,
+    // The published tree only (`keep_instances`): `@(c) p` over a property,
+    // or one that restates the clock in effect (37.52 clocked property), a
+    // property `case` with its items (37.52 case property, case property
+    // item). The plan builders never see them.
+    clocked_property,
+    case_property,
+    case_item,
 };
 
 struct Node {
@@ -81,6 +91,14 @@ struct Node {
     bool leading { };
     // The clock of a clocked node: an index into ParseContext::clocks.
     std::uint32_t clock { };
+    // An instance: the declaration it names, whether that is a sequence,
+    // and the actuals as written.
+    std::string instance;
+    bool sequence_instance { };
+    // An instance's actuals as written; a case item's expressions.
+    std::vector<std::vector<Token>> actual_tokens;
+    // The default item of a published property case.
+    bool default_item { };
 };
 
 [[nodiscard]] bool sequence_kind(const NodeKind kind)
@@ -134,14 +152,16 @@ struct ParseContext {
     const DesignUnit& unit;
     std::function<bool(std::span<const Token>)> boolean;
     // The directive's clocking event (the tokens inside `@( )`).
-    std::vector<Token> clock;
+    std::vector<Token> clock { };
     // The scope's default disable condition, `1'b0` when none (16.14.7).
-    std::vector<Token> inferred_disable;
-    std::string failure;
+    std::vector<Token> inferred_disable { };
+    std::string failure { };
     // The clocking events of the property, the directive's first; the
     // clock in effect flows left to right (16.13.3, 16.16).
-    std::vector<std::vector<Token>> clocks;
+    std::vector<std::vector<Token>> clocks { };
     std::uint32_t current_clock { };
+    // Keep a named instance as an instance node (the published tree).
+    bool keep_instances { };
 };
 
 // Builds the property tree of one token sequence; a named sequence or
@@ -220,7 +240,9 @@ private:
 
     [[nodiscard]] bool is_sequence(const std::size_t node) const
     {
-        return sequence_kind(nodes_[node].kind);
+        return nodes_[node].kind == NodeKind::instance
+            ? nodes_[node].sequence_instance
+            : sequence_kind(nodes_[node].kind);
     }
 
     // `|->`, and `|=>` which lexes as `|=` then `>`.
@@ -624,6 +646,31 @@ private:
             return fail("a property case has no endcase");
         }
         ++position_;
+        if (context_.keep_instances) {
+            // The published tree keeps the case items as written (37.52
+            // case property; the plan builders get the desugared chain).
+            Node whole;
+            whole.kind = NodeKind::case_property;
+            whole.expression = selector;
+            for (auto& item : items) {
+                Node published;
+                published.kind = NodeKind::case_item;
+                published.actual_tokens = std::move(item.values);
+                published.operands = { item.property };
+                whole.operands.push_back(add(std::move(published)));
+            }
+            if (otherwise) {
+                Node published;
+                published.kind = NodeKind::case_item;
+                published.default_item = true;
+                published.operands = { *otherwise };
+                whole.operands.push_back(add(std::move(published)));
+            }
+            if (whole.operands.empty()) {
+                return fail("a property case has no items");
+            }
+            return add(std::move(whole));
+        }
         auto result = otherwise;
         for (auto item = items.rbegin(); item != items.rend(); ++item) {
             Node node;
@@ -1053,6 +1100,26 @@ private:
                 ++position_;
             }
             const auto clock = clock_index(event);
+            if (context_.keep_instances) {
+                // The published tree keeps every clocking event (37.52,
+                // 37.56): a sequence on another clock than the one in
+                // effect is a component of a multiclocked sequence, any
+                // other operand is a clocked property.
+                const auto enclosing
+                    = std::exchange(context_.current_clock, clock);
+                auto operand = implication();
+                context_.current_clock = enclosing;
+                if (!operand) {
+                    return operand;
+                }
+                Node node;
+                node.kind = is_sequence(*operand) && clock != enclosing
+                    ? NodeKind::clocked
+                    : NodeKind::clocked_property;
+                node.clock = clock;
+                node.operands = { *operand };
+                return add(std::move(node));
+            }
             if (clock == context_.current_clock) {
                 return implication();
             }
@@ -1076,6 +1143,26 @@ private:
     std::optional<std::size_t> instance(
         const SystemVerilogAssertionDeclaration& declaration)
     {
+        if (context_.keep_instances) {
+            Node node;
+            node.kind = NodeKind::instance;
+            node.instance = declaration.name;
+            node.sequence_instance = declaration.kind
+                == SystemVerilogAssertionDeclarationKind::Sequence;
+            ++position_;
+            if (at(TokenKind::LeftParen)) {
+                const auto close = matching(position_);
+                if (!close) {
+                    return fail("an instance argument list is unbalanced");
+                }
+                const auto inside = slice(position_ + 1U, *close);
+                if (!inside.empty()) {
+                    node.actual_tokens = split_top_level(inside, TokenKind::Comma);
+                }
+                position_ = *close + 1U;
+            }
+            return add(std::move(node));
+        }
         if (depth_ >= 16U) {
             return fail("sequence and property instances nest too deeply");
         }
@@ -1258,7 +1345,7 @@ public:
     std::vector<std::vector<Token>> guards;
     std::vector<std::vector<Token>> bounds;
     // Why a multiclocked sequence could not be compiled.
-    std::string failure;
+    std::string failure { };
 
     void compile(const std::size_t root, const bool every_match)
     {
@@ -1288,6 +1375,16 @@ private:
         guards.push_back(tokens);
         const auto index = static_cast<std::uint32_t>(guards.size() - 1U);
         guard_index_.emplace(text, index);
+        // The guard's source span (plan text sva3): the position of its
+        // first token, which a step callback reports as the matched
+        // expression (IEEE 1800-2023 39.4.2); 0 for a synthetic guard.
+        plan::GuardSpan span;
+        if (!tokens.empty()) {
+            span.line = static_cast<std::uint32_t>(tokens.front().span.begin.line);
+            span.column
+                = static_cast<std::uint32_t>(tokens.front().span.begin.column);
+        }
+        plan.guard_spans.push_back(span);
         return index;
     }
 
@@ -1340,6 +1437,41 @@ private:
         return result;
     }
 
+    // An instruction that evaluates the boolean written as `tokens`: the
+    // position of its first token is what a failure of it reports.
+    static plan::Instruction positioned(
+        plan::Instruction result, const std::vector<Token>& tokens)
+    {
+        if (!tokens.empty()) {
+            result.line = static_cast<std::uint32_t>(tokens.front().span.begin.line);
+            result.column
+                = static_cast<std::uint32_t>(tokens.front().span.begin.column);
+        }
+        return result;
+    }
+
+    // The position of the leftmost boolean written under property node
+    // `index`.
+    std::pair<std::uint32_t, std::uint32_t> first_position(
+        const std::size_t index, const std::size_t depth = 0U) const
+    {
+        const auto& node = nodes_[index];
+        if (!node.expression.empty()) {
+            const auto& at = node.expression.front().span.begin;
+            return { static_cast<std::uint32_t>(at.line),
+                static_cast<std::uint32_t>(at.column) };
+        }
+        if (depth < 64U) {
+            for (const auto operand : node.operands) {
+                const auto found = first_position(operand, depth + 1U);
+                if (found.first != 0U) {
+                    return found;
+                }
+            }
+        }
+        return { 0U, 0U };
+    }
+
     // Repeat the code emitted by `body` between lo and hi times.
     void repeat(plan::Sequence& sequence, const plan::Bound& lo,
         const plan::Bound& hi, const std::function<void()>& body)
@@ -1384,7 +1516,9 @@ private:
                 && node.kind != NodeKind::clocked };
         switch (node.kind) {
         case NodeKind::boolean:
-            code.push_back(instruction(plan::Op::check, guard(node.expression)));
+            code.push_back(positioned(
+                instruction(plan::Op::check, guard(node.expression)),
+                node.expression));
             break;
         case NodeKind::clocked:
             if (node.clock != clock_) {
@@ -1439,13 +1573,16 @@ private:
             forever.mode = plan::Bound::Mode::unbounded;
             repeat(sequence, bound(node.lo), bound(node.hi), [&] {
                 repeat(sequence, zero, forever, [&] {
-                    code.push_back(instruction(plan::Op::check, miss));
+                    code.push_back(positioned(
+                        instruction(plan::Op::check, miss), condition));
                 });
-                code.push_back(instruction(plan::Op::check, hit));
+                code.push_back(positioned(
+                    instruction(plan::Op::check, hit), condition));
             });
             if (node.kind == NodeKind::nonconsecutive_repeat) {
                 repeat(sequence, zero, forever, [&] {
-                    code.push_back(instruction(plan::Op::check, miss));
+                    code.push_back(positioned(
+                        instruction(plan::Op::check, miss), condition));
                 });
             }
             break;
@@ -1491,8 +1628,9 @@ private:
             break;
         }
         case NodeKind::throughout:
-            code.push_back(instruction(
-                plan::Op::throughout_begin, guard(node.expression)));
+            code.push_back(positioned(
+                instruction(plan::Op::throughout_begin, guard(node.expression)),
+                node.expression));
             emit(node.operands[0], sequence);
             code.push_back(instruction(plan::Op::throughout_end));
             break;
@@ -1529,6 +1667,9 @@ private:
         if (sequence_kind(node.kind)) {
             result.kind = plan::PropertyKind::sequence;
             result.sequence = sequence(index);
+            const auto at = first_position(index);
+            result.line = at.first;
+            result.column = at.second;
             return add(std::move(result));
         }
         const auto operand = [&](const std::size_t position) {
@@ -1618,6 +1759,9 @@ private:
         default:
             break;
         }
+        const auto at = first_position(index);
+        result.line = at.first;
+        result.column = at.second;
         return add(std::move(result));
     }
 
@@ -1654,26 +1798,298 @@ void strip_semicolons(std::vector<Token>& tokens)
 
 } // namespace
 
+namespace {
+
+// Whether a statement list, at any depth, holds an assertion statement; the
+// spans (source offsets) of the assertion statements are collected too.
+void collect_assertion_spans(const std::vector<Statement>& statements,
+    std::vector<std::pair<std::uint64_t, std::uint64_t>>& spans)
+{
+    for (const auto& statement : statements) {
+        if (statement.procedural_concurrent_assertion
+            || statement.kind == StatementKind::Assert) {
+            spans.emplace_back(
+                statement.span.begin.offset, statement.span.end.offset);
+            continue;
+        }
+        collect_assertion_spans(statement.statements, spans);
+        collect_assertion_spans(statement.else_statements, spans);
+        for (const auto& alternative : statement.case_alternatives) {
+            collect_assertion_spans(alternative.statements, spans);
+        }
+    }
+}
+
+void collect_automatic_names(const std::vector<Statement>& statements,
+    std::vector<std::string>& names)
+{
+    for (const auto& statement : statements) {
+        for (const auto& declaration : statement.declarations) {
+            if (declaration.systemverilog_automatic) {
+                names.push_back(declaration.name);
+            }
+        }
+        collect_automatic_names(statement.statements, names);
+        collect_automatic_names(statement.else_statements, names);
+        for (const auto& alternative : statement.case_alternatives) {
+            collect_automatic_names(alternative.statements, names);
+        }
+    }
+}
+
+[[nodiscard]] bool clock_keyword(const Token& token)
+{
+    return token.text == "posedge" || token.text == "negedge"
+        || token.text == "edge" || token.text == "iff" || token.text == "or";
+}
+
+} // namespace
+
+void VerilogParser::record_procedure_clock_inference(Process& process,
+    const std::size_t control_begin, const std::size_t control_end,
+    const std::size_t body_begin, const std::size_t body_end)
+{
+    // IEEE 1800-2023 16.14.6: only a procedure that holds a concurrent
+    // assertion statement needs the inference.
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> assertions;
+    collect_assertion_spans(process.statements, assertions);
+    const auto has_concurrent = [](const auto& self,
+                                    const std::vector<Statement>& statements)
+        -> bool {
+        for (const auto& statement : statements) {
+            if ((statement.procedural_concurrent_assertion
+                    && !statement.procedural_concurrent_assertion
+                            ->expect_statement)
+                || self(self, statement.statements)
+                || self(self, statement.else_statements)) {
+                return true;
+            }
+            for (const auto& alternative : statement.case_alternatives) {
+                if (self(self, alternative.statements)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+    const bool concurrent = has_concurrent(has_concurrent, process.statements);
+    if (!concurrent || body_end > tokens_.size() || control_end > tokens_.size()) {
+        return;
+    }
+    const auto in_assertion = [&](const Token& token) {
+        const auto offset = token.span.begin.offset;
+        return std::ranges::any_of(assertions, [&](const auto& span) {
+            return span.first <= offset && offset < span.second;
+        });
+    };
+    // a) no blocking timing control, b) exactly one event control.
+    std::size_t event_controls = control_end > control_begin ? 1U : 0U;
+    std::size_t only_control = body_end;
+    for (std::size_t index = body_begin; index < body_end; ++index) {
+        const auto& token = tokens_[index];
+        if (in_assertion(token)) {
+            continue;
+        }
+        // (The delay of a nonblocking assignment, `q <= #1 d`, does not
+        // block the procedure.)
+        if (token.kind == TokenKind::Hash
+            && !(index > body_begin
+                && tokens_[index - 1U].kind == TokenKind::LessEqual)
+            && !(index > body_begin && index + 1U < body_end
+                && tokens_[index + 1U].kind == TokenKind::LeftParen
+                && tokens_[index - 1U].kind == TokenKind::Identifier
+                && tokens_[index - 1U].text != "begin"
+                && tokens_[index - 1U].text != "else"
+                && tokens_[index - 1U].text != "end"
+                && tokens_[index - 1U].text != "do"
+                && tokens_[index - 1U].text != "fork")) {
+            // (`C#(8)` parameterizes a class and is not a delay.)
+            process.systemverilog_clock_blocker
+                = "the procedure has a delay (a blocking timing control)";
+            return;
+        }
+        if (token.kind == TokenKind::Identifier && token.text == "wait"
+            && index + 1U < body_end
+            && (tokens_[index + 1U].kind == TokenKind::LeftParen)) {
+            process.systemverilog_clock_blocker
+                = "the procedure has a wait statement (a blocking timing "
+                  "control)";
+            return;
+        }
+        if (token.kind == TokenKind::At) {
+            ++event_controls;
+            only_control = index + 1U;
+        }
+    }
+    if (event_controls != 1U) {
+        process.systemverilog_clock_blocker = event_controls == 0U
+            ? "the procedure has no event control"
+            : "the procedure has more than one event control";
+        return;
+    }
+    // The tokens of the one event control, after its `@`.
+    std::size_t begin = control_begin;
+    std::size_t end = control_end;
+    if (control_end <= control_begin) {
+        begin = only_control;
+        end = begin;
+        if (end < body_end && tokens_[end].kind == TokenKind::LeftParen) {
+            int depth { };
+            for (; end < body_end; ++end) {
+                if (tokens_[end].kind == TokenKind::LeftParen) {
+                    ++depth;
+                } else if (tokens_[end].kind == TokenKind::RightParen
+                    && --depth == 0) {
+                    ++end;
+                    break;
+                }
+            }
+        } else {
+            while (end < body_end
+                && (tokens_[end].kind == TokenKind::Identifier
+                    || tokens_[end].kind == TokenKind::Dot
+                    || tokens_[end].kind == TokenKind::Star)) {
+                ++end;
+            }
+        }
+    }
+    std::vector<Token> control(tokens_.begin()
+            + static_cast<std::ptrdiff_t>(begin),
+        tokens_.begin() + static_cast<std::ptrdiff_t>(end));
+    if (control.size() >= 2U && control.front().kind == TokenKind::LeftParen
+        && control.back().kind == TokenKind::RightParen) {
+        control.erase(control.begin());
+        control.pop_back();
+    }
+    // The event expressions of the control, split at the top-level `or`
+    // and comma.
+    std::vector<std::vector<Token>> expressions(1U);
+    int depth { };
+    for (auto& token : control) {
+        if (token.kind == TokenKind::LeftParen
+            || token.kind == TokenKind::LeftBracket
+            || token.kind == TokenKind::LeftBrace) {
+            ++depth;
+        } else if (token.kind == TokenKind::RightParen
+            || token.kind == TokenKind::RightBracket
+            || token.kind == TokenKind::RightBrace) {
+            --depth;
+        }
+        if (depth == 0 && (token.kind == TokenKind::Comma
+                || (token.kind == TokenKind::Identifier
+                    && token.text == "or"))) {
+            expressions.emplace_back();
+            continue;
+        }
+        expressions.back().push_back(std::move(token));
+    }
+    for (auto& expression : expressions) {
+        if (expression.empty()) {
+            continue;
+        }
+        SystemVerilogProcedureClockCandidate candidate;
+        candidate.tokens = expression;
+        std::size_t first = 0U;
+        if (expression.front().text == "posedge"
+            || expression.front().text == "negedge"
+            || expression.front().text == "edge") {
+            candidate.edge = true;
+            first = 1U;
+        } else if (expression.size() == 1U
+            && expression.front().kind == TokenKind::Identifier) {
+            candidate.name = expression.front().text;
+        }
+        if (!candidate.edge && candidate.name.empty()) {
+            // Neither of the forms of 16.14.6 c) 1): never the clock.
+            continue;
+        }
+        // expression1 ends at the top-level `iff`; its terms are the
+        // identifiers in it.
+        std::vector<std::string> terms;
+        int nesting { };
+        for (std::size_t index = first; index < expression.size(); ++index) {
+            const auto& token = expression[index];
+            if (token.kind == TokenKind::LeftParen) {
+                ++nesting;
+            } else if (token.kind == TokenKind::RightParen) {
+                --nesting;
+            } else if (nesting == 0 && token.text == "iff") {
+                break;
+            }
+            if (token.kind == TokenKind::Identifier && !clock_keyword(token)) {
+                terms.push_back(token.text);
+            }
+        }
+        for (std::size_t index = body_begin; index < body_end; ++index) {
+            // The event control itself, when it is in the body (`initial
+            // begin @(posedge clk); ...`), is the clocking event the terms
+            // may appear in (16.14.6 c) 2)).
+            if (begin <= index && index < end) {
+                continue;
+            }
+            const auto& token = tokens_[index];
+            if (token.kind != TokenKind::Identifier || in_assertion(token)
+                || std::ranges::find(terms, token.text) == terms.end()) {
+                continue;
+            }
+            // A clocking block signal is `block.signal` (16.14.6 c) 2)).
+            if (!candidate.edge && index + 1U < body_end
+                && tokens_[index + 1U].kind == TokenKind::Dot) {
+                continue;
+            }
+            candidate.used_in_body = true;
+            break;
+        }
+        process.systemverilog_clock_candidates.push_back(std::move(candidate));
+    }
+}
+
 void VerilogParser::extract_procedural_assertions(
     std::vector<Process>& processes,
     std::vector<VariableDeclaration>& variables,
     std::vector<SystemVerilogConcurrentAssertion>& directives,
-    std::vector<SystemVerilogAssertionDeclaration>& declarations)
+    std::vector<SystemVerilogAssertionDeclaration>& declarations,
+    const std::function<bool(std::string_view)>& names_event_or_clocking)
 {
     for (auto& process : processes) {
-        // The clock of an assertion in an always procedure whose event
-        // control is one edge expression (16.14.5).
+        // The clock inferred for the context of an always or initial
+        // procedure (IEEE 1800-2023 16.14.6): exactly one event expression
+        // of its one event control is `edge_identifier expression1 [iff
+        // expression2]` (not a part of a longer one) or a lone event variable
+        // or clocking block, and no term of it appears in the body outside
+        // assertion statements. A procedure that gives none takes the default
+        // clocking.
         std::vector<Token> clock;
-        if (process.kind == ProcessKind::VerilogAlways
-            && process.sensitivities.size() == 1U
-            && process.sensitivities.front().edge != EdgeKind::Any
-            && !process.sensitivities.front().signal.empty()) {
-            const auto& event = process.sensitivities.front();
-            clock = synthetic_tokens(
-                std::string { event.edge == EdgeKind::Positive ? "posedge "
-                                                               : "negedge " }
-                    + event.signal,
-                event.span);
+        std::string clock_failure = process.systemverilog_clock_blocker;
+        if (clock_failure.empty()) {
+            const SystemVerilogProcedureClockCandidate* found = nullptr;
+            std::size_t count { };
+            for (const auto& candidate : process.systemverilog_clock_candidates) {
+                if (candidate.used_in_body
+                    || (!candidate.edge
+                        && !names_event_or_clocking(candidate.name))) {
+                    continue;
+                }
+                found = &candidate;
+                ++count;
+            }
+            if (count == 1U) {
+                clock = found->tokens;
+            } else {
+                clock_failure = count == 0U
+                    ? "no event expression of its event control is an edge "
+                      "expression, event variable or clocking block that the "
+                      "procedure leaves unused"
+                    : "more than one event expression of its event control "
+                      "can be the clock";
+            }
+        }
+        std::vector<std::string> automatic_names;
+        collect_automatic_names(process.statements, automatic_names);
+        for (const auto& variable : process.variables) {
+            if (variable.systemverilog_automatic) {
+                automatic_names.push_back(variable.name);
+            }
         }
         const auto walk = [&](const auto& self, auto& statements) -> void {
             for (auto& statement : statements) {
@@ -1689,6 +2105,10 @@ void VerilogParser::extract_procedural_assertions(
                         = "__fsim_pa" + std::to_string(directives.size());
                     directive.procedural_enable = name;
                     directive.procedural_clock = clock;
+                    directive.procedural_clock_events
+                        = assertion_clock_events(clock);
+                    directive.procedural_clock_failure = clock_failure;
+                    directive.procedural_automatic_names = automatic_names;
                     declare_inline_property(directive, declarations);
                     variables.push_back(VariableDeclaration {
                         name,
@@ -1715,6 +2135,645 @@ void VerilogParser::extract_procedural_assertions(
     }
 }
 
+namespace {
+
+using TreeNode = SystemVerilogAssertionTreeNode;
+using TreeOperand = SystemVerilogAssertionTreeOperand;
+
+// The positions of a sequence operation's operands that are sequences (the
+// others are conditions and bounds).
+[[nodiscard]] std::vector<std::size_t> sequence_positions(const TreeNode& node)
+{
+    using Operator = SystemVerilogAssertionOperator;
+    switch (node.op) {
+    case Operator::CycleDelay:
+    case Operator::CompAnd:
+    case Operator::CompOr:
+    case Operator::Intersect:
+    case Operator::Within:
+        return { 0U, 1U };
+    case Operator::UnaryCycleDelay:
+    case Operator::Repeat:
+    case Operator::ConsecutiveRepeat:
+    case Operator::GotoRepeat:
+    case Operator::FirstMatch:
+        return { 0U };
+    case Operator::Throughout:
+        return { 1U };
+    default:
+        return { };
+    }
+}
+
+[[nodiscard]] bool sequence_operation(const TreeNode& node)
+{
+    return node.kind == TreeNode::Kind::Operation && node.sequence;
+}
+
+// Whether a clocked sequence is reached from `operand` through sequence
+// operations only.
+[[nodiscard]] bool holds_clocked_sequence(
+    const SystemVerilogAssertionTree& tree, const TreeOperand& operand,
+    const unsigned depth = 0U)
+{
+    if (operand.node < 0 || depth > 256U) {
+        return false;
+    }
+    const auto& node = tree.nodes[static_cast<std::size_t>(operand.node)];
+    if (node.kind == TreeNode::Kind::ClockedSequence) {
+        return true;
+    }
+    if (!sequence_operation(node)) {
+        return false;
+    }
+    for (const auto position : sequence_positions(node)) {
+        if (position < node.operands.size()
+            && holds_clocked_sequence(tree, node.operands[position], depth + 1U)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
+
+// A sequence expression that joins sequences on different clocks is a
+// multiclock sequence expression (IEEE 1800-2023 37.52, 37.56): the node
+// replaces the outermost sequence operation, and its operands are the clocked
+// sequences, in order. A part on the clock of the declaration, which the
+// declaration's own clocking event gave, is a clocked sequence of that event.
+void VerilogParser::wrap_multiclock_sequences(
+    SystemVerilogAssertionTree& tree,
+    const std::vector<Sensitivity>& default_clock, const SourceSpan& span,
+    const bool property_root)
+{
+    const std::function<void(const TreeOperand&, std::vector<TreeOperand>&,
+        unsigned)>
+        components = [&](const TreeOperand& operand,
+                         std::vector<TreeOperand>& out, const unsigned depth) {
+            if (operand.node < 0 || depth > 256U) {
+                return;
+            }
+            const auto index = static_cast<std::size_t>(operand.node);
+            const auto node = tree.nodes[index];
+            if (node.kind == TreeNode::Kind::ClockedSequence) {
+                out.push_back(operand);
+                if (!node.operands.empty()) {
+                    components(node.operands.front(), out, depth + 1U);
+                }
+                return;
+            }
+            if (!sequence_operation(node)) {
+                return;
+            }
+            for (const auto position : sequence_positions(node)) {
+                if (position >= node.operands.size()) {
+                    continue;
+                }
+                const auto& part = node.operands[position];
+                if (holds_clocked_sequence(tree, part)) {
+                    components(part, out, depth + 1U);
+                } else if (!default_clock.empty()) {
+                    TreeNode implied;
+                    implied.kind = TreeNode::Kind::ClockedSequence;
+                    implied.sequence = true;
+                    implied.clock_events = default_clock;
+                    implied.operands = { part };
+                    implied.span = span;
+                    tree.nodes.push_back(std::move(implied));
+                    TreeOperand reference;
+                    reference.node
+                        = static_cast<std::int32_t>(tree.nodes.size() - 1U);
+                    out.push_back(reference);
+                }
+            }
+        };
+    const auto wrap = [&](TreeOperand& operand) {
+        if (!holds_clocked_sequence(tree, operand)) {
+            return;
+        }
+        TreeNode multiclock;
+        multiclock.kind = TreeNode::Kind::MulticlockSequence;
+        multiclock.sequence = true;
+        multiclock.span = span;
+        std::vector<TreeOperand> parts;
+        components(operand, parts, 0U);
+        multiclock.operands = std::move(parts);
+        tree.nodes.push_back(std::move(multiclock));
+        operand.node = static_cast<std::int32_t>(tree.nodes.size() - 1U);
+    };
+    // A clocking event over one sequence where a property is expected is a
+    // clocked property (the grammar's `clocking_event property_expr`), not a
+    // part of a multiclocked sequence.
+    const auto as_property = [&](const TreeOperand& operand) {
+        if (operand.node >= 0) {
+            auto& node = tree.nodes[static_cast<std::size_t>(operand.node)];
+            if (node.kind == TreeNode::Kind::ClockedSequence) {
+                node.kind = TreeNode::Kind::ClockedProperty;
+                node.sequence = false;
+            }
+        }
+    };
+    const auto joins_sequences = [&](const TreeNode& node) {
+        return sequence_operation(node)
+            || node.kind == TreeNode::Kind::ClockedSequence
+            || node.kind == TreeNode::Kind::MulticlockSequence;
+    };
+    const auto count = tree.nodes.size();
+    // First the clocked sequences under a property operation, then the
+    // sequence operations that join them.
+    for (std::size_t index = 0U; index < count; ++index) {
+        if (joins_sequences(tree.nodes[index])) {
+            continue;
+        }
+        for (const auto& operand : tree.nodes[index].operands) {
+            as_property(operand);
+        }
+    }
+    if (property_root) {
+        as_property(tree.root);
+    }
+    for (std::size_t index = 0U; index < count; ++index) {
+        // A clocked property holds a property; a sequence operation's own
+        // operands are the parts of the sequence.
+        if (sequence_operation(tree.nodes[index])
+            || tree.nodes[index].kind == TreeNode::Kind::ClockedSequence
+            || tree.nodes[index].kind == TreeNode::Kind::MulticlockSequence) {
+            continue;
+        }
+        for (std::size_t position = 0U;
+             position < tree.nodes[index].operands.size(); ++position) {
+            auto operand = tree.nodes[index].operands[position];
+            wrap(operand);
+            tree.nodes[index].operands[position] = operand;
+        }
+    }
+    wrap(tree.root);
+}
+
+// The property or sequence expression tree a declaration (or a directive's
+// instance) publishes (IEEE 1800-2023 37.50-37.54): the parser's tree with
+// named instances kept, its boolean leaves, conditions and bounds as
+// expressions, in the operand order of the standard.
+std::optional<SystemVerilogAssertionTree> VerilogParser::build_assertion_tree(
+    const DesignUnit& unit, std::vector<Token> tokens,
+    const SystemVerilogAssertionDeclaration* declaration)
+{
+    using Operator = SystemVerilogAssertionOperator;
+    strip_semicolons(tokens);
+    if (tokens.empty()) {
+        return std::nullopt;
+    }
+    const auto model = tokens.front();
+    std::vector<Node> nodes;
+    ParseContext context {
+        unit,
+        [this](const std::span<const Token> operand) {
+            static constexpr std::array<std::string_view, 20> operators {
+                "and", "or", "not", "intersect", "within", "throughout",
+                "iff", "implies", "until", "s_until", "until_with",
+                "s_until_with", "first_match", "nexttime", "s_nexttime",
+                "always", "s_always", "eventually", "s_eventually", "strong",
+            };
+            if (std::ranges::any_of(operand, [](const Token& token) {
+                    return token.kind == TokenKind::Hash
+                        || (token.kind == TokenKind::Identifier
+                            && std::ranges::find(operators, token.text)
+                                != operators.end());
+                })) {
+                return false;
+            }
+            const auto saved = diagnostics_.size();
+            const bool valid = assertion_expression(operand).has_value();
+            diagnostics_.resize(saved);
+            return valid;
+        },
+    };
+    context.keep_instances = true;
+    if (declaration != nullptr && declaration->clock) {
+        context.clocks.push_back(declaration->clock->event_tokens);
+    }
+    TreeParser parser { nodes, std::move(tokens), context, 0U };
+    const auto parsed = parser.parse();
+    if (!parsed) {
+        return std::nullopt;
+    }
+    SystemVerilogAssertionTree tree;
+    bool failed { };
+    const auto expression_of = [&](const std::span<const Token> operand)
+        -> std::optional<Expression> {
+        const auto saved = diagnostics_.size();
+        auto expression = assertion_expression(operand);
+        diagnostics_.resize(saved);
+        return expression;
+    };
+    const auto literal = [&](const std::int64_t value) {
+        const Token number = punctuation(model, TokenKind::Number,
+            std::to_string(value));
+        return expression_of(std::span<const Token> { &number, 1U });
+    };
+    // A bound, a count or a range end as an operand.
+    const auto bound = [&](const BoundSpec& spec) {
+        SystemVerilogAssertionTreeOperand operand;
+        if (spec.kind == BoundSpec::Kind::literal) {
+            operand.expression = literal(spec.value);
+        } else if (spec.kind == BoundSpec::Kind::expression) {
+            operand.expression = expression_of(spec.tokens);
+        } else {
+            const Token dollar = punctuation(model, TokenKind::Identifier, "$");
+            operand.expression = expression_of(std::span<const Token> { &dollar, 1U });
+        }
+        return operand;
+    };
+    const auto same_bound = [](const BoundSpec& left, const BoundSpec& right) {
+        return left.kind == right.kind
+            && (left.kind == BoundSpec::Kind::unbounded
+                || (left.kind == BoundSpec::Kind::literal
+                    && left.value == right.value)
+                || (left.kind == BoundSpec::Kind::expression
+                    && spelling(left.tokens) == spelling(right.tokens)));
+    };
+    const std::function<SystemVerilogAssertionTreeOperand(std::size_t)> convert
+        = [&](const std::size_t index) -> SystemVerilogAssertionTreeOperand {
+        // A copy: converting an instance's actuals appends to `nodes`.
+        const Node node = nodes[index];
+        const auto add = [&](const Operator op, const bool sequence,
+                             std::vector<SystemVerilogAssertionTreeOperand> operands,
+                             const bool strong = false) {
+            SystemVerilogAssertionTreeNode published;
+            published.op = op;
+            published.sequence = sequence;
+            published.strong = strong;
+            published.operands = std::move(operands);
+            published.span = declaration != nullptr ? declaration->span
+                                                    : model.span;
+            tree.nodes.push_back(std::move(published));
+            SystemVerilogAssertionTreeOperand operand;
+            operand.node = static_cast<std::int32_t>(tree.nodes.size() - 1U);
+            return operand;
+        };
+        const auto child = [&](const std::size_t position) {
+            return convert(node.operands[position]);
+        };
+        switch (node.kind) {
+        case NodeKind::boolean: {
+            SystemVerilogAssertionTreeOperand leaf;
+            leaf.expression = expression_of(node.expression);
+            failed = failed || !leaf.expression;
+            return leaf;
+        }
+        case NodeKind::clocked:
+        case NodeKind::clocked_property: {
+            // A clocking event over its operand (37.52 clocked property,
+            // 37.56 clocked seq).
+            SystemVerilogAssertionTreeNode published;
+            published.kind = node.kind == NodeKind::clocked
+                ? SystemVerilogAssertionTreeNode::Kind::ClockedSequence
+                : SystemVerilogAssertionTreeNode::Kind::ClockedProperty;
+            published.sequence = node.kind == NodeKind::clocked;
+            if (node.clock < context.clocks.size()) {
+                published.clock_events
+                    = assertion_clock_events(context.clocks[node.clock]);
+            }
+            published.operands.push_back(child(0));
+            published.span = declaration != nullptr ? declaration->span
+                                                    : model.span;
+            tree.nodes.push_back(std::move(published));
+            SystemVerilogAssertionTreeOperand operand;
+            operand.node = static_cast<std::int32_t>(tree.nodes.size() - 1U);
+            return operand;
+        }
+        case NodeKind::case_property: {
+            SystemVerilogAssertionTreeNode published;
+            published.kind = SystemVerilogAssertionTreeNode::Kind::CaseProperty;
+            SystemVerilogAssertionTreeOperand condition;
+            condition.expression = expression_of(node.expression);
+            failed = failed || !condition.expression;
+            published.operands.push_back(std::move(condition));
+            for (std::size_t position = 0; position < node.operands.size();
+                 ++position) {
+                published.operands.push_back(child(position));
+            }
+            published.span = declaration != nullptr ? declaration->span
+                                                    : model.span;
+            tree.nodes.push_back(std::move(published));
+            SystemVerilogAssertionTreeOperand operand;
+            operand.node = static_cast<std::int32_t>(tree.nodes.size() - 1U);
+            return operand;
+        }
+        case NodeKind::case_item: {
+            SystemVerilogAssertionTreeNode published;
+            published.kind = SystemVerilogAssertionTreeNode::Kind::CaseItem;
+            published.default_item = node.default_item;
+            for (const auto& value : node.actual_tokens) {
+                SystemVerilogAssertionTreeOperand expression;
+                expression.expression = expression_of(value);
+                failed = failed || !expression.expression;
+                published.operands.push_back(std::move(expression));
+            }
+            published.operands.push_back(child(0));
+            published.span = declaration != nullptr ? declaration->span
+                                                    : model.span;
+            tree.nodes.push_back(std::move(published));
+            SystemVerilogAssertionTreeOperand operand;
+            operand.node = static_cast<std::int32_t>(tree.nodes.size() - 1U);
+            return operand;
+        }
+        case NodeKind::strong:
+        case NodeKind::weak: {
+            auto operand = child(0);
+            if (operand.node >= 0) {
+                tree.nodes[static_cast<std::size_t>(operand.node)].strong
+                    = node.kind == NodeKind::strong;
+            }
+            return operand;
+        }
+        case NodeKind::delay: {
+            std::vector<SystemVerilogAssertionTreeOperand> operands;
+            operands.push_back(child(0));
+            if (!node.leading) {
+                operands.push_back(child(1));
+            }
+            operands.push_back(bound(node.lo));
+            if (!same_bound(node.lo, node.hi)) {
+                operands.push_back(bound(node.hi));
+            }
+            return add(node.leading ? Operator::UnaryCycleDelay
+                                    : Operator::CycleDelay,
+                true, std::move(operands));
+        }
+        case NodeKind::repeat:
+        case NodeKind::goto_repeat:
+        case NodeKind::nonconsecutive_repeat: {
+            std::vector<SystemVerilogAssertionTreeOperand> operands;
+            operands.push_back(child(0));
+            operands.push_back(bound(node.lo));
+            if (!same_bound(node.lo, node.hi)) {
+                operands.push_back(bound(node.hi));
+            }
+            return add(node.kind == NodeKind::repeat ? Operator::ConsecutiveRepeat
+                    : node.kind == NodeKind::goto_repeat ? Operator::GotoRepeat
+                                                         : Operator::Repeat,
+                true, std::move(operands));
+        }
+        case NodeKind::sequence_or:
+        case NodeKind::disjunction:
+        case NodeKind::sequence_and:
+        case NodeKind::conjunction: {
+            const bool is_or = node.kind == NodeKind::sequence_or
+                || node.kind == NodeKind::disjunction;
+            auto left = child(0);
+            auto right = child(1);
+            return add(is_or ? Operator::CompOr : Operator::CompAnd,
+                node.kind == NodeKind::sequence_or
+                    || node.kind == NodeKind::sequence_and,
+                { std::move(left), std::move(right) });
+        }
+        case NodeKind::intersect:
+        case NodeKind::within: {
+            auto left = child(0);
+            auto right = child(1);
+            return add(node.kind == NodeKind::intersect ? Operator::Intersect
+                                                        : Operator::Within,
+                true, { std::move(left), std::move(right) });
+        }
+        case NodeKind::throughout: {
+            SystemVerilogAssertionTreeOperand condition;
+            condition.expression = expression_of(node.expression);
+            failed = failed || !condition.expression;
+            return add(Operator::Throughout, true,
+                { std::move(condition), child(0) });
+        }
+        case NodeKind::first_match:
+            return add(Operator::FirstMatch, true, { child(0) });
+        case NodeKind::negation:
+            return add(Operator::Not, false, { child(0) });
+        case NodeKind::equivalence:
+        case NodeKind::implies: {
+            auto left = child(0);
+            auto right = child(1);
+            return add(node.kind == NodeKind::implies ? Operator::Implies
+                                                      : Operator::Iff,
+                false, { std::move(left), std::move(right) });
+        }
+        case NodeKind::implication:
+        case NodeKind::followed_by: {
+            auto left = child(0);
+            auto right = child(1);
+            const bool implication = node.kind == NodeKind::implication;
+            return add(implication
+                    ? (node.overlapped ? Operator::OverlapImply
+                                       : Operator::NonOverlapImply)
+                    : (node.overlapped ? Operator::OverlapFollowedBy
+                                       : Operator::NonOverlapFollowedBy),
+                false, { std::move(left), std::move(right) });
+        }
+        case NodeKind::conditional: {
+            SystemVerilogAssertionTreeOperand condition;
+            condition.expression = expression_of(node.expression);
+            failed = failed || !condition.expression;
+            std::vector<SystemVerilogAssertionTreeOperand> operands;
+            operands.push_back(std::move(condition));
+            for (std::size_t position = 0; position < node.operands.size();
+                 ++position) {
+                operands.push_back(child(position));
+            }
+            return add(node.operands.size() > 1U ? Operator::IfElse
+                                                 : Operator::If,
+                false, std::move(operands));
+        }
+        case NodeKind::nexttime: {
+            std::vector<SystemVerilogAssertionTreeOperand> operands;
+            operands.push_back(child(0));
+            if (node.lo.kind != BoundSpec::Kind::literal || node.lo.value != 1) {
+                operands.push_back(bound(node.lo));
+            }
+            return add(Operator::Nexttime, false, std::move(operands),
+                node.strong);
+        }
+        case NodeKind::always:
+        case NodeKind::eventually: {
+            std::vector<SystemVerilogAssertionTreeOperand> operands;
+            operands.push_back(child(0));
+            const bool plain = node.lo.kind == BoundSpec::Kind::literal
+                && node.lo.value == 0
+                && node.hi.kind == BoundSpec::Kind::unbounded;
+            if (!plain) {
+                operands.push_back(bound(node.lo));
+                operands.push_back(bound(node.hi));
+            }
+            return add(node.kind == NodeKind::always ? Operator::Always
+                                                     : Operator::Eventually,
+                false, std::move(operands), node.strong);
+        }
+        case NodeKind::until: {
+            auto left = child(0);
+            auto right = child(1);
+            return add(node.with ? Operator::UntilWith : Operator::Until, false,
+                { std::move(left), std::move(right) }, node.strong);
+        }
+        case NodeKind::accept:
+        case NodeKind::reject: {
+            SystemVerilogAssertionTreeOperand condition;
+            condition.expression = expression_of(node.expression);
+            failed = failed || !condition.expression;
+            const bool accept = node.kind == NodeKind::accept;
+            return add(accept ? (node.synchronous ? Operator::SyncAcceptOn
+                                                  : Operator::AcceptOn)
+                              : (node.synchronous ? Operator::SyncRejectOn
+                                                  : Operator::RejectOn),
+                false, { std::move(condition), child(0) });
+        }
+        case NodeKind::instance: {
+            const Node& instance_node = node;
+            const auto named = std::ranges::find_if(
+                unit.systemverilog_assertion_declarations,
+                [&](const SystemVerilogAssertionDeclaration& entry) {
+                    return entry.kind
+                            != SystemVerilogAssertionDeclarationKind::Checker
+                        && entry.name == instance_node.instance;
+                });
+            if (named == unit.systemverilog_assertion_declarations.end()) {
+                failed = true;
+                return { };
+            }
+            // One operand per formal, in declaration order: the actual of
+            // that name or position, else the formal's default (37.51 detail
+            // 2, 37.54 detail 1).
+            std::vector<std::vector<Token>> bound_tokens(named->formals.size());
+            std::size_t positional { };
+            for (const auto& actual : instance_node.actual_tokens) {
+                if (actual.size() >= 4U && actual[0].kind == TokenKind::Dot
+                    && actual[1].kind == TokenKind::Identifier
+                    && actual[2].kind == TokenKind::LeftParen
+                    && actual.back().kind == TokenKind::RightParen) {
+                    const auto formal = std::ranges::find(named->formals,
+                        actual[1].text,
+                        &SystemVerilogAssertionFormal::name);
+                    if (formal == named->formals.end()) {
+                        failed = true;
+                        continue;
+                    }
+                    bound_tokens[static_cast<std::size_t>(
+                        formal - named->formals.begin())]
+                        .assign(actual.begin() + 3, actual.end() - 1);
+                } else if (positional < named->formals.size()) {
+                    bound_tokens[positional++] = actual;
+                } else {
+                    failed = true;
+                }
+            }
+            std::vector<SystemVerilogAssertionTreeOperand> operands;
+            for (std::size_t position = 0; position < named->formals.size();
+                 ++position) {
+                const auto& written = bound_tokens[position].empty()
+                    ? named->formals[position].default_tokens
+                    : bound_tokens[position];
+                SystemVerilogAssertionTreeOperand operand;
+                if (!written.empty()) {
+                    operand.expression = expression_of(written);
+                    if (!operand.expression) {
+                        // A sequence or property actual is a tree of its
+                        // own.
+                        // The shared node store keeps the indexes valid.
+                        TreeParser shared { nodes, written, context, 1U };
+                        if (const auto actual_root = shared.parse()) {
+                            operand = convert(*actual_root);
+                        } else {
+                            failed = true;
+                        }
+                    }
+                }
+                operands.push_back(std::move(operand));
+            }
+            SystemVerilogAssertionTreeNode published;
+            published.kind = SystemVerilogAssertionTreeNode::Kind::Instance;
+            published.instance = instance_node.instance;
+            published.sequence = instance_node.sequence_instance;
+            published.operands = std::move(operands);
+            published.span = named->span;
+            tree.nodes.push_back(std::move(published));
+            SystemVerilogAssertionTreeOperand operand;
+            operand.node = static_cast<std::int32_t>(tree.nodes.size() - 1U);
+            return operand;
+        }
+        }
+        failed = true;
+        return { };
+    };
+    tree.root = convert(*parsed);
+    if (failed || (tree.root.node < 0 && !tree.root.expression)) {
+        return std::nullopt;
+    }
+    wrap_multiclock_sequences(tree,
+        declaration != nullptr && declaration->clock
+            ? declaration->clock->events
+            : std::vector<Sensitivity> { },
+        declaration != nullptr ? declaration->span : model.span,
+        declaration == nullptr
+            || declaration->kind
+                != SystemVerilogAssertionDeclarationKind::Sequence);
+    return tree;
+}
+
+// Publishes the trees of a scope's declarations and the property instances
+// of its directives. `unit` holds the declarations visible in the scope.
+void VerilogParser::publish_assertion_trees(const DesignUnit& unit,
+    std::vector<SystemVerilogAssertionDeclaration>& declarations,
+    std::vector<SystemVerilogConcurrentAssertion>& assertions)
+{
+    const auto publish_declaration
+        = [&](SystemVerilogAssertionDeclaration& declaration) {
+              if (declaration.kind == SystemVerilogAssertionDeclarationKind::Checker
+                  || declaration.tree) {
+                  return;
+              }
+              auto tree = build_assertion_tree(
+                  unit, declaration.expression_tokens, &declaration);
+              if (!tree) {
+                  return;
+              }
+              for (const auto& formal : declaration.formals) {
+                  std::optional<Expression> value;
+                  if (!formal.default_tokens.empty()) {
+                      const auto saved = diagnostics_.size();
+                      value = assertion_expression(formal.default_tokens);
+                      diagnostics_.resize(saved);
+                  }
+                  tree->formal_defaults.push_back(std::move(value));
+              }
+              declaration.tree = std::move(tree);
+          };
+    for (auto& declaration : declarations) {
+        publish_declaration(declaration);
+    }
+    for (auto& assertion : assertions) {
+        if (assertion.inline_sequence) {
+            publish_declaration(*assertion.inline_sequence);
+        }
+        // A property that names a declared property or sequence is an
+        // instance of it (37.50 vpiProperty); an inline property is the
+        // declaration the frontend synthesized, and the directive's own.
+        if (assertion.property_instance || assertion.property_tokens.empty()
+            || assertion.property_tokens.front().kind != TokenKind::Identifier
+            || assertion.property_tokens.front().text.starts_with(
+                "$inline_property$")) {
+            continue;
+        }
+        const auto named = std::ranges::find_if(
+            unit.systemverilog_assertion_declarations,
+            [&](const SystemVerilogAssertionDeclaration& entry) {
+                return entry.kind != SystemVerilogAssertionDeclarationKind::Checker
+                    && entry.name == assertion.property_tokens.front().text;
+            });
+        if (named == unit.systemverilog_assertion_declarations.end()) {
+            continue;
+        }
+        assertion.property_instance
+            = build_assertion_tree(unit, assertion.property_tokens, nullptr);
+    }
+}
+
 std::optional<VerilogParser::SvaPrepared> VerilogParser::prepare_sva_property(
     const DesignUnit& unit, const SystemVerilogConcurrentAssertion& directive,
     std::string& reason, const std::string_view tick_prefix)
@@ -1724,7 +2783,7 @@ std::optional<VerilogParser::SvaPrepared> VerilogParser::prepare_sva_property(
         return std::nullopt;
     };
     std::vector<Token> tokens;
-    std::vector<Token> clock;
+    std::vector<Token> clock { };
     std::vector<Token> disable;
     const bool cover_sequence
         = directive.form == SystemVerilogConcurrentAssertionForm::Sequence;
@@ -1879,6 +2938,17 @@ std::optional<VerilogParser::SvaPrepared> VerilogParser::prepare_sva_property(
     }
     if (clock.empty()) {
         return fail("no clocking event");
+    }
+    // It is illegal to use an automatic variable in a clocking event
+    // (IEEE 1800-2023 16.14.6).
+    for (const auto& token : clock) {
+        if (token.kind == TokenKind::Identifier
+            && std::ranges::find(directive.procedural_automatic_names,
+                   token.text)
+                != directive.procedural_automatic_names.end()) {
+            return fail("automatic variable '" + token.text
+                + "' in a clocking event");
+        }
     }
     if (disable.empty()) {
         disable = unit.systemverilog_default_disable_tokens;
@@ -2143,6 +3213,7 @@ bool VerilogParser::resolve_sva_directive(
     using namespace assertion_resolution_detail;
     const auto& directive = unit.systemverilog_concurrent_assertions[index];
     const auto reject = [&](const std::string& reason) {
+        sva_reject_reason_ = reason;
         if (trace_enabled()) {
             std::cerr << "fsim sva: directive " << index << " in "
                       << unit.name << " uses the earlier evaluator: " << reason

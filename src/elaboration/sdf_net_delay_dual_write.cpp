@@ -80,7 +80,7 @@ bool net_writes(const Process& process, const SignalId net,
         }
         if (allow_vital_delay) {
             // A VITAL delay call assigns its output signal; the dual write
-            // gives it the mirror (VitalDelay::mirrors).
+            // gives it the mirror (VitalWireCall::mirrors).
             if (const auto* const delay
                 = operation_get_if<VitalDelay>(&operation);
                 delay != nullptr && delay->output == net) {

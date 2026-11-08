@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
+#include "fsim/runtime/scheduler_events.hpp"
 #include "fsim/app/application_tf_scheduler.hpp"
+#include "fsim/runtime/run_state_sections.hpp"
 
 #include <atomic>
 #include <limits>
@@ -182,9 +184,10 @@ struct ScheduledRollback {
       const std::weak_ptr<TfSchedulerCoordinator::Impl> weak = state;
       auto handle = state->scheduler->schedule_after_cancelable(
           delay, callback_phase(callback), order,
-          [weak, id, call, callback](runtime::Scheduler&) {
-            execute_scheduled(weak, id, call, callback);
-          });
+          runtime::foreign_callback_task(
+              [weak, id, call, callback](runtime::Scheduler&) {
+                execute_scheduled(weak, id, call, callback);
+              }));
       try {
         state->pending.emplace(id, handle);
       } catch (...) {
@@ -413,6 +416,17 @@ TfSchedulerInvokeResult TfSchedulerCoordinator::invoke(
   return publish_result(
       impl_, call, TfSchedulerCallbackKind::Call,
       std::move(invoked), values);
+}
+
+void TfSchedulerCoordinator::audit_rest_state(
+    std::vector<std::string>& messages) const {
+  FSIM_RS_IDLE("foreign.tf_coordinator", dispatching);
+  std::lock_guard lock{impl_->mutex};
+  if (impl_->dispatching) {
+    messages.push_back(
+        "FSIM-SAVE-0011: a PLI TF callback dispatch is in progress at the "
+        "save point");
+  }
 }
 
 TfSchedulerCallSnapshot TfSchedulerCoordinator::snapshot(

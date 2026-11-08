@@ -65,6 +65,8 @@ fsim_safe_point_kind_t convert_safe_point_kind(
     case Kind::thread_end:
     case Kind::thread_enter:
     case Kind::object_created:
+    case Kind::assertion_pass:
+    case Kind::assertion_fail:
       return FSIM_SAFE_POINT_CALL;
   }
   return FSIM_SAFE_POINT_SCHEDULER;
@@ -779,6 +781,10 @@ bool rebuild_debug_objects(Session& session) {
     for (std::size_t local = 0;
          local < program.debug_locals.size(); ++local) {
       const auto& debug_local = program.debug_locals[local];
+      // A function's result register belongs to the foreign interfaces.
+      if (debug_local.name.find(".@result@") != std::string::npos) {
+        continue;
+      }
       std::optional<std::size_t> parent_scope;
       const auto leaf_separator = debug_local.name.find_last_of('.');
       if (leaf_separator != std::string::npos) {

@@ -39,6 +39,19 @@ struct Watch {
   PLI_INT32 reason{reason_paramvc};
 };
 
+// The driver a force or a procedural continuous assign makes of an argument:
+// it contributes the value of its statement while the statement is in effect
+// (IEEE 1364-2001 9.3, 21.3.2). Its value changes when the statement runs
+// with a value other than the one it contributed last, and when the release
+// or deassign ends it.
+struct ForceDriverWatch {
+  Instance* instance{};
+  PLI_INT32 parameter{};
+  vpiHandle argument{};
+  std::string last;
+  bool active{false};
+};
+
 // A value change of a link added by acc_vcl_add, awaiting its consumer.
 struct VclDelivery {
   Instance* instance{};
@@ -84,6 +97,12 @@ struct Instance {
   std::array<bool, 2> synchronization_pending{};
   bool asynchronous{};
   std::deque<Watch> watches;
+  // Creation order: the order misctf hears of save and restart, the same in
+  // the saving and the restarted process (IEEE 1364-2001 25.41, 25.65).
+  uint64_t order{};
+  // The force and procedural continuous assign drivers of the arguments
+  // (tf_asynchon): each statement kind of an argument is watched once.
+  std::deque<ForceDriverWatch> force_watches;
   // The current and saved pvc flag of each argument (IEEE 1364-2001 25.9),
   // sized when tf_asynchon first enables them.
   std::vector<uint8_t> pvc_current;
@@ -102,6 +121,13 @@ struct Instance {
 bool routine_active{};
 std::deque<Watch> pending_changes;
 std::deque<VclDelivery> pending_vcl;
+
+// The one save/restart data set of the TF layer (vpi_put_data id), and
+// whether misctf is inside reason_save (1) or reason_restart (2), where
+// tf_write_save and tf_read_restart are legal.
+PLI_INT32 save_restart_id{};
+int save_restart_mode{};
+uint64_t next_instance_order{};
 
 std::unordered_map<vpiHandle, std::unique_ptr<Instance>>& instances() {
   static std::unordered_map<vpiHandle, std::unique_ptr<Instance>> table;
@@ -369,6 +395,7 @@ Instance& instance_for(const vpiHandle call, const p_tfcell cell) {
   auto created = std::make_unique<Instance>();
   created->cell = cell;
   created->call = call;
+  created->order = ++next_instance_order;
   // The hierarchy identity is the call's VPI handle: acc_handle_tfinst
   // returns it as the task or function instance (IEEE 1364-2001 23.61).
   created->bridge = {FSIM_TF_INSTANCE_ABI_VERSION,
@@ -1249,13 +1276,18 @@ uint32_t read_object(const vpiHandle object,
     result->timing_delay_count = 12;
   } else if (type == accWirePath) {
     // An intermodule path has up to twelve delays (23.1, 23.14, 23.90).
-    result->timing_capabilities =
-        FSIM_ACC_TIMING_CAP_DELAYS | FSIM_ACC_TIMING_CAP_POLARITY;
+    // Its pulse limits are those of the delay that SDF annotation created
+    // or a put gave (23.2, 23.27).
+    result->timing_capabilities = FSIM_ACC_TIMING_CAP_DELAYS |
+                                  FSIM_ACC_TIMING_CAP_PULSE |
+                                  FSIM_ACC_TIMING_CAP_POLARITY;
     result->timing_delay_count = 12;
   } else if ((type == accPort || type == accPortBit) &&
              result->direction == accInput) {
-    // The delay of a module input port or of a bit of one, a MIPD (22.5.2).
-    result->timing_capabilities = FSIM_ACC_TIMING_CAP_DELAYS;
+    // The delay of a module input port or of a bit of one, a MIPD (22.5.2),
+    // with the pulse limits of its SDF record or a put.
+    result->timing_capabilities =
+        FSIM_ACC_TIMING_CAP_DELAYS | FSIM_ACC_TIMING_CAP_PULSE;
     result->timing_delay_count = 12;
   } else if (type == accPrimitive && full_type != accPullupGate &&
              full_type != accPulldownGate) {
@@ -2067,7 +2099,11 @@ struct AccCall {
       context.resolve = &acc_resolve;
       context.calling_scope = scope;
       context.default_scope = scope;
-      context.interactive_scope = scope;
+      // The initial interactive scope is the first top-level module (IEEE
+      // 1364-2001 23.46, 23.94; 1800-2023 D.11), not the calling scope.
+      const auto tops = members(vpiModule, nullptr);
+      context.interactive_scope =
+          tops.empty() ? scope : acc_object(tops.front());
       context.lookup = &acc_lookup;
       context.relation = &acc_relation;
       context.name = &acc_name;
@@ -2175,6 +2211,24 @@ PLI_INT32 FSIM_NATIVE_PLUGIN_CALL emit(
   case FSIM_TF_CONTROL_STOP:
     (void)vpi_control(vpiStop, 1);
     return 0;
+  // tf_write_save appends to the save file, tf_read_restart reads it back in
+  // the same order (IEEE 1364-2001 25.65, 25.41), through the VPI data set.
+  case FSIM_TF_CONTROL_SAVE_WRITE:
+    return save_restart_mode == 1 && save_restart_id != 0 &&
+                   vpi_put_data(save_restart_id,
+                                const_cast<PLI_BYTE8*>(message),
+                                static_cast<PLI_INT32>(size)) ==
+                       static_cast<PLI_INT32>(size)
+               ? 0
+               : 1;
+  case FSIM_TF_CONTROL_RESTART_READ:
+    return save_restart_mode == 2 && save_restart_id != 0 &&
+                   vpi_get_data(save_restart_id,
+                                const_cast<PLI_BYTE8*>(message),
+                                static_cast<PLI_INT32>(size)) ==
+                       static_cast<PLI_INT32>(size)
+               ? 0
+               : 1;
   default:
     return 1;
   }
@@ -2312,6 +2366,7 @@ PLI_INT32 FSIM_NATIVE_PLUGIN_CALL read_memory_argument(
 PLI_INT32 synchronized(p_cb_data data);
 PLI_INT32 reactivated(p_cb_data data);
 PLI_INT32 parameter_changed(p_cb_data data);
+PLI_INT32 force_driver_changed(p_cb_data data);
 void drain_changes();
 
 // Runs one routine of a cell in a TF call context, then applies what it
@@ -2595,6 +2650,8 @@ void run(Instance& instance, const uint32_t phase, const PLI_INT32 reason,
           continue;
         }
         bool unwatched_driver = false;
+        bool force_seen = false;
+        bool assign_seen = false;
         std::vector<vpiHandle> statement_watches;
         const auto watch_driver = [&](const vpiHandle driver) {
           auto& driver_watch = instance.watches.emplace_back(Watch{
@@ -2620,9 +2677,50 @@ void run(Instance& instance, const uint32_t phase, const PLI_INT32 reason,
             }
             continue;
           }
-          if (driver_type == vpiContAssignBit || driver_type == vpiAssignStmt ||
-              driver_type == vpiForce) {
-            unwatched_driver = true;
+          if (driver_type == vpiContAssignBit) {
+            // A bit of a concatenation target is its assignment's driver.
+            if (const auto registered = watch_driver(driver)) {
+              statement_watches.push_back(registered);
+            } else {
+              unwatched_driver = true;
+            }
+            continue;
+          }
+          if (driver_type == vpiAssignStmt || driver_type == vpiForce) {
+            // Each statement kind of the argument is watched once; its
+            // execution and its release are the driver's changes.
+            const bool forced = driver_type == vpiForce;
+            if (forced ? force_seen : assign_seen) {
+              continue;
+            }
+            (forced ? force_seen : assign_seen) = true;
+            auto& driver_watch = instance.force_watches.emplace_back(
+                ForceDriverWatch{&instance, static_cast<PLI_INT32>(argument + 1u),
+                                 handle, {}, false});
+            for (const auto statement_reason :
+                 {forced ? cbForce : cbAssign, forced ? cbRelease : cbDeassign}) {
+              s_cb_data statement_callback{};
+              statement_callback.reason = statement_reason;
+              statement_callback.cb_rtn = &force_driver_changed;
+              statement_callback.obj = handle;
+              statement_callback.user_data =
+                  reinterpret_cast<PLI_BYTE8*>(&driver_watch);
+              (void)vpi_register_cb(&statement_callback);
+            }
+            if (!forced) {
+              // While an assign is in effect its value follows its
+              // right-hand side, so the argument's changes are the driver's.
+              s_vpi_time follow_time{vpiSuppressTime, 0, 0, 0.0};
+              s_vpi_value follow_value{vpiSuppressVal, {}};
+              s_cb_data follow{};
+              follow.reason = cbValueChange;
+              follow.cb_rtn = &force_driver_changed;
+              follow.obj = handle;
+              follow.time = &follow_time;
+              follow.value = &follow_value;
+              follow.user_data = reinterpret_cast<PLI_BYTE8*>(&driver_watch);
+              (void)vpi_register_cb(&follow);
+            }
             continue;
           }
           if (type != vpiNet && type != vpiNetBit) {
@@ -2695,6 +2793,46 @@ PLI_INT32 parameter_changed(const p_cb_data data) {
         ->pvc_current[static_cast<std::size_t>(watch.parameter - 1)] = 1u;
   }
   pending_changes.push_back(watch);
+  if (!routine_active) {
+    drain_changes();
+  }
+  return 0;
+}
+
+// A force, release, procedural assign or deassign of an argument: the driver
+// the statement makes changed its value when it starts to contribute, when
+// it contributes another value, and when it stops (misctf with
+// reason_paramdrc, Table 88). The statement's own value is the argument's
+// value right after it, since a force or an active assign overrides the
+// other drivers (IEEE 1364-2001 9.3).
+PLI_INT32 force_driver_changed(const p_cb_data data) {
+  auto& watch = *reinterpret_cast<ForceDriverWatch*>(data->user_data);
+  if (!watch.instance->asynchronous) {
+    return 0;
+  }
+  const bool ends = data->reason == cbRelease || data->reason == cbDeassign;
+  if (data->reason == cbValueChange && !watch.active) {
+    // The argument changed while the statement was not in effect.
+    return 0;
+  }
+  bool changed = false;
+  if (ends) {
+    changed = watch.active;
+    watch.active = false;
+    watch.last.clear();
+  } else {
+    s_vpi_value now{vpiBinStrVal, {}};
+    vpi_get_value(watch.argument, &now);
+    const std::string text = now.value.str != nullptr ? now.value.str : "";
+    changed = !watch.active || text != watch.last;
+    watch.active = true;
+    watch.last = text;
+  }
+  if (!changed) {
+    return 0;
+  }
+  pending_changes.push_back(
+      Watch{watch.instance, watch.parameter, reason_paramdrc});
   if (!routine_active) {
     drain_changes();
   }
@@ -2918,6 +3056,13 @@ PLI_INT32 forced(const p_cb_data data) {
 PLI_INT32 interactive_event(const p_cb_data data) {
   const auto reason = data->reason == cbEnterInteractive ? reason_interactive
                                                          : reason_scope;
+  if (reason == reason_scope && data->obj != nullptr) {
+    // The scope changed from outside the ACC routines ($scope, the
+    // debugger): acc_handle_interactive_scope reports it (IEEE 1364-2001
+    // 23.46; 1800-2023 D.11).
+    fsim::runtime::acc_detail::note_interactive_scope(
+        static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(data->obj)));
+  }
   notify_statement(reason, nullptr);
   s_cb_data again{};
   again.reason = data->reason;
@@ -2974,6 +3119,86 @@ PLI_INT32 end_of_compile_disables(const p_cb_data) {
   return 0;
 }
 
+// misctf of every instance of a task or function with one, executed or not
+// (IEEE 1364-2001 21.1.4: reason_save, reason_startofsave, reason_restart,
+// reason_reset and reason_endofreset reach every instance), in creation order.
+void notify_every_instance(const PLI_INT32 reason) {
+  std::vector<Instance*> ordered;
+  for (const auto& entry : instances()) {
+    if (entry.second->cell->misctf != nullptr) {
+      ordered.push_back(entry.second.get());
+    }
+  }
+  std::sort(ordered.begin(), ordered.end(),
+            [](const Instance* left, const Instance* right) {
+              return left->order < right->order;
+            });
+  for (auto* const instance : ordered) {
+    run(*instance, FSIM_TF_CALL_PHASE_READ_ONLY_SYNCHRONIZE, reason);
+  }
+}
+
+PLI_INT32 saving(const p_cb_data);
+PLI_INT32 restarting(const p_cb_data);
+PLI_INT32 restarted(const p_cb_data);
+PLI_INT32 resetting(const p_cb_data);
+
+// VPI action callbacks run once, so each delivery registers the next one.
+void watch(const PLI_INT32 reason, PLI_INT32 (*const routine)(p_cb_data)) {
+  s_cb_data callback{};
+  callback.reason = reason;
+  callback.cb_rtn = routine;
+  (void)vpi_register_cb(&callback);
+}
+
+// $save (IEEE 1364-2001 21.3.2 Table 87): reason_startofsave, then reason_save
+// with tf_write_save legal. The data goes to one vpi_put_data set.
+PLI_INT32 saving(const p_cb_data) {
+  watch(cbStartOfSave, &saving);
+  notify_every_instance(reason_startofsave);
+  save_restart_mode = 1;
+  notify_every_instance(reason_save);
+  save_restart_mode = 0;
+  return 0;
+}
+
+// $restart: reason_startofrestart, then reason_restart with tf_read_restart
+// legal.
+PLI_INT32 restarting(const p_cb_data) {
+  watch(cbStartOfRestart, &restarting);
+  notify_every_instance(reason_startofrestart);
+  save_restart_mode = 2;
+  notify_every_instance(reason_restart);
+  save_restart_mode = 0;
+  return 0;
+}
+
+// A restart dropped every callback but the restart ones (IEEE 1800-2023
+// 38.36.3), so its end registers the save and reset reasons again.
+PLI_INT32 restarted(const p_cb_data) {
+  watch(cbEndOfRestart, &restarted);
+  watch(cbStartOfSave, &saving);
+  watch(cbStartOfReset, &resetting);
+  watch(cbEndOfReset, &resetting);
+  return 0;
+}
+
+// $reset: reason_reset at its start, reason_endofreset at its end.
+PLI_INT32 resetting(const p_cb_data data) {
+  watch(data->reason, &resetting);
+  notify_every_instance(data->reason == cbStartOfReset ? reason_reset
+                                                       : reason_endofreset);
+  return 0;
+}
+
+void watch_save_restart_reset() {
+  watch(cbStartOfSave, &saving);
+  watch(cbStartOfRestart, &restarting);
+  watch(cbEndOfRestart, &restarted);
+  watch(cbStartOfReset, &resetting);
+  watch(cbEndOfReset, &resetting);
+}
+
 // The statement watches of the misctf reasons run at the end of compile: the
 // force and assign reasons cannot be registered from a startup routine (IEEE
 // 1800-2023 36.10.2), and veriusertfs_register_table is called from one.
@@ -2990,6 +3215,10 @@ PLI_INT32 install_statement_watches(p_cb_data data) {
     callback.cb_rtn = &interactive_event;
     (void)vpi_register_cb(&callback);
   }
+  // The save/restart data set of the TF layer, and the save, restart and
+  // reset reasons.
+  save_restart_id = static_cast<PLI_INT32>(vpi_get(vpiSaveRestartID, nullptr));
+  watch_save_restart_reset();
   return end_of_compile_disables(data);
 }
 

@@ -1787,14 +1787,9 @@ Logic9 Interpreter::Impl::execute_vital_timing_check(
     PackedLogic4 trigger(1U);
     state.trigger_level = !state.trigger_level;
     trigger.fill(state.trigger_level ? Logic9::one : Logic9::zero);
-    scheduler.schedule_after(
-        *state.trigger_request - scheduler.now(),
-        SchedulerPhase::update,
-        process,
-        [this, process, signal = *operation.trigger_signal,
-         value = std::move(trigger)](Scheduler&) mutable {
-          stage_update(process, signal, std::move(value));
-        });
+    schedule_delayed_update(DelayedUpdateKind::whole, process,
+        *operation.trigger_signal, std::move(trigger), { }, 0U,
+        *state.trigger_request - scheduler.now());
   }
   if (state.last_violation && operation.message_on && report_hook) {
     report_hook(
@@ -1890,8 +1885,8 @@ void Interpreter::Impl::execute_vital_delay(
   }
   // A call on one element of a bus writes that element of the output and of
   // every mirror (the call is one expansion of a generate over the bus).
-  const std::optional<std::size_t> element = operation.output_offset
-      ? std::optional<std::size_t>{*operation.output_offset}
+  const std::optional<std::size_t> element = operation.wire->output_offset
+      ? std::optional<std::size_t>{*operation.wire->output_offset}
       : std::nullopt;
   if (glitch && !operation.negative_preemption
       && target < state.scheduled_time) {
@@ -1905,7 +1900,7 @@ void Interpreter::Impl::execute_vital_delay(
     schedule_projected_waveform(
         process, operation.output, waveform, element, 0U,
         ProjectedDelayMode::transport);
-    for (const auto mirror : operation.mirrors) {
+    for (const auto mirror : operation.wire->mirrors) {
       schedule_projected_waveform(
           process, mirror, waveform, element, 0U,
           ProjectedDelayMode::transport);
@@ -1921,7 +1916,7 @@ void Interpreter::Impl::execute_vital_delay(
     schedule_projected_waveform(
         process, operation.output, waveform, element, 0U,
         ProjectedDelayMode::transport);
-    for (const auto mirror : operation.mirrors) {
+    for (const auto mirror : operation.wire->mirrors) {
       schedule_projected_waveform(
           process, mirror, waveform, element, 0U,
           ProjectedDelayMode::transport);
@@ -1934,7 +1929,7 @@ void Interpreter::Impl::execute_vital_delay(
     schedule_projected(
         process, operation.output, vital_scalar(output), element,
         delay, mode == ProjectedDelayMode::inertial ? delay : 0U, mode);
-    for (const auto mirror : operation.mirrors) {
+    for (const auto mirror : operation.wire->mirrors) {
       schedule_projected(
           process, mirror, vital_scalar(output), element,
           delay, mode == ProjectedDelayMode::inertial ? delay : 0U, mode);
@@ -1984,7 +1979,7 @@ void Interpreter::Impl::execute_vital_delay_operation(
     }
     values.paths.push_back(value);
   }
-  if (!operation.wire_sources.empty()) {
+  if (!operation.wire->wire_sources.empty()) {
     // On every event on the actual of InSig, the sources that changed in
     // this delta cycle are those whose shadow had an event in it. The
     // initialization of the call, and a change that no source made (a
@@ -1998,17 +1993,17 @@ void Interpreter::Impl::execute_vital_delay_operation(
       const bool now_event = stamp && stamp->first == scheduler.now()
           && stamp->second == scheduler.delta();
       return now_event
-          && (!operation.input_offset
+          && (!operation.wire->input_offset
               || sensitivity_range_changed(signal_last_values[signal],
                   get_signal(signal).initial_value,
-                  *operation.input_offset, 1U));
+                  *operation.wire->input_offset, 1U));
     };
     std::vector<const VitalWireSource*> changed;
-    for (const auto& wire_source : operation.wire_sources) {
+    for (const auto& wire_source : operation.wire->wire_sources) {
       if (event(wire_source.shadow)) changed.push_back(&wire_source);
     }
     if (changed.empty()) {
-      for (const auto& wire_source : operation.wire_sources) {
+      for (const auto& wire_source : operation.wire->wire_sources) {
         changed.push_back(&wire_source);
       }
     }

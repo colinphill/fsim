@@ -66,6 +66,12 @@ public:
         released_task = nullptr;
     }
 
+    /// The task of an active slot without removing it (save_future).
+    [[nodiscard]] const Scheduler::Task* peek(Identity identity) const noexcept
+    {
+        return active(identity) ? &slots_[identity.slot].task : nullptr;
+    }
+
     [[nodiscard]] Scheduler::Task take(Identity identity) noexcept
     {
         Scheduler::Task task;
@@ -1401,6 +1407,14 @@ namespace scheduler_detail {
 
 using namespace scheduler_detail;
 
+// Marks a class S member of docs/run-state-classification.tsv beside the test
+// that refuses a save when the member is not at rest (#128, #185);
+// scripts/check_run_state_classification.py reads it. Shared with
+// simir_run_state.hpp.
+#ifndef FSIM_RS_IDLE
+#define FSIM_RS_IDLE(scope, member) static_cast<void>(scope)
+#endif
+
 struct Scheduler::Impl {
     static constexpr std::size_t current_slot_bucket_count = 3U;
     static constexpr std::size_t current_slot_auxiliary_queue_count = 2U;
@@ -1486,6 +1500,12 @@ struct Scheduler::Impl {
     SlotStartHookToken next_slot_start_hook_token { 1U };
     void* runtime_slot_quiet_context { };
     RuntimeSlotQuietHook runtime_slot_quiet_hook { };
+    // A requested save point (request_quiet_point): armed means either the
+    // runtime hook or a slot-end request is set, so the slot-end test stays
+    // one branch.
+    void* quiet_request_context { };
+    SchedulerQuietPointCallback quiet_request { };
+    SafePointHookToken cycle_end_request_token { };
     std::shared_ptr<const SafePointHook> safe_point_hook;
     using SafePointHookEntry
         = std::pair<SafePointHookToken, std::shared_ptr<const SafePointHook>>;
@@ -1550,6 +1570,21 @@ struct Scheduler::Impl {
             current && current->systemverilog_phase.has_value(),
             current && current->executing_end_of_slot });
     }
+
+    // The safe point after the last phase of a simulation cycle: the Active
+    // .. Postponed queues of this delta are consumed and no SystemVerilog
+    // batch is running (IEEE 1076-2019 20.7).
+    [[nodiscard]] bool at_cycle_end() const noexcept
+    {
+        return in_safe_point && current && current->phase == phase_count
+            && !current->systemverilog_phase.has_value()
+            && !current->executing_end_of_slot;
+    }
+
+    /// The exact rest state of the members the run-state table lists as class
+    /// S (scheduler_events.cpp): each message is an FSIM-SAVE-0011 reason a
+    /// save at this point would lose state.
+    void audit_rest_state(std::vector<std::string>& messages) const;
 
     [[nodiscard]] std::optional<SchedulerPhase> executing_phase() const noexcept
     {
@@ -2315,6 +2350,29 @@ struct Scheduler::Impl {
             EntryTask { BatchEntry {
                 &batch_task, batch_payload, std::move(fallback_task),
                 { }, group_key, std::move(owner_lifetime) } },
+            nullptr, { }
+        };
+    }
+
+    // A batch member whose fallback is a registered-event descriptor (#128).
+    [[nodiscard]] Entry make_batch_descriptor_entry(
+        StableOrder order,
+        SchedulerBatchTask& batch_task,
+        const std::uint64_t batch_payload,
+        const detail::SchedulerTaskDescriptor& fallback)
+    {
+        if (fallback.invoke == nullptr) {
+            throw std::invalid_argument(
+                "cannot schedule a batch with an empty fallback task");
+        }
+        if (next_sequence == std::numeric_limits<std::uint64_t>::max()) {
+            throw std::overflow_error("scheduler insertion sequence overflow");
+        }
+        return Entry {
+            order, next_sequence++,
+            EntryTask { BatchEntry {
+                &batch_task, batch_payload, Task { }, fallback,
+                SchedulerBatchGroupKey { }, std::shared_ptr<void> { } } },
             nullptr, { }
         };
     }

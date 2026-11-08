@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "simir_events.hpp"
 #include "simir_internal.hpp"
 
 namespace fsim::runtime::simir {
@@ -324,14 +325,13 @@ void Interpreter::Impl::evaluate_module_timing_checks(
             "simulation time overflow scheduling delayed timing signal"};
       }
       const auto value = after.get(source.terminal.offset);
-      scheduler.schedule_at(
+      scheduler.schedule_internal_at(
           now + delay,
           SchedulerPhase::update,
           static_cast<StableOrder>(index),
-          [owner = this, target = *target, value](Scheduler&) {
-            owner->stage_update_slice(
-                target.signal, PackedLogic4{1, value}, target.offset);
-          });
+          events::make<events::TimingDelayedCopy>(
+              events::TimingDelayedCopy::Payload {
+                  this, target->signal, target->offset, value }));
     };
     if (check.kind == ModuleTimingCheckKind::setuphold) {
       delayed_copy(
@@ -385,19 +385,14 @@ void Interpreter::Impl::evaluate_module_timing_checks(
     const auto schedule_deadline = [&](const std::int64_t limit) {
       scheduler.cancel(state.deadline);
       state.active = true;
+      // The descriptor is held by the cancel slot as a Task, so a save finds
+      // it and the check index rebinds the handle (bind_restored_event_handle).
       state.deadline = scheduler.schedule_after_cancelable(
           static_cast<SimulationTick>(limit),
           SchedulerPhase::postponed,
           static_cast<StableOrder>(index),
-          [owner = this, index](Scheduler&) {
-            auto& deadline_state =
-                owner->module_timing_check_states[index];
-            if (!deadline_state.active) return;
-            owner->report_module_timing_violation(index);
-            if (!owner->module_timing_checks[index].remain_active) {
-              deadline_state.active = false;
-            }
-          });
+          Scheduler::Task { events::make<events::TimingCheckDeadline>(
+              events::TimingCheckDeadline::Payload { this, index }) });
     };
     switch (check.kind) {
       case ModuleTimingCheckKind::setup:

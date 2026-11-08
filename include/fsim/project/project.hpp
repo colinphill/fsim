@@ -252,6 +252,12 @@ struct CoverageSection {
 
 struct RunSection {
   std::optional<std::string> duration;
+  // Save the run state when the simulation reaches this time, at the end of
+  // its time slot (IEEE 1800-2023 D.9), to `save_file`; `restart_file`
+  // starts the run from a saved state instead of from time zero.
+  std::optional<std::string> save_at;
+  std::optional<std::filesystem::path> save_file;
+  std::optional<std::filesystem::path> restart_file;
   std::uint64_t max_deltas{100'000};
   DelayMode delay_mode{DelayMode::typical};
   std::optional<std::filesystem::path> trace_file;

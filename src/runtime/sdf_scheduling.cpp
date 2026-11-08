@@ -175,8 +175,13 @@ namespace {
                 && (delay->selected_source
                         == SdfEffectiveValueSource::SdfAbsolute
                     || delay->selected_source
-                        == SdfEffectiveValueSource::SdfIncrement))
+                        == SdfEffectiveValueSource::SdfIncrement)) {
                 path.delays = delay->delay_ticks;
+                // The annotation's value replaces the source's triple.
+                path.minimum_delays.clear();
+                path.typical_delays.clear();
+                path.maximum_delays.clear();
+            }
             for (const auto& [role, member] : {
                      std::pair { SdfEffectiveValueRole::PulseReject,
                          &elaboration::VerilogSpecifyPathInfo::pulse_reject_delays },

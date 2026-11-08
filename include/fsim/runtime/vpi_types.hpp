@@ -276,6 +276,9 @@ struct SystemVerilogVpiTypeInfo {
     // 1800-2023 37.10 vpiDefFile, vpiDefLineNo).
     std::string definition_path;
     std::uint32_t definition_line { };
+    // The library.cell name of the configuration that controls the binding
+    // of an instance, empty when none does (IEEE 1800-2023 33.7 vpiConfig).
+    std::string configuration;
     // A task or function declared by a DPI import or named by a DPI export
     // (IEEE 1800-2023 37.40 details 6-10): vpiAccessType, vpiDPIPure,
     // vpiDPIContext, vpiDPICStr, vpiDPICIdentifier, and for an import the
@@ -290,6 +293,12 @@ struct SystemVerilogVpiTypeInfo {
     std::int32_t dpi_func_type { };
     std::int64_t dpi_size { };
     bool dpi_signed { };
+    // Where an import's declaration is, so its formals and result variable
+    // can be read from the HIR: the owning unit's id and its index in that
+    // unit's DPI declarations (IEEE 1800-2023 37.41 vpiIODecl, vpiReturn).
+    bool dpi_has_declaration { };
+    std::uint32_t dpi_unit { };
+    std::uint32_t dpi_index { };
     // A gate primitive's type name, such as `and` (IEEE 1800-2023 37.7
     // vpiDefName, vpiPrimType).
     std::string definition_name;

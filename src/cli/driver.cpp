@@ -415,6 +415,16 @@ namespace {
         if (invocation.duration.has_value()) {
             config.run.duration = invocation.duration;
         }
+        if (invocation.save_at.has_value()) {
+            config.run.save_at = invocation.save_at;
+        }
+        if (invocation.save_file.has_value()) {
+            config.run.save_file = absolute_normalized(*invocation.save_file);
+        }
+        if (invocation.restart_file.has_value()) {
+            config.run.restart_file
+                = absolute_normalized(*invocation.restart_file);
+        }
         if (invocation.max_deltas.has_value()) {
             config.run.max_deltas = *invocation.max_deltas;
         }
@@ -501,6 +511,16 @@ namespace {
         }
         if (invocation.duration.has_value()) {
             config.run.duration = invocation.duration;
+        }
+        if (invocation.save_at.has_value()) {
+            config.run.save_at = invocation.save_at;
+        }
+        if (invocation.save_file.has_value()) {
+            config.run.save_file = absolute_normalized(*invocation.save_file);
+        }
+        if (invocation.restart_file.has_value()) {
+            config.run.restart_file
+                = absolute_normalized(*invocation.restart_file);
         }
         if (invocation.max_deltas.has_value()) {
             config.run.max_deltas = *invocation.max_deltas;
@@ -657,6 +677,11 @@ namespace {
             << "      --coverage-output PATH\n"
             << "                           Write the coverage database when simulation ends\n"
             << "      --duration TIME\n"
+            << "      --save-at TIME       Save the run state at the end of the time slot\n"
+            << "                           at TIME (needs --save-file)\n"
+            << "      --save-file FILE     File that --save-at writes\n"
+            << "      --restart FILE       Start from a saved run state; repeat the command\n"
+            << "                           line of the save\n"
             << "      --max-deltas COUNT\n"
             << "      --delay-mode min|typ|max\n"
             << "      --sdf PATH           Add an SDF annotation input; repeatable\n"
@@ -931,6 +956,9 @@ namespace {
             "--format",
             "--threshold",
             "--duration",
+            "--save-at",
+            "--save-file",
+            "--restart",
             "--max-deltas",
             "--delay-mode",
             "--sdf",
@@ -1509,6 +1537,27 @@ std::optional<Invocation> parse_arguments(
                     return std::nullopt;
                 }
                 invocation.duration = std::string(*value);
+            } else if (is_option(argument, "", "--save-at")) {
+                const auto value = take_value(index, argc, argv, argument,
+                    "--save-at", diagnostics);
+                if (!value.has_value()) {
+                    return std::nullopt;
+                }
+                invocation.save_at = std::string(*value);
+            } else if (is_option(argument, "", "--save-file")) {
+                const auto value = take_value(index, argc, argv, argument,
+                    "--save-file", diagnostics);
+                if (!value.has_value()) {
+                    return std::nullopt;
+                }
+                invocation.save_file = fsim::support::path_from_utf8(*value);
+            } else if (is_option(argument, "", "--restart")) {
+                const auto value = take_value(index, argc, argv, argument,
+                    "--restart", diagnostics);
+                if (!value.has_value()) {
+                    return std::nullopt;
+                }
+                invocation.restart_file = fsim::support::path_from_utf8(*value);
             } else if (is_option(argument, "", "--max-deltas")) {
                 const auto value = take_value(index, argc, argv, argument, "--max-deltas", diagnostics);
                 std::uint64_t number = 0;
@@ -2250,6 +2299,8 @@ std::optional<Invocation> parse_arguments(
     }
     if (!snapshot_consumer
         && (invocation.duration.has_value() || invocation.max_deltas.has_value()
+            || invocation.save_at.has_value() || invocation.save_file.has_value()
+            || invocation.restart_file.has_value()
             || invocation.engine.has_value() || invocation.file_root.has_value()
             || invocation.compiled_processes.has_value())) {
         argument_error(diagnostics,
@@ -2535,6 +2586,19 @@ void apply_configuration_defaults(
         fill_delay_mode("simulate.delay_mode");
         if (!invocation.duration) {
             invocation.duration = text("simulate.duration");
+        }
+        if (!invocation.save_at) {
+            invocation.save_at = text("simulate.save_at");
+        }
+        if (!invocation.save_file) {
+            if (const auto path = text("simulate.save_file")) {
+                invocation.save_file = std::filesystem::path { *path };
+            }
+        }
+        if (!invocation.restart_file) {
+            if (const auto path = text("simulate.restart")) {
+                invocation.restart_file = std::filesystem::path { *path };
+            }
         }
         if (!invocation.max_deltas) {
             invocation.max_deltas = number("simulate.max_deltas");

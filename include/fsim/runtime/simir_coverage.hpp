@@ -80,6 +80,15 @@ public:
     [[nodiscard]] bool overflowed(
         ::fsim::runtime::CodeCoverageCounterId counter) const noexcept;
     [[nodiscard]] std::size_t overflow_count() const noexcept;
+    /// The per-counter saturation and enable flags, for the run-state image
+    /// (#128): a counter that saturated stays flagged after a restart, and a
+    /// counter switched off stays off.
+    [[nodiscard]] std::span<const std::uint8_t> overflow_flags() const noexcept;
+    [[nodiscard]] std::span<const std::uint8_t> enabled_flags() const noexcept;
+    /// Puts saved flags back; false, changing nothing, when a size differs
+    /// from the counter table.
+    [[nodiscard]] bool restore_flags(std::span<const std::uint8_t> overflowed,
+        std::span<const std::uint8_t> enabled) noexcept;
     [[nodiscard]] std::optional<std::size_t> overflow_count(
         std::span<const ::fsim::runtime::CodeCoverageCounterId> counters)
         const noexcept;

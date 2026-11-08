@@ -1152,7 +1152,7 @@ void VhdlParser::parse_vhdl_shared_variable(DesignUnit &unit,
     }
   expect(TokenKind::Colon, "':' after shared variable names",
          "FSIM-VHDL-PARSE-252");
-  const auto type = parse_vhdl_type(true, true);
+  const auto type = parse_vhdl_resolved_subtype();
   std::optional<Expression> initializer;
   if (match(TokenKind::ColonEqual)) {
     initializer = parse_expression();

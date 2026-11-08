@@ -569,9 +569,12 @@ void Interpreter::Impl::StaticKernel::track_unknowns(CompiledBody& body,
             return false;
         }
         const auto operation = static_cast<BinaryOperator>(inst.sub);
+        // The matching equality of std_ulogic values ("?=") can give 'U'
+        // (IEEE 1076-2019 9.2.3), so its result carries a mask too.
         return operation == BinaryOperator::bit_and
             || operation == BinaryOperator::bit_or
-            || operation == BinaryOperator::bit_xor;
+            || operation == BinaryOperator::bit_xor
+            || operation == BinaryOperator::vhdl_match_equal;
     };
     // Registers that may hold 'U' or a weak element ('H', 'L', 'W', '-'):
     // exact Logic9 loads, constants with either, reference-evaluated
@@ -601,10 +604,10 @@ void Interpreter::Impl::StaticKernel::track_unknowns(CompiledBody& body,
             case KOp::generic:
                 source = true;
                 break;
-            // A shift moves the weak elements of its value with their
-            // words.
+            // A shift moves the 'U' and weak elements of its value with
+            // their words.
             case KOp::shift:
-                source = body.weak != 0U && inst.x < count && tracked[inst.x] != 0U;
+                source = inst.x < count && tracked[inst.x] != 0U;
                 break;
             case KOp::extract:
                 source = inst.sub >= 2U
@@ -635,6 +638,15 @@ void Interpreter::Impl::StaticKernel::track_unknowns(CompiledBody& body,
             case KOp::conditional:
                 source = (inst.y < count && tracked[inst.y] != 0U)
                     || (inst.z < count && tracked[inst.z] != 0U);
+                break;
+            case KOp::wide_alu:
+                // The matching equality of wide std_ulogic values gives 'U'
+                // for a pair with 'U' (IEEE 1076-2019 9.2.3), as the narrow
+                // one does (bitwise); its result is the only narrow one of
+                // a wide operation that carries a mask.
+                source = static_cast<WideFamily>(inst.offset) == WideFamily::binary
+                    && static_cast<BinaryOperator>(inst.sub)
+                        == BinaryOperator::vhdl_match_equal;
                 break;
             default:
                 source = bitwise(inst)
@@ -668,6 +680,11 @@ void Interpreter::Impl::StaticKernel::track_unknowns(CompiledBody& body,
         case KOp::insert:
         case KOp::concat:
         case KOp::store_vhdl:
+        // A VHDL part-select assignment queues the 'U' and weak masks of the
+        // bits it writes (emit_store_slot_part).
+        case KOp::store_slot_part:
+        // A write through a dynamic index likewise (emit_store_slot_dynamic).
+        case KOp::store_slot_dynamic:
         case KOp::generic:
         // Reads its source's 'U' mask itself; defines nothing.
         case KOp::net_delay:
@@ -678,6 +695,7 @@ void Interpreter::Impl::StaticKernel::track_unknowns(CompiledBody& body,
         case KOp::wide_concat:
         case KOp::wide_store:
         case KOp::wide_part_insert:
+        case KOp::wide_alu:
             mode = u_aware;
             break;
         case KOp::copy:
@@ -720,6 +738,10 @@ void Interpreter::Impl::StaticKernel::track_unknowns(CompiledBody& body,
         case KOp::jump:
         case KOp::call:
         case KOp::ret:
+        // SystemVerilog assertion state and sampled values: Logic4 words.
+        case KOp::sva_tick:
+        case KOp::sva_outcome:
+        case KOp::sva_sampled_load:
             mode = u_clear;
             break;
         // Case equality (VHDL "=" on std_ulogic) compares the 'U' masks too;
@@ -730,16 +752,25 @@ void Interpreter::Impl::StaticKernel::track_unknowns(CompiledBody& body,
         case KOp::unary_not:
             mode = u_aware;
             break;
-        // The weak elements shift with their words; 'U' operands (and
-        // shifts with a 'U' amount) leave compiled execution.
+        // The 'U' and weak elements shift with their words, each mask as a
+        // word of its own (an unknown amount gives all X: none); a shift
+        // amount is an integer and never 'U'.
         case KOp::shift:
-            mode = body.weak != 0U && inst.x < count && tracked[inst.x] != 0U
-                ? static_cast<std::uint8_t>(u_check | u_aware)
-                : static_cast<std::uint8_t>(u_check | u_clear);
+            mode = inst.x < count && tracked[inst.x] != 0U
+                ? u_aware : u_clear;
             break;
         default:
             mode = u_check | u_clear;
             break;
+        }
+        // A SystemVerilog member never leaves compiled execution for a 'U':
+        // its operations are four-state (IEEE 1800-2023 6.6, 11.4), which
+        // read the 'U' element as x, as the word already holds it, and its
+        // stores write four-state values; only a result's mask is dropped
+        // (u_clear). A VHDL member keeps the check for the operations the
+        // table cannot yet carry the mask through.
+        if (!member.vhdl) {
+            mode &= static_cast<std::uint8_t>(~u_check);
         }
         if ((mode & u_check) != 0U && !reads_tracked) {
             mode &= static_cast<std::uint8_t>(~u_check);
@@ -2157,7 +2188,10 @@ const char* Interpreter::Impl::StaticKernel::prove_collapse_ranges(const Member&
                     }
                     if (inst.op == KOp::load_slot
                             ? !std::ranges::binary_search(input_offsets, inst.x)
-                            : !input_slot(inst.x)) {
+                            // A host signal's wide read (sub 3) names a
+                            // signal, not a slot: never a collapse input.
+                            : (inst.op == KOp::wide_load && inst.sub == 3U)
+                                || !input_slot(inst.x)) {
                         values[inst.d] = { };
                         return true;
                     }

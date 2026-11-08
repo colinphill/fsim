@@ -101,6 +101,20 @@ static void termination(const vhpiCbDataT* data)
     fflush(stdout);
 }
 
+static vhpiHandleT phase_cb(int32_t reason, void (*routine)(const vhpiCbDataT*));
+
+// A reset request made in the simulation phase takes the tool to the reset
+// phase (23.5, 20.9), which removes every callback except the end-of-reset
+// ones (20.9 b); the NOTE of 20.9 has the program reinstate what it needs from
+// that callback, here the termination callback.
+static void end_of_reset(const vhpiCbDataT* data)
+{
+    (void)data;
+    printf("#c end of reset phase=%d\n", (int)vhpi_get(vhpiPhaseP, NULL));
+    (void)phase_cb(vhpiCbEndOfTool, termination);
+    fflush(stdout);
+}
+
 static void initialization(const vhpiCbDataT* data)
 {
     vhpiHandleT current = vhpi_handle(vhpiCurCallback, NULL);
@@ -203,6 +217,7 @@ static void startup(void)
         = phase_cb(vhpiCbStartOfInitialization, initialization);
     simulation_handle = phase_cb(vhpiCbStartOfSimulation, simulation);
     (void)phase_cb(vhpiCbEndOfTool, termination);
+    (void)phase_cb(vhpiCbEndOfReset, end_of_reset);
     fflush(stdout);
 }
 

@@ -20,7 +20,7 @@ module top;
     #5 $display("#c done n=%0d", n);
   end
   initial begin : worker
-    #1 r = 4'h1;
+    #1 r = 4'h1; $write("");
     #5 r = 4'h2;
   end
   initial #2 disable worker;

@@ -7,6 +7,7 @@
 #include "fsim/runtime/scheduler.hpp"
 #include "fsim/runtime/simir_container_value.hpp"
 #include "fsim/runtime/simir_shared_vector.hpp"
+#include "fsim/runtime/sva_storage.hpp"
 #include "fsim/runtime/systemverilog_scalar.hpp"
 #include "fsim/support/rare_vector.hpp"
 #include <algorithm>
@@ -37,6 +38,14 @@ class RunStateImage;
 }
 
 namespace fsim::runtime::simir {
+/// What a save or restore reports: each reason as one FSIM-SAVE-nnnn line.
+struct RunStateReport {
+    std::vector<std::string> messages;
+    /// Every reason is work of the current time slot that drains before the
+    /// slot ends, so a save request waits for the next quiet point.
+    bool deferrable { };
+};
+
 using RegisterId = std::uint32_t;
 using StringRegisterId = std::uint32_t;
 using StringObjectId = std::uint32_t;
@@ -1267,6 +1276,23 @@ struct NetDelayTable {
         return result;
     }
 
+    /// The table of a gate's rise, fall and turn-off delays (IEEE 1800-2023
+    /// 28.16): a change to 1 takes the rise delay, to 0 the fall delay, to z
+    /// the turn-off delay and to x the smallest of the three, whatever the
+    /// old value; every limit equals its delay, so the write is inertial.
+    [[nodiscard]] static NetDelayTable from_gate_delays(
+        const TransitionDelays& gate)
+    {
+        const auto smallest = std::min({ gate.rise, gate.fall, gate.turnoff });
+        NetDelayTable result;
+        result.delay = { gate.rise, gate.fall, gate.turnoff, gate.rise,
+            gate.turnoff, gate.fall, smallest, gate.rise, smallest, gate.fall,
+            gate.turnoff, smallest };
+        result.reject = result.delay;
+        result.error = result.delay;
+        return result;
+    }
+
     /// The table of `values` (36 long, as values() gives them).
     [[nodiscard]] static NetDelayTable from_values(
         const std::span<const SimulationTick> values)
@@ -1439,6 +1465,16 @@ struct ProjectedWaveformValue {
     SimulationTick delay { };
 };
 
+/// One pending transaction of a driver's projected output waveform (IEEE
+/// 1076-2019 10.5.2.2, 14.7.2): the absolute time it is projected to occur
+/// at, its value component and whether it is a null transaction (a
+/// disconnection of a guarded signal's driver, which has no value).
+struct DriverTransaction {
+    SimulationTick time { };
+    PackedLogic4 value;
+    bool null { };
+};
+
 /// Return the shortest delay required by the bits that actually change.
 /// A transition to X uses the shortest rise/fall/turnoff delay. No value is
 /// returned when the packed values are equal.
@@ -1592,6 +1628,9 @@ struct Fork {
     /// The children are pending updates (a clocking drive with a cycle
     /// delay), which disable fork and wait fork leave alone.
     bool detached { };
+    /// The children are pending deferred assertion reports (IEEE 1800-2023
+    /// 16.4.1): a DisableFork with `deferred_reports` flushes them.
+    bool deferred_report { };
 };
 struct ForkEnd { };
 struct WaitFork { };
@@ -1599,6 +1638,10 @@ struct WaitFork { };
 /// site when `site` is present.
 struct DisableFork {
     std::optional<InstructionIndex> site;
+    /// A deferred assertion flush point (IEEE 1800-2023 16.4.2): ends the
+    /// pending reports (the children of Forks with `deferred_report`) of
+    /// this process and no other child; `site` is empty.
+    bool deferred_reports { };
 };
 /// Terminate one dynamically active named sequential block. `begin` and `end`
 /// delimit its lexical operation interval; execution resumes at `end`.
@@ -1849,6 +1892,12 @@ struct Process {
     std::size_t string_register_count { };
     std::size_t container_register_count { };
     std::vector<DebugLocal> debug_locals;
+    /// The result register of each user function this process lowers, by
+    /// callee (IEEE 1800-2023 37.42, 38.15): a table of its own, so the
+    /// debug-local listings and the debug-local gates of the optimizers do
+    /// not see it. A run with the execution probes reads a slot at the
+    /// callee's frame exit (`Interpreter::read_call_result`).
+    std::vector<DebugLocal> call_results;
     std::vector<DebugStringLocal> debug_string_locals;
     std::vector<DebugContainerLocal> debug_container_locals;
     CopyOnWriteVector<ContainerType> container_register_types;
@@ -2046,6 +2095,10 @@ enum class ExecutionPointKind : std::uint8_t {
     // A lowered class constructor has completed (IEEE 1800-2023 38.36.1
     // cbCreateObj). Probe builds only.
     object_created,
+    // An immediate or deferred assertion passed or failed (IEEE 1800-2023
+    // 39.4.1). Probe builds only.
+    assertion_pass,
+    assertion_fail,
 };
 
 struct ExecutionPoint {
@@ -2133,6 +2186,15 @@ public:
     static constexpr auto native_register_width = std::numeric_limits<std::size_t>::max();
 
     virtual ~ProcessExecutor() = default;
+    /// True when the executor keeps no run state of its own: every register,
+    /// frame and program counter of its process lives in the process record
+    /// and the owners' sections (the static kernel's host stub). A run whose
+    /// live processes all have such executors can be saved (#128); any other
+    /// executor keeps state that the run-state image has no description of.
+    [[nodiscard]] virtual bool run_state_free() const noexcept
+    {
+        return false;
+    }
     /// Share the lexical frame with a child owning an independent PC.
     [[nodiscard]] virtual std::unique_ptr<ProcessExecutor> fork_clone(
         InstructionIndex)
@@ -2353,6 +2415,9 @@ private:
 /// Small reference interpreter for differential testing of generated code.
 struct NativeRegionAllocationTestAccess;
 struct SystemCBridgeTestAccess;
+/// The application test that saves and restores a whole simulation reaches
+/// its interpreter through this friend (tests/app/run_state_application_test.cpp).
+struct RunStateTestAccess;
 
 class Interpreter {
 public:
@@ -2440,6 +2505,10 @@ public:
     /// simulation tick (IEEE 1800-2023 39.4.2 cbAssertionStart); the process
     /// is the static design process that owns the assertion.
     using SvaAttemptHook = std::function<void(ProcessId, std::int64_t)>;
+    /// A step of an attempt of the process's assertion (IEEE 1800-2023 39.4.2
+    /// cbAssertionStepSuccess / cbAssertionStepFailure); produced only for
+    /// attempts stepping was enabled for (39.5.2).
+    using SvaStepHook = std::function<void(ProcessId, const sva::StepRecord&)>;
     // Class callbacks receive the currently executing process. The next
     // identity is the owning static design process; runtime fork children
     // retain it even though their ProcessProgram id is dynamic.
@@ -2623,6 +2692,18 @@ public:
     /// the engine cannot take the graft.
     [[nodiscard]] bool graft_net_delay(
         NetDelayGraft& graft, std::string& reason);
+    /// Gives a gate's driver a delay slot (IEEE 1800-2023 38.32, 28.16): its
+    /// delay-free writes of the output, WriteUpdate or WriteUpdateSlice, run
+    /// as the WriteNetDelay operations of `rewritten` (the driver's program
+    /// with those operations replaced in place, the same count and
+    /// positions) from the next write on. Legal only at a scheduler safe
+    /// point after start. The static kernel rewrites the member and takes it
+    /// out of its partition's pass; the evaluator replaces the program.
+    /// Afterwards set_net_delay_table retimes the driver. False, changing
+    /// nothing and with `reason` set, when the engine cannot take it.
+    [[nodiscard]] bool split_gate_delay(
+        ProcessId process, Process rewritten, std::string& reason,
+        bool dry_run = false);
     /// Replace the limits of one module timing check, as vpi_put_delays does
     /// (IEEE 1800-2023 38.32). Returns false, changing nothing, when the
     /// scheduler is started and not at a safe point; throws
@@ -2681,6 +2762,10 @@ public:
     /// Arguments may include their conventional leading '+'. Must be set
     /// before start.
     void set_plusargs(std::span<const std::string> plusargs);
+    /// What $reset_count and $reset_value read (IEEE 1800-2023 D.8). The
+    /// embedder sets them after a reset or a restart; a run that never
+    /// resets reads zero.
+    void set_reset_values(std::int32_t count, std::int32_t value) noexcept;
 
     /// Set the duration represented by one scheduler tick. Must be set before
     /// start and is used by SystemVerilog $timeformat/%t services.
@@ -2722,6 +2807,31 @@ public:
     void materialize_ready_process_executors();
 
     void start();
+    /// Starts for a restore (IEEE 1800-2023 D.9): builds the tables that
+    /// restore_run_state() fills in but runs no user code, neither package
+    /// static initializers nor the first run of any process, and queues no
+    /// process at time zero; the saved state then supplies all of that. A
+    /// no-op on a started interpreter.
+    void start_for_restore();
+    /// Installs the factory reset_run_state() takes the time-zero state from:
+    /// it returns a fresh interpreter of the same design, configured exactly
+    /// as this one was before start (hooks excluded). Without one the run
+    /// cannot reset.
+    void set_reset_source(std::function<std::unique_ptr<Interpreter>()> source);
+    /// The embedder's share of the scheduler events of a run state (#128): the
+    /// owners of the event kinds the embedder registered ("vpi_value_control",
+    /// "uvm_objection", ...), bound into every save and restore beside the
+    /// engine's own, and the takers of a restored cancelable event's handle
+    /// (the same contract as Interpreter::Impl::bind_restored_event_handle).
+    /// Without a host an event of an embedder kind refuses the save
+    /// (FSIM-SAVE-0005), because its payload points outside the engine.
+    struct RunStateEventHost {
+        std::function<void(SchedulerEventOwners&)> bind_owners;
+        std::function<bool(std::string_view kind, std::uint64_t key,
+            const ScheduledTaskHandle& handle)>
+            bind_handle;
+    };
+    void set_run_state_event_host(RunStateEventHost host);
     /// True only while the kernel executes ordered package-static startup
     /// actions, including tagged SimIR processes and registered callbacks.
     [[nodiscard]] bool package_static_initialization_active() const noexcept;
@@ -2732,27 +2842,71 @@ public:
     /// its safe stopped boundary.
     [[nodiscard]] RunResult finish();
 
-    /// True when reset_run_state() can restore this run. A reset needs the
-    /// whole mutable run state back at its time-zero value (the scheduler,
-    /// the signal and driver values, the process and thread states, the
-    /// containers, strings and files, the static kernel's slots, waiters
-    /// and timers); no engine restores it yet.
+    /// True when reset_run_state() can restore this run: a reset source is
+    /// installed (set_reset_source) and every live
+    /// process's executor is state-free (ProcessExecutor::run_state_free).
+    /// Both engines reset: the reference interpreter and the v4 static kernel
+    /// take the whole mutable state (the scheduler, signal and driver values,
+    /// process and thread states, containers, strings and files, the kernel's
+    /// slots, waiters and timers) from the time-zero image of the twin.
     [[nodiscard]] bool can_reset_run_state() const noexcept;
-    /// Restore the time-zero state, so that the next run() initializes the
-    /// design again (IEEE 1800-2023 D.8, IEEE 1076-2019 20.9). False, with
-    /// the run unchanged, when can_reset_run_state() is false.
+    /// Puts the run back at time zero, so that the next run() initializes the
+    /// design again (IEEE 1800-2023 D.8, IEEE 1076-2019 20.9): builds the twin
+    /// from the reset source, starts it with start_for_restore(), and restores
+    /// its state into this run through restore_run_state(). $reset_count and
+    /// $reset_value are kept. False when can_reset_run_state() is false or the
+    /// restore fails; after a failed restore the run must be discarded.
     [[nodiscard]] bool reset_run_state();
+    /// Why the last reset_run_state() failed (an FSIM-SAVE line), else empty.
+    [[nodiscard]] const std::string& reset_failure() const noexcept;
+    /// Applies to `target` the requests this run's foreign interfaces made
+    /// that change its plan or time-zero state (watch_signal_changes,
+    /// watch_signal_transactions, open_external_observation,
+    /// note_external_signal_write, graft_net_delay), those made before start
+    /// (`after_start` false) or after it (true), in the order they were
+    /// made. A reset replays them onto its twin, so the twin has this run's
+    /// plan. False, with `reason`, when a graft cannot take the ids it had.
+    [[nodiscard]] bool replay_plan_onto(
+        Interpreter& target, bool after_start, std::string& reason) const;
+    /// While set, a split or graft made on this run is a replay of an earlier
+    /// run's (a restart rebuilds the run-time plan of the saved run before
+    /// the saved state replaces the tables, IEEE 1800-2023 D.9): the
+    /// safe-point test is waived because nothing has run, and the request is
+    /// not journaled a second time. The embedder sets it around the replay.
+    void set_plan_replay(bool replaying) noexcept;
 
-    /// Adds the sections of the run state this engine can save to `image`
-    /// (run_state_image.hpp). The static kernel's "kernel.values" section
-    /// (slot values) is the only one so far; threads, waiters, timers,
-    /// containers and the interpreter's host state are not saved yet, so the
-    /// image does not restore a run and can_reset_run_state() stays false.
-    /// Returns false while the image is incomplete in that way.
+    /// Saves the run state at a save point (#128; IEEE 1800-2023 D.9, IEEE
+    /// 1076-2019 20.7): adds the engine's sections to `image` (run_state_image.hpp).
+    /// Sections: "sched.state" (time, delta, every pending event as a registered
+    /// kind), "host.run", "host.signals", "host.objects", "host.pending",
+    /// "host.processes.<n>" (reference processes, chunks of 4096) and, for a
+    /// compiled run, "kernel.values" and "kernel.state" (registers, thread
+    /// slots, timers, pending writes, owned signals). Each has its own version;
+    /// see run_state_sections.hpp for the registry the application and foreign
+    /// interfaces use for theirs. Returns false, with `image` unchanged in
+    /// its engine sections, when the run cannot be saved now. `report` lists
+    /// each reason with its FSIM-SAVE code; `report.deferrable` is true when
+    /// every reason is work of the current time slot that drains before the
+    /// slot ends, so the request waits instead of failing (owner decision 2).
     bool record_run_state(RunStateImage& image) const;
-    /// Restores the sections record_run_state() wrote; false, with the run
-    /// unchanged, when one is missing or does not fit this design.
+    bool record_run_state(RunStateImage& image, RunStateReport& report) const;
+    /// Restores the sections record_run_state() wrote into this interpreter,
+    /// which must be built from the same design and not yet run, and brings it
+    /// to the saved point: pending events are re-created, kernel doorbells are
+    /// re-armed, and run() continues from the saved time. False, with `report`
+    /// listing each reason (FSIM-SAVE-0008..0010), when a section is missing,
+    /// has another version or does not fit the design. After a false return
+    /// the interpreter may be half restored and must be discarded.
     [[nodiscard]] bool restore_run_state(const RunStateImage& image);
+    [[nodiscard]] bool restore_run_state(
+        const RunStateImage& image, RunStateReport& report);
+    /// The xxh64 over the sections record_run_state() would write now: equal
+    /// states have equal hashes, and saving twice from one point gives the
+    /// same hash. Zero when the run cannot be saved.
+    [[nodiscard]] std::uint64_t run_state_hash() const;
+    /// True for the section names the engine owns ("sched.", "host.",
+    /// "kernel."), so a driver can tell its own sections from the engine's.
+    [[nodiscard]] static bool owns_run_state_section(std::string_view name) noexcept;
 
     /// Deposit immediately and activate sensitive processes in the next delta.
     /// A systemverilog origin domain (a VPI write from a calltf) wakes
@@ -2770,6 +2924,13 @@ public:
         const std::vector<ProjectedWaveformValue>& elements,
         std::optional<std::size_t> offset, SimulationTick rejection,
         ProjectedDelayMode mode);
+    /// Schedule the null transaction of a host driver `delay` ticks from now
+    /// (IEEE 1076-2019 10.5.2.2, 23.34): the driver stops contributing to the
+    /// guarded signal once it matures and its later transactions are
+    /// cancelled. Returns false, scheduling nothing, for a signal that has no
+    /// resolution (an unguarded signal cannot be disconnected).
+    [[nodiscard]] bool disconnect_host_driver(
+        ProcessId process, SignalId signal, SimulationTick delay);
     /// Force a host driver at once, or in the next update phase when
     /// `propagate` is set (IEEE 1076-2019 22.5.4).
     void force_host_driver(ProcessId process, SignalId signal,
@@ -2928,6 +3089,18 @@ public:
     /// the single underlying driven value.
     [[nodiscard]] PackedLogic4 driver_value(
         ProcessId process, SignalId signal) const;
+    /// The transactions the projected output waveform of `process`'s driver
+    /// of the bits [offset, offset + width) of `signal` holds beyond the one
+    /// that determines its current value, in time order (IEEE 1076-2019
+    /// 14.7.2, VHPI 19.12.1 vhpiTransactions). Every scalar of the range is
+    /// scheduled together, so a transaction exists at each time any of its
+    /// bits has one; a bit with none at that time keeps the value of its
+    /// latest earlier transaction, else its current driver value. A
+    /// transaction that applies in the update phase of the cycle it was
+    /// scheduled in is not pending any more and is not listed.
+    [[nodiscard]] std::vector<DriverTransaction> driver_transactions(
+        ProcessId process, SignalId signal, std::size_t offset,
+        std::size_t width) const;
     /// Return the strongest currently active zero and one contributions used
     /// by resolved-port observers such as extended VCD.
     [[nodiscard]] DriveStrength signal_strength(SignalId signal) const;
@@ -2965,6 +3138,9 @@ public:
         ProcessId process { };
         std::size_t failures { };
         std::size_t holds { };
+        /// The start tick of each failing and each holding attempt.
+        std::vector<std::int64_t> failure_starts;
+        std::vector<std::int64_t> hold_starts;
     };
     /// End every concurrent-property monitor and report, per process, the
     /// running attempts that fail and those that hold on the truncated
@@ -2982,12 +3158,39 @@ public:
     /// reported last (attemptStartTime, 39.4.2).
     [[nodiscard]] std::optional<std::int64_t> sva_outcome_start(
         ProcessId design_process) const;
+    /// The source position (1-based line and column) of the boolean
+    /// expression that rejected the attempt behind the failure the process's
+    /// monitor reported last (failExpr, 39.4.2); none when unknown.
+    [[nodiscard]] std::optional<std::pair<std::uint32_t, std::uint32_t>>
+    sva_outcome_fail(ProcessId design_process) const;
     void set_sva_attempt_hook(SvaAttemptHook hook);
+    /// Turn the inert attempt-start reports of the concurrent assertion
+    /// evaluators (Display::inert) into reports; effective for every attempt
+    /// that starts after the call, at any point of the run.
+    void bind_assertion_start_reports() noexcept;
+    void set_sva_step_hook(SvaStepHook hook);
+    /// vpiAssertionEnableStep / vpiAssertionDisableStep for the attempt that
+    /// starts at `start_time` in the selected processes' monitors (39.5.2).
+    /// A request made before a monitor exists, or before the attempt
+    /// starts, waits for it. False when the attempt has already started:
+    /// its stepping mode cannot change any more (39.5.2), and nothing
+    /// changes.
+    [[nodiscard]] bool set_sva_step(std::span<const ProcessId> design_processes,
+        std::int64_t start_time, bool enable);
     /// `newer_activations` selects an outer activation of a recursive
     /// callable: the number of activations of the same callable entered
     /// after the one read (VHPI stack frames, IEEE 1076-2019 19.10).
     [[nodiscard]] PackedLogic4 read_debug_local(ProcessId process,
         std::size_t local_index, std::size_t newer_activations = 0U) const;
+    /// The register of slot `slot` of the process program's call-result
+    /// table (`Process::call_results`): the value the callee's result
+    /// register holds at its frame exit.
+    [[nodiscard]] PackedLogic4 read_call_result(
+        ProcessId process, std::size_t slot) const;
+    /// The common body of read_debug_local and read_call_result.
+    [[nodiscard]] PackedLogic4 read_local_register(ProcessId process,
+        std::size_t local_index, std::size_t newer_activations,
+        bool call_result) const;
     /// Deposit a value into a debug local (a variable of a process): the
     /// value has the local's width (VHPI vhpi_put_value, IEEE 1076-2019
     /// 22.5.2).
@@ -3010,6 +3213,10 @@ public:
     [[nodiscard]] bool stopped_by_design() const noexcept;
     /// True once a final procedure has executed `$stop`.
     [[nodiscard]] bool paused_in_final() const noexcept;
+    /// The times of the future time steps that hold work, host and kernel
+    /// timers together, in increasing order without repeats (IEEE 1800-2023
+    /// 37.81). A debug query.
+    [[nodiscard]] std::vector<SimulationTick> pending_times() const;
     [[nodiscard]] Scheduler& scheduler() noexcept;
     [[nodiscard]] const Scheduler& scheduler() const noexcept;
     void set_signal_change_hook(SignalChangeHook hook);
@@ -3099,6 +3306,9 @@ public:
     void set_dpi_site_hooks(DpiSiteHooks hooks);
 
 private:
+    /// graft_net_delay without the journal entry.
+    [[nodiscard]] bool graft_net_delay_planned(
+        NetDelayGraft& graft, std::string& reason);
     [[nodiscard]] ProcessId
     add_process_impl(const Process& process, Process* owned_process);
     friend struct OwnedDriverDemotionTestAccess;
@@ -3106,6 +3316,7 @@ private:
     friend struct PackageStaticStartupRuntimeTestAccess;
     friend struct SystemCBridgeTestAccess;
     friend class InterpreterProgramAccess;
+    friend struct InterpreterEventAccess;
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

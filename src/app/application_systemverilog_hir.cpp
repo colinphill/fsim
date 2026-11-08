@@ -1152,6 +1152,17 @@ namespace systemverilog_hir_detail {
             output.processes.push_back(add_process_skeleton(
                 process, output.scope, output.origin));
         }
+        for (const auto& input_declaration :
+            input.systemverilog_assertion_declarations) {
+            output.assertion_declarations.push_back(assertion_declaration(
+                input_declaration, output.scope, output.origin));
+        }
+        for (std::size_t index = 0;
+            index < input.published_concurrent_assertions.size(); ++index) {
+            output.concurrent_assertions.push_back(concurrent_assertion(
+                input.published_concurrent_assertions[index], index,
+                output.origin));
+        }
         for (const auto& input_defparam : input.verilog_defparams) {
             if (auto defparam = add_defparam(
                     input_defparam, output.scope, output.origin)) {

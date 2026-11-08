@@ -71,6 +71,9 @@ std::vector<VpiFrameModel::Occurrence> VpiFrameModel::apply(
             started.origin = thread.statement;
             started.has_origin = thread.has_statement;
         }
+        started.call_site = thread.call_site;
+        started.has_call_site = thread.has_call_site;
+        thread.has_call_site = false;
         thread.frames.push_back(started.serial);
         current_ = thread.serial;
         occurrences.push_back(
@@ -87,6 +90,8 @@ std::vector<VpiFrameModel::Occurrence> VpiFrameModel::apply(
         break;
     case Kind::call:
         current_ = thread.serial;
+        thread.call_site = point.source;
+        thread.has_call_site = true;
         break;
     // The statement the thread or its active frame executes (37.43 detail 4;
     // the parent frame keeps the statement that activated the child, detail
@@ -110,9 +115,13 @@ std::vector<VpiFrameModel::Occurrence> VpiFrameModel::apply(
             current_ = 0U;
         }
         break;
+    // The pass or fail branch of an immediate assertion follows the
+    // assertion statement itself, which is already the active statement.
     case Kind::call_return:
     case Kind::thread_start:
     case Kind::object_created:
+    case Kind::assertion_pass:
+    case Kind::assertion_fail:
         break;
     }
     return occurrences;

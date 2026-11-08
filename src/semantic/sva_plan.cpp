@@ -7,7 +7,12 @@
 namespace fsim::semantic::sva {
 namespace {
 
-constexpr std::string_view version { "sva1" };
+// "sva3" adds the source span of each guard after the (possibly empty) clock
+// guard list; "sva2" added the source position of each check and property;
+// "sva1" text (artifacts written before) still decodes, without positions.
+constexpr std::string_view version { "sva3" };
+constexpr std::string_view version_positions { "sva2" };
+constexpr std::string_view version_without_positions { "sva1" };
 
 class Writer {
 public:
@@ -104,6 +109,8 @@ std::string encode(const Plan& plan)
             out.put(instruction.c);
             out.put(instruction.lo);
             out.put(instruction.hi);
+            out.put(instruction.line);
+            out.put(instruction.column);
         }
     }
     out.put(static_cast<std::int64_t>(plan.properties.size()));
@@ -115,24 +122,33 @@ std::string encode(const Plan& plan)
         out.put(property.guard);
         out.put(property.lo);
         out.put(property.hi);
+        out.put(property.line);
+        out.put(property.column);
         out.put(static_cast<std::int64_t>(property.children.size()));
         for (const auto child : property.children) {
             out.put(child);
         }
     }
-    // Singly clocked plans end here, as before multiclocked plans existed.
-    if (!plan.clock_guards.empty()) {
-        out.put(static_cast<std::int64_t>(plan.clock_guards.size()));
-        for (const auto guard : plan.clock_guards) {
-            out.put(guard);
-        }
+    // The clock guards (none for a singly clocked plan), then one span per
+    // guard.
+    out.put(static_cast<std::int64_t>(plan.clock_guards.size()));
+    for (const auto guard : plan.clock_guards) {
+        out.put(guard);
+    }
+    for (std::uint32_t guard = 0U; guard < plan.guards; ++guard) {
+        const auto span = guard < plan.guard_spans.size()
+            ? plan.guard_spans[guard] : GuardSpan { };
+        out.put(span.line);
+        out.put(span.column);
     }
     return std::move(out).finish();
 }
 
 std::optional<Plan> decode(const std::string_view text)
 {
-    if (!text.starts_with(version)) {
+    const bool spans = text.starts_with(version);
+    const bool positions = spans || text.starts_with(version_positions);
+    if (!positions && !text.starts_with(version_without_positions)) {
         return std::nullopt;
     }
     Reader in { text.substr(version.size()) };
@@ -160,7 +176,10 @@ std::optional<Plan> decode(const std::string_view text)
                 || !in.get_unsigned(instruction.a, maximum_count)
                 || !in.get_unsigned(instruction.b, maximum_count)
                 || !in.get_unsigned(instruction.c, maximum_count)
-                || !in.get(instruction.lo) || !in.get(instruction.hi)) {
+                || !in.get(instruction.lo) || !in.get(instruction.hi)
+                || (positions
+                    && (!in.get_unsigned(instruction.line, maximum_count)
+                        || !in.get_unsigned(instruction.column, maximum_count)))) {
                 return std::nullopt;
             }
         }
@@ -179,6 +198,9 @@ std::optional<Plan> decode(const std::string_view text)
             || !in.get_unsigned(property.sequence, maximum_count)
             || !in.get_unsigned(property.guard, maximum_count)
             || !in.get(property.lo) || !in.get(property.hi)
+            || (positions
+                && (!in.get_unsigned(property.line, maximum_count)
+                    || !in.get_unsigned(property.column, maximum_count)))
             || !in.get_unsigned(children, maximum_count)) {
             return std::nullopt;
         }
@@ -193,14 +215,26 @@ std::optional<Plan> decode(const std::string_view text)
         }
     }
     if (!in.done()) {
+        // "sva3" always writes the clock count (0 for a singly clocked
+        // plan); the older texts only for a multiclocked plan.
         std::size_t clocks { };
-        if (!in.get_unsigned(clocks, maximum_count) || clocks < 2U) {
+        if (!in.get_unsigned(clocks, maximum_count)
+            || (!spans && clocks < 2U) || clocks == 1U) {
             return std::nullopt;
         }
         plan.clock_guards.resize(clocks);
         for (auto& guard : plan.clock_guards) {
             if (!in.get_unsigned(guard, maximum_count)
                 || guard >= plan.guards) {
+                return std::nullopt;
+            }
+        }
+    }
+    if (spans) {
+        plan.guard_spans.resize(plan.guards);
+        for (auto& span : plan.guard_spans) {
+            if (!in.get_unsigned(span.line, maximum_count)
+                || !in.get_unsigned(span.column, maximum_count)) {
                 return std::nullopt;
             }
         }

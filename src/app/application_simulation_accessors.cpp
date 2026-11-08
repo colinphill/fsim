@@ -259,6 +259,12 @@ void Simulation::set_vpi_size_change_hook(
     impl_->vpi_size_change_hook = std::move(hook);
 }
 
+void Simulation::watch_vpi_string_size(const fsim_vpi_handle_v1 handle)
+{
+    std::scoped_lock bridge_lock { impl_->vpi_bridge_mutex };
+    impl_->watch_vpi_string(handle);
+}
+
 void Simulation::set_class_reclaim_hook(std::function<void()> hook)
 {
     impl_->class_reclaim_hook = std::move(hook);

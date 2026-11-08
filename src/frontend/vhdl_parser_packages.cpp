@@ -501,6 +501,15 @@ std::string VhdlParser::parse_vhdl_resolution_indication(
   return parse_vhdl_selected_name("resolution function name");
 }
 
+Type VhdlParser::parse_vhdl_resolved_subtype() {
+  auto resolution_function = parse_vhdl_resolution_indication(false);
+  auto type = parse_vhdl_type(true);
+  if (!resolution_function.empty()) {
+    type.vhdl_resolution_function = std::move(resolution_function);
+  }
+  return type;
+}
+
 void VhdlParser::parse_vhdl_generic_associations(
     std::vector<ParameterOverride>& associations,
     const VhdlGenericAssociationText& text) {

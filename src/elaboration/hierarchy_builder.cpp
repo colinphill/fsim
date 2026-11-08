@@ -360,6 +360,7 @@ bool same_systemverilog_process_source(
                 return left.edge == right.edge
                     && left.signal == right.signal
                     && left.expression == right.expression
+                    && left.guard == right.guard
                     && left.source == right.source;
             })
         && first.statements == second.statements
@@ -1885,6 +1886,7 @@ HierarchyBuilder::lower_cached_systemverilog_concurrent_statement(
     const auto started = measure
         ? diagnostic::thread_cpu_now() : std::nullopt;
     const auto instance_path_uses_before = lowerer.hir_instance_path_uses();
+    const auto hierarchical_reads_before = lowerer.hierarchical_read_count();
     auto lowered = lowerer.lower_hir_concurrent_statement(
         statement, source_language, path, order);
     const auto invocation_after
@@ -1909,10 +1911,12 @@ HierarchyBuilder::lower_cached_systemverilog_concurrent_statement(
         || invocation_after != invocation_before
         || lowerer.has_generated_processes()
         || lowerer.hir_instance_path_uses() != instance_path_uses_before
+        || lowerer.hierarchical_read_count() != hierarchical_reads_before
         || lowered->scheduling_domain != expected_domain
         || lowered->string_register_count != 0U
         || lowered->container_register_count != 0U
         || !lowered->debug_locals.empty()
+        || !lowered->call_results.empty()
         || !lowered->debug_string_locals.empty()
         || !lowered->debug_container_locals.empty()
         || !lowered->static_trigger_regions.empty()
@@ -1926,6 +1930,8 @@ HierarchyBuilder::lower_cached_systemverilog_concurrent_statement(
             : lowerer.has_generated_processes() ? "generated_processes"
             : lowerer.hir_instance_path_uses() != instance_path_uses_before
             ? "instance_path"
+            : lowerer.hierarchical_read_count() != hierarchical_reads_before
+            ? "hierarchical_read"
             : lowered->driver_regions.size() != 1U ? "driver_regions"
             : "program_shape");
         record_lowering_census(systemverilog_concurrent_template_rejections_);
@@ -2381,7 +2387,7 @@ bool HierarchyBuilder::remember_systemverilog_process_template(
             != ProcessSchedulingDomain::systemverilog
         || process.string_register_count != 0U
         || process.container_register_count != 0U
-        || (!process.debug_locals.empty()
+        || ((!process.debug_locals.empty() || !process.call_results.empty())
             && callable_invocation_after == callable_invocation_before)
         || !process.debug_string_locals.empty()
         || !process.debug_container_locals.empty()

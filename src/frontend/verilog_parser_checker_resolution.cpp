@@ -227,11 +227,15 @@ void VerilogParser::instantiate_checkers(DesignUnit& unit)
                 declaration.clock->event_tokens = substitute_tokens(
                     declaration.clock->event_tokens, actuals,
                     declaration_names, shadowed);
+                declaration.clock->events = assertion_clock_events(
+                    declaration.clock->event_tokens);
             }
             if (declaration.disable) {
                 declaration.disable->condition_tokens = substitute_tokens(
                     declaration.disable->condition_tokens, actuals,
                     declaration_names, shadowed);
+                declaration.disable->condition = assertion_expression(
+                    declaration.disable->condition_tokens);
             }
             declaration.expression_tokens = substitute_tokens(
                 declaration.expression_tokens, actuals, declaration_names,

@@ -36,7 +36,7 @@ namespace kw = kernel_word;
 
 namespace {
 
-constexpr std::string_view bodies_magic { "fsim-static-kernel-bodies-v7" };
+constexpr std::string_view bodies_magic { "fsim-static-kernel-bodies-v10" };
 
 } // namespace
 
@@ -50,6 +50,9 @@ void Interpreter::Impl::StaticKernel::compile_members()
 {
     std::map<std::string, std::size_t> failures;
     not_compiled_reason_.assign(members_.size(), nullptr);
+    // The block table of the concurrent assertion directives (KOp::sva_tick,
+    // sva_outcome): laid out before any member compiles.
+    plan_sva_table();
     // Decided before any member compiles (and before the commit reads it).
     (void)design_may_hold_weak();
     const char* dump = std::getenv("FSIM_KERNEL_DUMP");
@@ -127,12 +130,10 @@ void Interpreter::Impl::StaticKernel::compile_members()
             not_compiled_reason_[index] = "vhdl_behavioral";
             continue;
         }
-        // So do SystemVerilog members with nine-valued registers: their
-        // compiled bodies hold Logic4 words.
-        if (!members_[index].vhdl && !members_[index].register_kinds.empty()) {
-            not_compiled_reason_[index] = "register_kinds";
-            continue;
-        }
+        // SystemVerilog members with nine-valued registers (a member reading
+        // a VHDL-driven net) compile like VHDL ones: the words hold the
+        // four-state value of each element and 'U' and weak masks follow
+        // (track_unknowns below).
         // Per-thread callable contexts need the automatic frames the
         // compiled bodies elide: such a member runs on the operation tier.
         if (members_[index].thread_contexts) {
@@ -150,12 +151,12 @@ void Interpreter::Impl::StaticKernel::compile_members()
             not_compiled_reason_[index] = "dynamic_containers";
             continue;
         }
-        // Assertion operations and other regions run the reference's
-        // assertion services on the operation tier.
-        if (members_[index].assertion) {
-            not_compiled_reason_[index] = "assertion";
-            continue;
-        }
+        // Assertion evaluators and region members compile like any other
+        // behavioral member (IEEE 1800-2023 4.4.2, 16.14): a sampled value
+        // read and a monitor step are effect calls into the assertion
+        // services (KOp::generic of their kind; the monitor's state machine
+        // and the sampled history are the host's), a move to a later region
+        // is a suspension, and the surrounding body is native code.
         // A program's end (complete_program_member) runs on the operation
         // tier.
         if (members_[index].program_owner) {
@@ -228,6 +229,7 @@ void Interpreter::Impl::StaticKernel::compile_members()
                 && restored_bodies[index].operations
                     == members_[index].operations().size()) {
                 members_[index].compiled = std::move(restored_bodies[index].body);
+                note_sva_code(index);
                 static const bool verify_bodies
                     = std::getenv("FSIM_KERNEL_VERIFY_BODIES") != nullptr;
                 if (verify_bodies) {
@@ -430,7 +432,9 @@ void Interpreter::Impl::StaticKernel::report_interpreted_sites() const
     const auto note_generic = [&](const CompiledBody& code,
                                   const std::uint32_t member) {
         for (const auto& inst : code.code) {
-            if (inst.op != KOp::generic
+            // aux 2: an attempt-start report, which calls its helper only
+            // once a library has bound cbAssertionStart.
+            if (inst.op != KOp::generic || inst.aux == 2U
                 || inst.x >= members_[member].operations().size()) {
                 continue;
             }
@@ -501,6 +505,89 @@ void Interpreter::Impl::StaticKernel::report_interpreted_sites() const
 std::optional<Interpreter::Impl::StaticKernel::CompiledBody>
 Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
 {
+    family_generic_ = false;
+    auto first = compile_family(member_index);
+    if (!family_generic_ || !first) {
+        return first;
+    }
+    // A proxy access ran generically: compile its leaves' accesses instead,
+    // and keep the first body if that does not compile.
+    auto& member = members_[member_index];
+    auto operations = member.operations();
+    auto origin = member.origin;
+    auto stripped_origin = member.stripped_origin;
+    auto kinds = member.register_kinds;
+    const auto registers = member.registers.size();
+    const auto identity = member.body_identity;
+    const auto expansion_begin = member.family_expansion_begin;
+    auto continuations = member.piece_continuations;
+    if (!expand_family_accesses(member_index)) {
+        return first;
+    }
+    try {
+        family_generic_ = false;
+        auto second = compile_family(member_index);
+        if (second) {
+            return second;
+        }
+    } catch (const CompileFailure& failure) {
+        if (profile_) {
+            std::cerr << "fsim-kernel: expanded accesses not compiled reason="
+                      << failure.reason << " member=" << member_index << '\n';
+        }
+    }
+    member.operations() = std::move(operations);
+    member.origin = std::move(origin);
+    member.stripped_origin = std::move(stripped_origin);
+    member.register_kinds = std::move(kinds);
+    member.registers.resize(registers);
+    member.body_identity = identity;
+    member.family_expansion_begin = expansion_begin;
+    member.piece_continuations = std::move(continuations);
+    return first;
+}
+
+std::optional<Interpreter::Impl::StaticKernel::CompiledBody>
+Interpreter::Impl::StaticKernel::compile_family(const std::uint32_t member_index)
+{
+    try {
+        return compile_once(member_index);
+    } catch (const CompileFailure& failure) {
+        // A register several call sites give values of different widths has
+        // no static width: each site gets its own copy of the callee and the
+        // copies' registers are split (split_polymorphic_calls), then the
+        // member compiles again; a member the split cannot help keeps its
+        // reason.
+        auto& member = members_[member_index];
+        if (!member.vhdl || std::string_view { failure.reason } != "register_width") {
+            throw;
+        }
+        auto operations = member.operations();
+        auto origin = member.origin;
+        auto stripped_origin = member.stripped_origin;
+        auto kinds = member.register_kinds;
+        const auto registers = member.registers.size();
+        const auto identity = member.body_identity;
+        if (!split_polymorphic_calls(member_index)) {
+            throw;
+        }
+        try {
+            return compile_once(member_index);
+        } catch (...) {
+            member.operations() = std::move(operations);
+            member.origin = std::move(origin);
+            member.stripped_origin = std::move(stripped_origin);
+            member.register_kinds = std::move(kinds);
+            member.registers.resize(registers);
+            member.body_identity = identity;
+            throw;
+        }
+    }
+}
+
+std::optional<Interpreter::Impl::StaticKernel::CompiledBody>
+Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
+{
     const auto& member = members_[member_index];
     // A VHDL member compiles its whole operation stream (subprogram bodies
     // may follow the loop): it enters after its wait and leaves when it
@@ -511,9 +598,16 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
     // A VHDL member (delta semantics); a mixed kernel holds both languages.
     const bool vhdl = member.vhdl;
     const bool whole = vhdl || behavioral;
+    // A member that is not compiled whole runs [body_begin, body_end) and
+    // the operations a family expansion appended (expand_family_accesses),
+    // which the body reaches by jumps; the operations between are left out,
+    // the exit operation at body_end ends the body.
+    const bool expanded = !whole && member.family_expansion_begin != 0U
+        && member.family_expansion_begin <= member.operations().size();
     const auto begin = whole ? 0U : member.body_begin;
-    const auto end = whole ? static_cast<std::uint32_t>(member.operations().size())
-                           : member.body_end;
+    const auto end = whole || expanded
+        ? static_cast<std::uint32_t>(member.operations().size())
+        : member.body_end;
     const auto stop = member.body_end;
     const auto register_count = member.registers.size();
     const auto reject = [](const char* reason) -> CompileFailure {
@@ -622,6 +716,11 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
     // loads no later read can see are left out; they would otherwise give
     // registers conflicting widths.
     std::vector<std::uint8_t> skip(end, 0U);
+    if (expanded) {
+        for (auto pc = member.body_end; pc < member.family_expansion_begin; ++pc) {
+            skip[pc] = 1U;
+        }
+    }
     std::vector<std::uint64_t> live_at_entry;
     if (vhdl) {
         if (member.body_identity != nullptr) {
@@ -652,6 +751,85 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
         }
         return static_cast<std::uint32_t>(
             impl_.get_signal(signal).initial_value.width());
+    };
+    // The kernel ticks in one time unit of a $time or $stime query that is
+    // computed inline (KOp::sva_sampled_load, aux 4; IEEE 1800-2023 20.3):
+    // the unit and precision of the design unit, each the project resolution
+    // when the unit has no timescale, as systemverilog_time_function takes
+    // them. Empty for $realtime (a rounding-mode dependent real) and for a
+    // context the library rejects, which keep the library call.
+    const auto time_query_ticks = [&](const SystemVerilogMath& op)
+        -> std::optional<std::uint64_t> {
+        if (vhdl
+            || (op.function != SystemVerilogMathFunction::Time
+                && op.function != SystemVerilogMathFunction::Stime)) {
+            return std::nullopt;
+        }
+        const auto resolution = time_resolution_ != 0U
+            ? time_resolution_ : impl_.time_format.resolution_femtoseconds;
+        const auto unit = op.time_unit_femtoseconds != 0U
+            ? op.time_unit_femtoseconds : resolution;
+        const auto precision = op.time_precision_femtoseconds != 0U
+            ? op.time_precision_femtoseconds : resolution;
+        if (resolution == 0U || precision == 0U || unit % precision != 0U
+            || precision % resolution != 0U) {
+            return std::nullopt;
+        }
+        return unit / resolution;
+    };
+    // A sampled-value read the kernel loads inline (KOp::sva_sampled_load):
+    // $sampled of the Preponed value (a signal with sampled words), or a
+    // clocked history read ($rose, $fell, $stable, $changed, $past with a
+    // clock) of a signal of at most 64 bits whose ring the plan lays out.
+    // The global-clocking future forms read the current value (host).
+    const auto inline_sampled_read = [&](const ReadSignal& op) {
+        if (!sampled_read(op) || op.signal >= impl_.signals.size()
+            || signal_width(op.signal) > 64U || signal_width(op.signal) == 0U
+            || impl_.get_signal(op.signal).initial_value.is_logic9()) {
+            // A VHDL signal's sampled value needs the Logic9 to Logic4
+            // mapping of the host read.
+            return false;
+        }
+        switch (op.kind) {
+        case SignalReadKind::sampled:
+            if (!op.clock) {
+                impl_.ensure_sampled_value_word_layout();
+                return op.signal < impl_.sampled_value_word_offsets.size()
+                    && impl_.sampled_value_word_offsets[op.signal]
+                        != Impl::no_sampled_value_words;
+            }
+            [[fallthrough]];
+        case SignalReadKind::rose:
+        case SignalReadKind::fell:
+        case SignalReadKind::stable:
+        case SignalReadKind::changed:
+        case SignalReadKind::past:
+            if (!op.clock || op.ticks == 0U) {
+                return false;
+            }
+            return impl_.planned_sampled_ring_offset(Impl::SampledHistoryKey {
+                           op.signal, op.clock, op.clock_edge, op.gate,
+                           ProcessSchedulingDomain::systemverilog })
+                .has_value();
+        default:
+            return false;
+        }
+    };
+    // The ordinal of a directive among the member's SvaOperation sites: its
+    // entry in the kernel's block table (sva_member_base_[member] + ordinal).
+    const auto sva_site_ordinal = [&](const std::uint32_t site) {
+        std::vector<std::uint32_t> sites;
+        for (const auto& operation : member.operations()) {
+            if (const auto* sva = operation_get_if<SvaOperation>(&operation);
+                sva != nullptr && std::ranges::find(sites, sva->site) == sites.end()) {
+                sites.push_back(sva->site);
+            }
+        }
+        const auto found = std::ranges::find(sites, site);
+        if (found == sites.end()) {
+            throw reject("sva_site");
+        }
+        return static_cast<std::uint32_t>(found - sites.begin());
     };
     // Private arrays are bound from the start; design memories bind at
     // ReadContainerObject.
@@ -716,7 +894,10 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     || std::is_same_v<T, ConvertToTwoState>) {
                     define(op.destination, of(op.source));
                 } else if constexpr (std::is_same_v<T, ReadSignal>) {
-                    define(op.destination, signal_width(op.signal));
+                    define(op.destination, sampled_read_width(op, signal_width(op.signal)));
+                } else if constexpr (std::is_same_v<T, SvaOperation>) {
+                    // The outcome count or outcome code (run_sva).
+                    define(op.result, 32U);
                 } else if constexpr (std::is_same_v<T, Binary>) {
                     define(op.destination,
                         comparison(op.operation) ? 1U : of(op.lhs));
@@ -836,6 +1017,61 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
             std::cerr << '\n';
         }
     }
+    // Null-range registers (IEEE 1076-2019 5.3.2.2: an array with a null range
+    // has no elements): registers without a width whose every definition
+    // produces no bits (a constant, a signal read, a field or a
+    // concatenation of width 0, or a copy of such a register). A register
+    // without a width that anything else defines is an undefined one (the
+    // member then runs uncompiled).
+    std::vector<std::uint8_t> null_register(register_count, 0U);
+    {
+        std::vector<std::uint8_t> zero_defined(register_count, 0U);
+        std::vector<RegisterId> reads;
+        std::optional<RegisterId> written;
+        for (RegisterId reg = 0U; reg < register_count; ++reg) {
+            null_register[reg] = width[reg] == 0U ? 1U : 0U;
+        }
+        for (bool grew = true; grew;) {
+            grew = false;
+            std::ranges::fill(zero_defined, 0U);
+            for (std::uint32_t pc = begin; pc < end; ++pc) {
+                if (skip[pc] != 0U) {
+                    continue;
+                }
+                operation_registers(member.operations()[pc], reads, written);
+                if (!written || *written >= register_count) {
+                    continue;
+                }
+                const auto target = *written;
+                bool zero = false;
+                visit_operation([&](const auto& op) {
+                    using T = std::decay_t<decltype(op)>;
+                    if constexpr (std::is_same_v<T, LoadConstant>) {
+                        zero = op.value.width() == 0U;
+                    } else if constexpr (std::is_same_v<T, ReadSignal>) {
+                        zero = op.kind == SignalReadKind::current && !op.clock
+                            && !op.gate && signal_width(op.signal) == 0U;
+                    } else if constexpr (std::is_same_v<T, Extract>
+                        || std::is_same_v<T, Concatenate>) {
+                        zero = op.width == 0U;
+                    } else if constexpr (std::is_same_v<T, CopyRegister>) {
+                        zero = op.source < register_count
+                            && null_register[op.source] != 0U;
+                    }
+                }, member.operations()[pc]);
+                if (zero) {
+                    zero_defined[target] = 1U;
+                } else if (null_register[target] != 0U) {
+                    null_register[target] = 0U;
+                    grew = true;
+                }
+            }
+        }
+        for (RegisterId reg = 0U; reg < register_count; ++reg) {
+            null_register[reg] = null_register[reg] != 0U && zero_defined[reg] != 0U
+                ? 1U : 0U;
+        }
+    }
     if (profile_) {
         std::size_t wide_ops = 0U;
         std::size_t total_ops = 0U;
@@ -890,7 +1126,7 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
     };
     const auto w = [&](const RegisterId reg) { return width[narrow(reg)]; };
     const auto map_target = [&](const InstructionIndex target) -> std::uint32_t {
-        if (vhdl && target == stop) {
+        if ((vhdl || expanded) && target == stop) {
             return end - begin;
         }
         return target >= begin && target < end ? target - begin : end - begin;
@@ -942,19 +1178,22 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
     // leaf, in a member that never writes the family: each selection loads
     // its leaf (family_leaf).
     std::vector<std::uint32_t> field_family(register_count, no_slot);
-    // Wide registers of fixed width outside threads live in chunks of the
-    // register file (CompiledBody::wide_base); instructions name them by
-    // register until storage is assigned after translation.
+    // Wide registers of fixed width (threads included: their wide values are
+    // read and written through thread_register/set_thread_register, which
+    // know the chunks) live in chunks of the register file (CompiledBody::
+    // wide_base); instructions name them by register until storage is
+    // assigned after translation.
     // FSIM_KERNEL_WIDE_MASK (diagnostic): the wide lowerings to use (bit 0
     // ReadSignal, 1 CopyRegister, 2 LoadConstant, 3 Concatenate, 4
-    // DynamicPartInsert, 5 writes); 0 keeps every register in wide_registers.
+    // DynamicPartInsert, 5 writes, 6 arithmetic and logic); 0 keeps every
+    // register in wide_registers.
     static const std::uint32_t wide_mask = [] {
         const char* text = std::getenv("FSIM_KERNEL_WIDE_MASK");
         return text == nullptr ? ~0U
                                : static_cast<std::uint32_t>(std::strtoul(text, nullptr, 0));
     }();
     const auto chunked = [&](const RegisterId reg) {
-        return wide_mask != 0U && !behavioral && reg < register_count && width[reg] > 64U
+        return wide_mask != 0U && reg < register_count && width[reg] > 64U
             && width[reg] != polymorphic && field_slot[reg] == no_slot
             && field_family[reg] == no_slot;
     };
@@ -963,6 +1202,47 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
     // every chunked VHDL register has 'U' masks.
     const auto has_unknowns = [&](const RegisterId reg) {
         return vhdl || kind_of(reg) == ValueKind::logic9;
+    };
+    // A write through a dynamic index (IEEE 1800-2023 11.5.1: an unknown or
+    // out-of-range one writes nothing; 1076-2019 8.4: a checked one) or a
+    // dynamic part select (11.5.1) to a host signal, the host applying it as
+    // it applies a static one: store_host (narrow source: x, index or part
+    // base register y, aux the selection's position + 1 in indices, or in
+    // parts when offset is 1) and wide_store sub 3 (chunked source: imm_a the
+    // position + 1, from bit 32 for a part). The domain is the member's, the
+    // flags flag_blocking and flag_strict.
+    const auto host_dynamic_write = [&](KInst& inst, const SignalId signal,
+                                        const RegisterId source, const RegisterId index,
+                                        const SignalUpdateDomain domain, const bool blocking,
+                                        const bool strict, const bool part,
+                                        const DynamicIndex* selection,
+                                        const DynamicPartIndex* part_selection) {
+        inst.d = signal;
+        inst.y = index;
+        inst.width = width[source];
+        inst.flags = static_cast<std::uint8_t>(
+            (blocking ? flag_blocking : 0U) | (strict ? flag_strict : 0U));
+        const auto position = static_cast<std::uint64_t>(
+            (part ? body.parts.size() : body.indices.size()) + 1U);
+        if (chunked(source)) {
+            inst.op = KOp::wide_store;
+            inst.sub = 3U;
+            inst.x = source;
+            inst.aux = has_unknowns(source) ? 1U : 0U;
+            inst.imm_b = static_cast<std::uint64_t>(domain);
+            inst.imm_a = part ? (std::uint64_t { 1 } << 32U) | position : position;
+        } else {
+            inst.op = KOp::store_host;
+            inst.x = narrow(source);
+            inst.sub = static_cast<std::uint8_t>(domain);
+            inst.aux = static_cast<std::uint32_t>(position);
+            inst.offset = part ? 1U : 0U;
+        }
+        if (part) {
+            body.parts.push_back(*part_selection);
+        } else {
+            body.indices.push_back(*selection);
+        }
     };
     // A VHDL register read only as the value of assignments to four-state
     // slots (a SystemVerilog net, as on a VHDL inout it alone drives): the
@@ -1169,6 +1449,14 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
             visit_operation([&](const auto& op) {
                 using T = std::decay_t<decltype(op)>;
                 if constexpr (std::is_same_v<T, ReadSignal>) {
+                    // A sampled value is the host's history, not the slot
+                    // an in-place field read would see.
+                    if (sampled_read(op)) {
+                        for (const auto reg : operand_reads) {
+                            other_use[reg] = 1U;
+                        }
+                        return;
+                    }
                     if (op.signal < family_of_signal_.size()
                         && family_of_signal_[op.signal] != no_slot
                         && op.destination < register_count) {
@@ -1426,7 +1714,11 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                         return;
                     }
                     const auto target = wide_slot(op.signal);
-                    if (target == no_slot) {
+                    // A resolved target is written through wide_store, which
+                    // resolves each chunk (emit_wide_net_store); the read,
+                    // the selection and the write then stay separate
+                    // instructions.
+                    if (target == no_slot || slots_[target].resolved) {
                         return;
                     }
                     std::uint32_t offset = 0U;
@@ -1454,9 +1746,8 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     // plane, imm_b the target's and, from bit 32, the
                     // source's width.
                     move.imm_a = slots_[move.x].words;
-                    move.imm_b = slots_[target].resolved ? 0U
-                        : slots_[target].words
-                            | std::uint64_t { slots_[move.x].width } << 32U;
+                    move.imm_b = slots_[target].words
+                        | std::uint64_t { slots_[move.x].width } << 32U;
                     move.flags = static_cast<std::uint8_t>(
                         move.flags | (deferred ? flag_nba : 0U));
                     matched = true;
@@ -1464,6 +1755,19 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
             }, member.operations()[write_pc]);
             if (!matched || !straight(read_pc, write_pc, read->signal)) {
                 continue;
+            }
+            if (selection) {
+                // The fused move copies one field of the source: result bit
+                // i is source bit first + i, which holds when the declared
+                // right bound is the low bound of a descending range or the
+                // high bound of an ascending one. Any other selection
+                // (a reversed one) stays a wide_alu dynamic_part_select.
+                const bool descending = (move.flags & flag_descending) != 0U;
+                const auto low = std::min(selection->left, selection->right);
+                const auto high = std::max(selection->left, selection->right);
+                if (descending ? selection->right != low : selection->right != high) {
+                    continue;
+                }
             }
             if (select_pc != no_slot) {
                 // The base must still hold its value at the write.
@@ -1488,6 +1792,13 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
     for (std::uint32_t pc = begin; pc < end; ++pc) {
         translating = pc;
         KInst inst;
+        if (expanded && pc == stop) {
+            // The body's end: the code before it falls through to here.
+            inst.op = KOp::jump;
+            inst.d = end - begin;
+            body.code.push_back(inst);
+            continue;
+        }
         if (skip[pc] != 0U || fused_away[pc - begin] != 0U) {
             body.code.push_back(inst);
             continue;
@@ -1495,6 +1806,47 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
         if (fused_move[pc - begin]) {
             body.code.push_back(*fused_move[pc - begin]);
             continue;
+        }
+        {
+            // Null-range values (IEEE 1076-2019 5.3.2.2: an array with a
+            // null range has no elements): a register no operation gives a
+            // width holds no bits, so an operation that only moves such
+            // values around, or writes them to a signal without elements,
+            // has no effect and compiles to nothing.
+            const auto null = [&](const RegisterId reg) {
+                return reg < register_count && null_register[reg] != 0U;
+            };
+            bool nothing = false;
+            visit_operation([&](const auto& op) {
+                using T = std::decay_t<decltype(op)>;
+                if constexpr (std::is_same_v<T, LoadConstant>) {
+                    nothing = null(op.destination) && op.value.width() == 0U;
+                } else if constexpr (std::is_same_v<T, ReadSignal>) {
+                    nothing = null(op.destination)
+                        && op.kind == SignalReadKind::current && !op.clock
+                        && !op.gate && signal_width(op.signal) == 0U;
+                } else if constexpr (std::is_same_v<T, CopyRegister>) {
+                    nothing = null(op.destination) && null(op.source);
+                } else if constexpr (std::is_same_v<T, Extract>) {
+                    nothing = op.width == 0U && null(op.destination);
+                } else if constexpr (std::is_same_v<T, Concatenate>) {
+                    nothing = op.width == 0U && null(op.destination)
+                        && std::ranges::all_of(op.operands, null);
+                } else if constexpr (std::is_same_v<T, WriteBlocking>
+                    || std::is_same_v<T, WriteUpdate>
+                    || std::is_same_v<T, WriteProjected>) {
+                    nothing = null(op.source) && op.signal < slot_of_signal_.size()
+                        && signal_width(op.signal) == 0U;
+                } else if constexpr (std::is_same_v<T, WriteBlockingSlice>
+                    || std::is_same_v<T, WriteUpdateSlice>
+                    || std::is_same_v<T, WriteProjectedSlice>) {
+                    nothing = null(op.source) && op.signal < slot_of_signal_.size();
+                }
+            }, member.operations()[pc]);
+            if (nothing) {
+                body.code.push_back(inst);
+                continue;
+            }
         }
         if (const auto* delayed = operation_get_if<WriteNetDelay>(
                 &member.operations()[pc])) {
@@ -1529,8 +1881,22 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     inst.x = pc;
                     inst.sub = static_cast<std::uint8_t>(operation_kind_of<T>);
                     inst.aux = 1U;
-                } else if constexpr (std::is_same_v<T, Display>
-                    || std::is_same_v<T, FormatDisplay>
+                } else if constexpr (std::is_same_v<T, Display>) {
+                    // An attempt-start report (Display::inert) runs only
+                    // once a library has bound cbAssertionStart: the
+                    // instruction tests the kernel's flag (aux 2) and skips
+                    // the call while it is clear, at any time in the run.
+                    if (op.inert) {
+                        inst.op = KOp::generic;
+                        inst.x = pc;
+                        inst.y = 0U;
+                        inst.aux = 2U;
+                    } else {
+                        inst.op = KOp::generic;
+                        inst.x = pc;
+                        inst.y = 0U;
+                    }
+                } else if constexpr (std::is_same_v<T, FormatDisplay>
                     || std::is_same_v<T, StringDisplay>
                     || std::is_same_v<T, TimeDisplay>
                     || std::is_same_v<T, Report>
@@ -1625,8 +1991,11 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
             }
         }
         // Whole-value operations on chunked wide registers (KOp::wide_load
-        // .. wide_part_insert); anything else on them runs generically.
-        if (!behavioral) {
+        // .. wide_part_insert, wide_alu); anything else on them runs
+        // generically. A thread lowers them as a member does: its registers
+        // are the compiled body's (thread_register reads the chunks) and its
+        // signal accesses bind slots like a member's.
+        {
             bool lowered = false;
             const auto enabled = [&](const std::uint32_t bit) {
                 return ((wide_mask >> bit) & 1U) != 0U;
@@ -1635,17 +2004,43 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                 return reg < register_count && width[reg] != 0U
                     && width[reg] <= 64U;
             };
+            // Operand slot `slot` (0 d, 1 x, 2 y, 3 z) of the wide_alu
+            // instruction `alu` names `reg`.
+            const auto place_alu = [&](KInst& alu, const std::uint32_t slot,
+                                       const RegisterId reg) {
+                const bool wide = chunked(reg);
+                alu.aux |= (wide ? wide_alu_wide : 0U) << slot;
+                if (wide && has_unknowns(reg)) {
+                    alu.aux |= wide_alu_masks << slot;
+                }
+                if (kind_of(reg) == ValueKind::logic9) {
+                    alu.aux |= wide_alu_logic9 << slot;
+                }
+                (slot == 0U ? alu.d : slot == 1U ? alu.x
+                        : slot == 2U ? alu.y : alu.z)
+                    = reg;
+            };
             // An owned plain slot of `count` bits at `offset`.
+            // A read may also take the mirror of a host signal (mirror_of_
+            // signal_: a slot the kernel refreshes between activations, as
+            // the narrow reads of a mirrored signal take); a write never.
             const auto plain_slot = [&](const SignalId signal,
                                         const std::uint32_t offset,
                                         const std::uint32_t count,
-                                        const bool whole) -> std::uint32_t {
+                                        const bool whole,
+                                        const bool mirrored = false) -> std::uint32_t {
                 if (signal >= slot_of_signal_.size()
-                    || family_of_signal_[signal] != no_slot
-                    || slot_of_signal_[signal] == no_slot) {
+                    || family_of_signal_[signal] != no_slot) {
                     return no_slot;
                 }
-                const auto slot = slot_of_signal_[signal];
+                auto slot = slot_of_signal_[signal];
+                if (slot == no_slot && mirrored
+                    && mirror_of_signal_[signal] != no_slot) {
+                    slot = mirror_of_signal_[signal];
+                }
+                if (slot == no_slot) {
+                    return no_slot;
+                }
                 const auto& state = slots_[slot];
                 if (offset > state.width || count > state.width - offset
                     || (whole && count != state.width)) {
@@ -1662,26 +2057,58 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                         return;
                     }
                     const auto slot = plain_slot(op.signal, 0U,
-                        width[op.destination], true);
-                    if (slot == no_slot) {
+                        width[op.destination], true, true);
+                    // A host signal without a mirror (one a member writes
+                    // blockingly, so the host's value is current at every
+                    // read): sub 3 copies its chunks into the register file
+                    // (execute_wide), exact codes into a register with masks
+                    // (as load_host sub 1).
+                    if (slot == no_slot
+                        && (op.signal >= slot_of_signal_.size()
+                            || family_of_signal_[op.signal] != no_slot
+                            || slot_of_signal_[op.signal] != no_slot
+                            || signal_width(op.signal) != width[op.destination])) {
                         return;
                     }
                     inst.op = KOp::wide_load;
                     inst.d = op.destination;
-                    inst.x = slot;
                     inst.width = width[op.destination];
-                    inst.imm_a = slots_[slot].words;
                     // The value read is coerced to the register's kind.
                     inst.aux = has_unknowns(op.destination) ? 1U : 0U;
+                    if (slot == no_slot) {
+                        inst.x = op.signal;
+                        inst.sub = 3U;
+                        lowered = true;
+                        return;
+                    }
+                    inst.x = slot;
+                    inst.imm_a = slots_[slot].words;
                     if (slots_[slot].planes != 2U) {
                         inst.sub = kind_of(op.destination) == ValueKind::logic9
                             ? 1U : 2U;
                     }
                     lowered = true;
                 } else if constexpr (std::is_same_v<T, CopyRegister>) {
-                    if (!enabled(1U) || !chunked(op.destination) || !chunked(op.source)
-                        || width[op.destination] != width[op.source]) {
+                    if (!enabled(1U)) {
                         return;
+                    }
+                    // The width fixpoint gives a copy's destination its
+                    // source's width (a register of several widths is
+                    // polymorphic and split by split_polymorphic_calls), so a
+                    // chunked destination has a chunked source of its width;
+                    // anything else would be a compiler error, reported
+                    // rather than run on the reference.
+                    if (op.destination >= register_count || op.source >= register_count
+                        || (width[op.destination] <= 64U && width[op.source] <= 64U)) {
+                        return;
+                    }
+                    if (!chunked(op.destination) || !chunked(op.source)
+                        || width[op.destination] != width[op.source]) {
+                        if (width[op.destination] == polymorphic
+                            || width[op.source] == polymorphic) {
+                            return;
+                        }
+                        throw reject("copy_shape");
                     }
                     // The copy is coerced to the destination's kind: the
                     // masks survive only into a Logic9 register ('U' reads
@@ -1736,23 +2163,41 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     }
                     const bool masks = has_unknowns(op.destination);
                     std::uint32_t total = 0U;
+                    std::uint32_t kept = 0U;
                     for (const auto reg : op.operands) {
-                        if (!(narrow_operand(reg) || chunked(reg))
-                            || (!masks && has_unknowns(reg))) {
-                            return;
+                        // A null-range operand contributes no bits.
+                        if (reg < register_count && null_register[reg] != 0U) {
+                            continue;
+                        }
+                        // A Logic9 operand of a Logic4 result is read
+                        // through coerce_weak (emit_wide_concat).
+                        if (!(narrow_operand(reg) || chunked(reg))) {
+                            // An operand read in place is a field of its
+                            // slot (field_slot, only Extract and the
+                            // dynamic selections use one); a register of
+                            // several widths is split before this point.
+                            if (reg >= register_count || width[reg] == polymorphic
+                                || width[reg] <= 64U) {
+                                return;
+                            }
+                            throw reject("concat_operand");
                         }
                         total += width[reg];
+                        ++kept;
                     }
-                    if (total != op.width) {
+                    if (total != op.width || kept == 0U) {
                         return;
                     }
                     inst.op = KOp::wide_concat;
                     inst.d = op.destination;
-                    inst.x = static_cast<std::uint32_t>(op.operands.size());
+                    inst.x = kept;
                     inst.aux = static_cast<std::uint32_t>(body.concat.size());
                     inst.width = op.width;
                     inst.sub = masks ? 1U : 0U;
                     for (const auto reg : op.operands) {
+                        if (reg < register_count && null_register[reg] != 0U) {
+                            continue;
+                        }
                         body.concat.push_back({ reg, width[reg],
                             width[reg] > 64U && has_unknowns(reg) ? 1U : 0U });
                     }
@@ -1801,6 +2246,35 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     const auto slot = plain_slot(op.signal, offset, width[op.source],
                         !slice);
                     if (slot == no_slot) {
+                        // A host signal's write: the register file's chunks
+                        // become the host's value (wide_store sub 3,
+                        // execute_wide), a blocking one at once, the others
+                        // staged in the member's domain, as store_host does
+                        // for a narrow value.
+                        if (op.signal >= slot_of_signal_.size()
+                            || slot_of_signal_[op.signal] != no_slot
+                            || family_of_signal_[op.signal] != no_slot) {
+                            return;
+                        }
+                        SignalUpdateDomain domain = blocking
+                            ? SignalUpdateDomain::systemverilog_active
+                            : SignalUpdateDomain::generic;
+                        if constexpr (std::is_same_v<T, WriteUpdate>
+                            || std::is_same_v<T, WriteUpdateSlice>) {
+                            domain = op.domain;
+                        }
+                        inst.op = KOp::wide_store;
+                        inst.sub = 3U;
+                        inst.x = op.source;
+                        inst.d = op.signal;
+                        inst.offset = offset;
+                        inst.width = width[op.source];
+                        inst.aux = has_unknowns(op.source) ? 1U : 0U;
+                        inst.flags = static_cast<std::uint8_t>(
+                            (blocking ? flag_blocking : 0U)
+                            | (slice ? flag_linear : 0U));
+                        inst.imm_b = static_cast<std::uint64_t>(domain);
+                        lowered = true;
                         return;
                     }
                     if (vhdl) {
@@ -1821,20 +2295,36 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     } else {
                         // As KOp::wide_move: Logic4 slots; an update in the
                         // generic domain stays generic.
-                        if (projected || slots_[slot].planes != 2U
-                            || has_unknowns(op.source)) {
+                        // A register with masks (a nine-value operand read
+                        // from a VHDL-driven net) stores its four-state value
+                        // with 'W' and '-' read as X ('U' already is, in the
+                        // word): the chunk store applies the weak mask
+                        // (kernel_word::coerce_weak).
+                        // An update in the generic domain stores at once, as
+                        // the narrow store_slot of every domain but the NBA
+                        // one does. A nine-value slot takes the codes of the
+                        // value (sub 2 with the value's masks, as a shared
+                        // variable or a queued VHDL assignment stores them:
+                        // at once, flag_blocking, or deferred for the NBA
+                        // domain); a resolved one is not done here.
+                        if (projected) {
                             return;
                         }
                         bool deferred = false;
                         if constexpr (std::is_same_v<T, WriteUpdate>
                             || std::is_same_v<T, WriteUpdateSlice>) {
-                            if (op.domain == SignalUpdateDomain::generic) {
-                                return;
-                            }
                             deferred = op.domain
                                 == SignalUpdateDomain::systemverilog_nba;
                         }
-                        inst.sub = deferred ? 1U : 0U;
+                        if (slots_[slot].planes != 2U) {
+                            if (slots_[slot].resolved) {
+                                return;
+                            }
+                            inst.sub = 2U;
+                            inst.flags = deferred ? 0U : flag_blocking;
+                        } else {
+                            inst.sub = deferred ? 1U : 0U;
+                        }
                     }
                     inst.op = KOp::wide_store;
                     inst.x = op.source;
@@ -1846,6 +2336,13 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     // chunk by chunk (emit_wide_slot_store): imm_b the
                     // slot's words per plane.
                     inst.imm_b = !vhdl && inst.sub == 0U ? slots_[slot].words : 0U;
+                    if ((vhdl || inst.sub == 2U) && (inst.flags & flag_blocking) != 0U) {
+                        // A shared variable (emit_wide_shared_store): the
+                        // slot's words per plane and, from bit 32, its
+                        // planes.
+                        inst.imm_b = slots_[slot].words
+                            | std::uint64_t { slots_[slot].planes } << 32U;
+                    }
                     if (slots_[slot].resolved && (inst.flags & flag_blocking) == 0U
                         && inst.sub != 1U) {
                         // Generated code stores each chunk of a resolved
@@ -1857,6 +2354,316 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                         net_store(inst, slot);
                         inst.aux = has_unknowns(op.source) ? 1U : 0U;
                     }
+                    lowered = true;
+                } else if constexpr (std::is_same_v<T, Extract>
+                    || std::is_same_v<T, Insert>
+                    || std::is_same_v<T, DynamicInsert>) {
+                    // Fields of wide registers (KOp::wide_alu extract, insert
+                    // and dynamic_insert): a wide destination; the
+                    // narrow-destination Extract is KOp::extract sub 3.
+                    if (!enabled(6U) || !chunked(op.destination)) {
+                        return;
+                    }
+                    KInst alu;
+                    alu.op = KOp::wide_alu;
+                    if constexpr (std::is_same_v<T, Extract>) {
+                        if (!chunked(op.source) || op.width != width[op.destination]
+                            || op.offset > width[op.source]
+                            || op.width > width[op.source] - op.offset) {
+                            return;
+                        }
+                        alu.offset = static_cast<std::uint32_t>(WideFamily::extract);
+                        alu.width = op.width;
+                        alu.imm_a = op.offset;
+                        alu.imm_b = width[op.source];
+                        place_alu(alu, 0U, op.destination);
+                        place_alu(alu, 1U, op.source);
+                    } else {
+                        const auto target_width = width[op.destination];
+                        if (!chunked(op.target) || width[op.target] != target_width
+                            || !(narrow_operand(op.source) || chunked(op.source))
+                            || width[op.source] > target_width) {
+                            return;
+                        }
+                        alu.width = target_width;
+                        alu.imm_a = width[op.source];
+                        place_alu(alu, 0U, op.destination);
+                        place_alu(alu, 1U, op.target);
+                        place_alu(alu, 2U, op.source);
+                        if constexpr (std::is_same_v<T, Insert>) {
+                            if (op.offset > target_width
+                                || width[op.source] > target_width - op.offset) {
+                                return;
+                            }
+                            alu.offset = static_cast<std::uint32_t>(WideFamily::insert);
+                            alu.imm_b = op.offset;
+                        } else {
+                            if (!narrow_operand(op.selection.index)
+                                || width[op.selection.index] != 32U) {
+                                return;
+                            }
+                            alu.offset = static_cast<std::uint32_t>(
+                                WideFamily::dynamic_insert);
+                            alu.flags = op.selection.strict ? flag_strict : 0U;
+                            place_alu(alu, 3U, op.selection.index);
+                            alu.imm_b = body.indices.size();
+                            body.indices.push_back(op.selection);
+                        }
+                    }
+                    inst = alu;
+                    lowered = true;
+                } else if constexpr (std::is_same_v<T, ContainerRead>
+                    || std::is_same_v<T, ContainerWrite>
+                    || std::is_same_v<T, WriteContainerObjectElement>) {
+                    // An element of more than 64 bits of a kernel-held array
+                    // (IEEE 1800-2023 7.4, 7.9): KOp::mem_read and mem_write
+                    // sub 1, whose chunks generated code loops over
+                    // (emit_wide_mem_read, emit_wide_mem_write).
+                    RegisterId value_register { };
+                    if constexpr (std::is_same_v<T, ContainerRead>) {
+                        value_register = op.destination;
+                    } else {
+                        value_register = op.source;
+                    }
+                    if (!enabled(6U) || !chunked(value_register)) {
+                        return;
+                    }
+                    std::uint32_t container = no_container;
+                    if constexpr (std::is_same_v<T, ContainerRead>) {
+                        if (op.source >= container_of_register.size()
+                            || op.string_index || !narrow_operand(op.index)) {
+                            return;
+                        }
+                        container = container_of_register[op.source];
+                    } else if constexpr (std::is_same_v<T, ContainerWrite>) {
+                        if (op.target >= container_of_register.size() || op.string_index
+                            || !narrow_operand(op.index)) {
+                            return;
+                        }
+                        container = container_of_register[op.target];
+                        if (container != no_container
+                            && containers_[container].object != no_container_object) {
+                            return;
+                        }
+                    } else {
+                        if (op.object >= container_of_object_.size()
+                            || op.transaction_signal || !op.levels.empty()
+                            || !narrow_operand(op.index)
+                            || (op.dynamic_part
+                                && !(narrow_operand(op.dynamic_part->base)
+                                    && width[op.dynamic_part->base] == 32U))) {
+                            return;
+                        }
+                        container = container_of_object_[op.object];
+                    }
+                    if (container == no_container) {
+                        return;
+                    }
+                    const auto& type = containers_[container].type;
+                    if (type.associative || !type.fixed) {
+                        return;
+                    }
+                    if constexpr (std::is_same_v<T, ContainerRead>) {
+                        if (type.element_width != width[op.destination]) {
+                            return;
+                        }
+                        inst.op = KOp::mem_read;
+                        inst.sub = 1U;
+                        inst.d = op.destination;
+                        inst.x = container;
+                        inst.y = op.index;
+                        inst.width = width[op.index];
+                        inst.offset = width[op.destination];
+                        inst.aux = has_unknowns(op.destination) ? 1U : 0U;
+                        inst.flags = op.linear_index ? flag_linear : 0U;
+                    } else {
+                        inst.op = KOp::mem_write;
+                        inst.sub = 1U;
+                        inst.d = container;
+                        inst.x = op.source;
+                        inst.y = op.index;
+                        inst.width = width[op.source];
+                        inst.offset = width[op.index];
+                        inst.imm_b = has_unknowns(op.source) ? 1U : 0U;
+                        inst.flags = static_cast<std::uint8_t>(
+                            (op.linear_index ? flag_linear : 0U)
+                            | (op.signed_index ? flag_signed : 0U));
+                        if constexpr (std::is_same_v<T, WriteContainerObjectElement>) {
+                            inst.flags = static_cast<std::uint8_t>(inst.flags
+                                | (op.nonblocking ? flag_nba : 0U));
+                            if (op.dynamic_part) {
+                                inst.z = op.dynamic_part->base;
+                                inst.aux = static_cast<std::uint32_t>(body.parts.size()) + 1U;
+                                body.parts.push_back(*op.dynamic_part);
+                            }
+                        }
+                    }
+                    lowered = true;
+                } else if constexpr (std::is_same_v<T, DynamicPartSelect>) {
+                    // A part select with a wide result of a wide register
+                    // (KOp::wide_alu dynamic_part_select; a result of at
+                    // most 64 bits is KOp::dynamic_part_select).
+                    if (!enabled(6U) || op.width <= 64U || !chunked(op.destination)
+                        || !chunked(op.source) || width[op.destination] != op.width
+                        || has_unknowns(op.destination) != has_unknowns(op.source)
+                        || !narrow_operand(op.base) || width[op.base] != 32U) {
+                        return;
+                    }
+                    KInst alu;
+                    alu.op = KOp::wide_alu;
+                    alu.offset = static_cast<std::uint32_t>(
+                        WideFamily::dynamic_part_select);
+                    alu.width = op.width;
+                    alu.imm_a = width[op.source];
+                    alu.imm_b = body.parts.size();
+                    alu.flags = static_cast<std::uint8_t>(
+                        (op.increasing ? flag_increasing : 0U)
+                        | (op.source_descending ? flag_descending : 0U)
+                        | (op.two_state ? flag_two_state : 0U));
+                    place_alu(alu, 0U, op.destination);
+                    place_alu(alu, 1U, op.source);
+                    place_alu(alu, 2U, op.base);
+                    DynamicPartIndex part;
+                    part.left = op.left;
+                    part.right = op.right;
+                    part.base_offset = op.base_offset;
+                    part.width = op.width;
+                    part.increasing = op.increasing;
+                    part.source_descending = op.source_descending;
+                    body.parts.push_back(part);
+                    inst = alu;
+                    lowered = true;
+                } else if constexpr (std::is_same_v<T, Binary>
+                    || std::is_same_v<T, Shift>
+                    || std::is_same_v<T, UnaryNot>
+                    || std::is_same_v<T, Reduction>
+                    || std::is_same_v<T, ConditionalSelect>
+                    || std::is_same_v<T, LogicalNot>
+                    || std::is_same_v<T, LogicalBinary>
+                    || std::is_same_v<T, ConvertToTwoState>) {
+                    // Arithmetic and logic on chunked wide registers
+                    // (KOp::wide_alu). Operands the lowering cannot take
+                    // (an unfixed width, a width mismatch the reference
+                    // reports) stay generic.
+                    if (!enabled(6U)) {
+                        return;
+                    }
+                    KInst alu;
+                    // Operand slot `slot` (0 d, 1 x, 2 y, 3 z) names `reg`.
+                    const auto place_operand = [&](const std::uint32_t slot,
+                                                   const RegisterId reg) {
+                        place_alu(alu, slot, reg);
+                    };
+                    const auto scalar = [&](const RegisterId reg) {
+                        return narrow_operand(reg) && width[reg] == 1U;
+                    };
+                    alu.op = KOp::wide_alu;
+                    if constexpr (std::is_same_v<T, Binary>) {
+                        constexpr auto first = BinaryOperator::equal;
+                        constexpr auto last = BinaryOperator::greater_equal_signed;
+                        // The matching equality (IEEE 1076-2019 9.2.3) is a
+                        // comparison too: a scalar, 'U' when an element pair
+                        // of 'U' decides it (emit_wide_binary).
+                        const bool comparison = (op.operation >= first
+                            && op.operation <= last)
+                            || op.operation == BinaryOperator::vhdl_match_equal;
+                        if (!chunked(op.lhs) || !chunked(op.rhs)
+                            || width[op.lhs] != width[op.rhs]
+                            || (comparison ? !scalar(op.destination)
+                                           : !chunked(op.destination)
+                                    || width[op.destination] != width[op.lhs])) {
+                            return;
+                        }
+                        alu.offset = static_cast<std::uint32_t>(WideFamily::binary);
+                        alu.sub = static_cast<std::uint8_t>(op.operation);
+                        alu.width = width[op.lhs];
+                        place_operand(0U, op.destination);
+                        place_operand(1U, op.lhs);
+                        place_operand(2U, op.rhs);
+                    } else if constexpr (std::is_same_v<T, Shift>) {
+                        if (!chunked(op.value) || !chunked(op.destination)
+                            || width[op.value] != width[op.destination]
+                            || !(narrow_operand(op.amount) || chunked(op.amount))) {
+                            return;
+                        }
+                        alu.offset = static_cast<std::uint32_t>(WideFamily::shift);
+                        alu.sub = static_cast<std::uint8_t>(op.operation);
+                        alu.width = width[op.value];
+                        alu.imm_a = width[op.amount];
+                        alu.flags = op.signed_amount ? flag_signed : 0U;
+                        place_operand(0U, op.destination);
+                        place_operand(1U, op.value);
+                        place_operand(2U, op.amount);
+                    } else if constexpr (std::is_same_v<T, UnaryNot>
+                        || std::is_same_v<T, ConvertToTwoState>) {
+                        if (!chunked(op.source) || !chunked(op.destination)
+                            || width[op.source] != width[op.destination]) {
+                            return;
+                        }
+                        alu.offset = static_cast<std::uint32_t>(
+                            std::is_same_v<T, UnaryNot> ? WideFamily::unary_not
+                                                        : WideFamily::two_state);
+                        alu.width = width[op.source];
+                        place_operand(0U, op.destination);
+                        place_operand(1U, op.source);
+                    } else if constexpr (std::is_same_v<T, Reduction>
+                        || std::is_same_v<T, LogicalNot>) {
+                        if (!chunked(op.source) || !scalar(op.destination)) {
+                            return;
+                        }
+                        alu.offset = static_cast<std::uint32_t>(
+                            std::is_same_v<T, Reduction> ? WideFamily::reduce
+                                                         : WideFamily::logical_not);
+                        if constexpr (std::is_same_v<T, Reduction>) {
+                            alu.sub = static_cast<std::uint8_t>(op.operation);
+                        }
+                        alu.width = width[op.source];
+                        place_operand(0U, op.destination);
+                        place_operand(1U, op.source);
+                    } else if constexpr (std::is_same_v<T, ConditionalSelect>) {
+                        if (!scalar(op.condition) || !chunked(op.when_true)
+                            || !chunked(op.when_false) || !chunked(op.destination)
+                            || width[op.when_true] != width[op.when_false]
+                            || width[op.destination] != width[op.when_true]) {
+                            return;
+                        }
+                        alu.offset = static_cast<std::uint32_t>(
+                            WideFamily::conditional);
+                        alu.width = width[op.when_true];
+                        alu.imm_b = 1U;
+                        place_operand(0U, op.destination);
+                        place_operand(1U, op.condition);
+                        place_operand(2U, op.when_true);
+                        place_operand(3U, op.when_false);
+                    } else {
+                        // LogicalBinary: any widths, one operand at least wide.
+                        if (!scalar(op.destination)
+                            || !(narrow_operand(op.lhs) || chunked(op.lhs))
+                            || !(narrow_operand(op.rhs) || chunked(op.rhs))
+                            || !(chunked(op.lhs) || chunked(op.rhs))) {
+                            return;
+                        }
+                        alu.offset = static_cast<std::uint32_t>(
+                            WideFamily::logical_binary);
+                        alu.sub = static_cast<std::uint8_t>(op.operation);
+                        alu.width = width[op.lhs];
+                        alu.imm_a = width[op.rhs];
+                        place_operand(0U, op.destination);
+                        place_operand(1U, op.lhs);
+                        place_operand(2U, op.rhs);
+                    }
+                    if constexpr (std::is_same_v<T, Binary>
+                        || std::is_same_v<T, Shift>
+                        || std::is_same_v<T, UnaryNot>
+                        || std::is_same_v<T, Reduction>
+                        || std::is_same_v<T, LogicalNot>
+                        || std::is_same_v<T, ConvertToTwoState>) {
+                        alu.imm_b = alu.width;
+                    }
+                    if constexpr (std::is_same_v<T, LogicalBinary>) {
+                        alu.imm_b = width[op.lhs];
+                    }
+                    inst = alu;
                     lowered = true;
                 }
             }, member.operations()[pc]);
@@ -1886,9 +2693,28 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                         && width[op.destination] <= 64U) {
                         wide_source = op.source;
                     }
+                } else if constexpr (std::is_same_v<T, WriteBlockingDynamicSlice>
+                    || std::is_same_v<T, WriteUpdateDynamicSlice>
+                    || std::is_same_v<T, WriteProjectedDynamicSlice>
+                    || std::is_same_v<T, WriteBlockingDynamicPartSlice>
+                    || std::is_same_v<T, WriteUpdateDynamicPartSlice>) {
+                    // A host signal takes a chunked wide value whole through
+                    // the host (wide_store sub 3, host_dynamic_write).
+                    if (op.signal < family_of_signal_.size()
+                        && family_of_signal_[op.signal] == no_slot
+                        && !owned(op.signal) && chunked(op.source)) {
+                        wide_source = op.source;
+                    }
                 }
             }, operation);
+            // A concatenation's null-range operands contribute no bits
+            // (they are dropped where it lowers).
+            const bool null_operands = operation_holds<Concatenate>(operation);
             const auto check = [&](const RegisterId reg) {
+                if (null_operands && reg < register_count && null_register[reg] != 0U
+                    && (!operand_write || *operand_write != reg)) {
+                    return;
+                }
                 if (reg >= register_count || width[reg] == 0U) {
                     if (profile_) {
                         compile_failure_detail_ = "undefined reg="
@@ -1937,13 +2763,27 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                             || field_family[op.destination] != no_slot)) {
                         return;
                     }
-                    generic = generic || wide_signal(op.signal);
+                    family_generic_ = family_generic_ || proxy(op.signal);
+                    // A sampled-value read of a narrow signal is an inline
+                    // load of the host's sampled words (KOp::sva_sampled_load,
+                    // task #186); the global-clocking future forms read the
+                    // signal's current value through the host.
+                    generic = generic
+                        || (sampled_read(op) && !inline_sampled_read(op))
+                        || (!sampled_read(op) && wide_signal(op.signal));
+                } else if constexpr (std::is_same_v<T, SvaOperation>) {
+                    // The monitor's tick and outcome pop (IEEE 1800-2023
+                    // 16.14) are kernel operations (KOp::sva_tick,
+                    // sva_outcome, task #186) once every operand is a narrow
+                    // register (checked above).
                 } else if constexpr (std::is_same_v<T, WriteBlocking>
                     || std::is_same_v<T, WriteUpdate>
                     || std::is_same_v<T, WriteProjected>) {
                     if (op.signal >= slot_of_signal_.size()) {
                         throw reject("signal_range");
                     }
+                    family_generic_ = family_generic_
+                        || (owned(op.signal) && proxy(op.signal));
                     generic = generic || (owned(op.signal) && wide_signal(op.signal));
                 } else if constexpr (std::is_same_v<T, WriteBlockingSlice>
                     || std::is_same_v<T, WriteUpdateSlice>
@@ -1960,6 +2800,8 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                             && proxy_leaf(op.signal, op.offset, width[op.source])
                                 != nullptr;
                     }
+                    family_generic_ = family_generic_
+                        || (owned(op.signal) && proxy(op.signal) && !leaf);
                     generic = generic
                         || (owned(op.signal) && proxy(op.signal) && !leaf);
                 } else if constexpr (std::is_same_v<T, WriteBlockingDynamicSlice>
@@ -1970,22 +2812,51 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     if (op.signal >= slot_of_signal_.size()) {
                         throw reject("signal_range");
                     }
-                    generic = generic || !owned(op.signal) || proxy(op.signal);
-                    // VHDL part-select assignments are rare; the reference
-                    // evaluator stages them.
-                    generic = generic
-                        || (vhdl
-                            && (std::is_same_v<T, WriteBlockingDynamicPartSlice>
-                                || std::is_same_v<T, WriteUpdateDynamicPartSlice>));
+                    // A host target takes store_host (host_dynamic_write); a
+                    // family proxy's access is expanded into its leaves'
+                    // (expand_family_accesses) before it gets here.
+                    generic = generic || proxy(op.signal);
+                    // A proxy's write, and a wide value's to an owned slot,
+                    // are rewritten as narrow writes of the leaves and of
+                    // 64-bit pieces (expand_family_accesses) and the member
+                    // compiled again. A chunked wide value's to a host signal
+                    // is one wide_store (sub 3): the host applies it as the
+                    // one update event it is (IEEE 1800-2023 4.4).
+                    family_generic_ = family_generic_ || proxy(op.signal)
+                        || (op.source < register_count && width[op.source] > 64U
+                            && width[op.source] != polymorphic
+                            && (owned(op.signal) || !chunked(op.source)));
+                    // A VHDL part-select assignment (IEEE 1076-2019 10.5.2.1)
+                    // of an unresolved owned slot, deferred to the update
+                    // phase, queues its field like a SystemVerilog
+                    // nonblocking one (store_slot_part); a resolved slot's
+                    // is resolved into its next block with the other
+                    // sources' values at the write (emit_deferred_store). A
+                    // shared variable's blocking one stores in place
+                    // (emit_store_slot_part).
+                    if constexpr (std::is_same_v<T, WriteBlockingDynamicPartSlice>
+                        || std::is_same_v<T, WriteUpdateDynamicPartSlice>) {
+                        generic = generic || (vhdl && proxy(op.signal));
+                    }
                 } else if constexpr (std::is_same_v<T, ContainerRead>) {
                     generic = generic || op.string_index;
+                } else if constexpr (std::is_same_v<T, Display>) {
+                    // An attempt-start report tests the bind flag
+                    // (KOp::generic, aux 2); it is not a wide operation.
+                    generic = generic || !op.inert;
                 } else if constexpr (std::is_same_v<T, Report>
                     || std::is_same_v<T, CodeCoverageHit>
                     || std::is_same_v<T, CodeCoverageToggle>
-                    || std::is_same_v<T, Display>
                     || std::is_same_v<T, TimeDisplay>
                     || std::is_same_v<T, SystemVerilogMath>
                     || std::is_same_v<T, SystemVerilogScalarBinary>) {
+                    if constexpr (std::is_same_v<T, SystemVerilogMath>) {
+                        // $time and $stime are an inline load of the kernel's
+                        // time (below).
+                        if (time_query_ticks(op)) {
+                            return;
+                        }
+                    }
                     // A report statement (IEEE 1076-2019 10.9; a SystemVerilog
                     // severity message) and immediate output emit, a time
                     // query reads the kernel's time, a real-number operation
@@ -2151,8 +3022,15 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     || std::is_same_v<T, WriteUpdateDynamicSlice>
                     || std::is_same_v<T, WriteProjectedDynamicSlice>) {
                     const auto slot = owned_slot(op.signal);
-                    if (!slot || w(op.selection.index) != 32U) {
+                    if (w(op.selection.index) != 32U) {
                         throw reject("dynamic_write");
+                    }
+                    if (!slot) {
+                        host_dynamic_write(inst, op.signal, op.source, op.selection.index,
+                            SignalUpdateDomain::generic,
+                            std::is_same_v<T, WriteBlockingDynamicSlice>,
+                            op.selection.strict, false, &op.selection, nullptr);
+                        return;
                     }
                     inst.op = KOp::store_vhdl;
                     inst.sub = 1U;
@@ -2162,6 +3040,13 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     inst.width = w(op.source);
                     // The target's width, for the generated range check.
                     inst.imm_a = slots_[*slot].width;
+                    // A shared variable's immediate store (emit_vhdl_blocking_
+                    // store) also needs the slot's planes, in z (imm_b is the
+                    // shape of a resolved slot, net_shape).
+                    if (std::is_same_v<T, WriteBlockingDynamicSlice>
+                        && !slots_[*slot].resolved) {
+                        inst.z = slots_[*slot].planes;
+                    }
                     if (const auto load = net_constant_load(pc)) {
                         // Sub 3: sub 1 of a nine-value constant, whose codes
                         // are at imm_b in the body's constants (as sub 2).
@@ -2275,6 +3160,43 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                 inst.d = narrow(op.destination);
                 inst.x = narrow(op.source);
             } else if constexpr (std::is_same_v<T, ReadSignal>) {
+                if (sampled_read(op)) {
+                    // A sampled value or sampled-value function (IEEE
+                    // 1800-2023 16.5.1, 16.9.3): an inline load of the
+                    // host's sampled words (the generic classification
+                    // above kept the forms this cannot express).
+                    inst.op = KOp::sva_sampled_load;
+                    sva_table_used_ = true;
+                    inst.d = narrow(op.destination);
+                    inst.width = w(op.destination);
+                    inst.sub = static_cast<std::uint8_t>(op.kind);
+                    inst.offset = signal_width(op.signal);
+                    inst.z = op.ticks;
+                    if (op.kind == SignalReadKind::sampled && !op.clock) {
+                        inst.aux = 1U;
+                        inst.x = impl_.sampled_value_word_offsets[op.signal];
+                        return;
+                    }
+                    const auto ring = impl_.planned_sampled_ring_offset(
+                        Impl::SampledHistoryKey { op.signal, op.clock,
+                            op.clock_edge, op.gate,
+                            ProcessSchedulingDomain::systemverilog });
+                    if (!ring) {
+                        throw reject("sampled_ring");
+                    }
+                    impl_.sampled_ring_layout_baked = true;
+                    inst.x = static_cast<std::uint32_t>(*ring);
+                    // An empty history reads the signal's default: its
+                    // value at the start of simulation (sampled_defaults),
+                    // which is the initial value after the startup writes.
+                    const auto shape = Impl::coerce_value_kind(
+                        impl_.get_signal(op.signal).initial_value, ValueKind::logic4);
+                    const auto aval = shape.aval_words();
+                    const auto bval = shape.bval_words();
+                    inst.imm_a = aval.empty() ? 0U : aval[0];
+                    inst.imm_b = bval.empty() ? 0U : bval[0];
+                    return;
+                }
                 if (op.destination < register_count
                     && (field_slot[op.destination] != no_slot
                         || field_family[op.destination] != no_slot)) {
@@ -2282,7 +3204,18 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     return;
                 }
                 inst.d = narrow(op.destination);
-                if (const auto slot = owned_narrow_slot(op.signal)) {
+                if (const auto slot = owned_narrow_slot(op.signal);
+                    slot && slots_[*slot].planes == 4U) {
+                    // A VHDL std_logic slot read by SystemVerilog (a port of
+                    // a VHDL parent): its Logic9 codes coerce to Logic4, U
+                    // and W reading as x (IEEE 1800-2023 21.2.1.3), as on
+                    // the VHDL side (sub 1).
+                    inst.op = KOp::load_slot9;
+                    inst.x = *slot;
+                    inst.width = slots_[*slot].width;
+                    inst.sub = kind_of(op.destination) == ValueKind::logic9
+                        ? 0U : 1U;
+                } else if (slot) {
                     inst.op = KOp::load_slot;
                     inst.x = slots_[*slot].offset;
                 } else {
@@ -2293,9 +3226,6 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     inst.x = op.signal;
                 }
             } else if constexpr (std::is_same_v<T, Binary>) {
-                if (op.operation == BinaryOperator::vhdl_match_equal) {
-                    throw reject("vhdl_match");
-                }
                 if (w(op.lhs) != w(op.rhs)) {
                     throw reject("binary_widths");
                 }
@@ -2424,17 +3354,23 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                 inst.width = w(op.source);
             } else if constexpr (std::is_same_v<T, Concatenate>) {
                 std::uint32_t total = 0U;
+                std::uint32_t kept = 0U;
                 inst.aux = static_cast<std::uint32_t>(body.concat.size());
                 for (const auto operand : op.operands) {
+                    // A null-range operand contributes no bits.
+                    if (operand < register_count && null_register[operand] != 0U) {
+                        continue;
+                    }
                     total += w(operand);
                     body.concat.push_back({ operand, w(operand) });
+                    ++kept;
                 }
-                if (total != op.width || op.operands.empty()) {
+                if (total != op.width || kept == 0U) {
                     throw reject("concat_width");
                 }
                 inst.op = KOp::concat;
                 inst.d = narrow(op.destination);
-                inst.x = static_cast<std::uint32_t>(op.operands.size());
+                inst.x = kept;
                 inst.width = op.width;
             } else if constexpr (std::is_same_v<T, ConditionalSelect>) {
                 if (w(op.condition) != 1U || w(op.when_true) != w(op.when_false)) {
@@ -2465,6 +3401,8 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     inst.imm_b = slots_[inst.x].planes == 4U
                             && kind_of(op.source) != ValueKind::logic9
                         ? 1U : 0U;
+                    // The slot's plane count, for generated code.
+                    inst.z = slots_[inst.x].planes;
                 } else if (op.source < register_count && width[op.source] > 64U) {
                     inst.sub = 2U;
                     inst.x = op.source;
@@ -2638,8 +3576,18 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                 constexpr bool blocking
                     = std::is_same_v<T, WriteBlockingDynamicSlice>;
                 const auto slot = owned_slot(op.signal);
-                if (!slot || w(op.selection.index) != 32U) {
+                if (w(op.selection.index) != 32U) {
                     throw reject("dynamic_write");
+                }
+                if (!slot) {
+                    SignalUpdateDomain domain = SignalUpdateDomain::systemverilog_active;
+                    if constexpr (!blocking) {
+                        domain = op.domain;
+                    }
+                    host_dynamic_write(inst, op.signal, op.source, op.selection.index,
+                        domain, blocking, op.selection.strict, false, &op.selection,
+                        nullptr);
+                    return;
                 }
                 inst.op = KOp::store_slot_dynamic;
                 inst.d = *slot;
@@ -2651,6 +3599,25 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                 inst.imm_a = slots_[*slot].words;
                 inst.imm_b = slots_[*slot].planes == 2U && !slots_[*slot].resolved
                     ? slots_[*slot].width : 0U;
+                if (slots_[*slot].resolved) {
+                    // sub 2: a resolved slot, whose member source takes the
+                    // field's codes in generated code (net_store: imm_b the
+                    // source count and the member's source); offset its width.
+                    inst.sub = 2U;
+                    inst.offset = slots_[*slot].width;
+                    net_store(inst, *slot);
+                } else if (slots_[*slot].planes == 4U) {
+                    // A nine-value slot: a write that takes effect at once
+                    // stores the codes of the four planes (sub 3, with the
+                    // source's 'U' and weak masks), a nonblocking one queues
+                    // the masks with the field (as store_slot_part).
+                    bool immediate = true;
+                    if constexpr (!blocking) {
+                        immediate = op.domain != SignalUpdateDomain::systemverilog_nba;
+                    }
+                    inst.imm_b = slots_[*slot].width;
+                    inst.sub = immediate ? 3U : 0U;
+                }
                 inst.aux = static_cast<std::uint32_t>(body.indices.size());
                 body.indices.push_back(op.selection);
                 // A strict (VHDL) index is checked; a SystemVerilog write
@@ -2661,15 +3628,32 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     inst.flags = static_cast<std::uint8_t>(inst.flags
                         | (op.domain == SignalUpdateDomain::systemverilog_nba
                             ? flag_nba : 0U));
+                    if (op.domain == SignalUpdateDomain::systemverilog_nba
+                        && std::ranges::binary_search(member.piece_continuations, pc)) {
+                        inst.flags = static_cast<std::uint8_t>(inst.flags | flag_continues);
+                    }
                 }
             } else if constexpr (std::is_same_v<T, WriteBlockingDynamicPartSlice>
                 || std::is_same_v<T, WriteUpdateDynamicPartSlice>) {
                 constexpr bool blocking
                     = std::is_same_v<T, WriteBlockingDynamicPartSlice>;
                 const auto slot = owned_slot(op.signal);
-                if (!slot || w(op.selection.base) != 32U
+                if (w(op.selection.base) != 32U
                     || w(op.source) != op.selection.width) {
                     throw reject("dynamic_part_write");
+                }
+                if (!slot) {
+                    SignalUpdateDomain domain = vhdl
+                        ? SignalUpdateDomain::generic
+                        : SignalUpdateDomain::systemverilog_active;
+                    if constexpr (!blocking) {
+                        if (!vhdl) {
+                            domain = op.domain;
+                        }
+                    }
+                    host_dynamic_write(inst, op.signal, op.source, op.selection.base,
+                        domain, blocking, false, true, nullptr, &op.selection);
+                    return;
                 }
                 inst.op = KOp::store_slot_part;
                 inst.d = *slot;
@@ -2681,11 +3665,37 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                 inst.imm_a = slots_[*slot].words;
                 inst.imm_b = slots_[*slot].planes == 2U && !slots_[*slot].resolved
                     ? slots_[*slot].width : 0U;
+                if (slots_[*slot].resolved) {
+                    // sub 2: a resolved slot, whose member source takes the
+                    // field's codes in generated code (net_store: imm_b the
+                    // source count and the member's source); offset its width.
+                    inst.sub = 2U;
+                    inst.offset = slots_[*slot].width;
+                    net_store(inst, *slot);
+                } else if (slots_[*slot].planes == 4U) {
+                    // A nine-value slot. A VHDL assignment is applied in the
+                    // update phase, as is a nonblocking SystemVerilog one:
+                    // the field's width is all the queue form needs. A
+                    // shared variable (IEEE 1076-2019 6.4.2.4) and a
+                    // SystemVerilog write that takes effect at once store
+                    // the codes of the four planes (sub 3).
+                    bool immediate = true;
+                    if constexpr (!blocking) {
+                        immediate = !vhdl
+                            && op.domain != SignalUpdateDomain::systemverilog_nba;
+                    }
+                    inst.imm_b = slots_[*slot].width;
+                    inst.sub = immediate ? 3U : 0U;
+                }
                 inst.aux = static_cast<std::uint32_t>(body.parts.size());
                 body.parts.push_back(op.selection);
                 if constexpr (!blocking) {
-                    inst.flags = op.domain == SignalUpdateDomain::systemverilog_nba
+                    inst.flags = vhdl || op.domain == SignalUpdateDomain::systemverilog_nba
                         ? flag_nba : 0U;
+                    if (!vhdl && op.domain == SignalUpdateDomain::systemverilog_nba
+                        && std::ranges::binary_search(member.piece_continuations, pc)) {
+                        inst.flags = static_cast<std::uint8_t>(inst.flags | flag_continues);
+                    }
                 }
             } else if constexpr (std::is_same_v<T, ReadContainerObject>) {
                 inst.op = KOp::nop;
@@ -2696,6 +3706,8 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     throw reject("container_read");
                 }
                 const auto container = container_of_register[op.source];
+                // Elements of more than 64 bits are the wide lowering's
+                // (mem_read sub 1); the destination of this one is narrow.
                 if (containers_[container].type.element_width > 64U
                     || containers_[container].type.associative
                     || !containers_[container].type.fixed) {
@@ -2764,6 +3776,44 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     inst.aux = static_cast<std::uint32_t>(body.parts.size())
                         + 1U;
                     body.parts.push_back(*op.dynamic_part);
+                    // The element's width, for generated code's in-place
+                    // part write (emit_mem_write_part).
+                    inst.imm_a = containers_[inst.d].type.element_width;
+                }
+            } else if constexpr (std::is_same_v<T, SystemVerilogMath>) {
+                // $time and $stime (IEEE 1800-2023 20.3; the classification
+                // above leaves no other form here): the kernel's time in the
+                // unit's ticks, rounded to the nearest unit, from the SVA
+                // table's time (aux 4; sub 0 $time, 1 $stime).
+                const auto ticks = time_query_ticks(op);
+                if (!ticks) {
+                    throw reject("operation");
+                }
+                inst.op = KOp::sva_sampled_load;
+                sva_table_used_ = true;
+                inst.d = narrow(op.destination);
+                inst.aux = 4U;
+                inst.sub = op.function == SystemVerilogMathFunction::Stime ? 1U : 0U;
+                inst.width = op.function == SystemVerilogMathFunction::Stime ? 32U : 64U;
+                inst.imm_a = *ticks;
+            } else if constexpr (std::is_same_v<T, SvaOperation>) {
+                // A concurrent assertion's clock tick or outcome pop (IEEE
+                // 1800-2023 16.14; task #186): x the operation, y the
+                // register base (fused bodies add theirs), aux the
+                // directive's entry in the member's block table.
+                inst.op = op.kind == SvaKind::tick ? KOp::sva_tick : KOp::sva_outcome;
+                sva_table_used_ = true;
+                inst.d = narrow(op.result);
+                inst.width = 32U;
+                inst.x = pc;
+                inst.y = 0U;
+                inst.aux = sva_site_ordinal(op.site);
+                if (op.kind == SvaKind::tick) {
+                    (void)narrow(op.start);
+                    (void)narrow(op.disabled);
+                    if (op.guard_count != 0U) {
+                        (void)narrow(op.guards);
+                    }
                 }
             } else {
                 throw reject("operation");
@@ -2883,6 +3933,9 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                                       body.return_targets.end()),
             body.return_targets.end());
     }
+    if (!vhdl && !member.register_kinds.empty()) {
+        track_unknowns(body, member_index);
+    }
     if (vhdl) {
         if (native_prologue(member) && member.prologue_end != member.body_begin
             && member.prologue_end < body.code.size()) {
@@ -2947,10 +4000,36 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                 case KOp::wide_store:
                     place(inst.x);
                     break;
+                case KOp::wide_alu:
+                    // Only the wide operands name chunked registers.
+                    if ((inst.aux & (wide_alu_wide << 0U)) != 0U) {
+                        place(inst.d);
+                    }
+                    if ((inst.aux & (wide_alu_wide << 1U)) != 0U) {
+                        place(inst.x);
+                    }
+                    if ((inst.aux & (wide_alu_wide << 2U)) != 0U) {
+                        place(inst.y);
+                    }
+                    if ((inst.aux & (wide_alu_wide << 3U)) != 0U) {
+                        place(inst.z);
+                    }
+                    break;
                 case KOp::extract:
                 case KOp::dynamic_extract:
                 case KOp::dynamic_part_select:
                     if (inst.sub == 3U) {
+                        place(inst.x);
+                    }
+                    break;
+                case KOp::mem_read:
+                    // An element of more than 64 bits is the chunks of d.
+                    if (inst.sub == 1U) {
+                        place(inst.d);
+                    }
+                    break;
+                case KOp::mem_write:
+                    if (inst.sub == 1U) {
                         place(inst.x);
                     }
                     break;
@@ -2974,6 +4053,13 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
         if (inst.op == KOp::generic && inst.x < member.operations().size()) {
             inst.sub = static_cast<std::uint8_t>(
                 operation_kind_ordinal(member.operations()[inst.x]));
+        }
+    }
+    if (family_generic_) {
+        family_widths_ = width;
+        family_in_place_.assign(register_count, 0U);
+        for (RegisterId reg = 0U; reg < register_count; ++reg) {
+            family_in_place_[reg] = field_family[reg] != no_slot ? 1U : 0U;
         }
     }
     return body;

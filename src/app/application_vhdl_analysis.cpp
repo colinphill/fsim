@@ -522,14 +522,15 @@ class AnalysisOrderValidator {
          if (found == index.end()) {
              return false;
          }
-         if (found->second != frontend::to_string(owner.vhdl_standard)) {
+         // Units of the standards of one package family mix; the families
+         // differ in IEEE 1164/numeric_std type relations.
+         const auto owner_standard = frontend::to_string(owner.vhdl_standard);
+         if (vhdl_package_family(found->second)
+             != vhdl_package_family(owner_standard)) {
              report(
                  "FSIM-FE-VHORDER-011",
-                 "VHDL " + std::string { kind } + " '" + key
-                     + "' was analyzed as "
-                     + found->second
-                     + " but the owning source uses "
-                     + std::string { frontend::to_string(owner.vhdl_standard) },
+                 "VHDL " + std::string { kind } + " '" + key + "': "
+                     + vhdl_mixed_family_message(found->second, owner_standard),
                  source);
          }
          return true;

@@ -481,10 +481,35 @@ bool HierarchyBuilder::forward_compiled_systemverilog_interface_port(
             if (const auto interface_handle
                 = systemverilog_interface_handles_.find(source_path);
                 interface_handle != systemverilog_interface_handles_.end()) {
-                systemverilog_interface_exports_.insert_or_assign(
-                    std::to_string(interface_handle->second) + ":"
-                        + member.name.spelling,
-                    child_path);
+                auto key = std::to_string(interface_handle->second) + ":"
+                    + member.name.spelling;
+                if (!function && expected->systemverilog->callable
+                    && expected->systemverilog->callable->extern_forkjoin) {
+                    // Every module that exports an `extern forkjoin` task
+                    // supplies one body of the call (IEEE 1800-2023
+                    // 25.7.3); the first is keyed by the bare name, the
+                    // others by `#n`, in elaboration order.
+                    const auto base = key;
+                    for (std::size_t slot { };; ++slot) {
+                        if (slot != 0U) {
+                            key = base + "#" + std::to_string(slot);
+                        }
+                        const auto existing
+                            = systemverilog_interface_exports_.find(key);
+                        if (existing
+                            == systemverilog_interface_exports_.end()) {
+                            systemverilog_interface_exports_.emplace(
+                                key, child_path);
+                            break;
+                        }
+                        if (existing->second == child_path) {
+                            break;
+                        }
+                    }
+                } else {
+                    systemverilog_interface_exports_.insert_or_assign(
+                        key, child_path);
+                }
             }
         } else {
             diagnose(

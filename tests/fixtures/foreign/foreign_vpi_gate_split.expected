@@ -1,0 +1,12 @@
+#c put top.g rise/fall 3,5
+#c put top.x1 rise/fall 3,5
+#c put top.gv rise/fall 3,5
+#c put top.gm rise/fall 3,5
+#c put top.gd rise/fall 3,5
+#c dead 21 =0
+#c 22 y=0 z=1 t1=z vec=01 m=0
+#c 23 y=1 z=1 t1=1 vec=11 m=1
+#c dead 26 =1
+#c 44 y=1 z=0 t1=1 vec=10 m=1
+#c 45 y=0 z=0 t1=z vec=00 m=0
+#c dead 47 =0

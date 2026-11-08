@@ -170,7 +170,7 @@ std::optional<std::size_t> Lowerer::hir_vhdl_vector_element_width(
         case Builtin::std_standard_integer_vector:
             return static_cast<std::size_t>(
                 frontend::vhdl_predefined_integer_storage_width(
-                    vhdl_standard_));
+                    vhdl_integer_standard()));
         case Builtin::std_standard_string:
             return 8U;
         default:
@@ -341,7 +341,7 @@ Lowerer::hir_vhdl_shaped_profile(
             profile.element_width = integer
                 ? static_cast<std::size_t>(
                       frontend::vhdl_predefined_integer_storage_width(
-                          vhdl_standard_))
+                          vhdl_integer_standard()))
                 : 1U;
             profile.element_domain = integer ? frontend::ValueDomain::Integer
                 : logic ? frontend::ValueDomain::Logic9
@@ -937,7 +937,7 @@ std::optional<std::size_t> Lowerer::hir_vhdl_shaped_width(
             ? 1U
             : static_cast<std::size_t>(
                   frontend::vhdl_predefined_integer_storage_width(
-                      vhdl_standard_));
+                      vhdl_integer_standard()));
     }
     // A slice whose bounds fold, or differ by a constant (8.5).
     if (const auto slice = hir_vhdl_shaped_slice(expression_id)) {
@@ -1108,7 +1108,7 @@ Lowerer::lower_hir_vhdl_shaped_expression(
             : expected_width != 0U ? expected_width
             : static_cast<std::size_t>(
                   frontend::vhdl_predefined_integer_storage_width(
-                      vhdl_standard_));
+                      vhdl_integer_standard()));
         const auto destination = allocate_register(width,
             boolean ? frontend::ValueDomain::Boolean
                     : frontend::ValueDomain::Integer);

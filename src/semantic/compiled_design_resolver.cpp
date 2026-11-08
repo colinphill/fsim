@@ -4405,12 +4405,11 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
     };
     std::function<void(vhdl::SubtypeIndication&,
         std::span<const CompiledBindingFrame>)> materialize_boundaries;
+    // INTEGER is one type for the whole design: 64 bits when any unit is
+    // VHDL-2019, whatever the standard of the unit being resolved
+    // (IEEE 1076-2019 5.2.3.1; 1076-2008 5.2.3.1 only sets a minimum).
     const auto standard_width = [&]() -> std::uint8_t {
-        const auto selected = design_->find_unit(selected_unit_);
-        return selected && selected->vhdl != nullptr
-                && selected->vhdl->standard == "2019"
-            ? 64U
-            : 32U;
+        return design_->vhdl_wide_integer() ? 64U : 32U;
     };
     const auto concrete_array_range_length = [](
         const vhdl::RangeConstraint& range,

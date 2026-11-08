@@ -138,11 +138,29 @@ RunResult Scheduler::run(std::optional<SimulationTick> until)
             systemverilog = impl_->begin_systemverilog_batch(true);
             if (!systemverilog) {
                 if (slot.end_of_slot.empty()) {
-                    if (impl_->runtime_slot_quiet_hook != nullptr) {
+                    if (impl_->runtime_slot_quiet_hook != nullptr
+                        || impl_->quiet_request != nullptr) {
                         impl_->in_runtime_slot_quiet_point = true;
                         impl_->in_callback = true;
-                        impl_->runtime_slot_quiet_hook(
-                            impl_->runtime_slot_quiet_context);
+                        if (impl_->runtime_slot_quiet_hook != nullptr) {
+                            impl_->runtime_slot_quiet_hook(
+                                impl_->runtime_slot_quiet_context);
+                        }
+                        if (impl_->quiet_request != nullptr) {
+                            // One shot (IEEE 1800-2023 D.9 save point); the
+                            // request is cleared first so a throwing callback
+                            // does not repeat.
+                            const auto request
+                                = std::exchange(impl_->quiet_request, nullptr);
+                            void* const context = impl_->quiet_request_context;
+                            try {
+                                request(context, *this);
+                            } catch (...) {
+                                impl_->in_callback = false;
+                                impl_->in_runtime_slot_quiet_point = false;
+                                throw;
+                            }
+                        }
                         impl_->in_callback = false;
                         impl_->in_runtime_slot_quiet_point = false;
                         // A runtime hook is contractually non-scheduling, but

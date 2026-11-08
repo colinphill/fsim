@@ -16,6 +16,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <set>
 #include <unordered_set>
 #include <vector>
 
@@ -586,6 +587,14 @@ public:
     // Lowerings that wrote this instance's path into the program (%m,
     // 'path_name, context DPI identities). A process whose lowering did
     // names one instance and must not become a shared template.
+    /// The reads through hierarchical names published so far. A cached
+    /// continuous-assignment template replays no lowering, so it would lose
+    /// the marks the lowering recorded for SDF net delays
+    /// (HierarchicalSignalRead); a lowering that adds one is not cached.
+    [[nodiscard]] std::size_t hierarchical_read_count() const noexcept
+    {
+        return design_.hierarchical_reads_.size();
+    }
     [[nodiscard]] std::uint64_t hir_instance_path_uses() const noexcept
     {
         return hir_instance_path_uses_;
@@ -961,6 +970,9 @@ private:
         std::span<const semantic::DeclarationId> declarations;
         std::span<const semantic::StatementId> statements;
         std::vector<runtime::simir::Sensitivity> sensitivities;
+        // The event controls that name a signal hierarchically, with the
+        // path the name resolved to (HierarchicalSignalRead::sensitivity).
+        std::vector<std::pair<SignalId, std::string>> hierarchical_sensitivities;
         std::optional<semantic::ExpressionId> event_expression;
         runtime::simir::EdgeKind event_edge {
             runtime::simir::EdgeKind::any
@@ -1005,6 +1017,11 @@ private:
         // @(vif.d)`): the body begins by waiting on them (IEEE 1800-2017
         // 9.2.2.1, 9.4.2).
         std::vector<semantic::sv::Sensitivity> leading_wait;
+        // A static event control with `iff` guards on its events (IEEE
+        // 1800-2023 9.4.2.3): the sensitivity stays static, and the body
+        // begins by testing the guard of the event that fired
+        // (lower_hir_wake_guard). Parallel to `sensitivities`.
+        std::vector<semantic::sv::Sensitivity> wake_guards;
         // Sensitivities to S'STABLE(T) or S'QUIET(T): their value signals
         // are created with the process (IEEE 1076-2019 16.2.4).
         std::vector<std::pair<semantic::ExpressionId, frontend::SourceSpan>>
@@ -3555,6 +3572,23 @@ private:
     [[nodiscard]] bool lower_hir_statement(
         semantic::StatementId statement);
     void emit_deferred_assertion_action_handoff();
+    /// Emits `operation`, an effect of a deferred assertion action (a
+    /// display, a report, a file write).  While the action's handoff to
+    /// its region is still open, the operation is held back and placed
+    /// after the handoff by finish_deferred_assertion_action_handoff, so
+    /// that every by-value argument of the action has been evaluated by
+    /// the process before the handoff (IEEE 1800-2023 16.4).
+    void emit_deferred_assertion_action_effect(
+        runtime::simir::Operation operation);
+    /// A deferred assertion flush point (IEEE 1800-2023 16.4.2) right after
+    /// a wait of the process: ends its pending reports.  Only a process
+    /// that holds a deferred assertion, directly or in a callable it calls
+    /// (hir_process_flushes_deferred_), gets the operation.
+    void emit_deferred_flush_point();
+    [[nodiscard]] bool hir_contains_deferred_assertion(
+        std::span<const semantic::StatementId> statements,
+        std::set<std::uint32_t>& visited_callables);
+    bool hir_process_flushes_deferred_ { };
     [[nodiscard]] std::optional<InstructionIndex>
     finish_deferred_assertion_action_handoff();
     [[nodiscard]] bool initialize_hir_declarations(
@@ -4354,6 +4388,16 @@ private:
         semantic::ExpressionId expression,
         std::size_t expected_width,
         std::optional<StringRegisterId>* string_result = nullptr);
+    // The bodies of a call of an `extern forkjoin task` (IEEE 1800-2023
+    // 25.7.3): one (declaration, instance path) per exporting module.
+    struct HirForkjoinBodies {
+        bool forkjoin { };
+        std::vector<std::pair<semantic::DeclarationId, std::string>> bodies;
+        // The interface instance the call goes through and the task name:
+        // the scopes a disable of the task names (25.7.4).
+        std::uint64_t handle { };
+        std::string name;
+    };
     struct HirClassTaskProfile {
         semantic::DeclarationId declaration;
         std::string identity;
@@ -4364,6 +4408,8 @@ private:
         bool automatic { true };
         // The parameterized class specialization the call runs in.
         std::optional<std::uint32_t> specialization;
+        // Set for a call of an `extern forkjoin task`.
+        HirForkjoinBodies forkjoin { };
     };
     // The actuals of a native UVM database call (`@uvm-config-db-get:T`,
     // `@uvm-resource-db-read_by_name:T`), each of its own type; a read
@@ -5237,6 +5283,15 @@ private:
     hir_named_clocking_event(
         std::span<const semantic::sv::Sensitivity> sensitivities,
         semantic::ScopeId scope) const;
+    // The prologue of a process whose static event control guards events with
+    // `iff` (IEEE 1800-2023 9.4.2.3): finds the events of `terms` that fired in
+    // this wake (SignalEvent, SignalLastValue) and tests each one's guard. Emits
+    // a Branch that skips the body when no event with a true guard fired; returns
+    // its index and condition register.
+    [[nodiscard]] std::optional<std::pair<InstructionIndex, RegisterId>>
+    lower_hir_wake_guard(
+        std::span<const semantic::sv::Sensitivity> guards,
+        std::span<const runtime::simir::Sensitivity> terms);
     // Suspends until one of `sensitivities` occurs (IEEE 1800-2017 9.4.2):
     // the lowering of an event control.
     [[nodiscard]] bool lower_hir_sensitivity_wait(
@@ -5533,6 +5588,23 @@ private:
         const semantic::SpecializedHirUnit* saved_ { };
         bool active_ { };
     };
+    // Runs a package, $unit or other cross-unit body under the revision of
+    // the unit that declares it, not of the unit being lowered: units of
+    // different SystemVerilog standards mix (IEEE 1800-2023 Annex C keeps
+    // each compilation under its own revision).
+    class HirStandardScope {
+    public:
+        HirStandardScope(Lowerer& lowerer, semantic::ScopeId scope);
+        ~HirStandardScope();
+        HirStandardScope(const HirStandardScope&) = delete;
+        HirStandardScope& operator=(const HirStandardScope&) = delete;
+
+    private:
+        Lowerer& lowerer_;
+        frontend::StandardRevision saved_;
+    };
+    [[nodiscard]] frontend::StandardRevision hir_scope_systemverilog_standard(
+        semantic::ScopeId scope) const;
     const ContainerDeclarationBindings*
         container_declaration_bindings_ { };
     semantic::ScopeId hir_process_scope_;
@@ -5864,6 +5936,8 @@ private:
         deferred_assertion_action_phase_;
     std::optional<DeferredAssertionActionHandoff>
         deferred_assertion_action_handoff_;
+    std::vector<runtime::simir::Operation>
+        deferred_assertion_action_effects_;
     std::optional<std::uint32_t> systemverilog_program_owner_;
     std::vector<Process> generated_processes_;
     void record_implicit_signal_dependency(SignalId signal,
@@ -5925,6 +5999,15 @@ private:
     std::unordered_map<std::string, StringRegisterId> string_locals_;
     std::unordered_set<std::string> debug_local_names_;
     std::vector<std::string> local_scope_;
+    /// The SystemVerilog tasks and functions whose bodies are lowering,
+    /// innermost last: the name and the local_scope_ depth the body's own
+    /// blocks start at, so a block in a task is named task.block in its
+    /// instance (IEEE 1800-2023 9.6.2, hir_named_scope_path).
+    struct HirCallableScope {
+        std::string name;
+        std::size_t local_base { };
+    };
+    std::vector<HirCallableScope> hir_callable_scopes_;
     InternedString debug_scope_cache_;
     struct LoopControlContext {
         std::optional<InstructionIndex> continue_target;
@@ -5993,6 +6076,17 @@ private:
     frontend::VhdlStandard vhdl_standard_ {
         frontend::VhdlStandard::Vhdl2008
     };
+    // The design has a VHDL-2019 unit, so STD.STANDARD.INTEGER is 64 bits
+    // for every unit in it (IEEE 1076-2019 5.2.3.1). Set with
+    // vhdl_standard_ from the specialized unit's design.
+    bool vhdl_wide_integer_ { };
+    // The standard whose predefined INTEGER this design uses; vhdl_standard_
+    // keeps deciding every other standard-dependent rule of the unit.
+    [[nodiscard]] frontend::VhdlStandard vhdl_integer_standard() const noexcept
+    {
+        return vhdl_wide_integer_ ? frontend::VhdlStandard::Vhdl2019
+                                  : vhdl_standard_;
+    }
     frontend::StandardRevision systemverilog_standard_ {
         frontend::StandardRevision::SystemVerilog2017
     };
@@ -6036,13 +6130,27 @@ private:
     // body a module connected through an exporting modport defines (IEEE
     // 1800-2017 25.7.3): that instance's task or function, or an invalid
     // declaration while the exporting instance is not yet elaborated.
+    // For an `extern forkjoin task` (25.7.3) `forkjoin` is set when given:
+    // it receives every exporting module instance's body, and the result is
+    // the prototype itself (no exporter is a run-time error of the call).
     [[nodiscard]] std::optional<std::pair<semantic::DeclarationId, std::string>>
     hir_exported_interface_callable(std::string_view receiver,
-        semantic::DeclarationId declaration, bool function) const;
+        semantic::DeclarationId declaration, bool function,
+        HirForkjoinBodies* forkjoin = nullptr) const;
     // `bif.consumer` names interface instance `bif` through its modport
     // `consumer` (IEEE 1800-2017 25.5): the instance's name.
     [[nodiscard]] std::optional<std::string_view>
     hir_interface_instance_through_modport(std::string_view receiver) const;
+    // `m1.a.t` names subroutine prototype `t` of the interface that module
+    // instance `m1`'s interface port `a` connects to (IEEE 1800-2023
+    // 25.7.4): the prototype, found through the elaborated port.
+    // The module instance path of an exporting body's receiver
+    // (`@instance:top.m1` names `top.m1`).
+    [[nodiscard]] static std::string_view hir_forkjoin_module_path(
+        std::string_view receiver) noexcept;
+    [[nodiscard]] std::optional<semantic::DeclarationId>
+    hir_interface_port_prototype(std::string_view receiver,
+        std::string_view member, bool function) const;
     [[nodiscard]] std::optional<std::string> hir_systemverilog_constant_path(
         semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<SignalId> hir_hierarchical_signal(

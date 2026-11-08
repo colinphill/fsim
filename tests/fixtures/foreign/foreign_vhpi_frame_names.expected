@@ -1,0 +1,5 @@
+#c probe line 16
+#c   inner param :top:main:outer:inner:k = 2
+#c   inner var :top:main:outer:inner:v = 2
+#c   outer param :top:main:outer:n = 1
+#c   outer var :top:main:outer:u = 1

@@ -2,6 +2,7 @@
 #include "fsim/runtime/vhpi_driver.hpp"
 
 #include "fsim/runtime/logic.hpp"
+#include "fsim/runtime/scheduler_events.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -442,9 +443,7 @@ VhdlVhpiTransactionListResult VhdlVhpiDriverSystem::schedule_waveform(
           elements[index].delay,
           SchedulerPhase::update,
           found->second.descriptor.ordinal,
-          [this, driver_identity, identity](Scheduler&) {
-            commit_transaction(driver_identity, identity);
-          });
+          transaction_task(driver_identity, identity));
     } catch (...) {
       pending.erase(transaction);
       return {{}, VhdlVhpiDriverError::ResourceLimit};
@@ -491,6 +490,111 @@ void VhdlVhpiDriverSystem::commit_transaction(
   const auto signal = found->second.descriptor.signal;
   pending.erase(transaction);
   resolve_signal_locked(signal);
+}
+
+// The scheduler events of the driver system (#128): plain data naming the
+// system and an identity; the entries are saved with the foreign state.
+struct VhdlVhpiDriverEvents {
+  struct Domain {
+    static constexpr std::string_view name{"vhpi_driver"};
+  };
+  struct WritePayload {
+    VhdlVhpiDriverSystem* owner{};
+    std::uint64_t identity{};
+  };
+  struct WriteEvent
+      : OwnedFieldsSchedulerEventCodec<WritePayload, VhdlVhpiDriverSystem,
+                                       Domain, &WritePayload::owner,
+                                       &WritePayload::identity> {
+    static std::uint64_t cancel_key(const WritePayload& payload) {
+      return payload.identity;
+    }
+    static void dispatch(Scheduler&, const WritePayload& scheduled) {
+      std::scoped_lock lock{scheduled.owner->mutex_};
+      scheduled.owner->commit_write(scheduled.identity);
+    }
+  };
+  struct TransactionPayload {
+    VhdlVhpiDriverSystem* owner{};
+    std::uint64_t driver{};
+    std::uint64_t transaction{};
+  };
+  struct TransactionEvent
+      : OwnedFieldsSchedulerEventCodec<
+            TransactionPayload, VhdlVhpiDriverSystem, Domain,
+            &TransactionPayload::owner, &TransactionPayload::driver,
+            &TransactionPayload::transaction> {
+    static std::uint64_t cancel_key(const TransactionPayload& payload) {
+      return payload.transaction;
+    }
+    static void dispatch(Scheduler&, const TransactionPayload& scheduled) {
+      scheduled.owner->commit_transaction(
+          scheduled.driver, scheduled.transaction);
+    }
+  };
+
+  static void register_kinds() {
+    static_cast<void>(register_scheduler_event_kind<
+        WritePayload, &WriteEvent::dispatch, WriteEvent>(
+        "vhpi.write", SchedulerEventClass::data));
+    static_cast<void>(register_scheduler_event_kind<
+        TransactionPayload, &TransactionEvent::dispatch, TransactionEvent>(
+        "vhpi.transaction", SchedulerEventClass::data));
+  }
+};
+
+namespace {
+[[maybe_unused]] const bool vhpi_driver_kinds_registered =
+    (VhdlVhpiDriverEvents::register_kinds(), true);
+}  // namespace
+
+Scheduler::Task VhdlVhpiDriverSystem::write_task(
+    const std::uint64_t identity) {
+  return Scheduler::Task{
+      detail::make_scheduler_task_descriptor<
+          VhdlVhpiDriverEvents::WritePayload,
+          &VhdlVhpiDriverEvents::WriteEvent::dispatch>(
+          VhdlVhpiDriverEvents::WritePayload{this, identity})};
+}
+
+Scheduler::Task VhdlVhpiDriverSystem::transaction_task(
+    const std::uint64_t driver, const std::uint64_t transaction) {
+  return Scheduler::Task{
+      detail::make_scheduler_task_descriptor<
+          VhdlVhpiDriverEvents::TransactionPayload,
+          &VhdlVhpiDriverEvents::TransactionEvent::dispatch>(
+          VhdlVhpiDriverEvents::TransactionPayload{
+              this, driver, transaction})};
+}
+
+void VhdlVhpiDriverSystem::bind_event_owner(SchedulerEventOwners& owners) {
+  owners.bind(VhdlVhpiDriverEvents::Domain::name, this);
+}
+
+bool VhdlVhpiDriverSystem::bind_restored_write(
+    const std::uint64_t identity, const ScheduledTaskHandle& handle) {
+  std::scoped_lock lock{mutex_};
+  const auto found = operations_.find(identity);
+  if (found == operations_.end()) {
+    return false;
+  }
+  found->second.task = handle;
+  return true;
+}
+
+bool VhdlVhpiDriverSystem::bind_restored_transaction(
+    const std::uint64_t identity, const ScheduledTaskHandle& handle) {
+  std::scoped_lock lock{mutex_};
+  for (auto& [driver_identity, driver] : drivers_) {
+    static_cast<void>(driver_identity);
+    for (auto& transaction : driver.transactions) {
+      if (transaction.descriptor.identity == identity) {
+        transaction.task = handle;
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 }  // namespace fsim::runtime

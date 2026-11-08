@@ -1,0 +1,11 @@
+#c top.big native LongIntVal status=0 value=1099511627781
+#c top.small native LongIntVal status=0 value=7
+#c top.narrow native IntVal status=0 value=42
+#c top.big IntVal status=-1
+#c top.small IntVal status=0 value=7
+#c top.v LongIntVecVal status=0 n=3 -1 8589934592 9
+#c top.v IntVecVal status=-1
+#c put top.big status=0
+#c put top.v status=0
+#c top.big native LongIntVal status=0 value=3298534883328
+#c top.v native LongIntVecVal status=0

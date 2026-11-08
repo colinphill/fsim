@@ -105,11 +105,12 @@ static void describe_signal(const char* path)
             (int)vhpi_get(vhpiIsBasicP, basic),
             related(basic, vhpiSimNet));
         while (drivers != NULL && (driver = vhpi_scan(drivers)) != NULL) {
-            printf("#c     driver %s process=%s basic=%s access=%d size=%d "
-                   "foreign=%d\n",
+            printf("#c     driver %s process=%s basic=%s signal=%s access=%d "
+                   "size=%d foreign=%d\n",
                 text_property(driver, vhpiKindStrP),
                 related(driver, vhpiEqProcessStmt),
                 related(driver, DEPRECATED_vhpiBasicSignal),
+                related(driver, vhpiSignal),
                 (int)vhpi_get(vhpiAccessP, driver),
                 (int)vhpi_get(vhpiSizeP, driver),
                 (int)vhpi_get(vhpiIsForeignP, driver));

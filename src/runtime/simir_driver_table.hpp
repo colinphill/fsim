@@ -117,6 +117,49 @@ public:
         return size() == 1 ? &*inline_record_ : nullptr;
     }
 
+    /// Run-state save/restart (#128): the records in ProcessId order, each
+    /// with its value, strength and static regions. A load replaces the whole
+    /// table (the first record in ProcessId order takes the inline slot; the
+    /// order of traversal, which is what readers see, is the same).
+    template <typename Archive> void run_state_io(Archive& archive)
+    {
+        if (archive.saving()) {
+            static_cast<void>(archive.count(size()));
+            for_each_in_process_order([&](DriverRecord& record) {
+                archive.io(record.process);
+                archive.io(record.value);
+                archive.io(record.strength);
+                std::optional<std::vector<Process::DriverRegion>> regions;
+                if (record.scalar_regions) {
+                    regions = *record.scalar_regions;
+                }
+                archive.io(regions);
+            });
+            return;
+        }
+        const auto records = archive.count(0U);
+        *this = DriverTable { };
+        for (std::uint64_t index = 0U; index < records && archive.ok(); ++index) {
+            DriverRecord record;
+            std::optional<std::vector<Process::DriverRegion>> regions;
+            archive.io(record.process);
+            archive.io(record.value);
+            archive.io(record.strength);
+            archive.io(regions);
+            if (!archive.ok()) {
+                return;
+            }
+            if (regions) {
+                record.scalar_regions
+                    = std::make_shared<const std::vector<Process::DriverRegion>>(
+                        std::move(*regions));
+            }
+            if (!insert_if_absent(std::move(record))) {
+                archive.fail("duplicate driver record");
+            }
+        }
+    }
+
     /// Visit all records in increasing ProcessId order without allocating.
     /// The callback may change record values or strengths, but must not change
     /// this table's membership while traversal is in progress.

@@ -161,6 +161,53 @@ static void dpi_signature(char* name)
             (int)vpi_get(vpiFuncType, callable), (int)vpi_get(vpiSize, callable),
             (int)vpi_get(vpiSigned, callable));
     }
+    // The formals and the result variable of an import or export (37.41).
+    {
+        vpiHandle const items = vpi_iterate(vpiIODecl, callable);
+        vpiHandle item;
+        vpiHandle result;
+        while (items != NULL && (item = vpi_scan(items)) != NULL) {
+            vpi_printf("#c %s:   %s %s dir=%d size=%d signed=%d parent=%s\n",
+                name, text(vpiType, item), text(vpiName, item),
+                (int)vpi_get(vpiDirection, item), (int)vpi_get(vpiSize, item),
+                (int)vpi_get(vpiSigned, item),
+                text(vpiFullName, vpi_handle(vpiParent, item)));
+        }
+        result = vpi_handle(vpiReturn, callable);
+        if (result == NULL) {
+            vpi_printf("#c %s:   no return\n", name);
+        } else {
+            vpi_printf("#c %s:   return %s %s size=%d signed=%d\n", name,
+                text(vpiType, result), text(vpiName, result),
+                (int)vpi_get(vpiSize, result), (int)vpi_get(vpiSigned, result));
+        }
+    }
+}
+
+// The typespec of an import's formals and result (IEEE 1800-2023 37.41): the
+// import is typed by the profile it resolved to.
+static void dpi_typespec(char* name)
+{
+    vpiHandle const callable = vpi_handle_by_name(name, NULL);
+    vpiHandle items;
+    vpiHandle item;
+    vpiHandle result;
+    if (callable == NULL) {
+        vpi_printf("#c %s: missing\n", name);
+        return;
+    }
+    items = vpi_iterate(vpiIODecl, callable);
+    while (items != NULL && (item = vpi_scan(items)) != NULL) {
+        vpiHandle const typespec = vpi_handle(vpiTypespec, item);
+        vpi_printf("#c %s: formal %s typespec=%s\n", name, text(vpiName, item),
+            typespec != NULL ? text(vpiType, typespec) : "none");
+    }
+    result = vpi_handle(vpiReturn, callable);
+    if (result != NULL) {
+        vpiHandle const typespec = vpi_handle(vpiTypespec, result);
+        vpi_printf("#c %s: result typespec=%s\n", name,
+            typespec != NULL ? text(vpiType, typespec) : "none");
+    }
 }
 
 // The calls to a DPI import: the statement's task, or the function of the
@@ -304,7 +351,10 @@ static void system_calls(vpiHandle top)
         }
         vpi_printf("#c sysfunc %s functype=%d", text(vpiName, call),
             (int)vpi_get(vpiFuncType, call));
-        if (strcmp(text(vpiName, call), "$time") == 0) {
+        // $time reads the simulation time; $clog2(8) is 3 (20.8.1), read
+        // from its constant argument.
+        if (strcmp(text(vpiName, call), "$time") == 0
+            || strcmp(text(vpiName, call), "$clog2") == 0) {
             s_vpi_value value;
             memset(&value, 0, sizeof value);
             value.format = vpiIntVal;
@@ -337,9 +387,13 @@ static PLI_INT32 start(p_cb_data data)
     signature("top.add");
     signature("top.wide");
     signature("top.bump");
+    signature("cp::twice");
+    signature("cp::note");
     dpi_signature("top.dpi_twice");
     dpi_signature("top.dpi_note");
     dpi_signature("top.dpi_exp");
+    dpi_typespec("top.dpi_twice");
+    dpi_typespec("top.dpi_note");
     dpi_calls(top);
     assignment_bits("top.w");
     assignment_bits("top.nd");

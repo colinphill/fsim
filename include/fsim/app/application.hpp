@@ -6,10 +6,12 @@
 #include "fsim/artifact/object.hpp"
 #include "fsim/cli/driver.hpp"
 #include "fsim/elaboration/elaborator.hpp"
+#include "fsim/elaboration/sdf_net_delay_split.hpp"
 #include "fsim/frontend/design.hpp"
 #include "fsim/library/artifact.hpp"
 #include "fsim/project/project.hpp"
 #include "fsim/runtime/class_methods.hpp"
+#include "fsim/runtime/run_state_sections.hpp"
 #include "fsim/runtime/simir.hpp"
 #include "fsim/runtime/systemverilog_chandle.hpp"
 #include "fsim/runtime/systemverilog_coverage_state.hpp"
@@ -487,6 +489,10 @@ struct ConcurrentAssertionEvent {
     std::uint32_t source_span { };
     // The tick the attempt that reached this outcome started at.
     runtime::SimulationTick attempt_start { };
+    // The source position of the expression that rejected a failed attempt
+    // (failExpr, IEEE 1800-2023 39.4.2); line 0 when unknown.
+    std::uint32_t fail_line { };
+    std::uint32_t fail_column { };
 
     friend bool operator==(
         const ConcurrentAssertionEvent&,
@@ -682,6 +688,11 @@ public:
     /// (IEEE 1800-2023 39.4.2 cbAssertionStart).
     using AssertionAttemptHook
         = std::function<void(std::uint64_t, runtime::SimulationTick)>;
+    /// A step of an attempt of the VPI assertion object (a handle), produced
+    /// only for attempts stepping is enabled for (IEEE 1800-2023 39.4.2
+    /// cbAssertionStepSuccess / cbAssertionStepFailure, 39.5.2).
+    using AssertionStepHook
+        = std::function<void(std::uint64_t, const runtime::sva::StepRecord&)>;
     using VhdlPslAttemptHook = runtime::VhdlPslCompletionHook;
     using UvmActivityHook = runtime::SystemVerilogUvmActivityService::Observer;
     using UvmTaskPhaseContinuation = runtime::SystemVerilogUvmPhaseService::TaskPhaseCallback;
@@ -776,6 +787,10 @@ public:
     [[nodiscard]] runtime::PackedLogic4 read_process_local(
         runtime::simir::ProcessId process, std::size_t local_index,
         std::size_t newer_activations = 0U) const;
+    /// The value slot `slot` of the process program's call-result table holds
+    /// (`Process::call_results`, IEEE 1800-2023 37.42, 38.15).
+    [[nodiscard]] runtime::PackedLogic4 read_process_call_result(
+        runtime::simir::ProcessId process, std::size_t slot) const;
     /// Deposit a value into a variable of a process (VHPI 22.5.2).
     void write_process_local(runtime::simir::ProcessId process,
         std::size_t local_index, const runtime::PackedLogic4& value);
@@ -962,6 +977,58 @@ public:
     /// the port's record in design().sdf_net_delays() is delayed, and
     /// set_verilog_net_delay_table retimes the copy.
     void request_net_delay_split(elaboration::SdfNetDelayInfo record);
+    /// The result of put_gate_driver_delays.
+    enum class GateDelayPut : std::uint8_t {
+        /// The driver took the delays now (a slotted write, or a gate already
+        /// split).
+        applied,
+        /// The driver writes without a delay: it is split into a delay slot at
+        /// the next safe point (owner decision 2026-11-07; a gate declared
+        /// without a delay is never turned into a #0 write), with these
+        /// delays; gate_delay_split_refusals says if the engine cannot.
+        split_requested,
+        refused,
+    };
+    /// Gives a gate's driver process the delays of a vpi_put_delays or
+    /// acc_replace_delays (IEEE 1800-2023 38.32), splitting a delay-free
+    /// driver into a delay slot the first time (Simulation::GateDelayPut).
+    [[nodiscard]] GateDelayPut put_gate_driver_delays(
+        runtime::simir::ProcessId driver, runtime::simir::TransitionDelays delays);
+    /// Whether put_gate_driver_delays would take these delays now, changing
+    /// nothing; when not, `reason` says why.
+    [[nodiscard]] bool gate_delays_accepted(runtime::simir::ProcessId driver,
+        runtime::simir::TransitionDelays delays, std::string& reason);
+    /// The processes that write the output of the gate (or switch) whose full
+    /// hierarchical name is given with a delay-free continuous write: the
+    /// ones put_gate_driver_delays can split.
+    [[nodiscard]] std::vector<runtime::simir::ProcessId>
+    undelayed_gate_drivers(std::string_view full_name) const;
+    /// Every process that drives an output of the gate whose full name is
+    /// given (`g`, `g$one`, `g$output<n>`), delayed or not: the driver
+    /// objects of IEEE 1364-2001 Table 88 (reason_paramdrc) for its
+    /// output terminals.
+    [[nodiscard]] std::vector<runtime::simir::ProcessId>
+    gate_driver_processes(std::string_view full_name) const;
+    /// Why each gate split that was asked for was not made, in request order.
+    /// The turn-on and turn-off delays of a tranif put by vpi_put_delays
+    /// (IEEE 1800-2023 28.16, 38.32), as the rise and fall of its control
+    /// (`delays` already swapped for a tranif0). A switch declared without a
+    /// delay gets the delayed copy of its control the first time, at the next
+    /// safe point (the lazy split of a gate); false with
+    /// gate_delay_error() set when the switch cannot take it.
+    [[nodiscard]] bool put_tranif_control_delays(std::string_view full_name,
+        runtime::simir::TransitionDelays delays);
+    /// Why the latest put_gate_driver_delays was refused.
+    [[nodiscard]] const std::string& gate_delay_error() const noexcept;
+    [[nodiscard]] const std::vector<std::string>& gate_delay_split_refusals()
+        const noexcept;
+    /// The deferred splits that failed at their safe point after the put
+    /// returned success (FSIM-VPI-SPLIT-001), each already worded as the
+    /// error; the run ends with a failure status. take_ hands each to
+    /// vpi_chk_error once.
+    [[nodiscard]] const std::vector<std::string>& deferred_split_errors()
+        const noexcept;
+    [[nodiscard]] std::optional<std::string> take_deferred_split_error();
     /// Whether a split asked for is waiting for its safe point.
     [[nodiscard]] bool net_delay_split_pending() const noexcept;
     /// Why each split that was asked for was not made (the engine cannot take
@@ -981,6 +1048,10 @@ public:
     /// simulation callbacks, so the live class objects can be reclaimed
     /// (cbReclaimObj, IEEE 1800-2023 38.36.1); an empty function removes it.
     void set_class_reclaim_hook(std::function<void()> hook);
+    /// Compare the length of a string variable's text at each safe point so
+    /// the size hook hears of its changes (cbSizeChange on a string var,
+    /// IEEE 1800-2023 37.17 detail 14).
+    void watch_vpi_string_size(fsim_vpi_handle_v1 handle);
     /// Tell `hook` of each class object whose constructor has completed
     /// (cbCreateObj, IEEE 1800-2023 38.36.1); only a run with the execution
     /// probes does. An empty function removes it.
@@ -1081,10 +1152,6 @@ public:
     /// callbacks, debugger inspection, trace backends, and coverage reports.
     [[nodiscard]] std::vector<ConcurrentAssertionCoverage>
     concurrent_assertion_coverage() const;
-    /// Stable sample events for callbacks, debugger inspection, and trace
-    /// backends. Disabled samples are retained but do not increment coverage.
-    [[nodiscard]] const std::vector<ConcurrentAssertionEvent>&
-    concurrent_assertion_events() const noexcept;
     /// Mutable simulation-owned functional coverage state, including exact
     /// arbitrary-width hits, callbacks, trace events, and derived reports.
     [[nodiscard]] const runtime::SystemVerilogCoverageState&
@@ -1175,6 +1242,12 @@ public:
         runtime::SimulationTick delay,
         runtime::SimulationTick rejection,
         bool transport);
+    /// Schedule the null transaction of the driver `process` has for
+    /// `signal`, `delay` ticks from now (VHPI 23.34, IEEE 1076-2019 10.5.2.2);
+    /// false when the signal is not guarded.
+    [[nodiscard]] bool disconnect_foreign_driver(
+        runtime::simir::ProcessId process, runtime::simir::SignalId signal,
+        runtime::SimulationTick delay);
     /// Force the driver of a foreign architecture's placeholder process
     /// (VHPI 22.5.4), at once or in the next update phase.
     void force_foreign_driver(
@@ -1190,6 +1263,14 @@ public:
         runtime::simir::SignalId signal,
         runtime::PackedLogic4 value,
         std::size_t offset);
+    /// The pending transactions of a driver's projected output waveform for
+    /// the bits [offset, offset + width) of `signal`, in time order (VHPI
+    /// vhpiTransactions, IEEE 1076-2019 14.7.2); see
+    /// Interpreter::driver_transactions.
+    [[nodiscard]] std::vector<runtime::simir::DriverTransaction>
+    foreign_driver_transactions(runtime::simir::ProcessId process,
+        runtime::simir::SignalId signal, std::size_t offset,
+        std::size_t width) const;
     /// Release a forced driver of a foreign architecture's placeholder
     /// process (VHPI 22.5.4).
     void release_foreign_driver(
@@ -1202,6 +1283,10 @@ public:
     /// or a driver it makes with no process (IEEE 1076-2019 23.6).
     /// Gives `process` a driver of `signal` at its initial value, unless it
     /// has one (a driver vhpi_create makes, IEEE 1076-2019 23.6).
+    /// Records structure a foreign interface made (a created process, a host
+    /// driver): the run can no longer be reset (reset_refusal). Only the first
+    /// description is kept.
+    void note_foreign_structure(std::string_view what);
     void add_foreign_driver(
         runtime::simir::ProcessId process, runtime::simir::SignalId signal);
     [[nodiscard]] runtime::simir::ProcessId add_foreign_driver_owner(
@@ -1276,6 +1361,28 @@ public:
     };
     /// True when the engine restores the time-zero state of this run.
     [[nodiscard]] bool reset_supported() const noexcept;
+    /// Why this run cannot reset, as a diagnostic with its FSIM-SAVE code; empty
+    /// when reset_supported(). A design with a SystemC part never resets: the
+    /// SystemC kernel (IEEE 1666) has no operation that returns its modules,
+    /// channels and suspended processes to their elaborated state, so $reset
+    /// cannot meet IEEE 1800-2023 D.8 ("All variables and nets contain their
+    /// initial values") for it. vpiReset (38.4), $reset and vhpiReset (IEEE
+    /// 1076-2019 23.5: a tool "may" implement it, 20.9) are refused with this
+    /// text instead of resetting part of the design.
+    [[nodiscard]] std::string reset_refusal() const;
+    /// Installs the factory a reset takes the time-zero state from (IEEE
+    /// 1800-2023 D.8): it returns a fresh interpreter of the same design,
+    /// built from the artifact and configured as the run's was before start.
+    /// Without one reset_supported() is false.
+    void set_reset_source(
+        std::function<std::unique_ptr<runtime::simir::Interpreter>()> source);
+    /// Installs the reset source from a loader of the same design artifact:
+    /// each reset reloads the design with `reload` and builds the twin as
+    /// this run was built (seed, access plan and roots are taken from the
+    /// running design). `max_deltas` and `engine` are the constructor's.
+    void set_reset_design_source(
+        std::function<std::optional<BuiltProject>()> reload,
+        std::uint64_t max_deltas, SimulationEngine engine);
     /// Ask for a reset once the caller's routine returns: the run stops at
     /// the next safe point, the foreign interfaces hear start-of-reset,
     /// time and every value return to their time-zero state, they hear
@@ -1286,6 +1393,58 @@ public:
     /// reset_value of the last one ($reset_value).
     [[nodiscard]] std::uint32_t reset_count() const noexcept;
     [[nodiscard]] std::int32_t reset_value() const noexcept;
+
+    /// Run-state files: $save, $incsave and $restart (IEEE 1800-2023 D.9),
+    /// `simulate --save-at/--save-file/--restart`, and the Tcl commands
+    /// `save` and `restart`. A file holds the whole run state in versioned,
+    /// checksummed sections (runtime/run_state_image.hpp).
+    struct StateFileResult {
+        bool ok { true };
+        /// "FSIM-SAVE-nnnn: ..." when !ok.
+        std::string error;
+    };
+    /// Whether a process of the design runs $save, $incsave, $restart or
+    /// $reset. Such a run keeps the host's time steps (no kernel-owned
+    /// time), so the end of a time slot is where the request sees it.
+    [[nodiscard]] bool uses_simulation_control() const noexcept;
+    /// What a restart must repeat besides the design: the command line and
+    /// libraries of the run (IEEE 1800-2023 D.9 requires the same design;
+    /// the same libraries keep their callback registrations valid). Included
+    /// in the identity a saved file records; set before the run starts.
+    void set_state_file_identity(std::string text);
+    /// The sections the foreign interfaces add to a run-state file
+    /// ("foreign.vpi", "foreign.vhpi": the data sets by save/restart id and
+    /// the restart callbacks; IEEE 1800-2023 38.31, 38.36.3, IEEE 1076-2019
+    /// 20.7). They are written after the end-of-save callbacks ran, so that
+    /// data put from those callbacks is in the file, and read before the
+    /// start-of-restart callbacks fire, so that the data can be read and the
+    /// restart callbacks exist. The registry's owners must outlive the run.
+    void set_foreign_run_state_sections(runtime::RunStateSectionRegistry sections);
+    /// True while a restore sets the run up (before start-of-restart): a
+    /// fresh-process restart fires no start-of-simulation callback of any
+    /// interface, only start- and end-of-restart.
+    [[nodiscard]] bool restoring_state() const noexcept;
+    /// Writes the run state to `file` (written beside it and renamed, so a
+    /// failed save leaves an older file). At the end of a time slot with the
+    /// slot's events drained, or between run() calls. `incremental` writes
+    /// only what changed since the last full save of this run ($incsave,
+    /// D.9); it fails when no full save came before.
+    [[nodiscard]] StateFileResult save_state(
+        const std::filesystem::path& file, bool incremental = false);
+    /// Restores the run state from `file`, a full file or an incremental one
+    /// whose full base file is still present and unchanged. The foreign
+    /// interfaces hear start-of-restart before and end-of-restart after;
+    /// the run then continues from the saved time without a second
+    /// start-of-simulation. Fails (nothing partly restored is usable) with
+    /// FSIM-SAVE-0009, 0010, 0015, 0016 or 0017 when the file is not one of this
+    /// run's design.
+    [[nodiscard]] StateFileResult restore_state(const std::filesystem::path& file);
+    /// Queue a save or a restart for the next safe point of run(), as the
+    /// system tasks do; the file is written at the end of the current time
+    /// slot once nothing is pending in it (D.9), and a failure ends run() with
+    /// the error.
+    void request_save(std::filesystem::path file, bool incremental = false);
+    void request_restart(std::filesystem::path file);
     [[nodiscard]] runtime::SimulationTick now() const noexcept;
     [[nodiscard]] std::uint64_t delta() const noexcept;
     /// Simulation cycles started (IEEE 1076-2019 23.18).
@@ -1293,6 +1452,10 @@ public:
     [[nodiscard]] bool has_pending() const noexcept;
     /// The earliest tick with pending activity, the current tick for a
     /// pending delta cycle; nothing when no activity remains.
+    /// The future time steps that hold work, in increasing order (IEEE
+    /// 1800-2023 37.81).
+    [[nodiscard]] std::vector<runtime::SimulationTick> pending_times()
+        const;
     [[nodiscard]] std::optional<runtime::SimulationTick> next_pending_time()
         const noexcept;
     [[nodiscard]] bool finished() const noexcept;
@@ -1364,14 +1527,22 @@ public:
     /// split the simulation runs, the records and the delay tables of the
     /// delayed copies of the load ports (sdf_net_delay_retiming): later
     /// transitions use the new tables, pending ones keep their time. A
-    /// reannotation that changes which loads are split (a load that had no
-    /// delay at elaboration, or one that loses it) cannot add or remove
-    /// processes of a running simulation: it keeps the delay tables of the
-    /// running split and takes the effective path and check timing only.
+    /// reannotation that changes which loads are split splits a load that had
+    /// no delay at this safe point (request_net_delay_split) and gives one
+    /// that loses its delay a zero table. `device_gates` are the DEVICE
+    /// delays of outputs that no module path ends at (SdfSessionPlan::
+    /// device_gates, IEEE 1497-2001 5.4.1): the gates that drive each take
+    /// its delays (put_gate_driver_delays), a delay-free gate by the split at
+    /// the next safe point.
     [[nodiscard]] SdfReannotationCommitResult commit_sdf_reannotation(
         const SdfReannotationApplication& application,
-        const elaboration::ElaboratedDesign* annotated = nullptr);
+        const elaboration::ElaboratedDesign* annotated = nullptr,
+        std::span<const elaboration::SdfDeviceGateDelay> device_gates = {});
     [[nodiscard]] bool at_sdf_reannotation_safe_point() const noexcept;
+    /// Counts the live SDF reannotations that replaced the delay tables of
+    /// the delayed port copies (sdf_net_delay_retiming): a value that
+    /// vpi_put_delays stored for such a record is stale once this changes.
+    [[nodiscard]] std::uint64_t sdf_net_delay_epoch() const noexcept;
     void set_execution_point_hook(ExecutionPointHook hook);
     /// Add an execution-point observer beside the debugger's hook. The
     /// static kernel reports points only when it keeps its debug points
@@ -1414,6 +1585,18 @@ public:
     void set_trusted_text_report_hook(ReportHook hook);
     void set_concurrent_assertion_hook(ConcurrentAssertionHook hook);
     void set_assertion_attempt_hook(AssertionAttemptHook hook);
+    void set_assertion_step_hook(AssertionStepHook hook);
+    /// vpiAssertionEnableStep / vpiAssertionDisableStep for the attempt of
+    /// the VPI assertion object that starts at the tick (IEEE 1800-2023
+    /// 39.5.2). `attempt_started`: the attempt has already started, so its
+    /// stepping mode cannot change any more (39.5.2) and nothing changed.
+    enum class AssertionStepResult : std::uint8_t {
+        done,
+        no_assertion,
+        attempt_started,
+    };
+    [[nodiscard]] AssertionStepResult set_assertion_step(std::uint64_t assertion,
+        runtime::SimulationTick start, bool enable);
     /// Discard the running attempts of the VPI assertion object that started
     /// at the tick, leaving it enabled (vpiAssertionKill, IEEE 1800-2023
     /// 39.5.2); true when one was running.
@@ -1429,6 +1612,7 @@ public:
 private:
     friend struct ::fsim::runtime::simir::NativeRegionAllocationTestAccess;
     friend struct ::fsim::runtime::simir::SystemCBridgeTestAccess;
+    friend struct ::fsim::runtime::simir::RunStateTestAccess;
     struct Impl;
     void install_execution_point_hooks();
     std::unique_ptr<Impl> impl_;

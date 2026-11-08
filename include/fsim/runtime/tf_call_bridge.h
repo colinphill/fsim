@@ -26,6 +26,10 @@
 #define FSIM_TF_CONTROL_MESSAGE 4u
 #define FSIM_TF_CONTROL_FINISH 5u
 #define FSIM_TF_CONTROL_STOP 6u
+// tf_write_save and tf_read_restart (IEEE 1364-2001 25.65, 25.41): the text
+// of the request is the block of bytes to save, or the buffer to fill.
+#define FSIM_TF_CONTROL_SAVE_WRITE 7u
+#define FSIM_TF_CONTROL_RESTART_READ 8u
 #define FSIM_TF_CONTROL_MAX_TEXT_SIZE 65536u
 #define FSIM_TF_CONTROL_MAX_METADATA_SIZE 255u
 #define FSIM_TF_SYNCHRONIZATION_READ_WRITE 1u

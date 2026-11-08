@@ -52,6 +52,18 @@ static void class_variables(const char* label, vpiHandle owner)
     }
 }
 
+// The vpiVirtualInterfaceVar iteration of a class defn or class obj (37.31,
+// 37.33 detail 7).
+static void class_virtual(const char* label, vpiHandle owner)
+{
+    vpiHandle iterator = vpi_iterate(vpiVirtualInterfaceVar, owner);
+    vpiHandle object;
+    while (iterator != NULL && (object = vpi_scan(iterator)) != NULL) {
+        vpi_printf("#c %s virtual %s\n", label,
+            text(vpi_get_str(vpiName, object)));
+    }
+}
+
 static PLI_INT32 check(p_cb_data data)
 {
     vpiHandle top = vpi_handle_by_name("top", NULL);
@@ -79,6 +91,8 @@ static PLI_INT32 check(p_cb_data data)
     class_variables("Xactor", defn);
     object = vpi_handle(vpiClassObj, holder);
     class_variables("t", object);
+    class_virtual("Xactor", defn);
+    class_virtual("t", object);
     return 0;
 }
 

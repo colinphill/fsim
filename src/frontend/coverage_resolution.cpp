@@ -1303,6 +1303,8 @@ namespace {
             bind_coverage_methods(design, owner, argument);
         for (auto& output : statement.output_values)
             bind_coverage_methods(design, owner, output.value);
+        for (auto& argument : statement.output_arguments)
+            bind_coverage_methods(design, owner, argument);
         for (auto& alternative : statement.case_alternatives) {
             for (auto& choice : alternative.choices)
                 bind_coverage_methods(design, owner, choice);

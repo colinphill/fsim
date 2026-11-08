@@ -15,6 +15,7 @@
 #include <span>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -147,8 +148,42 @@ struct NormalizationIndexes {
     RecordIndex vhdl_expressions;
     RecordIndex semantic_scopes;
     RecordIndex semantic_types;
+    // The local parameters that stand for specparams (scope value, '\n',
+    // name): see specparam_local_parameter().
+    std::unordered_set<std::string> specparam_locals;
 };
 thread_local const NormalizationIndexes* normalization_indexes = nullptr;
+
+std::string specparam_local_key(const ScopeId scope, const std::string& name)
+{
+    return std::to_string(scope.value()) + '\n' + name;
+}
+
+// A specparam is a constant whose value the delay mode selects (IEEE
+// 1800-2023 6.20.5, 30.4.1), so its references stay names: folding one into
+// the typical value here would make every use ignore --delay-mode and hide
+// the minimum and maximum alternatives from the elaborated paths.
+bool specparam_local_parameter(
+    const CompiledDesign& design, const sv::Declaration& declaration)
+{
+    if (normalization_indexes != nullptr) {
+        return normalization_indexes->specparam_locals.contains(
+            specparam_local_key(declaration.scope, declaration.name));
+    }
+    for (const auto& unit : design.systemverilog_hir.units()) {
+        if (unit.scope != declaration.scope) {
+            continue;
+        }
+        for (const auto& timing : unit.timing) {
+            for (const auto& specparam : timing.specparams) {
+                if (!specparam.path_pulse && specparam.name == declaration.name) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
 
 template <typename Record, typename Id>
 const Record* find_record(const std::vector<Record>& records, const Id id,
@@ -883,7 +918,8 @@ std::optional<ConstantValue> constant_name_value(
     // 6.19).
     if (declaration == nullptr
         || declaration->form != sv::DeclarationForm::local_parameter
-        || !declaration->initializer) {
+        || !declaration->initializer
+        || specparam_local_parameter(design, *declaration)) {
         return std::nullopt;
     }
     const auto* initializer = expression_for(
@@ -1645,7 +1681,15 @@ bool fold_expression(const CompiledDesign& design,
     if constexpr (std::is_same_v<Expression, vhdl::Expression>) {
         // The VHPI static model keeps seeing the call (IEEE 1076-2019 19.8);
         // only the literal is simulated.
-        if (expression.kind == Kind::call && !expression.unfolded_call) {
+        // An operator whose operands folded is kept the same way (a
+        // funcCall of a predefined operator, 19.8 and 19.10).
+        // The sign of a numeric literal stays the literal the range and
+        // value readers expect.
+        const bool sign = expression.kind == Kind::unary
+            && (expression.text == "-" || expression.text == "+");
+        if ((expression.kind == Kind::call || expression.kind == Kind::binary
+                || (expression.kind == Kind::unary && !sign))
+            && !expression.unfolded_call) {
             expression.unfolded_call
                 = std::make_shared<const vhdl::Expression>(expression);
         }
@@ -2598,6 +2642,16 @@ bool normalize_compiled_design(CompiledDesign& design) noexcept
         indexes->vhdl_expressions.build(design.vhdl_hir.expressions());
         indexes->semantic_scopes.build(design.semantics.scopes());
         indexes->semantic_types.build(design.semantics.types());
+        for (const auto& unit : design.systemverilog_hir.units()) {
+            for (const auto& timing : unit.timing) {
+                for (const auto& specparam : timing.specparams) {
+                    if (!specparam.path_pulse) {
+                        indexes->specparam_locals.insert(
+                            specparam_local_key(unit.scope, specparam.name));
+                    }
+                }
+            }
+        }
     } catch (...) {
         indexes.reset();
     }

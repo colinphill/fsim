@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // VHPI subprogram call stack frame conformance plug-in (IEEE 1076-2019 14.6,
-// 19.10, Figure 35): at a statement of a recursive procedure, at one of a
+// 19.10, Figure 35): at the return statement of a function with a signal
+// parameter it lists that formal's contributors; at a statement of a recursive procedure, at one of a
 // function and at the end of its calls, walks vhpiCurStackFrame of the call
 // objects, vhpiUpStack and vhpiFrameLevelP, and reads the formal and the
 // variable the call elaborated (vhpiParamDecls and vhpiVarDecls of a
@@ -19,6 +20,9 @@ static vhpiHandleT outer_call;
 static vhpiHandleT inner_call;
 static vhpiHandleT leaf_call;
 static vhpiHandleT drive_call;
+static vhpiHandleT sample_call;
+// The number of times the probe in the body of the recursive procedure ran.
+static int probes;
 
 // The number of objects of an iteration.
 static int count(vhpiOneToManyT relation, vhpiHandleT object)
@@ -92,6 +96,41 @@ static void variables(vhpiHandleT call)
     }
 }
 
+// Deposits a value into the variable `name` that the running call
+// elaborated (IEEE 1076-2019 14.6 b, 22.5.2) and reads it back.
+static void deposit_variable(vhpiHandleT call, const char* name, int new_value)
+{
+    vhpiHandleT iterator = vhpi_iterator(vhpiVarDecls, call);
+    vhpiHandleT declaration;
+    while (iterator != NULL && (declaration = vhpi_scan(iterator)) != NULL) {
+        vhpiValueT value;
+        const char* text = (const char*)vhpi_get_str(vhpiNameP, declaration);
+        size_t index;
+        for (index = 0U; text != NULL && name[index] != 0
+             && tolower((unsigned char)text[index]) == name[index];
+             ++index) {
+        }
+        if (text == NULL || name[index] != 0 || text[index] != 0) {
+            continue;
+        }
+        memset(&value, 0, sizeof value);
+        value.format = vhpiIntVal;
+        value.value.intg = new_value;
+        if (vhpi_put_value(declaration, &value, vhpiDeposit) != 0) {
+            printf("#c   put %s refused\n", name);
+            return;
+        }
+        value.value.intg = 0;
+        if (vhpi_get_value(declaration, &value) != 0) {
+            printf("#c   put %s readback failed\n", name);
+            return;
+        }
+        printf("#c   put %s=%d readback=%d\n", name, new_value,
+            (int)value.value.intg);
+        return;
+    }
+}
+
 // The frame of a running call, its level and the levels above it.
 static void describe(const char* label, vhpiHandleT call, int with_variables)
 {
@@ -125,10 +164,19 @@ static void report(const vhpiCbDataT* data)
     if (strcmp(label, "probe") == 0) {
         describe("outer", outer_call, 1);
         describe("inner", inner_call, 1);
+        // In the newest activation (n = 1) the variable is deposited; the
+        // statements that follow overwrite it, so the trace after this
+        // line is the one without the deposit.
+        if (++probes == 3) {
+            deposit_variable(inner_call, "depth", 55);
+        }
     } else if (strcmp(label, "leaf.return") == 0) {
         describe("leaf", leaf_call, 0);
     } else if (strcmp(label, "drive") == 0) {
         formals(drive_call);
+    } else if (strcmp(label, "fsig") == 0) {
+        // A function's signal parameter (mode in) denotes its actual.
+        formals(sample_call);
     } else if (strcmp(label, "inner") == 0) {
         describe("inner", inner_call, 1);
     } else {
@@ -181,6 +229,9 @@ static void start(const vhpiCbDataT* data)
         vhpiSubpBody, vhpi_handle_by_name("top.main.leaf", NULL));
     vhpiHandleT drive_body = vhpi_handle(
         vhpiSubpBody, vhpi_handle_by_name("top.main.drive", NULL));
+    vhpiHandleT fp_process = vhpi_handle_by_name("top.fp", NULL);
+    vhpiHandleT sample_body = vhpi_handle(
+        vhpiSubpBody, vhpi_handle_by_name("top.fp.sample", NULL));
     vhpiHandleT branches
         = vhpi_iterator(vhpiBranchs, first_of(down_body, vhpiIfStmtK));
     vhpiHandleT then_branch = vhpi_scan(branches);
@@ -199,6 +250,9 @@ static void start(const vhpiCbDataT* data)
     place(vhpiCbStmt, first_of(down_body, vhpiVarAssignStmtK), "probe");
     place(vhpiCbStmt, first_of(drive_body, vhpiSeqSigAssignStmtK), "drive");
     place(vhpiCbStmt, first_of(leaf_body, vhpiReturnStmtK), "leaf.return");
+    sample_call
+        = vhpi_handle(vhpiRhsExpr, first_of(fp_process, vhpiVarAssignStmtK));
+    place(vhpiCbStmt, first_of(sample_body, vhpiReturnStmtK), "fsig");
     place(vhpiCbEndOfSubpCall, inner_call, "inner");
     place(vhpiCbEndOfSubpCall, outer_call, "outer");
     fflush(stdout);

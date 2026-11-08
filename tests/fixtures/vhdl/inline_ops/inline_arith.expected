@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+inl udiv=142 umod=6
+inl udiv0=x umod0=x
+inl sdiv=-14 smod=-2
+inl sdiv2=-14 smod2=2
+inl sdiv0=x
+inl pow1=1024
+inl pow2=-8
+inl pow3=-1
+inl pow4=1
+inl pow5=1
+inl pow6=0
+inl pow7=x
+inl upow=81
+inl upow2=0
+inl plus=e
+inl minus=7
+inl outside=xx11
+inl unknown=xxxx
+inl wplus=89abcdaf
+inl wminus=89abcde1
+inl wpartial=5eadbeef
+inl wunknown=deadbeef
+inl nba=89abcd5f
+inl wbit=ff

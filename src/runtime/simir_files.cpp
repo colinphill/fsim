@@ -3,6 +3,7 @@
 #include "fsim/runtime/file_scanning.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
+#include "simir_events.hpp"
 #include "simir_internal.hpp"
 
 #include <algorithm>
@@ -1670,19 +1671,11 @@ void Interpreter::Impl::control_vcd(const ProcessId process,
         const auto begin_kind = operation.kind == VcdControlKind::variables
             ? VcdControlKind::begin_variables
             : VcdControlKind::begin_ports;
-        scheduler.schedule(
+        scheduler.schedule_internal(
             SchedulerPhase::postponed,
             process,
-            [this, begin_kind](Scheduler& runtime) {
-                if (!vcd_control_hook) {
-                    return;
-                }
-                VcdControlEvent begin;
-                begin.kind = begin_kind;
-                begin.time = runtime.now();
-                begin.delta = runtime.delta();
-                vcd_control_hook(begin);
-            });
+            events::make<events::VcdBegin>(
+                events::VcdBegin::Payload { this, begin_kind }));
     }
 }
 

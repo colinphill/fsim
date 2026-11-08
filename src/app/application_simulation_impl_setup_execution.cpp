@@ -107,6 +107,8 @@ void Simulation::Impl::setup_execution(
 
     // Constructor-body fragment included by application_simulation_setup.tpp.
 
+    register_event_kinds();
+
     const auto has_systemc_process = std::ranges::any_of(
         built.design_ir.boundaries(), [](const auto& boundary) {
             return boundary.kind

@@ -21,6 +21,7 @@ namespace fsim::runtime {
 
 using SystemVerilogClassHandle = std::uint64_t;
 
+class RunStateArchive;
 class SystemVerilogClassHeap;
 
 enum class SystemVerilogClassContainerKind : std::uint8_t {
@@ -100,6 +101,15 @@ class SystemVerilogClassHandleContainer final {
       std::string key,
       SystemVerilogClassHandle handle);
   [[nodiscard]] bool erase(std::string_view key);
+  /// Replaces the elements with saved ones (a restart, IEEE 1800-2023 D.9).
+  /// The handles are not checked against a heap: the heap section that
+  /// holds their objects is restored separately.
+  void restore_state(
+      std::vector<SystemVerilogClassHandle> sequential,
+      std::map<std::string, SystemVerilogClassHandle> keyed) {
+    sequential_ = std::move(sequential);
+    keyed_ = std::move(keyed);
+  }
 
  private:
   void validate(
@@ -341,6 +351,13 @@ class SystemVerilogClassHeap final {
   [[nodiscard]] const SystemVerilogClassHeapLimits& limits() const noexcept {
     return limits_;
   }
+  /// The heap as a section of a run-state image: every slot with its
+  /// generation, so a saved handle (slot and generation) names the same
+  /// object after a restart (IEEE 1800-2023 D.9). Limits and the simulation
+  /// seed come from the run's configuration and are not saved. Loading fails
+  /// the archive, with the heap unchanged, when the bytes do not decode or the
+  /// saved simulation seed differs from this run's.
+  void run_state_io(RunStateArchive& archive);
 
  private:
   struct Slot {

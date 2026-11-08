@@ -134,6 +134,11 @@ struct Invocation {
   std::vector<std::string> vhpi_registries;
   std::vector<std::string> trace_filters;
   std::optional<std::string> duration;
+  // `--save-at TIME --save-file FILE` and `--restart FILE` (IEEE 1800-2023
+  // D.9).
+  std::optional<std::string> save_at;
+  std::optional<std::filesystem::path> save_file;
+  std::optional<std::filesystem::path> restart_file;
   std::optional<std::uint64_t> max_deltas;
   std::optional<project::DelayMode> delay_mode;
   std::vector<std::filesystem::path> sdf_files;

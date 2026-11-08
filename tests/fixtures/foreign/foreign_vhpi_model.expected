@@ -25,6 +25,8 @@
 #c resolved resolved_bit=1 unit_volts=0 anonymous=0
 #c quad anonymous=0 base anonymous=1
 #c fi openmode=1003
+#c fo logicalname=vhpi_model_out.dat
+#c attrspec entityclass=1010 signal=1
 #c drive params=2 s resolved=1 t resolved=0 s dynamic=1
 #c volts left=-1 right=2.5 unit_volts left=0 right=1
 #c volts range float=1 left=-1 right=2.5
@@ -56,4 +58,5 @@
 #c decl vhpifiletypedeclk int_file line=38 offset=2 file=foreign_vhpi_model.vhd
 #c decl vhpifiledeclk fi line=39 offset=2 file=foreign_vhpi_model.vhd
 #c decl vhpiprocdeclk drive line=40 offset=2 file=foreign_vhpi_model.vhd
+#c decl vhpifiledeclk fo line=47 offset=2 file=foreign_vhpi_model.vhd
 #c root kind=vhpirootinstk line=8 offset=0 unit line=8

@@ -1,0 +1,5 @@
+#c gen top.g.ga type=vpiAssert full=top.g.ga clock=posedge(clk) disable=none
+#c gen top.g.gc type=vpiCover full=top.g.gc clock=posedge(clk) disable=none
+#c gen top.l[0].gl type=vpiAssert full=top.l[0].gl clock=posedge(clk) disable=none
+#c gen top.l[1].gl type=vpiAssert full=top.l[1].gl clock=posedge(clk) disable=none
+#c gen top.cs type=vpiCover full=top.cs clock=negedge(clk) disable=b

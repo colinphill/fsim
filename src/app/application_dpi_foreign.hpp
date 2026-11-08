@@ -56,6 +56,17 @@ public:
 
     virtual void set_clock(Clock clock) = 0;
 
+    /// A $reset, vpiReset or vhpiReset is about to return the design to its
+    /// time-zero state (IEEE 1800-2023 D.8): every import call chain that is
+    /// suspended in an export call is disabled with the 35.9 protocol (D.8 a,
+    /// "disables all concurrent activity"), the current scope returns to
+    /// none, and the svPutUserData areas of the scopes are emptied, as
+    /// vpi_put_userdata's are (38.33: "After a restart or a reset,
+    /// subsequent calls to vpi_get_userdata() shall return NULL"). The C
+    /// state of the libraries is theirs: they reset it from their
+    /// cbStartOfReset or vhpiCbStartOfReset callback, which has run before.
+    virtual void reset() = 0;
+
     /// Runs the C code of a context import that serves DPI exports on a
     /// helper thread; the entry wraps that code in the thread's caller
     /// context (as the VPI context of the calling simulation).

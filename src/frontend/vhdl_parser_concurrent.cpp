@@ -864,7 +864,7 @@ void VhdlParser::parse_vhdl_generate_constant(
       TokenKind::Colon,
       "':' after constant names",
       "FSIM-VHDL-PARSE-083");
-  const auto type = parse_vhdl_type(true);
+  const auto type = parse_vhdl_resolved_subtype();
   Expression value;
   if (match(TokenKind::ColonEqual)) {
     value = parse_expression();
@@ -1757,7 +1757,7 @@ Process VhdlParser::parse_process(
         TokenKind::Colon,
         "':' after variable names",
         "FSIM-VHDL-PARSE-047");
-    const auto type = parse_vhdl_type(true, true);
+    const auto type = parse_vhdl_resolved_subtype();
     std::optional<Expression> initializer;
     if (match(TokenKind::ColonEqual)) {
       initializer = parse_expression();

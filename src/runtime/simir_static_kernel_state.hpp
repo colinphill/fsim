@@ -33,6 +33,11 @@
 #include <utility>
 #include <vector>
 
+namespace fsim::runtime {
+class RunStateArchive;
+class RunStateImage;
+}
+
 namespace fsim::runtime::simir {
 
 namespace static_kernel_detail {
@@ -225,7 +230,9 @@ struct WriterRegion {
     return point != nullptr
         && (point->kind == DebugPointKind::frame_entry
             || point->kind == DebugPointKind::frame_exit
-            || point->kind == DebugPointKind::class_constructed);
+            || point->kind == DebugPointKind::class_constructed
+            || point->kind == DebugPointKind::assertion_pass
+            || point->kind == DebugPointKind::assertion_fail);
 }
 
 /// Where operation `pc` of a program lies once the probe points are
@@ -384,6 +391,10 @@ public:
 
     StaticKernel(Impl& impl, StaticKernelRuntimeSpec spec);
     ~StaticKernel();
+    /// Drops every concurrent assertion block base of the kernel's table (a
+    /// restore replaced the monitors; the next tick or outcome pop binds
+    /// them again, task #186).
+    void reset_sva_blocks() noexcept;
     /// FSIM_PROFILE_KERNEL_MT (with FSIM_PROFILE_KERNEL): multi-threading
     /// Phase 0 plan report, from the compiled units and the observed runs.
     void report_mt_plan() const;
@@ -392,8 +403,8 @@ public:
 
     /// Run-state image sections (simir_static_kernel_image.cpp). The
     /// "kernel.values" section holds the slot values (the arena and the
-    /// published outputs), so far the only kernel section: threads, waiters,
-    /// timers and containers are not saved yet. restore_value_section is
+    /// published outputs); threads, waiters, timers and the rest are the
+    /// "kernel.state" section (run_state_io). restore_value_section is
     /// false, with the kernel unchanged, when the bytes do not fit this
     /// kernel's slots.
     void record_value_section(std::string& out) const;
@@ -701,7 +712,10 @@ private:
         /// hosted region lists (ready_thread), outside the kernel's rounds.
         SchedulerPhase phase { SchedulerPhase::active };
         /// Runs assertion operations (sampled reads, SvaOperation) or leaves
-        /// the Active region (WaitRegion): it runs on the operation tier.
+        /// the Active region (WaitRegion). Such a member compiles like any
+        /// other behavioral member (the monitor step and the sampled read
+        /// are effect calls into the assertion services); the flag keeps the
+        /// kernel from closing over the host's regions (`closed_`).
         bool assertion { };
         /// A non-final process of a program (program_members_), and whether
         /// its thread has ended (the reference's halted program process).
@@ -728,6 +742,14 @@ private:
         bool conversion { };
         std::uint32_t body_begin { };
         std::uint32_t body_end { };
+        /// Where expand_family_accesses appended its operations to a member
+        /// that is not compiled whole (0: none); the operations between
+        /// body_end and here are not part of the compiled body.
+        std::uint32_t family_expansion_begin { };
+        /// Operations (sorted positions) that expand_family_accesses made of a
+        /// wide dynamic write's later 64-bit pieces: they continue the update
+        /// of the piece before them (flag_continues).
+        std::vector<std::uint32_t> piece_continuations;
         std::uint32_t exit_alt { static_kernel_detail::no_slot };
         std::uint32_t level { };
         /// The member's operations (operations()). A member restored from
@@ -780,6 +802,10 @@ private:
         std::vector<InstructionIndex> call_stack;
         struct Frame {
             std::uint32_t identity { };
+            /// The call-stack depth of the call it saves for (the number of
+            /// return targets before that call), so a disable that ends the
+            /// call restores it (IEEE 1800-2023 9.6.2).
+            std::uint32_t depth { };
             std::vector<RegisterId> ids;
             std::vector<PackedLogic4> values;
             /// Behavioral members also save string values and container
@@ -806,7 +832,13 @@ private:
             std::vector<std::uint64_t> words;
         };
         std::vector<SavedArray> saved_arrays;
-        std::vector<std::size_t> saved_array_marks;
+        /// Where each private frame's arrays start in saved_arrays, and the
+        /// call-stack depth of its call (as Frame::depth).
+        struct ArrayMark {
+            std::size_t mark { };
+            std::uint32_t depth { };
+        };
+        std::vector<ArrayMark> saved_array_marks;
         std::vector<std::uint32_t> private_frame_identities;
         [[nodiscard]] bool private_frame(const std::uint32_t identity) const
         {
@@ -836,6 +868,11 @@ private:
         bool wakes_itself { };
         std::uint32_t partition { static_kernel_detail::no_slot };
         std::uint32_t position { };
+        /// split_gate_delay took the member out of this partition's pass: the
+        /// partition still polls its inputs (DissolvedPartition::retired)
+        /// and schedules it, so a graft that moves its reads moves that
+        /// polling too.
+        std::uint32_t retired_partition { static_kernel_detail::no_slot };
         /// VHDL delta mode: the next run starts at operation 0.
         bool fresh { };
         /// VHDL: where the process prologue enters the body (the original
@@ -911,6 +948,10 @@ private:
         std::vector<PackedLogic4> seen;
         std::vector<std::uint8_t> due;
         std::vector<std::uint8_t> gated;
+        /// A member split_gate_delay moved out of the partition: it never
+        /// runs in a pass; when it is due the kernel schedules it as a
+        /// member of its own (empty until the first split).
+        std::vector<std::uint8_t> retired;
     };
 
     /// A deduplicated scheduling target for whole-slot readers: a member, or
@@ -1399,6 +1440,41 @@ private:
     /// caller's register file.
     static void native_net_delay(StaticKernelNativeFrame* frame,
         Word* registers, std::uint32_t at);
+    // Concurrent assertions in compiled members (task #186; IEEE 1800-2023
+    // 16.14, 39.4.2). A directive's monitor publishes its attempt block's
+    // base in sva_blocks_ (StaticKernelSvaTable::blocks), at the entry
+    // sva_member_base_[member] + the directive's ordinal in the member; the
+    // inline outcome pop (KOp::sva_outcome) and the tick read it there.
+    /// KOp::sva_tick: one clock tick of the directive of instruction `inst`
+    /// (its SvaOperation at inst.x), guards, start and disabled read from the
+    /// caller's register file; writes the pending outcome count to d.
+    void execute_sva_tick(const static_kernel_detail::CompiledBody& body,
+        Word* registers, const static_kernel_detail::KInst& inst,
+        std::uint32_t member);
+    /// The block base of the directive of instruction `inst` of `member`:
+    /// binds the monitor to its table entry when it exists; null when no
+    /// monitor exists yet (no tick has run).
+    [[nodiscard]] std::int64_t* sva_block(
+        const static_kernel_detail::KInst& inst, std::uint32_t member);
+    /// KOp::sva_outcome on the bytecode tier: the inline ring pop.
+    void execute_sva_outcome(Word* registers,
+        const static_kernel_detail::KInst& inst, std::uint32_t member);
+    /// KOp::sva_sampled_load on the bytecode tier.
+    void execute_sva_sampled_load(Word* registers,
+        const static_kernel_detail::KInst& inst, std::uint32_t member);
+    /// fsim_sk_sva_tick / fsim_sk_sva_bind for generated code.
+    static void native_sva_tick(StaticKernelNativeFrame* frame,
+        Word* registers, std::uint32_t at);
+    static std::int64_t* native_sva_bind(StaticKernelNativeFrame* frame,
+        std::uint32_t at);
+    /// Lays out sva_blocks_ and sva_member_base_ from the members'
+    /// SvaOperation sites (compile_members) and points the table at the
+    /// host's sampled words.
+    void plan_sva_table();
+    /// Marks the SVA table used (frame.sva) when member `index`'s compiled
+    /// body has an SVA operation: for bodies restored without the lowering
+    /// that marks it (restored bodies, a kernel image).
+    void note_sva_code(std::size_t index) noexcept;
     /// A generic instruction's operands into the member's reference
     /// registers, and its result back (true: two-state code got X or 'U').
     void generic_load_operands(CompiledBody& body, const Word* registers,
@@ -1490,6 +1566,10 @@ private:
     /// the delayed-copy graft of a late split (Interpreter::graft_net_delay).
 public:
     [[nodiscard]] ReplanResult replan_at_safe_point(const ReplanRequest& request);
+    /// The run added host signals the kernel has no slot for (the delayed
+    /// copy of a switch's control, which the host's network reads): the
+    /// kernel's signal tables cover them as signals it does not own.
+    void note_late_signals();
 private:
     /// One delayed copy a graft adds (graft_net_delay): the net it follows,
     /// the load members that read it instead of the net, and its drivers.
@@ -1507,6 +1587,12 @@ private:
     /// points the load members at the copies and rebuilds the tables that
     /// derive from them; nothing changes when the graft is refused.
     [[nodiscard]] ReplanResult graft_net_delay(const NetDelayGraft& graft);
+    /// ReplanRequest::Kind::split_gate_delay: rewrites the member's delay-free
+    /// writes of its output in place (the operation count and positions are
+    /// kept), recompiles it and rebinds its native unit; nothing changes when
+    /// the split is refused.
+    [[nodiscard]] ReplanResult split_gate_delay(
+        ProcessId process, const Process& rewritten, bool dry_run);
     /// Moves the sensitivity, readers, edges, waiters and operations of a
     /// copy's load members from the net to the copy. `groups` collects the
     /// dispatch groups whose fused program must be built again.
@@ -1628,6 +1714,21 @@ private:
         const Word* registers, std::uint32_t reg, ValueKind kind);
     static void set_wide_value(const CompiledBody& body, Word* registers,
         std::uint32_t reg, const PackedLogic4& value);
+    /// The same for chunks named by their storage index `entry` (with
+    /// wide_unknown_flag when they have masks) and width, as the wide_alu
+    /// instruction names its operands.
+    [[nodiscard]] static PackedLogic4 wide_value_at(const Word* registers,
+        std::uint32_t entry, std::uint32_t width, ValueKind kind);
+    static void set_wide_value_at(const CompiledBody& body, Word* registers,
+        std::uint32_t entry, std::uint32_t width, const PackedLogic4& value);
+    /// KOp::wide_alu on the register file `registers`, through the reference
+    /// value functions (the bytecode tier; generated code computes it over
+    /// the chunks).
+    /// Returns the error message of an invalid dynamic_insert (strict), else
+    /// null.
+    [[nodiscard]] const char* execute_wide_alu(
+        const static_kernel_detail::CompiledBody& body, Word* registers,
+        const static_kernel_detail::KInst& inst);
     static void native_fail(StaticKernelNativeFrame* frame, std::uint32_t at,
         std::uint32_t reason);
     void compile_members();
@@ -1673,6 +1774,26 @@ private:
     static void visit_image_fields(Self& self, Visit&& visit);
     class ImageWriter;
     class ImageReader;
+public:
+    /// Run-state save and restart (#128; IEEE 1800-2023 D.9, IEEE 1076-2019
+    /// 20.7-20.9; simir_run_state_kernel.cpp). The kernel's sections are
+    /// "kernel.values" (slot values) and "kernel.state" (registers, thread
+    /// slots, waiters, timers, pending writes and the dissolved partitions).
+    /// audit_run_state() lists what keeps the kernel from a save point,
+    /// save_run_state() and restore_run_state() write and read the sections,
+    /// and rearm_run_state() re-creates the doorbell events the save left out
+    /// (kernel.timer, kernel.vhdl_timer, kernel.hosted_timer, kernel.vhdl_round,
+    /// kernel.late_start, kernel.hosted_region). None of them is reachable from
+    /// a kernel step.
+    void audit_run_state(std::vector<std::string>& messages) const;
+    [[nodiscard]] bool save_run_state(
+        RunStateImage& image, std::vector<std::string>& errors);
+    [[nodiscard]] bool restore_run_state(
+        const RunStateImage& image, std::vector<std::string>& errors);
+    void rearm_run_state();
+    void run_state_io(RunStateArchive& archive);
+
+private:
     /// Storage of restored not_compiled_reason_ texts.
     std::vector<std::string> image_reasons_;
     /// Appends a VHDL member's body specialized on its constant control
@@ -1687,6 +1808,21 @@ private:
         std::pair<std::vector<std::uint8_t>, std::vector<std::uint64_t>>>
         prune_cache_;
     [[nodiscard]] std::optional<CompiledBody> compile(std::uint32_t member);
+    [[nodiscard]] std::optional<CompiledBody> compile_family(std::uint32_t member);
+    [[nodiscard]] std::optional<CompiledBody> compile_once(std::uint32_t member);
+    /// Gives each call site of a VHDL member its own copy of the callee and
+    /// splits the registers the copies share into one per web, so registers
+    /// that several sites give values of different widths have a static
+    /// width (split_polymorphic_calls, simir_static_kernel_specialize.cpp).
+    bool split_polymorphic_calls(std::uint32_t member);
+    /// Replaces the accesses of family proxies that compile_once would run
+    /// generically with accesses of the leaves (expand_family_accesses).
+    bool expand_family_accesses(std::uint32_t member);
+    /// Set by compile_once when a proxy access went generic, with the
+    /// register widths and the registers read in place.
+    bool family_generic_ { };
+    std::vector<std::uint32_t> family_widths_;
+    std::vector<std::uint8_t> family_in_place_;
     void settle();
     void check_owned_edges();
     void commit_pending();
@@ -1788,10 +1924,28 @@ private:
         }
         bind_write_marks(frame);
     }
+    /// Kernels whose code has an SVA operation (a directive's tick or
+    /// outcome, or an inline sampled or $time read, which procedural code has
+    /// too): the host's sampled words and rings may have moved (a late
+    /// allocation), and the time step. The leader refreshes it before worker
+    /// lanes run, which only read it.
+    void refresh_sva_table() noexcept
+    {
+        sva_table_.rings = impl_.sampled_ring_words.data();
+        sva_table_.sampled = impl_.sampled_value_words.data();
+        sva_now_ = static_cast<std::int64_t>(kernel_now());
+    }
     /// Gives generated code the write marks where its writes go to writes_
     /// (StaticKernelNativeFrame::write_marks).
     void bind_write_marks(StaticKernelNativeFrame& frame) noexcept
     {
+        // Every frame of a member's code (not the worker lanes': a thread
+        // member runs on the leader).
+        frame.assertion_starts = impl_.assertion_starts_bound ? 1U : 0U;
+        if (sva_table_used_) {
+            refresh_sva_table();
+            frame.sva = &sva_table_;
+        }
         if (worker_lane_ == nullptr && !write_marks_.empty()) {
             frame.write_round = write_round_;
             frame.write_marks = write_marks_.data();
@@ -1848,13 +2002,16 @@ private:
         std::vector<Member::Frame> frames;
         std::size_t frame_bytes { };
         std::vector<Member::SavedArray> saved_arrays;
-        std::vector<std::size_t> saved_array_marks;
+        std::vector<Member::ArrayMark> saved_array_marks;
         /// The forking thread and the fork group this child belongs to.
         std::uint32_t parent { static_kernel_detail::no_slot };
         std::uint32_t group { static_kernel_detail::no_slot };
         /// A fork child's Fork operation (the reference's fork_site), for
         /// disable (IEEE 1800-2023 9.6.2).
         std::uint32_t fork_site { static_kernel_detail::no_slot };
+        /// The forking thread's call depth at the fork: a child forked inside
+        /// a task a disabled block called ends with it.
+        std::uint32_t fork_depth { };
         /// thread_contexts members: the callable activations the thread is
         /// inside (the escaping ones inherited from its forking parent, then
         /// its own frames, innermost last); stored when it parks, loaded
@@ -2038,6 +2195,10 @@ private:
     struct NetDelaySite {
         std::uint32_t member { };
         std::uint32_t pc { };
+        /// Which leaf part of the operation's run this site holds: 0 for a
+        /// run in one slot, the leaf's place in the run over several leaves
+        /// of a vector alias.
+        std::uint32_t part { };
         std::uint32_t slot { };
         /// The run's first bit in the slot, and its width.
         std::uint32_t offset { };
@@ -2045,8 +2206,14 @@ private:
         PendingNetDelayWrites pending;
     };
     std::vector<NetDelaySite> net_delay_sites_;
-    /// Site by member << 32 | operation index.
+    /// Site by part << 56 | member << 32 | operation index.
     std::unordered_map<std::uint64_t, std::uint32_t> net_delay_site_of_;
+    [[nodiscard]] static std::uint64_t net_delay_site_key(
+        const std::uint32_t member, const std::uint32_t pc,
+        const std::uint32_t part) noexcept
+    {
+        return (std::uint64_t { part } << 56U) | (std::uint64_t { member } << 32U) | pc;
+    }
     /// The write of a WriteNetDelay operation of `member` at `pc` with
     /// `source`: each bit's change matures after the delay of its own
     /// transition, any number pending, with the pulse limits of the shared
@@ -2395,6 +2562,15 @@ private:
     void disable_thread_interval(std::uint32_t running, std::uint32_t running_pc,
         std::uint32_t owner, std::uint32_t begin, std::uint32_t end,
         std::optional<std::uint32_t>& running_redirect, bool include_end = false);
+    /// The depth of the outermost call of a thread made from [begin, end)
+    /// that has not returned (its return target is in (begin, end]).
+    [[nodiscard]] std::optional<std::uint32_t> call_inside(std::uint32_t thread,
+        std::uint32_t begin, std::uint32_t end) const;
+    /// End a thread's calls from depth `depth` on: restore their automatic
+    /// frames and private arrays and drop their return targets.
+    void unwind_thread_calls(std::uint32_t thread, std::uint32_t depth);
+    /// The running thread's call-stack depth.
+    [[nodiscard]] std::uint32_t running_call_depth(const Member& member) const;
     /// disable of a block or task named by hierarchical name (IEEE 1800-2023
     /// 9.6.2), as Interpreter::Impl::disable_named_scope: the first name
     /// that a member's program declares ends that interval in each of the
@@ -2497,6 +2673,10 @@ public:
         ProcessId process) const;
     /// Interpreter::kill_dynamic_processes for the kernel's fork children.
     void kill_member_children(std::span<const ProcessId> design_processes);
+    /// Appends the wake time of every live timer of the kernel (the
+    /// threads' delays, delayed-write maturities, VHDL timers and hosted
+    /// timers); a debug query (IEEE 1800-2023 37.81).
+    void append_timer_times(std::vector<SimulationTick>& times) const;
 private:
     /// A context covering every register, string and private array of the
     /// member, holding their current values.
@@ -2848,6 +3028,9 @@ private:
     bool debug_points_ { };
     /// StaticKernelRuntimeSpec::weak_sources (or a debugger plan).
     bool weak_sources_ { };
+    /// StaticKernelRuntimeSpec::time_resolution_femtoseconds (0: the
+    /// interpreter's time_format).
+    std::uint64_t time_resolution_ { };
     /// Debugger plan: the program the host member ran before its scheduler
     /// program became the kernel stub.
     std::optional<Process> host_original_;
@@ -3043,6 +3226,17 @@ private:
     /// element tables it points into.
     std::vector<StaticKernelContainerInfo> container_info_;
     std::vector<std::uint32_t> container_elements_;
+    /// The concurrent assertion tables (StaticKernelSvaTable), null in a
+    /// kernel without a compiled directive. The monitors publish their
+    /// block bases into *sva_blocks_ while it lives (sva::BlockSlot).
+    std::shared_ptr<std::vector<std::int64_t*>> sva_blocks_;
+    std::vector<std::uint32_t> sva_member_base_;
+    StaticKernelSvaTable sva_table_;
+    /// Whether compiled code reads sva_table_ (frame.sva): set when
+    /// compile_members emits KOp::sva_tick, sva_outcome or sva_sampled_load.
+    bool sva_table_used_ { };
+    /// The time step generated code reads for the $past sample test.
+    std::int64_t sva_now_ { };
     /// members_[i].process, dense: hot paths record slot writers without
     /// touching the large member records.
     std::vector<ProcessId> member_process_;

@@ -782,7 +782,7 @@ Exclusions never count as closures.
 | `file1` | not run | expects READ's LENGTH to be 3 for the 5-character value "hello" (IEEE 1076-2008 5.5.2) and reads a character file through a string file type, whose format is implementation-defined |
 | `ieee9` | not run | expects a conversion to a constrained sfixed subtype to keep the operand's index range; IEEE 1076-2019 9.3.6 gives the result the subtype's bounds |
 | `image2` | not run | asserts the 'IMAGE of a record with a REAL element as "((42,-5),true,2.5)"; the image of a floating-point value has implementation-defined digits and notation (IEEE 1076-2019 16.2.2, 5.2.5.1) |
-| `integer1` | not run | declares a 64-bit integer type |
+| `integer1` | not run | declares a 64-bit integer type under a revision before VHDL-2019, where fsim's integer range is 32-bit (IEEE 1076-2008 5.2.3.1) |
 | `integer2` | not run | expects INTEGER'HIGH + 1 to wrap to signed-64 INTEGER'LEFT; out-of-range INTEGER arithmetic is erroneous (IEEE 1076-2019 5.2.3.1) |
 | `integer3` | not run | asserts nvc's repeated range evaluation count, which the test notes should be 1 |
 | `issue1030` | not run | nvc-specific test kind wave |
@@ -860,7 +860,7 @@ Exclusions never count as closures.
 | `issue957` | not run | nvc-specific test kind wave |
 | `issue962` | not run | nvc-specific test kind wave |
 | `issue972` | not run | nvc-specific test kind wave |
-| `issue978` | not run | reads 64-bit integer and physical values through VHPI |
+| `issue978` | not run | reads 64-bit integer and physical values through VHPI under a revision before VHDL-2019, where fsim's integer range is 32-bit (IEEE 1076-2008 5.2.3.1) |
 | `issue979` | not run | nvc-specific test kind wave |
 | `issue983` | not run | nvc-specific test kind relaxed |
 | `issue985` | not run | nvc-specific test kind wave |
@@ -921,7 +921,7 @@ Exclusions never count as closures.
 | `vhpi13` | not run | counts initialization as a time step for vhpiCbRepNextTimeStep; IEEE 1076-2019 14.7.5.1 makes a first simulation cycle at time zero a delta cycle, and 14.7.5.3 b) 1) runs the callback only in a cycle that is not a delta cycle |
 | `vhpi14` | not run | expects vhpi_iterator to return an iterator for a call with no parameters; IEEE 1076-2019 23.24 returns NULL for an association with no target objects |
 | `vhpi17` | not run | expects the tool to claim vhpiProvidesPostAnalysis; fsim does not yet provide the IEEE 1076-2019 17.3 post-analysis capability set, and claiming it would contradict 17.3 |
-| `vhpi18` | not run | reads 64-bit integer and physical values through VHPI |
+| `vhpi18` | not run | reads 64-bit integer and physical values through VHPI under a revision before VHDL-2019, where fsim's integer range is 32-bit (IEEE 1076-2008 5.2.3.1) |
 | `vhpi20` | not run | nvc-specific test kind tcl |
 | `vhpi4` | not run | binds a foreign subprogram with nvc's single-token VHPIDIRECT form and calling convention; IEEE 1076-2019 20.2.4.3 defines VHPIDIRECT with an object library and execution specifier |
 | `vhpi8` | not run | expects vhpi_iterator to return an iterator for the indexed names of a null-range array; IEEE 1076-2019 23.24 returns NULL for an association with no target objects |

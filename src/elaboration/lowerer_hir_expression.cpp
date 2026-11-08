@@ -168,7 +168,7 @@ RegisterId Lowerer::widen_enumeration_ordinal(const RegisterId source)
         = language_ == frontend::Language::Vhdl2008
         ? static_cast<std::size_t>(
               frontend::vhdl_predefined_integer_storage_width(
-                  vhdl_standard_))
+                  vhdl_integer_standard()))
         : std::size_t { 32U };
     if (source_width == 1U
         && register_domain(source) == frontend::ValueDomain::Logic9) {
@@ -2682,6 +2682,21 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_attribute(
         }
         const auto destination = allocate_register(
             result_width, attribute->domain);
+        // A STD_ULOGIC bound is the literal at its position (U, X, 0, 1, Z,
+        // W, L, H, -; IEEE 1164), not that position's bits.
+        constexpr std::string_view logic9_literals = "UX01ZWLH-";
+        if (attribute->domain == frontend::ValueDomain::Logic9
+            && result_width == 1U && *attribute->constant >= 0
+            && *attribute->constant
+                < static_cast<std::int64_t>(logic9_literals.size())) {
+            process_.operations.emplace_back(LoadConstant {
+                destination,
+                PackedLogic4::from_logic9_msb_string(std::string(1U,
+                    logic9_literals[static_cast<std::size_t>(
+                        *attribute->constant)])),
+            });
+            return destination;
+        }
         process_.operations.emplace_back(LoadConstant {
             destination,
             integer_value(*attribute->constant, result_width),
@@ -6083,7 +6098,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
         }
         if (same_vhdl_identifier(spelling, "integer")) {
             const auto bits = frontend::vhdl_predefined_integer_storage_width(
-                vhdl_standard_);
+                vhdl_integer_standard());
             const auto minimum = bits == 0U || bits >= 64U
                 ? std::numeric_limits<std::int64_t>::min()
                 : -static_cast<std::int64_t>(
@@ -14209,6 +14224,14 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 : frontend::ValueDomain::Logic4);
         process_.operations.emplace_back(ReadSignal {
             whole, member->signal, SignalReadKind::current });
+        // A member or select of a load port named hierarchically reads the
+        // port's delayed copy there too (IEEE 1364-2005 16.2.4).
+        if (hierarchical_last_found_
+            && hierarchical_last_signal_ == member->signal
+            && hierarchical_reference_used_) {
+            hierarchical_marks_.push_back({ 0U, whole, member->signal, false,
+                hierarchical_last_path_ });
+        }
         record_implicit_signal_dependency(member->signal);
         const auto selected = allocate_register(
             static_cast<std::size_t>(member->width), register_domain(whole));
@@ -20301,6 +20324,27 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
     } else if (expression->systemverilog != nullptr
         && expression->systemverilog->kind
             == semantic::sv::ExpressionKind::call
+        && (expression->systemverilog->text == "$reset_count"
+            || expression->systemverilog->text == "$reset_value")) {
+        // The reset count and the value the last $reset passed (IEEE
+        // 1800-2023 D.8); the host keeps both for the running design.
+        const auto& call = *expression->systemverilog;
+        if (language_ == frontend::Language::Vhdl2008
+            || !call.operands.empty()) {
+            report("FSIM-ELAB-SVSIMCTL-001",
+                call.text + " takes no argument",
+                hir_source_span(call.source));
+            return std::nullopt;
+        }
+        const auto destination = allocate_register(
+            32U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(PlusArgSelect {
+            destination, allocate_string_register(), std::nullopt, false,
+            static_cast<std::uint8_t>(call.text == "$reset_count" ? 1U : 2U) });
+        result = destination;
+    } else if (expression->systemverilog != nullptr
+        && expression->systemverilog->kind
+            == semantic::sv::ExpressionKind::call
         && (expression->systemverilog->text == "$urandom"
             || (expression->systemverilog->text == "$random"
                 && expression->systemverilog->operands.size() != 1U)
@@ -20886,9 +20930,13 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                                             actual->type_mark.spelling,
                                             element->type_mark.spelling));
                         }
-                        if (source.kind
-                            == semantic::vhdl::ExpressionKind::integer_literal) {
-                            return !compiler_time_identity;
+                        if (!compiler_time_identity) {
+                            // Any globally static element of the element's
+                            // nominal type (IEEE 1076-2008 9.4.3): operators,
+                            // attributes, pure function calls, conversions.
+                            // The evaluator below folds it to an in-range
+                            // value or the table is not formed.
+                            return true;
                         }
                         if (source.kind
                                 == semantic::vhdl::ExpressionKind::unary
@@ -21307,7 +21355,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 = hir_effective_vhdl_subtype(*array->element_subtype);
             const auto width = static_cast<std::size_t>(
                 frontend::vhdl_predefined_integer_storage_width(
-                    vhdl_standard_));
+                    vhdl_integer_standard()));
             if (width == 0U
                 || !element
                 || element->domain != semantic::vhdl::ValueDomain::integer
@@ -21951,7 +21999,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             const auto element_width = predefined_integer_vector
                 ? static_cast<std::size_t>(
                       frontend::vhdl_predefined_integer_storage_width(
-                          vhdl_standard_))
+                          vhdl_integer_standard()))
                 : std::size_t { 1U };
             if (predefined_array && conversion->width != 0U
                 && element_width != 0U
@@ -28269,6 +28317,13 @@ std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_runtime_image(
     if (!width && simple_type == "character") {
         width = 8U;
     }
+    // A STD_ULOGIC or BIT scalar, such as an attribute of an IEEE subtype
+    // (`X01'LEFT`), is one element wide.
+    if (!width
+        && (simple_type == "std_ulogic" || simple_type == "std_logic"
+            || simple_type == "bit")) {
+        width = 1U;
+    }
     // A null array of a predefined type, such as STD_LOGIC_VECTOR, images
     // as a null string (IEEE 1076-2019 5.7, 16.2.2).
     if (!width) {
@@ -29246,9 +29301,83 @@ std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_scalar_image(
         return quoted(upper());
     }
     if (simple_type == "character") {
+        // A graphic character images as itself in apostrophes, a control
+        // character as its identifier in lowercase (NUL as "nul", IEEE
+        // 1076-2019 16.2.2, 16.3).
         append_formatted(runtime::simir::OutputFormat::character, false,
             frontend::SystemVerilogScalarKind::None);
-        return quoted(destination);
+        const auto graphic = quoted(destination);
+        if (width != 8U) {
+            return graphic;
+        }
+        const auto result = allocate_string_register();
+        process_.operations.emplace_back(LoadStringConstant { result, { } });
+        process_.operations.emplace_back(ConcatenateStrings {
+            result, { result, graphic } });
+        const auto boolean = [&](const BinaryOperator operation,
+                                 const RegisterId left, const RegisterId right) {
+            const auto output = allocate_register(
+                1U, frontend::ValueDomain::Boolean);
+            process_.operations.emplace_back(Binary {
+                operation, output, left, right });
+            return output;
+        };
+        const auto compare = [&](const BinaryOperator operation,
+                                 const std::uint64_t code) {
+            return boolean(operation, value,
+                load_constant(unsigned_value(code, width), domain));
+        };
+        const auto control = boolean(BinaryOperator::bit_or,
+            compare(BinaryOperator::less_unsigned, 32U),
+            boolean(BinaryOperator::bit_and,
+                compare(BinaryOperator::greater_equal_unsigned, 127U),
+                compare(BinaryOperator::less_unsigned, 160U)));
+        const auto guard = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations.emplace_back(Branch {
+            control, 0U, 0U, UnknownBranchPolicy::when_false });
+        const auto names = static_cast<InstructionIndex>(
+            process_.operations.size());
+        static constexpr std::array<std::string_view, 32U> low {
+            "nul", "soh", "stx", "etx", "eot", "enq", "ack", "bel",
+            "bs", "ht", "lf", "vt", "ff", "cr", "so", "si",
+            "dle", "dc1", "dc2", "dc3", "dc4", "nak", "syn", "etb",
+            "can", "em", "sub", "esc", "fsp", "gsp", "rsp", "usp",
+        };
+        std::vector<InstructionIndex> exits;
+        for (std::uint64_t code { }; code < 160U; ++code) {
+            if (code >= 32U && code < 127U) {
+                continue;
+            }
+            const auto matched = compare(BinaryOperator::equal, code);
+            const auto branch = static_cast<InstructionIndex>(
+                process_.operations.size());
+            process_.operations.emplace_back(Branch {
+                matched, 0U, 0U, UnknownBranchPolicy::when_false });
+            const auto selected = static_cast<InstructionIndex>(
+                process_.operations.size());
+            process_.operations.emplace_back(LoadStringConstant { result,
+                code < 32U ? std::string { low[code] }
+                    : code == 127U ? std::string { "del" }
+                                   : "c" + std::to_string(code) });
+            exits.push_back(static_cast<InstructionIndex>(
+                process_.operations.size()));
+            process_.operations.emplace_back(Jump { });
+            process_.operations[branch] = Branch {
+                matched,
+                selected,
+                static_cast<InstructionIndex>(process_.operations.size()),
+                UnknownBranchPolicy::when_false,
+            };
+        }
+        const auto done = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations[guard] = Branch {
+            control, names, done, UnknownBranchPolicy::when_false };
+        for (const auto exit : exits) {
+            process_.operations[exit] = Jump { done };
+        }
+        return result;
     }
     std::vector<std::string> images;
     if (enumeration) {
@@ -34181,7 +34310,7 @@ Lowerer::hir_vhdl_predefined_array_element(
         set("std.standard.boolean", semantic::vhdl::ValueDomain::boolean, 1U);
     } else if (same_vhdl_identifier(array_name, "integer_vector")) {
         const auto width
-            = vhdl_standard_ == frontend::VhdlStandard::Vhdl2019 ? 64U : 32U;
+            = vhdl_wide_integer_ ? 64U : 32U;
         set("std.standard.integer", semantic::vhdl::ValueDomain::integer,
             width);
         element.integer_storage_width = static_cast<std::uint8_t>(width);

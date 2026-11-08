@@ -865,6 +865,27 @@ std::size_t ElaboratedDesign::bind_primitive_delay_slots()
     return changed;
 }
 
+bool ElaboratedDesign::scan_simulation_control()
+{
+    using namespace runtime::simir;
+    const auto holds = [](const OperationList& operations) {
+        return std::ranges::any_of(operations, [](const Operation& operation) {
+            const auto* display = operation_get_if<Display>(&operation);
+            return display != nullptr
+                && display->text.starts_with(simulation_control_marker);
+        });
+    };
+    if (process_rows_) {
+        return std::ranges::any_of(process_rows_->rows, [&](const auto& row) {
+            return holds(row.instance.operations);
+        });
+    }
+    (void)processes();
+    return std::ranges::any_of(processes_, [&](const auto& process) {
+        return holds(process.operations);
+    });
+}
+
 std::size_t ElaboratedDesign::process_count() const noexcept
 {
     if (process_builder_) {
@@ -963,11 +984,11 @@ runtime::simir::ProcessProgramView ElaboratedDesign::process_view(
 
 void ElaboratedDesign::finalize_process_rows()
 {
-    if (!process_builder_) {
-        return;
+    if (process_builder_) {
+        process_rows_ = std::move(*process_builder_).freeze();
+        process_builder_.reset();
     }
-    process_rows_ = std::move(*process_builder_).freeze();
-    process_builder_.reset();
+    uses_simulation_control_ = scan_simulation_control();
 }
 
 detail::RuntimeProcessProgramTableBuilder::
@@ -1625,6 +1646,14 @@ void ElaboratedDesign::finalize_signal_driver_inventory()
     }
 }
 
+void ElaboratedDesign::replace_module_timing(
+    std::vector<VerilogSpecifyPathInfo> paths,
+    std::vector<runtime::simir::ModuleTimingCheck> checks)
+{
+    verilog_specify_paths_ = std::move(paths);
+    verilog_timing_checks_ = std::move(checks);
+}
+
 ElaboratedDesignState ElaboratedDesign::state() const&
 {
     if (process_builder_) {
@@ -1653,7 +1682,7 @@ ElaboratedDesignState ElaboratedDesign::state() const&
         { }, code_coverage_inventory_, *driver_inventory,
         verilog_primitives_, sdf_net_delays_,
         interface_handle_rows(systemverilog_interface_handles_),
-        hierarchical_reads_,
+        hierarchical_reads_, uses_simulation_control_,
     };
     if (process_rows_) {
         result.processes.reserve(process_rows_->rows.size());
@@ -1716,7 +1745,7 @@ detail::ElaboratedDesignProcessAccess::artifact_state(
         design.code_coverage_inventory_, *driver_inventory,
         design.verilog_primitives_, design.sdf_net_delays_,
         interface_handle_rows(design.systemverilog_interface_handles_),
-        design.hierarchical_reads_,
+        design.hierarchical_reads_, design.uses_simulation_control_,
     };
     result.signal_names.reserve(design.signal_by_path_.size());
     for (const auto& [path, signal] : design.signal_by_path_) {
@@ -1780,6 +1809,7 @@ detail::ElaboratedDesignProcessAccess::take_artifact_state(
         std::move(design.sdf_net_delays_),
         interface_handle_rows(design.systemverilog_interface_handles_),
         std::move(design.hierarchical_reads_),
+        design.uses_simulation_control_,
     };
     result.signal_names.reserve(design.signal_by_path_.size());
     for (const auto& [path, signal] : design.signal_by_path_) {
@@ -1849,7 +1879,7 @@ ElaboratedDesignState ElaboratedDesign::state() &&
         std::move(driver_inventory_value),
         std::move(verilog_primitives_), std::move(sdf_net_delays_),
         interface_handle_rows(systemverilog_interface_handles_),
-        std::move(hierarchical_reads_),
+        std::move(hierarchical_reads_), uses_simulation_control_,
     };
     result.signal_names.reserve(signal_by_path_.size());
     for (const auto& [path, signal] : signal_by_path_) {
@@ -2487,6 +2517,7 @@ ElaboratedDesign::from_state_with_process_rows(
     result.verilog_primitives_ = std::move(state.verilog_primitives);
     result.sdf_net_delays_ = std::move(state.sdf_net_delays);
     result.hierarchical_reads_ = std::move(state.hierarchical_reads);
+    result.uses_simulation_control_ = state.uses_simulation_control;
     for (auto& [path, handle] : state.systemverilog_interface_handles) {
         result.systemverilog_interface_handles_.emplace(
             std::move(path), handle);

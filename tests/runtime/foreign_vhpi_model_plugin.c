@@ -126,6 +126,18 @@ static void properties(vhpiHandleT root, vhpiHandleT unit)
     // Files and the parameters of a subprogram (19.4.3, 19.10).
     item = declaration(root, vhpiFileDeclK, "fi");
     printf("#c fi openmode=%d\n", (int)vhpi_get(vhpiOpenModeP, item));
+    // The logical name of a file declaration (6.4.2.5, Figure 10).
+    item = declaration(root, vhpiFileDeclK, "fo");
+    printf("#c fo logicalname=%s\n", text_property(item, vhpiLogicalNameP));
+    // The entity class of an attribute specification (7.2, 23.10).
+    iterator = vhpi_iterator(vhpiDecls, root);
+    while (iterator != NULL && (item = vhpi_scan(iterator)) != NULL) {
+        if (vhpi_get(vhpiKindP, item) == vhpiAttrSpecK) {
+            printf("#c attrspec entityclass=%d signal=%d\n",
+                (int)vhpi_get(vhpiEntityClassP, item),
+                vhpi_get(vhpiEntityClassP, item) == vhpiSignalEC);
+        }
+    }
     item = declaration(root, vhpiProcDeclK, "drive");
     iterator = vhpi_iterator(vhpiParamDecls, item);
     first = iterator == NULL ? NULL : vhpi_scan(iterator);

@@ -5109,6 +5109,20 @@ Lowerer::hir_class_task_profile(
                         break;
                     }
                 }
+            } else {
+                // `m1.a.t(...)`: a prototype of the interface a module
+                // instance's port connects to (25.7.4); the exporting body
+                // is chosen below.
+                for (const bool function : { false, true }) {
+                    if (const auto prototype = hir_interface_port_prototype(
+                            receiver, identity.substr(separator + 1U),
+                            function)) {
+                        selected_declaration = *prototype;
+                        interface_receiver = std::string { receiver };
+                        instance_function = function;
+                        break;
+                    }
+                }
             }
         }
         // A simple name declared neither here nor in a visible scope names
@@ -5157,12 +5171,27 @@ Lowerer::hir_class_task_profile(
     }
     // `ifc.send(...)` of a subroutine a modport exports runs the exporting
     // instance's definition (IEEE 1800-2017 25.7.3).
+    HirForkjoinBodies forkjoin_bodies;
     if (const auto separator = identity.rfind('.');
         !class_call && separator != std::string_view::npos
         && separator != 0U) {
         if (const auto exported = hir_exported_interface_callable(
                 identity.substr(0U, separator), *selected_declaration,
-                instance_function)) {
+                instance_function, &forkjoin_bodies)) {
+            if (!exported->first.valid()) {
+                return std::nullopt;
+            }
+            selected_declaration = exported->first;
+            interface_receiver = exported->second;
+        }
+    } else if (!class_call && separator == std::string_view::npos
+        && !instance_function && !hierarchy_.empty()) {
+        // An interface's own process calls a prototype of that interface
+        // by its simple name (`countTargets;` in 25.7.4): the instance is
+        // the receiver.
+        if (const auto exported = hir_exported_interface_callable(
+                hierarchy_, *selected_declaration, false,
+                &forkjoin_bodies)) {
             if (!exported->first.valid()) {
                 return std::nullopt;
             }
@@ -5233,6 +5262,7 @@ Lowerer::hir_class_task_profile(
         ? selected->canonical_identity
         : std::string { identity };
     result.interface_receiver = std::move(interface_receiver);
+    result.forkjoin = std::move(forkjoin_bodies);
     result.static_method = static_call;
     // Class methods have automatic lifetime unless declared static (IEEE
     // 1800-2017 8.6).
@@ -8083,6 +8113,7 @@ Lowerer::hir_virtual_interface_instances(const std::string_view receiver,
 bool Lowerer::lower_hir_class_task_call(
     const semantic::StatementId statement_id)
 {
+    using namespace runtime::simir;
     if (const auto statement = specialized_hir_unit_->find_statement(
             statement_id);
         statement && statement->systemverilog != nullptr
@@ -8162,6 +8193,118 @@ bool Lowerer::lower_hir_class_task_call(
         // object runs on `this` (8.11); a compilation-unit or package task
         // has no object.
         receiver = *hir_class_receiver_register_;
+    }
+
+    // `extern forkjoin task` (IEEE 1800-2023 25.7.3, 25.7.4): the call runs
+    // the body of every exporting module instance as the branches of a
+    // fork...join; with no exporter it reports a run-time error and returns
+    // at once with no effect.
+    if (profile->forkjoin.forkjoin) {
+        const auto statement = specialized_hir_unit_->find_statement(
+            statement_id);
+        if (!statement || statement->systemverilog == nullptr) {
+            return false;
+        }
+        if (profile->forkjoin.bodies.empty()) {
+            process_.operations.emplace_back(Report {
+                "call of an extern forkjoin task that no module connected "
+                "to the interface defines",
+                runtime::simir::AssertionSeverity::error,
+                runtime_source_location(
+                    hir_source_span(statement->systemverilog->source)),
+            });
+            return true;
+        }
+        const auto fork_site = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations.emplace_back(Fork { });
+        const auto continuation_jump = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations.emplace_back(Jump { 0U });
+        // The branches run as other processes and reach container
+        // properties through the object, not this process's cache.
+        auto saved_caches = std::exchange(hir_class_container_caches_, { });
+        std::vector<InstructionIndex> branches;
+        bool lowered_branches = true;
+        for (const auto& [body, path] : profile->forkjoin.bodies) {
+            branches.push_back(static_cast<InstructionIndex>(
+                process_.operations.size()));
+            auto body_profile = *profile;
+            body_profile.declaration = body;
+            body_profile.interface_receiver = path;
+            body_profile.forkjoin = { };
+            // A disable of the task ends the calls it names (25.7.4): via
+            // the interface instance every call, via a module instance only
+            // that module's. Each name the interface is known by (the
+            // instance, and the port of each module it connects to) scopes
+            // the branches it reaches; a name under this body's module
+            // reaches this branch only, a name under another exporter's
+            // module is not this branch's.
+            std::vector<std::string> scopes;
+            if (systemverilog_interface_handles_ != nullptr
+                && disable_target_labels_ != nullptr
+                && disable_target_labels_->contains(profile->forkjoin.name)) {
+                std::vector<std::string> names;
+                for (const auto& [alias, alias_handle] :
+                    *systemverilog_interface_handles_) {
+                    if (alias_handle == profile->forkjoin.handle) {
+                        names.push_back(alias);
+                    }
+                }
+                std::ranges::sort(names);
+                const auto under = [](const std::string_view alias,
+                                       const std::string_view module_path) {
+                    return alias.size() > module_path.size() + 1U
+                        && alias.starts_with(module_path)
+                        && alias[module_path.size()] == '.'
+                        && alias.find('.', module_path.size() + 1U)
+                            == std::string_view::npos;
+                };
+                for (const auto& alias : names) {
+                    bool other_exporter { };
+                    for (const auto& [other, other_path] :
+                        profile->forkjoin.bodies) {
+                        (void)other;
+                        if (other_path != path
+                            && under(alias,
+                                hir_forkjoin_module_path(other_path))) {
+                            other_exporter = true;
+                        }
+                    }
+                    if (!other_exporter) {
+                        scopes.push_back(alias + "." + profile->forkjoin.name);
+                    }
+                }
+            }
+            const auto body_span = hir_source_span(statement->systemverilog->source);
+            for (const auto& scope : scopes) {
+                process_.operations.emplace_back(DebugPoint {
+                    DebugPointKind::block_entry,
+                    runtime_source_location(body_span), scope });
+            }
+            if (!lower_hir_class_task_invocation(
+                    statement_id, body_profile, receiver)) {
+                lowered_branches = false;
+                break;
+            }
+            for (auto scope = scopes.rbegin(); scope != scopes.rend(); ++scope) {
+                process_.operations.emplace_back(DebugPoint {
+                    DebugPointKind::block_exit,
+                    runtime_source_location(body_span), *scope });
+            }
+            process_.operations.emplace_back(ForkEnd { });
+        }
+        hir_class_container_caches_ = std::move(saved_caches);
+        if (!lowered_branches) {
+            return false;
+        }
+        process_.operations[continuation_jump] = Jump {
+            static_cast<InstructionIndex>(process_.operations.size()) };
+        process_.operations[fork_site] = Fork {
+            std::move(branches), runtime::simir::ForkJoinKind::all, false,
+            false
+        };
+        return true;
     }
 
     // A virtual UVM library task called through a handle runs the override
@@ -9412,11 +9555,15 @@ Lowerer::lower_hir_class_callable_invocation(
         lowered_container_actuals(profile.actuals.size());
     std::vector<std::optional<HirPackedUpdateTarget>>
         packed_copy_out_targets(profile.actuals.size());
-    for (std::size_t index = 0U;
-        index < profile.actuals.size(); ++index) {
+    // IEEE 1800-2023 16.4: a by-value actual of a deferred assertion action
+    // is evaluated when the assertion is, before the handoff; a ref or
+    // const ref actual that is not bound to a whole variable (an element
+    // select, say) is read in the action's region, after it.
+    const bool deferred_call = deferred_assertion_action_phase_.has_value();
+    const auto lower_actual = [&](const std::size_t index) -> bool {
         const auto& actual = profile.actuals[index];
         if (ref_signals[index]) {
-            continue;
+            return true;
         }
         if (actual.container) {
             const auto formal_type
@@ -9444,17 +9591,17 @@ Lowerer::lower_hir_class_callable_invocation(
                             specialized_hir_unit_
                                 ->find_expression(actual.expression)
                                 ->systemverilog->source));
-                    continue;
+                    return true;
                 }
                 const auto value = lower_hir_static_container_actual(
                     actual.expression, formal_type, formals[index]);
                 if (!value) {
-                    return std::nullopt;
+                    return false;
                 }
                 process_.operations.emplace_back(CopyContainerRegister {
                     storage, *value });
             }
-            continue;
+            return true;
         }
         if (!actual.string
             && class_method_copy_out(actual.direction)) {
@@ -9463,15 +9610,15 @@ Lowerer::lower_hir_class_callable_invocation(
                     actual.expression);
         }
         if (!callable_copy_in(actual.direction)) {
-            continue;
+            return true;
         }
         if (actual.string) {
             lowered_string_actuals[index]
                 = lower_hir_string_expression(actual.expression);
             if (!lowered_string_actuals[index]) {
-                return std::nullopt;
+                return false;
             }
-            continue;
+            return true;
         }
         // A real actual of an integral inout formal converts on the way in
         // as on the way out (6.12.2).
@@ -9492,7 +9639,7 @@ Lowerer::lower_hir_class_callable_invocation(
             : lower_hir_callable_actual(
                   actual.expression, formals[index], formal_width);
         if (!lowered_actuals[index]) {
-            return std::nullopt;
+            return false;
         }
         if (register_width(*lowered_actuals[index]) != formal_width) {
             lowered_actuals[index] = resize_register(
@@ -9505,10 +9652,29 @@ Lowerer::lower_hir_class_callable_invocation(
             lowered_actuals[index]
                 = convert_to_two_state(*lowered_actuals[index]);
         }
+        return true;
+    };
+    for (std::size_t index = 0U;
+        index < profile.actuals.size(); ++index) {
+        if (deferred_call
+            && profile.actuals[index].direction
+                == frontend::PortDirection::Ref) {
+            continue;
+        }
+        if (!lower_actual(index)) {
+            return std::nullopt;
+        }
     }
 
     emit_debug_point(DebugPointKind::call, hir_source_span(source));
     emit_deferred_assertion_action_handoff();
+    for (std::size_t index = 0U;
+        deferred_call && index < profile.actuals.size(); ++index) {
+        if (profile.actuals[index].direction == frontend::PortDirection::Ref
+            && !lower_actual(index)) {
+            return std::nullopt;
+        }
+    }
     auto& frame = hir_callable_frames_[frame_index];
     if (frame.type.automatic) {
         const auto push_site = static_cast<InstructionIndex>(
@@ -10054,7 +10220,7 @@ Lowerer::hir_vhdl_type_actual(
     result.type_mark.spelling = name;
     if (name == "integer" || name == "natural" || name == "positive") {
         const auto width = frontend::vhdl_predefined_integer_storage_width(
-            vhdl_standard_);
+            vhdl_integer_standard());
         result.domain = semantic::vhdl::ValueDomain::integer;
         result.executable_width = width;
         result.integer_storage_width = width;
@@ -10918,9 +11084,67 @@ Lowerer::hir_interface_instance_through_modport(
     }
 }
 
+std::string_view Lowerer::hir_forkjoin_module_path(
+    const std::string_view receiver) noexcept
+{
+    constexpr std::string_view instance_prefix { "@instance:" };
+    return receiver.starts_with(instance_prefix)
+        ? receiver.substr(instance_prefix.size())
+        : receiver;
+}
+
+std::optional<semantic::DeclarationId> Lowerer::hir_interface_port_prototype(
+    const std::string_view receiver, const std::string_view member,
+    const bool function) const
+{
+    if (systemverilog_interface_handles_ == nullptr
+        || systemverilog_interface_types_ == nullptr
+        || specialized_hir_unit_ == nullptr || receiver.empty()) {
+        return std::nullopt;
+    }
+    for (std::string_view scope = hierarchy_;;) {
+        const auto path = scope.empty()
+            ? std::string { receiver }
+            : std::string { scope } + "." + std::string { receiver };
+        if (const auto type = systemverilog_interface_types_->find(path);
+            type != systemverilog_interface_types_->end()
+            && systemverilog_interface_handles_->contains(path)) {
+            const auto& design = specialized_hir_unit_->design();
+            const auto unit = std::ranges::find_if(
+                design.systemverilog_hir.units(),
+                [&](const semantic::sv::Unit& candidate) {
+                    return candidate.kind
+                            == semantic::sv::UnitKind::interface
+                        && candidate.name == type->second;
+                });
+            if (unit == design.systemverilog_hir.units().end()) {
+                return std::nullopt;
+            }
+            for (const auto id : unit->declarations) {
+                const auto view = design.find_declaration(id);
+                if (view && view->systemverilog != nullptr
+                    && view->systemverilog->name == member
+                    && view->systemverilog->statements.empty()
+                    && view->systemverilog->callable
+                    && view->systemverilog->callable->function == function) {
+                    return id;
+                }
+            }
+            return std::nullopt;
+        }
+        if (scope.empty()) {
+            return std::nullopt;
+        }
+        const auto dot = scope.rfind('.');
+        scope = dot == std::string_view::npos ? std::string_view { }
+                                              : scope.substr(0U, dot);
+    }
+}
+
 std::optional<std::pair<semantic::DeclarationId, std::string>>
 Lowerer::hir_exported_interface_callable(const std::string_view receiver,
-    const semantic::DeclarationId declaration, const bool function) const
+    const semantic::DeclarationId declaration, const bool function,
+    HirForkjoinBodies* const forkjoin) const
 {
     if (systemverilog_interface_exports_ == nullptr
         || systemverilog_interface_handles_ == nullptr
@@ -10954,6 +11178,9 @@ Lowerer::hir_exported_interface_callable(const std::string_view receiver,
     // The interface instance: the receiver, or the receiver without its
     // modport (`bif.consumer`), searched upward from the calling scope.
     std::optional<std::uint64_t> handle;
+    // The name the interface was reached by (the instance, or a module's port
+    // for it); a port of an exporting module selects that module's body.
+    std::string reached_by;
     for (std::string instance { receiver };
          !handle && !instance.empty();) {
         for (std::string_view scope = hierarchy_;;) {
@@ -10963,6 +11190,7 @@ Lowerer::hir_exported_interface_callable(const std::string_view receiver,
             if (const auto found = systemverilog_interface_handles_->find(path);
                 found != systemverilog_interface_handles_->end()) {
                 handle = found->second;
+                reached_by = path;
                 break;
             }
             if (scope.empty()) {
@@ -10982,8 +11210,52 @@ Lowerer::hir_exported_interface_callable(const std::string_view receiver,
     if (!handle) {
         return std::nullopt;
     }
-    const auto exporter = systemverilog_interface_exports_->find(
-        std::to_string(*handle) + ":" + name);
+    const auto key = std::to_string(*handle) + ":" + name;
+    if (forkjoin != nullptr && !function && prototype->systemverilog->callable
+        && prototype->systemverilog->callable->extern_forkjoin) {
+        // A call runs the body of every module that exports the task, as
+        // the branches of a fork...join (25.7.3, 25.7.4). The exports are
+        // complete: a design with such a prototype lowers its processes
+        // after the whole hierarchy exists (systemverilog_defers_process_
+        // lowering).
+        forkjoin->forkjoin = true;
+        forkjoin->handle = *handle;
+        forkjoin->name = name;
+        for (std::size_t slot { };; ++slot) {
+            const auto found = systemverilog_interface_exports_->find(
+                slot == 0U ? key : key + "#" + std::to_string(slot));
+            if (found == systemverilog_interface_exports_->end()) {
+                break;
+            }
+            if (const auto body = hir_instance_callable(
+                    found->second, name, function);
+                body && body->first.valid()) {
+                forkjoin->bodies.push_back(*body);
+            }
+        }
+        // A call through a module instance (`top.m1.a.t()`, 25.7.4) is the
+        // call of that module's body only.
+        std::optional<std::string> selected_module;
+        for (const auto& [other, other_receiver] : forkjoin->bodies) {
+            (void)other;
+            const auto other_path
+                = hir_forkjoin_module_path(other_receiver);
+            if (reached_by.size() > other_path.size() + 1U
+                && reached_by.starts_with(other_path)
+                && reached_by[other_path.size()] == '.'
+                && reached_by.find('.', other_path.size() + 1U)
+                    == std::string::npos) {
+                selected_module = other_receiver;
+            }
+        }
+        if (selected_module) {
+            std::erase_if(forkjoin->bodies, [&](const auto& body) {
+                return body.second != *selected_module;
+            });
+        }
+        return std::pair { declaration, std::string { receiver } };
+    }
+    const auto exporter = systemverilog_interface_exports_->find(key);
     if (exporter == systemverilog_interface_exports_->end()) {
         // The exporting instance may be elaborated after this process; the
         // call fails and the process is retried then.
@@ -11429,8 +11701,7 @@ std::optional<Lowerer::HirCallableType> Lowerer::hir_callable_type(
                 } else if (definition->vhdl->form
                     == semantic::vhdl::TypeForm::physical) {
                     subtype->executable_width
-                        = vhdl_standard_
-                                == frontend::VhdlStandard::Vhdl2019
+                        = vhdl_wide_integer_
                         ? 64U
                         : 32U;
                 }
@@ -11461,7 +11732,7 @@ std::optional<Lowerer::HirCallableType> Lowerer::hir_callable_type(
                   subtype->integer_storage_width != 0U
                       ? subtype->integer_storage_width
                       : frontend::vhdl_predefined_integer_storage_width(
-                            vhdl_standard_)
+                            vhdl_integer_standard())
               }
             : std::nullopt;
         if (!width || (context_sized
@@ -11612,7 +11883,7 @@ Lowerer::hir_callable_formal_binding(
               subtype->integer_storage_width != 0U
                   ? subtype->integer_storage_width
                   : frontend::vhdl_predefined_integer_storage_width(
-                        vhdl_standard_)
+                        vhdl_integer_standard())
           }
         : std::nullopt;
     // A partially constrained record formal has the element bounds of its
@@ -13300,7 +13571,7 @@ Lowerer::hir_vhdl_function_result_proof(
     }
     const auto value_id = *statement->vhdl->value;
     const auto standard_element_width = standard_array_element_width(
-        standard_return_identity, vhdl_standard_);
+        standard_return_identity, vhdl_integer_standard());
     if (return_array == nullptr && standard_element_width
         && standard_return_identity
             != semantic::vhdl::BuiltinTypeIdentity::std_standard_string
@@ -14286,7 +14557,7 @@ Lowerer::hir_vhdl_function_result_proof(
                 && aggregate_elements_match) {
                 const auto element_width_value
                     = frontend::vhdl_predefined_integer_storage_width(
-                        vhdl_standard_);
+                        vhdl_integer_standard());
                 const auto count = value->vhdl->associations.size();
                 const auto aggregate_width
                     = hir_vhdl_positional_aggregate_width(
@@ -14682,7 +14953,7 @@ Lowerer::hir_vhdl_function_result_proof(
                       }
                     : std::optional<std::uint64_t> {
                           frontend::vhdl_predefined_integer_storage_width(
-                              vhdl_standard_)
+                              vhdl_integer_standard())
                       };
                 if (integer_width && *integer_width != 0U
                     && *integer_width
@@ -18051,7 +18322,7 @@ std::optional<Lowerer::HirPackedRange> Lowerer::hir_vhdl_index_subtype_range(
     spelling = simple_name_of(spelling);
     if (same_hir_identifier(spelling, "natural", true)) {
         return HirPackedRange { 0,
-            vhdl_standard_ == frontend::VhdlStandard::Vhdl2019
+            vhdl_wide_integer_
                 ? std::numeric_limits<std::int64_t>::max()
                 : static_cast<std::int64_t>(
                       std::numeric_limits<std::int32_t>::max()),
@@ -18059,7 +18330,7 @@ std::optional<Lowerer::HirPackedRange> Lowerer::hir_vhdl_index_subtype_range(
     }
     if (same_hir_identifier(spelling, "positive", true)) {
         return HirPackedRange { 1,
-            vhdl_standard_ == frontend::VhdlStandard::Vhdl2019
+            vhdl_wide_integer_
                 ? std::numeric_limits<std::int64_t>::max()
                 : static_cast<std::int64_t>(
                       std::numeric_limits<std::int32_t>::max()),
@@ -18067,11 +18338,11 @@ std::optional<Lowerer::HirPackedRange> Lowerer::hir_vhdl_index_subtype_range(
     }
     if (same_hir_identifier(spelling, "integer", true)) {
         return HirPackedRange {
-            vhdl_standard_ == frontend::VhdlStandard::Vhdl2019
+            vhdl_wide_integer_
                 ? std::numeric_limits<std::int64_t>::min()
                 : static_cast<std::int64_t>(
                       std::numeric_limits<std::int32_t>::min()),
-            vhdl_standard_ == frontend::VhdlStandard::Vhdl2019
+            vhdl_wide_integer_
                 ? std::numeric_limits<std::int64_t>::max()
                 : static_cast<std::int64_t>(
                       std::numeric_limits<std::int32_t>::max()),
@@ -18687,7 +18958,7 @@ Lowerer::HirVhdlFunctionActualShapes Lowerer::hir_vhdl_function_actual_shapes(
                             hir_generic_binding_frames_);
                     if (const auto width
                         = standard_array_element_width(
-                              identity, vhdl_standard_)) {
+                              identity, vhdl_integer_standard())) {
                         return *width;
                     }
                 }
@@ -21406,13 +21677,10 @@ bool Lowerer::lower_hir_dpi_export_foreign()
             }
             continue;
         }
-        // A unit's instances are known once the hierarchy is complete
-        // (children are elaborated after their parent's processes), so
-        // the process is lowered on its retry.
-        if (hierarchical_reference_retry_) {
-            hierarchical_reference_missed_ = true;
-            return false;
-        }
+        // A design with DPI exports lowers its processes once every
+        // instance and specialization exists (the hierarchy builder's
+        // systemverilog_defers_process_lowering), so the table of a unit's
+        // instances is complete here and no retry is needed.
         std::vector<std::string> paths;
         for (const auto& specialization : design_.specializations_) {
             if (specialization.source_unit
@@ -21453,9 +21721,9 @@ bool Lowerer::lower_hir_dpi_block_exports_foreign()
     }
     // The exports of a generate block are served for each instance of the
     // block, in that instance (IEEE 1800-2023 35.5.3, 35.7): the hook of the
-    // block runs with the block instance as its receiver. The block
-    // instances of an instance are known once its specialization is
-    // recorded, so the process is lowered on its retry.
+    // block runs with the block instance as its receiver. Every
+    // specialization, with its generate blocks, exists before the process is
+    // lowered (see the hierarchy builder), so no retry is needed.
     const auto& design = specialized_hir_unit_->design();
     const auto& scopes = design.semantics.scopes();
     std::set<std::string> served;
@@ -21476,10 +21744,6 @@ bool Lowerer::lower_hir_dpi_block_exports_foreign()
                 break;
             }
             current = &scopes[current->parent->value()];
-        }
-        if (hierarchical_reference_retry_) {
-            hierarchical_reference_missed_ = true;
-            return false;
         }
         for (const auto& specialization : design_.specializations_) {
             if (!specialization.source_unit
@@ -25219,6 +25483,12 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
     if (!declaration) {
         return false;
     }
+    // A package function, task or class method body is lowered under the
+    // revision its declaring unit was analyzed with, not the caller's.
+    std::optional<HirStandardScope> declaring_standard;
+    if (declaration->systemverilog != nullptr) {
+        declaring_standard.emplace(*this, declaration->systemverilog->scope);
+    }
     auto statements = declaration->systemverilog != nullptr
         ? std::span<const semantic::StatementId> {
               declaration->systemverilog->statements
@@ -25232,6 +25502,11 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
 
     auto* initial_frame = &hir_callable_frames_[callable_index];
     const auto automatic = initial_frame->type.automatic;
+    const SizeRestoreGuard callable_scope { hir_callable_scopes_ };
+    if (declaration->systemverilog != nullptr) {
+        hir_callable_scopes_.push_back(
+            { declaration->systemverilog->name, local_scope_.size() });
+    }
     const SizeRestoreGuard generic_scope { hir_generic_binding_frames_ };
     for (const auto& environment : initial_frame->generic_environment) {
         hir_generic_binding_frames_.push_back(environment);
@@ -25315,6 +25590,36 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
     }
     initial_frame->call_sites.clear();
     initial_frame->lowered = true;
+
+    // The value a user function call returned (IEEE 1800-2023 38.15,
+    // 37.42): the result register is a slot of the process program's
+    // call-result table (`Process::call_results`, not a debug local, so the
+    // debug-local listings and gates do not see it), named
+    // `<callable>.@result` behind the lowering's suffix, which a run with the
+    // execution probes reads at the frame's end (`frame_exit`). A string,
+    // container or void result has no register to read.
+    if (initial_frame->function && declaration->systemverilog != nullptr
+        && (!declaration->systemverilog->type
+            || declaration->systemverilog->type->target.spelling != "void")
+        && !initial_frame->type.string && !initial_frame->type.container
+        && initial_frame->type.width != 0U
+        && !initial_frame->debug_name.empty()) {
+        const auto& function_record = *declaration->systemverilog;
+        process_.call_results.push_back(DebugLocal {
+            initial_frame->debug_name + ".@result@hir-callable-"
+                + std::to_string(initial_frame->invocation_identity),
+            function_record.type ? function_record.type->target.spelling
+                                 : std::string { "logic" },
+            initial_frame->result,
+            register_width(initial_frame->result),
+            runtime_source_location(hir_source_span(function_record.source)),
+            std::nullopt,
+            std::nullopt,
+            value_kind(register_domains_[initial_frame->result]),
+            { },
+            frontend::SystemVerilogScalarKind::None,
+        });
+    }
 
     // Another process may have lowered this package-level function under
     // the same key; its body then differs only in register and instruction

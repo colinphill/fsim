@@ -2746,6 +2746,12 @@ void Lowerer::emit_deferred_assertion_action_handoff()
     }
     const auto fork = static_cast<InstructionIndex>(
         process_.operations.size());
+    // The branch gets a private copy of the register frame (the fork's
+    // isolate_register_frame), so what the process evaluated before the
+    // handoff -- the by-value actuals, strings and containers included --
+    // is what the action sees in its region, however often the process
+    // runs this statement again first (16.4, 16.4.1: the call and "the
+    // current values of its input arguments" are queued).
     process_.operations.emplace_back(Fork { });
     const auto continuation_jump = static_cast<InstructionIndex>(
         process_.operations.size());
@@ -2759,12 +2765,152 @@ void Lowerer::emit_deferred_assertion_action_handoff()
               fork, continuation_jump, branch
           };
     deferred_assertion_action_phase_.reset();
+    for (auto& effect : deferred_assertion_action_effects_) {
+        process_.operations.push_back(std::move(effect));
+    }
+    deferred_assertion_action_effects_.clear();
+}
+
+void Lowerer::emit_deferred_assertion_action_effect(
+    runtime::simir::Operation operation)
+{
+    if (deferred_assertion_action_phase_ && !deferred_assertion_action_handoff_) {
+        deferred_assertion_action_effects_.push_back(std::move(operation));
+        return;
+    }
+    process_.operations.push_back(std::move(operation));
+}
+
+void Lowerer::emit_deferred_flush_point()
+{
+    if (hir_process_flushes_deferred_) {
+        process_.operations.emplace_back(DisableFork { std::nullopt, true });
+    }
+}
+
+// Whether the statements, or a task or function they call, hold a deferred
+// assertion (IEEE 1800-2023 16.4): then the process owns a deferred
+// assertion report queue that its flush points clear (16.4.2).
+bool Lowerer::hir_contains_deferred_assertion(
+    const std::span<const semantic::StatementId> statements,
+    std::set<std::uint32_t>& visited_callables)
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return false;
+    }
+    // Each expression and statement is walked once: the HIR shares subtrees,
+    // and one already walked holds no deferred assertion (a hit ends the
+    // walk), so a large conditional chain stays linear.
+    std::unordered_set<std::uint32_t> visited_expressions;
+    std::unordered_set<std::uint32_t> visited_statements;
+    std::function<bool(semantic::ExpressionId)> expression_holds;
+    std::function<bool(semantic::DeclarationId)> callable_holds;
+    std::function<bool(semantic::StatementId)> statement_holds;
+    callable_holds = [&](const semantic::DeclarationId id) {
+        if (!id.valid() || !visited_callables.insert(id.value()).second) {
+            return false;
+        }
+        const auto declaration = specialized_hir_unit_->find_declaration(id);
+        if (!declaration || declaration->systemverilog == nullptr) {
+            return false;
+        }
+        return std::ranges::any_of(declaration->systemverilog->statements,
+            [&](const semantic::StatementId nested) {
+                return statement_holds(nested);
+            });
+    };
+    expression_holds = [&](const semantic::ExpressionId id) {
+        if (!id.valid() || !visited_expressions.insert(id.value()).second) {
+            return false;
+        }
+        const auto expression = specialized_hir_unit_->find_expression(id);
+        if (!expression || expression->systemverilog == nullptr) {
+            return false;
+        }
+        const auto& source = *expression->systemverilog;
+        if (source.referenced_name) {
+            auto selected = source.referenced_name->selected;
+            if (!selected && source.referenced_name->overloads.size() == 1U) {
+                selected = source.referenced_name->overloads.front();
+            }
+            if (selected && callable_holds(*selected)) {
+                return true;
+            }
+        }
+        return std::ranges::any_of(source.operands, expression_holds)
+            || std::ranges::any_of(source.call_arguments,
+                [&](const semantic::sv::CallAssociation& argument) {
+                    return argument.actual && expression_holds(*argument.actual);
+                });
+    };
+    statement_holds = [&](const semantic::StatementId id) {
+        if (!visited_statements.insert(id.value()).second) {
+            return false;
+        }
+        const auto view = specialized_hir_unit_->find_statement(id);
+        if (!view || view->systemverilog == nullptr) {
+            return false;
+        }
+        const auto& source = *view->systemverilog;
+        if ((source.kind == semantic::sv::StatementKind::assertion
+                && (source.delay || source.output_postponed
+                    || source.immediate_deferred || source.immediate_final))
+            || (source.kind == semantic::sv::StatementKind::conditional
+                && source.immediate_directive
+                    == semantic::sv::Statement::ImmediateDirective::cover
+                && (source.immediate_deferred || source.immediate_final))) {
+            return true;
+        }
+        if (source.kind == semantic::sv::StatementKind::task_call) {
+            auto selected = source.task.selected;
+            if (!selected && source.task.overloads.size() == 1U) {
+                selected = source.task.overloads.front();
+            }
+            if (selected && callable_holds(*selected)) {
+                return true;
+            }
+        }
+        for (const auto expression : { source.target, source.value,
+                 source.condition, source.loop_initial, source.loop_limit,
+                 source.loop_update_target }) {
+            if (expression && expression_holds(*expression)) {
+                return true;
+            }
+        }
+        for (const auto& argument : source.task_arguments) {
+            if (argument.actual && expression_holds(*argument.actual)) {
+                return true;
+            }
+        }
+        for (const auto& output : source.output_values) {
+            if (output.value && expression_holds(*output.value)) {
+                return true;
+            }
+        }
+        const auto holds = [&](const std::vector<semantic::StatementId>& list) {
+            return std::ranges::any_of(list, statement_holds);
+        };
+        if (holds(source.statements) || holds(source.else_statements)
+            || holds(source.loop_updates)) {
+            return true;
+        }
+        return std::ranges::any_of(source.case_alternatives,
+            [&](const semantic::sv::CaseAlternative& alternative) {
+                return holds(alternative.statements);
+            });
+    };
+    return std::ranges::any_of(statements, statement_holds);
 }
 
 std::optional<InstructionIndex>
 Lowerer::finish_deferred_assertion_action_handoff()
 {
+    if (deferred_assertion_action_phase_
+        && !deferred_assertion_action_effects_.empty()) {
+        emit_deferred_assertion_action_handoff();
+    }
     deferred_assertion_action_phase_.reset();
+    deferred_assertion_action_effects_.clear();
     if (!deferred_assertion_action_handoff_) {
         return std::nullopt;
     }
@@ -2773,7 +2919,8 @@ Lowerer::finish_deferred_assertion_action_handoff()
         process_.operations.size());
     const auto handoff = *deferred_assertion_action_handoff_;
     process_.operations[handoff.fork] = Fork {
-        { handoff.branch }, runtime::simir::ForkJoinKind::none
+        { handoff.branch }, runtime::simir::ForkJoinKind::none, true,
+        false, true
     };
     process_.operations[handoff.continuation_jump]
         = Jump { continuation };
@@ -3139,6 +3286,87 @@ Lowerer::hir_named_clocking_event(
     return std::nullopt;
 }
 
+std::optional<std::pair<InstructionIndex, RegisterId>>
+Lowerer::lower_hir_wake_guard(
+    const std::span<const semantic::sv::Sensitivity> guards,
+    const std::span<const runtime::simir::Sensitivity> terms)
+{
+    // Per event: fired = it changed in this wake, and (for an edge) the
+    // change is that edge (the old value is not the edge's far value and the
+    // new one is not its near value, IEEE 1800-2023 9.4.2.1), and the event's
+    // guard, if any, holds (9.4.2.3, an unknown guard is false).
+    const auto logic = [&](const LogicalBinaryOperator operation,
+                           const RegisterId lhs, const RegisterId rhs) {
+        const auto output = allocate_register(1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(
+            LogicalBinary { operation, output, lhs, rhs });
+        return output;
+    };
+    const auto logical_not = [&](const RegisterId input) {
+        const auto output = allocate_register(1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(LogicalNot { output, input });
+        return output;
+    };
+    std::optional<RegisterId> any;
+    for (std::size_t index = 0U; index < terms.size() && index < guards.size();
+         ++index) {
+        const auto signal = terms[index].signal;
+        const auto event = allocate_register(1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(SignalEvent { event, signal });
+        auto fired = event;
+        if (terms[index].edge != runtime::simir::EdgeKind::any) {
+            const bool positive
+                = guards[index].edge == semantic::sv::EdgeKind::positive;
+            const auto domain = design_.signal_info_[signal].source_domain;
+            const auto previous = allocate_register(1U, domain);
+            process_.operations.emplace_back(
+                SignalLastValue { previous, signal });
+            const auto current = allocate_register(1U, domain);
+            process_.operations.emplace_back(ReadSignal { current, signal });
+            const auto zero = allocate_register(1U, frontend::ValueDomain::Bit2);
+            const auto one = allocate_register(1U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(
+                LoadConstant { zero, unsigned_value(0U, 1U) });
+            process_.operations.emplace_back(
+                LoadConstant { one, unsigned_value(1U, 1U) });
+            const auto previous_forbidden
+                = allocate_register(1U, frontend::ValueDomain::Bit2);
+            const auto current_forbidden
+                = allocate_register(1U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(Binary {
+                BinaryOperator::case_equal, previous_forbidden, previous,
+                positive ? one : zero });
+            process_.operations.emplace_back(Binary {
+                BinaryOperator::case_equal, current_forbidden, current,
+                positive ? zero : one });
+            fired = logic(LogicalBinaryOperator::logical_and, fired,
+                logical_not(previous_forbidden));
+            fired = logic(LogicalBinaryOperator::logical_and, fired,
+                logical_not(current_forbidden));
+        }
+        if (guards[index].guard) {
+            const auto width = hir_expression_width(
+                *guards[index].guard, hir_process_scope_).value_or(1U);
+            const auto value = lower_hir_expression(*guards[index].guard, width);
+            if (!value) {
+                return std::nullopt;
+            }
+            const auto not_true = logical_not(*value);
+            fired = logic(LogicalBinaryOperator::logical_and, fired,
+                logical_not(not_true));
+        }
+        any = any ? logic(LogicalBinaryOperator::logical_or, *any, fired)
+                  : fired;
+    }
+    if (!any) {
+        return std::nullopt;
+    }
+    const auto branch = static_cast<InstructionIndex>(process_.operations.size());
+    process_.operations.emplace_back(
+        Branch { *any, 0U, 0U, UnknownBranchPolicy::when_false });
+    return std::pair { branch, *any };
+}
+
 bool Lowerer::lower_hir_sensitivity_wait(
     const std::span<const semantic::sv::Sensitivity> sensitivities,
     const std::optional<semantic::ExpressionId> wildcard_expression,
@@ -3189,6 +3417,7 @@ bool Lowerer::lower_hir_sensitivity_wait(
                 dependencies.size(),
                 runtime::simir::EdgeKind::any),
         });
+        emit_deferred_flush_point();
         return true;
     }
 
@@ -3227,6 +3456,7 @@ bool Lowerer::lower_hir_sensitivity_wait(
                 std::vector<runtime::simir::EdgeKind>(
                     candidates.size(), runtime::simir::EdgeKind::any),
             });
+            emit_deferred_flush_point();
             const auto current = lower_hir_virtual_interface_read(*member);
             if (!current) {
                 return false;
@@ -3299,14 +3529,22 @@ bool Lowerer::lower_hir_sensitivity_wait(
                         { event },
                         { runtime::simir::EdgeKind::any },
                     });
+                    emit_deferred_flush_point();
                     return true;
                 },
                 true);
         }
     }
+    // An event with its own `iff` guard (IEEE 1800-2023 9.4.2.3) needs the
+    // general wait below: it finds which event fired and tests that event's
+    // guard.
+    const bool guarded_events = std::ranges::any_of(sensitivities,
+        [](const semantic::sv::Sensitivity& sensitivity) {
+            return sensitivity.guard.has_value();
+        });
     std::vector<SignalId> named_events;
     named_events.reserve(sensitivities.size());
-    const bool all_named_events = std::ranges::all_of(
+    const bool all_named_events = !guarded_events && std::ranges::all_of(
         sensitivities,
         [&](const semantic::sv::Sensitivity& sensitivity) {
             if (sensitivity.edge != semantic::sv::EdgeKind::any) {
@@ -3328,6 +3566,7 @@ bool Lowerer::lower_hir_sensitivity_wait(
             std::vector<runtime::simir::EdgeKind>(
                 sensitivities.size(), runtime::simir::EdgeKind::any),
         });
+        emit_deferred_flush_point();
         return true;
     }
 
@@ -3349,7 +3588,7 @@ bool Lowerer::lower_hir_sensitivity_wait(
                     || hir_local_string_event(sensitivity.signal,
                         hir_process_scope_, sensitivity.source_order));
         });
-    if (general == sensitivities.end() && !local_event) {
+    if (general == sensitivities.end() && !local_event && !guarded_events) {
         std::vector<SignalId> signals;
         std::vector<runtime::simir::EdgeKind> edges;
         signals.reserve(sensitivities.size());
@@ -3398,6 +3637,7 @@ bool Lowerer::lower_hir_sensitivity_wait(
                         std::vector<SignalId> { signal },
                         std::vector<runtime::simir::EdgeKind> {
                             event_edge(sensitivity.edge) } });
+                    emit_deferred_flush_point();
                     exits.push_back(static_cast<InstructionIndex>(
                         process_.operations.size()));
                     process_.operations.emplace_back(Jump { 0U });
@@ -3444,6 +3684,7 @@ bool Lowerer::lower_hir_sensitivity_wait(
         }
         process_.operations.emplace_back(WaitOn {
             std::move(signals), std::move(edges) });
+        emit_deferred_flush_point();
         return true;
     }
     struct EventExpressionState {
@@ -3458,6 +3699,8 @@ bool Lowerer::lower_hir_sensitivity_wait(
         semantic::sv::EdgeKind edge { semantic::sv::EdgeKind::any };
         std::size_t width { };
         RegisterId baseline { };
+        // The event's `iff` guard: it counts as fired only while this holds.
+        std::optional<semantic::ExpressionId> guard;
     };
     std::vector<EventExpressionState> expressions;
     std::vector<SignalId> dependencies;
@@ -3466,6 +3709,7 @@ bool Lowerer::lower_hir_sensitivity_wait(
         EventExpressionState state;
         state.expression = sensitivity.expression;
         state.edge = sensitivity.edge;
+        state.guard = sensitivity.guard;
 
         std::optional<std::size_t> width;
         const auto dependency_start = dependencies.size();
@@ -3594,6 +3838,7 @@ bool Lowerer::lower_hir_sensitivity_wait(
         std::vector<runtime::simir::EdgeKind>(
             dependencies.size(), runtime::simir::EdgeKind::any),
     });
+    emit_deferred_flush_point();
     const auto logical_not = [&](const RegisterId input) {
         const auto output = allocate_register(
             1U, frontend::ValueDomain::Bit2);
@@ -3609,6 +3854,24 @@ bool Lowerer::lower_hir_sensitivity_wait(
             operation, output, lhs, rhs });
         return output;
     };
+    // A guard holds when its value is known true (IEEE 1800-2023 12.4: an
+    // unknown condition is false).
+    const auto lower_guard = [&](const semantic::ExpressionId guard)
+        -> std::optional<RegisterId> {
+        const auto width = hir_expression_width(guard, hir_process_scope_)
+                               .value_or(1U);
+        const auto value = lower_hir_expression(guard, width);
+        if (!value) {
+            return std::nullopt;
+        }
+        const auto zero = allocate_register(
+            1U, frontend::ValueDomain::Logic4);
+        process_.operations.emplace_back(LogicalNot { zero, *value });
+        const auto truth = allocate_register(
+            1U, frontend::ValueDomain::Logic4);
+        process_.operations.emplace_back(LogicalNot { truth, zero });
+        return truth;
+    };
     std::vector<RegisterId> matches;
     matches.reserve(expressions.size());
     for (auto& state : expressions) {
@@ -3620,7 +3883,16 @@ bool Lowerer::lower_hir_sensitivity_wait(
                 1U, frontend::ValueDomain::Bit2);
             process_.operations.emplace_back(CompareStrings {
                 changed, state.string_baseline, current_text, true });
-            matches.push_back(changed);
+            auto string_matched = changed;
+            if (state.guard) {
+                const auto holds = lower_guard(*state.guard);
+                if (!holds) {
+                    return false;
+                }
+                string_matched = logical(
+                    LogicalBinaryOperator::logical_and, changed, *holds);
+            }
+            matches.push_back(string_matched);
             process_.operations.emplace_back(CopyStringRegister {
                 state.string_baseline, current_text });
             continue;
@@ -3694,6 +3966,17 @@ bool Lowerer::lower_hir_sensitivity_wait(
                 matched,
                 logical_not(current_forbidden));
         }
+        if (state.guard) {
+            // The wake tests the guard of the event that fired (9.4.2.3);
+            // the baseline still advances when the guard fails, so a later
+            // wake sees the change from this value.
+            const auto holds = lower_guard(*state.guard);
+            if (!holds) {
+                return false;
+            }
+            matched = logical(
+                LogicalBinaryOperator::logical_and, matched, *holds);
+        }
         matches.push_back(matched);
         process_.operations.emplace_back(CopyRegister {
             state.baseline, *current });
@@ -3717,6 +4000,7 @@ bool Lowerer::lower_hir_sensitivity_wait(
         std::vector<runtime::simir::EdgeKind>(
             dependency_count, runtime::simir::EdgeKind::any),
     });
+    emit_deferred_flush_point();
     process_.operations.emplace_back(Jump { evaluation });
     const auto satisfied = static_cast<InstructionIndex>(
         process_.operations.size());
@@ -3757,6 +4041,32 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 WaitRegion { runtime::SchedulerPhase::reactive });
             sample_concurrent_assertion_reads_ = false;
             return true;
+        }
+        constexpr std::string_view concurrent_assertion_marker {
+            "\x1f"
+            "fsim.concurrent-assertion|"
+        };
+        if (input.kind == semantic::sv::StatementKind::display
+            && !input.value
+            && input.output_text.starts_with(concurrent_assertion_marker)) {
+            // The marker is slot|kind|outcome|name; a start report stays
+            // inert unless a foreign library is loaded.
+            const std::string_view payload { std::string_view { input.output_text }
+                    .substr(concurrent_assertion_marker.size()) };
+            const auto slot_end = payload.find('|');
+            const auto kind_end = slot_end == std::string_view::npos
+                ? std::string_view::npos
+                : payload.find('|', slot_end + 1U);
+            if (kind_end != std::string_view::npos
+                && payload.substr(kind_end + 1U).starts_with("start|")) {
+                process_.operations.emplace_back(Display {
+                    input.output_text,
+                    input.output_newline,
+                    input.output_postponed,
+                    true,
+                });
+                return true;
+            }
         }
         source = input.source;
         target = input.target;
@@ -5084,8 +5394,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     } else if (equal_ignoring_ascii_case(name, "boolean_vector")) {
                         set("boolean", semantic::vhdl::ValueDomain::boolean, 1U);
                     } else if (equal_ignoring_ascii_case(name, "integer_vector")) {
-                        const auto width = vhdl_standard_
-                                == frontend::VhdlStandard::Vhdl2019
+                        const auto width = vhdl_wide_integer_
                             ? 64U : 32U;
                         set("integer", semantic::vhdl::ValueDomain::integer, width);
                         element.integer_storage_width
@@ -15808,6 +16117,42 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     domain_upper = static_cast<std::int64_t>(
                         selector_type->enumeration_literals.size() - 1U);
                 }
+                // A scalar std_ulogic selector's choices are its literals,
+                // valued by their positions in STD_ULOGIC: 'U', 'X', 'Z',
+                // 'W', 'L', 'H' and '-' are also CHARACTER literals, so only
+                // the selector's type resolves them (IEEE 1076-2019 9.3.2,
+                // 10.9), and '0' and '1' are not BIT's 0 and 1 here. An
+                // unconstrained selector must cover all nine values.
+                const bool scalar_logic_selector = !packed_vector_selector
+                    && (*selector_domain == frontend::ValueDomain::Logic4
+                        || *selector_domain == frontend::ValueDomain::Logic9);
+                if (scalar_logic_selector && (!domain_lower || !domain_upper)) {
+                    domain_lower = 0;
+                    domain_upper = 8;
+                }
+                const auto logic_choice_position
+                    = [&](const semantic::ExpressionId id)
+                    -> std::optional<std::int64_t> {
+                    if (!scalar_logic_selector) {
+                        return std::nullopt;
+                    }
+                    const auto record = specialized_hir_unit_->find_expression(id);
+                    if (!record || record->vhdl == nullptr
+                        || record->vhdl->kind
+                            != semantic::vhdl::ExpressionKind::logic_literal) {
+                        return std::nullopt;
+                    }
+                    constexpr std::string_view values { "UX01ZWLH-" };
+                    const auto& text = record->vhdl->text;
+                    const auto position = text.size() == 3U
+                            && text.front() == '\'' && text.back() == '\''
+                        ? values.find(text[1])
+                        : std::string_view::npos;
+                    if (position == std::string_view::npos) {
+                        return std::nullopt;
+                    }
+                    return static_cast<std::int64_t>(position);
+                };
                 std::vector<ChoiceInterval> intervals;
                 std::vector<std::string> packed_array_choices;
                 bool valid = true;
@@ -16610,11 +16955,17 @@ bool Lowerer::lower_hir_statement_unsuspended(
                                 || expression->vhdl->text
                                     == "@vhdl-case-range-downto")) {
                             const auto& range = *expression->vhdl;
+                            const auto bound = [&](
+                                const semantic::ExpressionId id) {
+                                const auto position = logic_choice_position(id);
+                                return position ? position
+                                                : hir_constant_integer(id);
+                            };
                             auto left = range.operands.size() == 2U
-                                ? hir_constant_integer(range.operands[0])
+                                ? bound(range.operands[0])
                                 : std::nullopt;
                             auto right = range.operands.size() == 2U
-                                ? hir_constant_integer(range.operands[1])
+                                ? bound(range.operands[1])
                                 : std::nullopt;
                             if (!left || !right) {
                                 report(
@@ -16664,8 +17015,11 @@ bool Lowerer::lower_hir_statement_unsuspended(
                             interval = ChoiceInterval {
                                 named_range->first, named_range->second };
                         } else {
-                            auto choice_value
-                                = hir_constant_integer(choice);
+                            const auto logic_position
+                                = logic_choice_position(choice);
+                            auto choice_value = logic_position
+                                ? logic_position
+                                : hir_constant_integer(choice);
                             bool choice_uses_selector_loop_enumeration = false;
                             if (selector_loop_enumeration) {
                                 auto choice_subtype
@@ -19616,7 +19970,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                                                             ->vhdl);
                                             const auto integer_width
                                                 = frontend::vhdl_predefined_integer_storage_width(
-                                                    vhdl_standard_);
+                                                    vhdl_integer_standard());
                                             if (standard_integer_index
                                                 && positional_aggregate
                                                 && integer_width != 0U
@@ -20947,8 +21301,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
             : requested_format;
         if (format == semantic::sv::OutputFormat::hierarchy
             || format == semantic::sv::OutputFormat::library) {
-            emit_deferred_assertion_action_handoff();
-            process_.operations.emplace_back(Display {
+            emit_deferred_assertion_action_effect(Display {
                 std::move(prefix)
                     + (format == semantic::sv::OutputFormat::library
                             ? hir_library_cell()
@@ -20966,8 +21319,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
         // module's unit (IEEE 1800-2017 20.3.1, 21.2.1.3); without an
         // argument it shows the current time.
         if (format == semantic::sv::OutputFormat::time && !expression) {
-            emit_deferred_assertion_action_handoff();
-            process_.operations.emplace_back(TimeDisplay {
+            emit_deferred_assertion_action_effect(TimeDisplay {
                 std::move(prefix),
                 std::move(suffix),
                 newline,
@@ -21031,8 +21383,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
             if (!displayed_string) {
                 return false;
             }
-            emit_deferred_assertion_action_handoff();
-            process_.operations.emplace_back(StringDisplay {
+            emit_deferred_assertion_action_effect(StringDisplay {
                 *displayed_string,
                 std::move(prefix),
                 std::move(suffix),
@@ -21075,8 +21426,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 CopyRegister { four_state, *displayed_value });
             displayed_value = four_state;
         }
-        emit_deferred_assertion_action_handoff();
-        process_.operations.emplace_back(FormatDisplay {
+        emit_deferred_assertion_action_effect(FormatDisplay {
             *displayed_value,
             runtime_format,
             std::move(prefix),
@@ -21118,8 +21468,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
             if (!text) {
                 return false;
             }
-            emit_deferred_assertion_action_handoff();
-            process_.operations.emplace_back(StringDisplay {
+            emit_deferred_assertion_action_effect(StringDisplay {
                 *text, std::move(prefix), std::move(suffix), newline,
                 postponed });
             return true;
@@ -21136,8 +21485,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
         }
         if (pattern.text) {
             const auto quote = pattern.quoted ? "\"" : "";
-            emit_deferred_assertion_action_handoff();
-            process_.operations.emplace_back(StringDisplay {
+            emit_deferred_assertion_action_effect(StringDisplay {
                 *pattern.text, std::move(prefix) + quote,
                 quote + std::move(suffix), newline, postponed });
             return true;
@@ -21325,8 +21673,56 @@ bool Lowerer::lower_hir_statement_unsuspended(
         case semantic::sv::StatementKind::deassign:
             return lower_hir_procedural_continuous_assignment(
                 statement_id);
-        case semantic::sv::StatementKind::conditional:
-            return lower_if();
+        case semantic::sv::StatementKind::conditional: {
+            if (input.immediate_directive
+                    != semantic::sv::Statement::ImmediateDirective::cover
+                || !(input.immediate_deferred || input.immediate_final)
+                || !input.condition) {
+                return lower_if();
+            }
+            // A deferred cover (`cover #0` / `cover final`, IEEE 1800-2023
+            // 16.4): its pass statement is queued like an assertion's
+            // action, with its arguments evaluated now, and runs in the
+            // Reactive or Postponed region unless a flush point cancels it
+            // first (16.4.1, 16.4.2).
+            const auto first_action = input.statements.empty()
+                ? std::nullopt
+                : specialized_hir_unit_->find_statement(
+                      input.statements.front());
+            const bool action_requires_handoff = first_action
+                && (first_action->systemverilog == nullptr
+                    || first_action->systemverilog->kind
+                        != semantic::sv::StatementKind::null_statement);
+            const auto checked = lower_condition(*input.condition);
+            if (!checked) {
+                return false;
+            }
+            const auto branch = static_cast<InstructionIndex>(
+                process_.operations.size());
+            process_.operations.emplace_back(Branch {
+                *checked, 0U, 0U, UnknownBranchPolicy::when_false });
+            const auto pass = static_cast<InstructionIndex>(
+                process_.operations.size());
+            deferred_assertion_action_phase_ = input.immediate_final
+                ? runtime::SchedulerPhase::postponed
+                : runtime::SchedulerPhase::reactive;
+            if (!lower_hir_statements(input.statements)) {
+                return false;
+            }
+            const auto handoff = finish_deferred_assertion_action_handoff();
+            const auto end = static_cast<InstructionIndex>(
+                process_.operations.size());
+            process_.operations[branch] = Branch {
+                *checked, pass, end, UnknownBranchPolicy::when_false };
+            if (action_requires_handoff && !handoff) {
+                report(
+                    "FSIM-ELAB-SVASSERT-002",
+                    "a deferred assertion action could not be lowered to a "
+                    "scheduler handoff",
+                    span);
+            }
+            return true;
+        }
         case semantic::sv::StatementKind::selection: {
             // `case (type(x))` is decided at elaboration: only the items of
             // the matching type, or the default, remain (IEEE 1800-2017
@@ -21802,6 +22198,229 @@ bool Lowerer::lower_hir_statement_unsuspended(
                                 ? argument->systemverilog->text
                                 : std::string { }),
                     true,
+                    false,
+                });
+                return true;
+            }
+            if (input.task.spelling == "$list") {
+                // $list belongs to the interactive scope tasks of IEEE
+                // 1800-2023 D.6; it lists source text for a front end,
+                // which a batch run does not have. Rejected on purpose.
+                report(
+                    "FSIM-ELAB-SVSCOPE-002",
+                    "the Annex D system task $list (IEEE 1800-2023 D.6) is "
+                    "not supported",
+                    span);
+                return true;
+            }
+            if (input.task.spelling == "$scope"
+                || input.task.spelling == "$showscopes"
+                || input.task.spelling == "$showvars") {
+                // The interactive scope tasks (IEEE 1800-2023 D.11-D.13,
+                // IEEE 1364-2005 C.10-C.12). Their hierarchical names are
+                // resolved when the task runs, by the host, against the
+                // design: the interactive scope is one setting of the
+                // tool shared with VPI, ACC and the debugger.
+                const bool is_scope = input.task.spelling == "$scope";
+                const bool is_showvars = input.task.spelling == "$showvars";
+                const bool named = std::ranges::any_of(
+                    input.task_arguments,
+                    [](const semantic::sv::TaskAssociation& argument) {
+                        return argument.formal.has_value()
+                            || !argument.actual.has_value();
+                    });
+                // The name an argument spells; a bit-select or part-select
+                // of a variable names the whole vector (D.13).
+                const auto spelled_name
+                    = [&](semantic::ExpressionId id, const bool selects)
+                    -> std::optional<std::string> {
+                    for (;;) {
+                        const auto view
+                            = specialized_hir_unit_->find_expression(id);
+                        if (!view || view->systemverilog == nullptr) {
+                            return std::nullopt;
+                        }
+                        const auto& expression = *view->systemverilog;
+                        if (expression.kind
+                                == semantic::sv::ExpressionKind::name
+                            && !expression.text.empty()) {
+                            return expression.text;
+                        }
+                        if (selects
+                            && (expression.kind
+                                    == semantic::sv::ExpressionKind::index
+                                || expression.kind
+                                    == semantic::sv::ExpressionKind::slice)
+                            && !expression.operands.empty()) {
+                            id = expression.operands.front();
+                            continue;
+                        }
+                        return std::nullopt;
+                    }
+                };
+                bool valid = language_ != frontend::Language::Vhdl2008
+                    && !named;
+                std::string payload;
+                if (is_scope) {
+                    // The argument names a module instance, task, function
+                    // or named block. A literal or expression cannot, so
+                    // it is refused here; whether a name denotes one of
+                    // those depends on the instantiated design and is
+                    // checked when the task runs.
+                    valid = valid && input.task_arguments.size() == 1U;
+                    if (valid) {
+                        const auto name = spelled_name(
+                            *input.task_arguments.front().actual, false);
+                        valid = name.has_value();
+                        if (name) {
+                            payload = *name;
+                        }
+                    }
+                } else if (is_showvars) {
+                    for (const auto& argument : input.task_arguments) {
+                        if (!valid) {
+                            break;
+                        }
+                        const auto name
+                            = spelled_name(*argument.actual, true);
+                        valid = name.has_value();
+                        if (name) {
+                            payload += payload.empty() ? "" : "\x1e";
+                            payload += *name;
+                        }
+                    }
+                } else {
+                    // $showscopes [ (n) ]: n is a constant, zero for the
+                    // current level, nonzero for everything below.
+                    valid = valid && input.task_arguments.size() <= 1U;
+                    payload = "0";
+                    if (valid && !input.task_arguments.empty()) {
+                        const auto level = hir_constant_integer(
+                            *input.task_arguments.front().actual);
+                        valid = level.has_value();
+                        if (level) {
+                            payload = *level != 0 ? "1" : "0";
+                        }
+                    }
+                }
+                if (!valid) {
+                    report(
+                        "FSIM-ELAB-SVSCOPE-001",
+                        is_scope
+                            ? "$scope requires one hierarchical name"
+                            : is_showvars
+                                ? "$showvars requires variable names, "
+                                  "optionally with a bit-select or "
+                                  "part-select"
+                                : "$showscopes takes at most one constant "
+                                  "argument",
+                        span);
+                    return true;
+                }
+                // The enclosing task and named blocks, so a relative name
+                // resolves from the block outward (IEEE 1800-2023 23.8).
+                std::string lexical_scope;
+                for (const auto& segment : hir_named_scope_path()) {
+                    lexical_scope += lexical_scope.empty() ? "" : ".";
+                    lexical_scope += segment;
+                }
+                process_.operations.emplace_back(Display {
+                    std::string {
+                        "\x1f"
+                        "fsim.scope-task|" }
+                        + std::string { input.task.spelling.substr(1U) }
+                        + "|" + lexical_scope + "|" + payload,
+                    true,
+                    false,
+                });
+                return true;
+            }
+            if (input.task.spelling == "$save"
+                || input.task.spelling == "$incsave"
+                || input.task.spelling == "$restart") {
+                // $save, $incsave and $restart take a file name "supplied as
+                // a string enclosed in quotation marks" (IEEE 1800-2023
+                // D.9). The host acts at the end of the time slot, once the
+                // events of the slot have drained, so the request is a
+                // marker the host reads, not an operation of the design.
+                const auto* file = [&]() -> const semantic::sv::Expression* {
+                    if (input.task_arguments.size() != 1U
+                        || input.task_arguments.front().formal
+                        || !input.task_arguments.front().actual) {
+                        return nullptr;
+                    }
+                    const auto found = specialized_hir_unit_->find_expression(
+                        *input.task_arguments.front().actual);
+                    return found ? found->systemverilog : nullptr;
+                }();
+                if (language_ == frontend::Language::Vhdl2008
+                    || file == nullptr || !file->decoded_string
+                    || file->decoded_string->empty()
+                    || file->kind
+                        != semantic::sv::ExpressionKind::string_literal) {
+                    report(
+                        "FSIM-ELAB-SVSIMCTL-001",
+                        std::string { input.task.spelling }
+                            + " requires one file name written as a string "
+                              "literal (IEEE 1800-2023 D.9)",
+                        span);
+                    return true;
+                }
+                process_.operations.emplace_back(Display {
+                    std::string { simulation_control_marker }
+                        + std::string { input.task.spelling.substr(1U) } + "|"
+                        + *file->decoded_string,
+                    false,
+                    false,
+                });
+                return true;
+            }
+            if (input.task.spelling == "$reset") {
+                // $reset [ ( stop_value [ , reset_value [ , diagnostics_value
+                // ] ] ) ] (IEEE 1800-2023 D.8). Each argument is an integer
+                // value evaluated here and sent to the host ahead of the
+                // request; reset_value is typically a variable, whose value
+                // survives the reset only through this argument.
+                const bool valid = language_ != frontend::Language::Vhdl2008
+                    && input.task_arguments.size() <= 3U
+                    && std::ranges::all_of(
+                        input.task_arguments,
+                        [](const semantic::sv::TaskAssociation& argument) {
+                            return !argument.formal && argument.actual;
+                        });
+                if (!valid) {
+                    report(
+                        "FSIM-ELAB-SVSIMCTL-001",
+                        "$reset takes at most stop_value, reset_value and "
+                        "diagnostics_value (IEEE 1800-2023 D.8)",
+                        span);
+                    return true;
+                }
+                for (std::size_t position = 0U;
+                     position < input.task_arguments.size(); ++position) {
+                    const auto& actual = *input.task_arguments[position].actual;
+                    auto lowered = lower_hir_expression(actual, 32U);
+                    if (!lowered) {
+                        return false;
+                    }
+                    if (register_width(*lowered) != 32U) {
+                        lowered = resize_register(
+                            *lowered, 32U, hir_expression_signed(actual));
+                    }
+                    FormatDisplay argument;
+                    argument.source = *lowered;
+                    argument.format = OutputFormat::decimal;
+                    argument.prefix = std::string { simulation_control_marker }
+                        + "arg|" + std::to_string(position) + "|";
+                    argument.newline = false;
+                    argument.signed_decimal = true;
+                    argument.suppress_leading_zero = true;
+                    process_.operations.emplace_back(std::move(argument));
+                }
+                process_.operations.emplace_back(Display {
+                    std::string { simulation_control_marker } + "reset|"
+                        + std::to_string(input.task_arguments.size()),
+                    false,
                     false,
                 });
                 return true;
@@ -22958,16 +23577,14 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     if (!message) {
                         return true;
                     }
-                    emit_deferred_assertion_action_handoff();
-                    process_.operations.emplace_back(Display {
+                    emit_deferred_assertion_action_effect(Display {
                         *message,
                         input.output_newline,
                         input.output_postponed,
                     });
                     return true;
                 }
-                emit_deferred_assertion_action_handoff();
-                process_.operations.emplace_back(Display {
+                emit_deferred_assertion_action_effect(Display {
                     input.output_text,
                     input.output_newline,
                     input.output_postponed,
@@ -22988,7 +23605,6 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     input.output_zero_pad,
                     input.output_precision);
         case semantic::sv::StatementKind::report: {
-            emit_deferred_assertion_action_handoff();
             const auto string_report = [&](const StringRegisterId message) {
                 const auto severity = load_constant(
                     unsigned_value(
@@ -22996,7 +23612,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                             input.assertion_severity)),
                         2U),
                     frontend::ValueDomain::Bit2);
-                process_.operations.emplace_back(StringReport {
+                emit_deferred_assertion_action_effect(StringReport {
                     message,
                     severity,
                     runtime_source_location(span),
@@ -23045,7 +23661,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 const auto message = lower_hir_string_expression(*input.value);
                 return message && string_report(*message);
             }
-            process_.operations.emplace_back(Report {
+            emit_deferred_assertion_action_effect(Report {
                 report_text.value_or(input.output_text),
                 runtime_assertion_severity(input.assertion_severity),
                 runtime_source_location(span),
@@ -23129,18 +23745,6 @@ bool Lowerer::lower_hir_statement_unsuspended(
             const bool failure_requires_handoff = deferred
                 && (!input.assertion_has_failure_action
                     || action_requires_handoff(input.else_statements));
-            std::optional<InstructionIndex> pass_disable;
-            std::optional<InstructionIndex> failure_disable;
-            if (pass_requires_handoff) {
-                pass_disable = static_cast<InstructionIndex>(
-                    process_.operations.size());
-                process_.operations.emplace_back(DisableFork { });
-            }
-            if (failure_requires_handoff) {
-                failure_disable = static_cast<InstructionIndex>(
-                    process_.operations.size());
-                process_.operations.emplace_back(DisableFork { });
-            }
             const auto checked = lower_condition(*input.condition);
             if (!checked) {
                 return false;
@@ -23157,6 +23761,15 @@ bool Lowerer::lower_hir_statement_unsuspended(
             });
             const auto pass = static_cast<InstructionIndex>(
                 process_.operations.size());
+            // The success and failure of an immediate or deferred assertion
+            // reach the foreign assertion callbacks (IEEE 1800-2023 39.4.1);
+            // the points are probe-only: a run without --foreign-probes
+            // drops them from its code.
+            const bool immediate_assertion
+                = !input.assertion_message.starts_with("concurrent assertion '");
+            if (immediate_assertion) {
+                emit_debug_point(DebugPointKind::assertion_pass, span);
+            }
             if (deferred) {
                 deferred_assertion_action_phase_
                     = input.output_postponed
@@ -23174,6 +23787,9 @@ bool Lowerer::lower_hir_statement_unsuspended(
             process_.operations.emplace_back(Jump { 0U });
             const auto failure = static_cast<InstructionIndex>(
                 process_.operations.size());
+            if (immediate_assertion) {
+                emit_debug_point(DebugPointKind::assertion_fail, span);
+            }
             std::optional<InstructionIndex> failure_handoff;
             if (input.assertion_has_failure_action) {
                 if (deferred) {
@@ -23193,9 +23809,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         = input.output_postponed
                         ? runtime::SchedulerPhase::postponed
                         : runtime::SchedulerPhase::reactive;
-                    emit_deferred_assertion_action_handoff();
                 }
-                process_.operations.emplace_back(Report {
+                emit_deferred_assertion_action_effect(Report {
                     input.assertion_message.empty()
                         ? "assertion failed"
                         : input.assertion_message,
@@ -23215,14 +23830,6 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 UnknownBranchPolicy::when_false,
             };
             process_.operations[skip_failure] = Jump { end };
-            if (pass_disable && pass_handoff) {
-                process_.operations[*pass_disable]
-                    = DisableFork { *pass_handoff };
-            }
-            if (failure_disable && failure_handoff) {
-                process_.operations[*failure_disable]
-                    = DisableFork { *failure_handoff };
-            }
             if ((pass_requires_handoff && !pass_handoff)
                 || (failure_requires_handoff && !failure_handoff)) {
                 report(
@@ -23470,6 +24077,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         dependency_count,
                         runtime::simir::EdgeKind::any),
                 });
+                emit_deferred_flush_point();
                 process_.operations.emplace_back(Jump { condition_start });
             }
             const auto satisfied = static_cast<InstructionIndex>(
@@ -23639,6 +24247,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 1U, frontend::ValueDomain::Bit2);
             process_.operations.emplace_back(WaitOrder {
                 std::move(events), result });
+            emit_deferred_flush_point();
             const auto branch = static_cast<InstructionIndex>(
                 process_.operations.size());
             process_.operations.emplace_back(Branch {
@@ -26304,6 +26913,7 @@ void Lowerer::materialize_hir_procedural_continuous_assignments()
         driver_lowerer.set_systemverilog_program_owner(
             systemverilog_program_owner_);
         driver_lowerer.vhdl_standard_ = vhdl_standard_;
+        driver_lowerer.vhdl_wide_integer_ = vhdl_wide_integer_;
         HirProcessDescription description;
         description.source = assignment.source;
         const auto statement = specialized_hir_unit_->find_statement(
@@ -27180,6 +27790,7 @@ void Lowerer::materialize_hir_monitor_drivers()
         driver_lowerer.set_systemverilog_program_owner(
             systemverilog_program_owner_);
         driver_lowerer.vhdl_standard_ = vhdl_standard_;
+        driver_lowerer.vhdl_wide_integer_ = vhdl_wide_integer_;
         const auto source = specialized_hir_unit_->find_expression(
             pending.expression);
         HirProcessDescription description;

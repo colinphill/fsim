@@ -1,0 +1,4 @@
+#c vpi: t=5 put q=42 after 25
+#c t=29 q=0
+#c t=31 q=42
+#c t=55 q=42

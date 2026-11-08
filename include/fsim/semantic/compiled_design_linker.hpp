@@ -73,6 +73,16 @@ void refresh_compiled_design_metadata(CompiledDesign& design);
     const CompiledDesign& design,
     std::span<const std::string> libraries);
 
+/// Project `design` without the VHDL packages (declarations, bodies) and
+/// contexts named by `packages`, each spelled "library.name" in lower case.
+/// A design that mixes VHDL standards of one package family links one copy
+/// of every compiler-supplied package; the copies this drops are the ones
+/// another bundle supplies. References into them become name-based edges
+/// that the link resolves to the surviving copy.
+[[nodiscard]] CompiledLinkResult extract_compiled_without_vhdl_packages(
+    const CompiledDesign& design,
+    std::span<const std::string> packages);
+
 /// Consume a bundle when the selected libraries cover every owning and
 /// auxiliary record. Partial selections retain the ordinary projection
 /// behavior.

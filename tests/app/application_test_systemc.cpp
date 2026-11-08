@@ -595,6 +595,17 @@ assert(
         .read_signal(*hdl_systemc_inverted)
         .to_msb_string()
     == "0");
+// A design with a SystemC part never resets (IEEE 1800-2023 D.8 needs the
+// time-zero state of every part; IEEE 1666 gives the SystemC kernel no way to
+// return to it): $reset, vpi_control(vpiReset) and vhpi_control(vhpiReset)
+// are refused with FSIM-SAVE-0018 and nothing is queued.
+assert(!hdl_systemc_interpreter.reset_supported());
+assert(!hdl_systemc_interpreter.request_reset(
+    fsim::app::Simulation::ResetRequest {}));
+assert(hdl_systemc_interpreter.reset_refusal().starts_with(
+    "FSIM-SAVE-0018"));
+assert(hdl_systemc_interpreter.reset_refusal().find("SystemC")
+    != std::string::npos);
 const auto run_compiled_systemc_actual =
     [&]() {
       fsim::diagnostic::Engine run_diagnostics;

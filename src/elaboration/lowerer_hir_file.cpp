@@ -2474,6 +2474,7 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
             }
             for (const auto& sensitivity : source.sensitivities) {
                 diagnose_optional(sensitivity.expression);
+                diagnose_optional(sensitivity.guard);
             }
             for (const auto& argument : source.task_arguments) {
                 diagnose_optional(argument.actual);
@@ -5084,7 +5085,7 @@ bool Lowerer::lower_hir_systemverilog_file_statement(
              const bool newline) {
                 if (output.format == semantic::sv::OutputFormat::hierarchy
                     || output.format == semantic::sv::OutputFormat::library) {
-                    process_.operations.emplace_back(FileWriteLiteral {
+                    emit_deferred_assertion_action_effect(FileWriteLiteral {
                         *handle,
                         output.prefix
                             + (output.format
@@ -5111,7 +5112,7 @@ bool Lowerer::lower_hir_systemverilog_file_statement(
                     }
                     if (text.text) {
                         const auto quote = text.quoted ? "\"" : "";
-                        process_.operations.emplace_back(FileWriteString {
+                        emit_deferred_assertion_action_effect(FileWriteString {
                             *handle, *text.text, output.prefix + quote,
                             quote + std::move(suffix), newline,
                         });
@@ -5144,7 +5145,7 @@ bool Lowerer::lower_hir_systemverilog_file_statement(
                     if (!value) {
                         return false;
                     }
-                    process_.operations.emplace_back(FileWriteString {
+                    emit_deferred_assertion_action_effect(FileWriteString {
                         *handle, *value, output.prefix,
                         std::move(suffix), newline,
                     });
@@ -5183,7 +5184,7 @@ bool Lowerer::lower_hir_systemverilog_file_statement(
                         frontend::SystemVerilogScalarKind::Real);
                     width = 64U;
                 }
-                process_.operations.emplace_back(FileWriteFormatted {
+                emit_deferred_assertion_action_effect(FileWriteFormatted {
                     *handle,
                     *value,
                     static_cast<std::uint32_t>(width),
@@ -5223,7 +5224,7 @@ bool Lowerer::lower_hir_systemverilog_file_statement(
             return true;
         }
         if (!source.output_format) {
-            process_.operations.emplace_back(FileWriteLiteral {
+            emit_deferred_assertion_action_effect(FileWriteLiteral {
                 *handle, source.output_text, source.output_newline });
             return true;
         }

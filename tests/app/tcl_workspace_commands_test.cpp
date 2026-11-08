@@ -669,6 +669,126 @@ puts sdf-workspace-ok
     }
 }
 
+// DEVICE (IEEE 1497-2001 5.4.1) in an SDF file and in a live reannotation.
+// dev has an output z that a module path ends at (a => z, 5 ns) and an output
+// y that no module path ends at, driven by the primitive g1:
+//  - first.sdf, applied before the run: DEVICE z (3) times the path to z like
+//    an IOPATH (3 ns in place of 5), DEVICE y (4) gives g1 the delay 4 ns (the
+//    driving primitive, as no path ends at y). a rises at 10 ns: z rises at
+//    13 ns, y at 14 ns (and(a, 1)).
+//  - second.sdf, applied at the safe point of 11 ns: DEVICE z (2), DEVICE y
+//    (6). The changes pending at 11 ns keep their time (z at 13 ns, y at
+//    14 ns); a falls at 40 ns, so z falls at 42 ns and y at 46 ns.
+void run_sdf_device_workspace_commands_test()
+{
+    TemporaryDirectory temporary;
+    WorkingDirectory working_directory(temporary.path());
+    {
+        std::ofstream source { "top.sv" };
+        source << R"sv(`timescale 1ns/1ps
+module dev(input logic a, input logic b, output wire z, output wire y);
+  assign z = a;
+  and g1(y, a, b);
+  specify
+    (a => z) = 5;
+  endspecify
+endmodule
+module top;
+  logic a = 1'b0;
+  logic b = 1'b1;
+  logic marker;
+  wire z, y;
+  dev u0(.a(a), .b(b), .z(z), .y(y));
+  // A time step at 11 ns, where the safe point applies second.sdf.
+  initial #11 marker = 1'b1;
+  initial begin
+    #10 a = 1'b1;
+    #30 a = 1'b0;
+    #60 $finish;
+  end
+endmodule
+)sv";
+        if (!source)
+            throw std::runtime_error("cannot write Tcl DEVICE source");
+    }
+    const auto write_sdf = [](const char* filename, const int path_delay,
+                               const int gate_delay) {
+        std::ofstream source { filename };
+        source << "(DELAYFILE\n"
+            "  (SDFVERSION \"4.0\")\n"
+            "  (DESIGN \"top\")\n"
+            "  (DIVIDER .)\n"
+            "  (TIMESCALE 1 ns)\n"
+            "  (CELL (CELLTYPE \"dev\") (INSTANCE top.u0)\n"
+            "    (DELAY (ABSOLUTE (DEVICE z (" << path_delay << "))"
+            " (DEVICE y (" << gate_delay << ")))))\n)\n";
+        if (!source)
+            throw std::runtime_error("cannot write Tcl DEVICE SDF input");
+    };
+    write_sdf("first.sdf", 3, 4);
+    write_sdf("second.sdf", 2, 6);
+    const auto invoke = [](const std::vector<std::string>& arguments) {
+        std::istringstream input;
+        std::ostringstream output;
+        std::ostringstream error;
+        if (run_cli(arguments, input, output, error) != 0)
+            throw std::runtime_error("Tcl DEVICE setup failed: " + error.str());
+    };
+    invoke({ "fsim", "compile", "--library", "work", "top.sv" });
+    invoke({ "fsim", "elaborate", "work.top", "--snapshot", "device" });
+    constexpr auto script = R"FSIM_TCL(
+set loaded [fsim::load_snapshot device]
+set first [fsim::sdf configure first.sdf top top.u0 typ]
+if {![dict get $first effective] || [dict get $first generation] != 1} {
+  error "DEVICE file did not apply: $first"
+}
+set ::sdf_live_committed 0
+proc commit_device_at_safe_point {time delta phase} {
+  if {!$::sdf_live_committed && $time == 11000 && $phase eq "postponed"} {
+    set second [fsim::sdf configure second.sdf top top.u0 typ]
+    if {![dict get $second effective] || [dict get $second generation] != 2} {
+      error "safe-point DEVICE file did not apply: $second"
+    }
+    set ::sdf_live_committed 1
+  }
+}
+fsim::add_callback safe_point commit_device_at_safe_point
+fsim::run 11ns
+fsim::remove_callback safe_point
+if {!$::sdf_live_committed} {error "DEVICE safe point was not reached"}
+fsim::run 12500ps
+if {[fsim::read_signal top.z] ne "0" || [fsim::read_signal top.y] ne "0"} {
+  error "DEVICE delays did not hold the change of a back"
+}
+fsim::run 13500ps
+if {[fsim::read_signal top.z] ne "1" || [fsim::read_signal top.y] ne "0"} {
+  error "z (path 3 ns) or y (gate 4 ns) did not keep its pending time"
+}
+fsim::run 14500ps
+if {[fsim::read_signal top.y] ne "1"} {error "y did not rise at 14 ns"}
+fsim::run 41500ps
+if {[fsim::read_signal top.z] ne "1"} {error "z fell before 42 ns"}
+fsim::run 42500ps
+if {[fsim::read_signal top.z] ne "0" || [fsim::read_signal top.y] ne "1"} {
+  error "reannotated DEVICE path delay of z (2 ns) was not used"
+}
+fsim::run 45500ps
+if {[fsim::read_signal top.y] ne "1"} {error "y fell before 46 ns"}
+fsim::run 46500ps
+if {[fsim::read_signal top.y] ne "0"} {
+  error "reannotated DEVICE delay of the gate (6 ns) was not used"
+}
+puts sdf-device-ok
+)FSIM_TCL";
+    std::istringstream input;
+    std::ostringstream output;
+    std::ostringstream error;
+    if (run_cli({ "fsim", "tcl", "-c", script }, input, output, error) != 0
+        || output.str().find("sdf-device-ok") == std::string::npos) {
+        throw std::runtime_error("Tcl DEVICE session failed: " + error.str());
+    }
+}
+
 // NETDELAY (IEEE 1364-2005 16.2.4) and the live reannotation of a net delay.
 // n has two load ports, u1.a and u2.a, and u3.a is an input port of its own:
 //  - first.sdf (OVI SDF 2.1): the delay of n is 3 ns and of u3.a 5 ns. The
@@ -809,6 +929,119 @@ puts sdf-net-delay-ok
         || output.str().find("sdf-net-delay-ok") == std::string::npos) {
         throw std::runtime_error(
             "Tcl NETDELAY session failed: " + error.str());
+    }
+}
+
+// A live SDF reannotation that delays a load no earlier annotation delayed
+// splits that load at the safe point (IEEE 1364-2005 16.2.4, 16.3). The first
+// file delays only the net n by 3 ns. u3.a is undelayed until the safe point
+// at 11 ns reannotates with a 5 ns PORT delay on it, so:
+//   t rises at 10 ns: z3 follows at once (the copy does not exist yet);
+//   t falls at 40 ns: u3.a is delayed by 5 ns, so z3 falls at 45 ns;
+//   t rises at 70 ns: z3 rises at 75 ns.
+// u1.a keeps its 3 ns delay: z1 rises at 13, falls at 43 and rises at 73 ns.
+void run_sdf_live_split_workspace_commands_test()
+{
+    TemporaryDirectory temporary;
+    WorkingDirectory working_directory(temporary.path());
+    {
+        std::ofstream source { "top.sv" };
+        source << R"sv(`timescale 1ns/1ps
+module ld(input logic a, output logic z);
+  assign z = a;
+endmodule
+module top;
+  logic s = 1'b0;
+  logic t = 1'b0;
+  wire n;
+  assign n = s;
+  wire m;
+  assign m = t;
+  wire z1, z3;
+  ld u1(.a(n), .z(z1));
+  ld u3(.a(m), .z(z3));
+  // A time slot at 11 ns for the safe point that commits the split.
+  logic marker;
+  initial #11 marker = 1'b1;
+  initial begin
+    #10 begin s = 1'b1; t = 1'b1; end
+    #30 begin s = 1'b0; t = 1'b0; end
+    #30 begin s = 1'b1; t = 1'b1; end
+    #50 $finish;
+  end
+endmodule
+)sv";
+        if (!source)
+            throw std::runtime_error("cannot write Tcl live split source");
+    }
+    const auto write_sdf = [](const char* filename, const std::string& body) {
+        std::ofstream source { filename };
+        source << "(DELAYFILE\n"
+            "  (SDFVERSION \"OVI 2.1\")\n"
+            "  (DESIGN \"top\")\n"
+            "  (DIVIDER .)\n"
+            "  (TIMESCALE 1 ns)\n"
+            "  (CELL (CELLTYPE \"top\") (INSTANCE top)\n"
+            "    (DELAY (ABSOLUTE " << body << "))))\n";
+        if (!source)
+            throw std::runtime_error("cannot write Tcl live split SDF input");
+    };
+    write_sdf("first.sdf", "(NETDELAY n (3))");
+    write_sdf("second.sdf", "(NETDELAY n (3)) (NETDELAY u3.a (5))");
+    const auto invoke = [](const std::vector<std::string>& arguments) {
+        std::istringstream input;
+        std::ostringstream output;
+        std::ostringstream error;
+        if (run_cli(arguments, input, output, error) != 0)
+            throw std::runtime_error("Tcl live split setup failed: " + error.str());
+    };
+    invoke({ "fsim", "compile", "--library", "work", "top.sv" });
+    invoke({ "fsim", "elaborate", "work.top", "--snapshot", "livesplit" });
+    constexpr auto script = R"FSIM_TCL(
+set loaded [fsim::load_snapshot livesplit]
+set first [fsim::sdf configure first.sdf top top typ]
+if {![dict get $first effective]} {error "first SDF file did not apply: $first"}
+set ::sdf_live_committed 0
+proc commit_split_at_safe_point {time delta phase} {
+  if {!$::sdf_live_committed && $time == 11000 && $phase eq "postponed"} {
+    set second [fsim::sdf configure second.sdf top top typ]
+    if {![dict get $second effective] || [dict get $second generation] != 2} {
+      error "safe-point SDF file did not apply: $second"
+    }
+    set ::sdf_live_committed 1
+  }
+}
+fsim::add_callback safe_point commit_split_at_safe_point
+fsim::run 11ns
+fsim::remove_callback safe_point
+if {!$::sdf_live_committed} {error "the safe point was not reached"}
+fsim::run 12500ps
+if {[fsim::read_signal top.z3] ne "1" || [fsim::read_signal top.z1] ne "0"} {
+  error "before the split u3.a followed t and u1.a was held back"
+}
+fsim::run 13500ps
+if {[fsim::read_signal top.z1] ne "1"} {error "u1.a did not rise at 13 ns"}
+fsim::run 44500ps
+if {[fsim::read_signal top.z3] ne "1" || [fsim::read_signal top.z1] ne "0"} {
+  error "split u3.a fell before 45 ns, or u1.a did not fall at 43 ns"
+}
+fsim::run 45500ps
+if {[fsim::read_signal top.z3] ne "0"} {error "split u3.a did not fall at 45 ns"}
+fsim::run 74500ps
+if {[fsim::read_signal top.z3] ne "0" || [fsim::read_signal top.z1] ne "1"} {
+  error "split u3.a rose before 75 ns, or u1.a did not rise at 73 ns"
+}
+fsim::run 75500ps
+if {[fsim::read_signal top.z3] ne "1"} {error "split u3.a did not rise at 75 ns"}
+puts sdf-live-split-ok
+)FSIM_TCL";
+    std::istringstream input;
+    std::ostringstream output;
+    std::ostringstream error;
+    if (run_cli({ "fsim", "tcl", "-c", script }, input, output, error) != 0
+        || output.str().find("sdf-live-split-ok") == std::string::npos) {
+        throw std::runtime_error(
+            "Tcl live split session failed: " + error.str());
     }
 }
 
@@ -1076,7 +1309,9 @@ int main()
     try {
         run_workspace_commands_test();
         run_sdf_workspace_commands_test();
+        run_sdf_device_workspace_commands_test();
         run_sdf_net_delay_workspace_commands_test();
+        run_sdf_live_split_workspace_commands_test();
         run_systemc_workspace_commands_test();
         run_unqualified_command_test();
         run_windows_long_path_cd_test();

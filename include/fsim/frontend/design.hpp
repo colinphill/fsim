@@ -626,6 +626,12 @@ struct GenerateBody {
         systemverilog_assertion_declarations;
     std::vector<SystemVerilogConcurrentAssertion>
         systemverilog_concurrent_assertions;
+    // The block's concurrent assertions as resolved into its processes
+    // (resolve_generate_assertion_references moves the originals out): the
+    // semantic HIR publishes them as the block's assertion statements (IEEE
+    // 1800-2023 27.3, 37.49).
+    std::vector<SystemVerilogConcurrentAssertion>
+        published_concurrent_assertions;
     // Clocking blocks of a SystemVerilog generate block (IEEE 1800-2023
     // 14.3, 27.3), one set per generated scope.
     std::vector<SystemVerilogClockingBlock> systemverilog_clocking_blocks;
@@ -751,11 +757,18 @@ struct SystemVerilogAssertionLocalVariable {
 struct SystemVerilogAssertionClock {
     std::vector<Token> event_tokens;
     SourceSpan span;
+    // The clocking event as an event control's sensitivities, for the VPI
+    // clocking event (IEEE 1800-2023 37.50); empty when the tokens do not
+    // parse as an event expression list.
+    std::vector<Sensitivity> events;
 };
 
 struct SystemVerilogAssertionDisable {
     std::vector<Token> condition_tokens;
     SourceSpan span;
+    // The disable condition as an expression (37.50 vpiDisableCondition);
+    // empty when the tokens are not an ordinary expression.
+    std::optional<Expression> condition;
 };
 
 enum class SystemVerilogAssertionReferenceKind {
@@ -953,6 +966,94 @@ struct SystemVerilogPropertyExpression {
 
 struct SystemVerilogConcurrentAssertion;
 
+/// The operator of a published property or sequence node, with the meaning
+/// of the operation types of IEEE 1800-2023 37.52 and 37.54 (vpiOpType).
+enum class SystemVerilogAssertionOperator : std::uint8_t {
+    Not,
+    OverlapImply,
+    NonOverlapImply,
+    OverlapFollowedBy,
+    NonOverlapFollowedBy,
+    If,
+    IfElse,
+    Iff,
+    Implies,
+    Until,
+    UntilWith,
+    Nexttime,
+    Always,
+    Eventually,
+    AcceptOn,
+    RejectOn,
+    SyncAcceptOn,
+    SyncRejectOn,
+    CompAnd,
+    CompOr,
+    CycleDelay,
+    UnaryCycleDelay,
+    Repeat,
+    ConsecutiveRepeat,
+    GotoRepeat,
+    Intersect,
+    FirstMatch,
+    Throughout,
+    Within,
+};
+
+/// An operand of a published node: another node of the tree, or an
+/// expression (a boolean, a condition or a bound).
+struct SystemVerilogAssertionTreeOperand {
+    std::int32_t node { -1 };
+    std::optional<Expression> expression;
+};
+
+/// One operation or instance of a property or sequence expression (IEEE
+/// 1800-2023 37.52, 37.54): the operands are in the order the standard gives
+/// them (a nexttime count, an always range and a repeat bound follow the
+/// property or sequence). An instance names the declaration it instantiates
+/// and holds one operand per formal of it, a default where the instance
+/// gave no actual.
+struct SystemVerilogAssertionTreeNode {
+    // ClockedProperty: `@(event) property_expr` (operand: the property).
+    // ClockedSequence: one `@(event) sequence_expr` component of a
+    // multiclocked sequence (operand: the sequence). MulticlockSequence: the
+    // clocked sequences a multiclocked sequence expression is made of.
+    // CaseProperty: the case expression, then its items. CaseItem: the item's
+    // expressions, then its property; a default item has the property only.
+    enum class Kind : std::uint8_t {
+        Operation,
+        Instance,
+        ClockedProperty,
+        ClockedSequence,
+        MulticlockSequence,
+        CaseProperty,
+        CaseItem,
+    };
+    Kind kind { Kind::Operation };
+    SystemVerilogAssertionOperator op { SystemVerilogAssertionOperator::Not };
+    bool strong { };
+    // A sequence expression rather than a property expression.
+    bool sequence { };
+    std::vector<SystemVerilogAssertionTreeOperand> operands;
+    std::string instance;
+    // The clocking event of a clocked property or clocked sequence (IEEE
+    // 1800-2023 37.52, 37.56 vpiClockingEvent).
+    std::vector<Sensitivity> clock_events;
+    // The default item of a case property (37.52 detail 5).
+    bool default_item { };
+    SourceSpan span;
+};
+
+/// The expression tree of a property or sequence declaration, or the single
+/// instance of a concurrent assertion that names a declaration. `root` is a
+/// node, or a lone expression for a property that is a boolean.
+struct SystemVerilogAssertionTree {
+    std::vector<SystemVerilogAssertionTreeNode> nodes;
+    SystemVerilogAssertionTreeOperand root;
+    // One per formal of the declaration, in order: the default value.
+    std::vector<std::optional<Expression>> formal_defaults;
+};
+
 // Sequence, property, and checker declarations are source-owned independently
 // of parser storage. Change 1 retains the exact header/body token stream so
 // later Batch 154 changes can add formal, clock, disable, and expression HIR
@@ -977,6 +1078,10 @@ struct SystemVerilogAssertionDeclaration {
     std::optional<SystemVerilogSequenceExpression> sequence_expression;
     std::optional<SystemVerilogPropertyExpression> property_expression;
     std::vector<SystemVerilogSequenceEndpoint> sequence_endpoints;
+    // The expression tree (IEEE 1800-2023 37.52, 37.54), built once the
+    // unit's declarations are known; empty when the body is outside the
+    // forms the tree covers.
+    std::optional<SystemVerilogAssertionTree> tree;
     // Checker bodies retain their assertion declarations and directives as
     // owned semantic forms. Instantiation specializes these records into the
     // containing design-unit scope before ordinary assertion resolution.
@@ -1018,6 +1123,10 @@ struct SystemVerilogConcurrentAssertion {
     std::string label;
     SourceSpan label_span;
     std::vector<Token> property_tokens;
+    // The property instance the directive names (37.50 vpiProperty): one
+    // instance node with the actuals as written; empty for an inline
+    // property.
+    std::optional<SystemVerilogAssertionTree> property_instance;
     std::optional<SystemVerilogAssertionDeclaration> inline_sequence;
     bool has_pass_action { };
     std::vector<Token> pass_action_tokens;
@@ -1044,6 +1153,14 @@ struct SystemVerilogConcurrentAssertion {
     // procedure's event control (16.14.5); empty for a directive.
     std::string procedural_enable;
     std::vector<Token> procedural_clock;
+    // The same clock as an event control's sensitivities, for the VPI
+    // clocking event of an inferred clock (16.14.6, 37.50).
+    std::vector<Sensitivity> procedural_clock_events;
+    // Why the procedure gives no inferred clock (16.14.6), empty when it
+    // does; the automatic variables its procedure declares, which may not
+    // appear in a clocking event (16.14.6).
+    std::string procedural_clock_failure;
+    std::vector<std::string> procedural_automatic_names;
     // An `expect` statement (16.17): it blocks its procedure until its one
     // attempt completes.
     bool expect_statement { };

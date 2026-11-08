@@ -602,7 +602,7 @@ ConcurrentCapture capture_concurrent_assertions(
     const auto result = simulation.run();
     assert(result.status == fsim::runtime::RunStatus::stopped);
     capture.coverage = simulation.concurrent_assertion_coverage();
-    capture.events = simulation.concurrent_assertion_events();
+    capture.events = capture.callback_events;
     return capture;
 }
 

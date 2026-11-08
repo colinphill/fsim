@@ -196,6 +196,20 @@ void Scheduler::schedule_next_delta_batchable(
     impl_->enqueue_next_delta(phase, std::move(entry));
 }
 
+void Scheduler::schedule_next_delta_batchable(
+    const SchedulerPhase phase,
+    const StableOrder stable_order,
+    SchedulerBatchTask& batch_task,
+    const std::uint64_t batch_payload,
+    detail::SchedulerTaskDescriptor fallback_descriptor)
+{
+    if (impl_->discarding)
+        return;
+    auto entry = impl_->make_batch_descriptor_entry(
+        stable_order, batch_task, batch_payload, fallback_descriptor);
+    impl_->enqueue_next_delta(phase, std::move(entry));
+}
+
 SchedulerOrderKey Scheduler::reserve_order_key(
     const StableOrder stable_order)
 {
@@ -439,6 +453,12 @@ void Scheduler::reset()
     impl_->recent_signals.clear();
     impl_->recent_signal_cursor = 0;
     impl_->stop.store(false, std::memory_order_relaxed);
+    impl_->quiet_request = nullptr;
+    impl_->quiet_request_context = nullptr;
+    if (impl_->cycle_end_request_token != 0U) {
+        remove_safe_point_hook(impl_->cycle_end_request_token);
+        impl_->cycle_end_request_token = 0U;
+    }
 }
 
 bool Scheduler::has_pending() const noexcept
@@ -480,6 +500,17 @@ Scheduler::next_pending_time() const noexcept
         }
     }
     return std::nullopt;
+}
+
+std::vector<SimulationTick> Scheduler::pending_times() const
+{
+    std::vector<SimulationTick> times;
+    for (const auto& [time, bucket] : impl_->future) {
+        if (!bucket.empty()) {
+            times.push_back(time);
+        }
+    }
+    return times;
 }
 
 bool Scheduler::running() const noexcept { return impl_->in_run; }

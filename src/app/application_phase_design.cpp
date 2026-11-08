@@ -658,6 +658,18 @@ static bool publish_design_artifact_impl(
         metadata.roots.push_back({ alias, root.target,
             selected_root_identity(project, alias, root.target) });
     }
+    // A configuration with several design cells expands one selected top to
+    // one root per cell (IEEE 1800-2023 33.4.1.1).
+    if (config.project.tops.size() == 1U
+        && project.design.roots().size() > metadata.roots.size()) {
+        const auto& root = config.project.tops.front();
+        for (std::size_t index = metadata.roots.size();
+            index < project.design.roots().size(); ++index) {
+            const auto& alias = project.design.roots()[index];
+            metadata.roots.push_back({ alias, root.target,
+                selected_root_identity(project, alias, root.target) });
+        }
+    }
     if (metadata.roots.empty() && !config.project.top.empty()) {
         const auto alias = project.design.roots().empty()
             ? std::string { "top" }
@@ -1826,15 +1838,25 @@ static int handle_simulate_impl(
     }
     const auto sdf_request = make_cli_sdf_request(invocation,
         SdfControlPhase::Simulate, config.run.delay_mode);
-    if (!sdf_request.inputs.empty()) {
+    // The SDF session applied to a design loaded from the artifact; a reset
+    // reloads the design and applies it again (IEEE 1800-2023 D.8).
+    const auto apply_sdf = [&](BuiltProject& project) {
+        if (sdf_request.inputs.empty()) {
+            return true;
+        }
         auto planned = plan_sdf_session_inputs(
-            built->design, built->time_resolution, built->cache_key,
+            project.design, project.time_resolution, project.cache_key,
             sdf_request, { }, diagnostics,
-            { &built->design_ir, &built->systemverilog_hir });
-        if (!planned)
-            return 1;
-        built->design = std::move(planned->design);
-        apply_sdf_session_cache_identity(*built, *planned->control);
+            { &project.design_ir, &project.systemverilog_hir });
+        if (!planned) {
+            return false;
+        }
+        project.design = std::move(planned->design);
+        apply_sdf_session_cache_identity(project, *planned->control);
+        return true;
+    };
+    if (!apply_sdf(*built)) {
+        return 1;
     }
     // Engine v4 is the default; `compiled` names it too (the per-process
     // JIT is retired, docs/simulation-engine-v4-progress.md).
@@ -1843,11 +1865,21 @@ static int handle_simulate_impl(
         ? SimulationEngine::interpreter
         : engine == "debug" ? SimulationEngine::debug
                             : SimulationEngine::v4;
+    const auto design_file = *invocation.design;
     return run_built_project(
         std::move(*built), simulation_engine,
         config, invocation.plusargs, diagnostics, output,
         simulation_engine == SimulationEngine::debug
-            ? SimulationOutputSink::callback : sink);
+            ? SimulationOutputSink::callback : sink,
+        [&diagnostics, design_file, apply_sdf]()
+            -> std::optional<BuiltProject> {
+            auto again = load_design_artifact_for_simulation(
+                design_file, diagnostics);
+            if (!again || !apply_sdf(*again)) {
+                return std::nullopt;
+            }
+            return again;
+        });
 }
 
 int handle_simulate(

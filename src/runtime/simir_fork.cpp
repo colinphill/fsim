@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "simir_internal.hpp"
+#include "simir_execution_shared.hpp"
+
+#include "fsim/runtime/foreign_call_process.hpp"
 
 namespace fsim::runtime::simir {
 
@@ -195,7 +198,37 @@ std::optional<std::uint64_t> Interpreter::Impl::decode_random_state(
     }
     const auto& disable = *fsim::runtime::simir::operation_get_if<DisableFork>(&operation);
     clear_wait_timeout(process);
-    if (!disable.site) {
+    // A deferred assertion flush point (IEEE 1800-2023 16.4.2) ends this
+    // process's pending reports, the children of its deferred Forks, and
+    // nothing else; the process goes on.
+    const bool flush_reports = disable.deferred_reports && !disable.site;
+    const bool whole_disable = !disable.site && !flush_reports;
+    if (flush_reports) {
+        const auto& operations = process.program().operations();
+        std::vector<ProcessId> reports;
+        for (const auto& candidate : processes) {
+            if (candidate.halted
+                || candidate.cold().fork_parent != process.id
+                || !candidate.cold().fork_site
+                || *candidate.cold().fork_site >= operations.size()) {
+                continue;
+            }
+            const auto* const fork = fsim::runtime::simir::operation_get_if<Fork>(
+                &operations[*candidate.cold().fork_site]);
+            if (fork != nullptr && fork->deferred_report
+                && deferred_report_pending(operations, *fork, candidate.pc,
+                    scheduler.current_phase().value_or(SchedulerPhase::active))) {
+                reports.push_back(candidate.id);
+            }
+        }
+        for (const auto child_id : reports) {
+            auto& child = get_process(child_id);
+            cancel_fork_descendants(child);
+            if (!child.halted) {
+                complete_fork_child(child, ProcessStatus::killed);
+            }
+        }
+    } else if (!disable.site) {
         // A pending clocking drive is not a subprocess (IEEE 1800-2017
         // 9.6.3): keep detached children.
         std::vector<ProcessId> children;
@@ -296,11 +329,11 @@ std::optional<std::uint64_t> Interpreter::Impl::decode_random_state(
     }
     if (!process.halted) {
         process.status = ProcessStatus::running;
-        if (!disable.site) {
+        if (whole_disable) {
             queue_current(process.id);
         }
     }
-    if (!disable.site) {
+    if (whole_disable) {
         notify_execution_point(
             process, instruction, ExecutionPointKind::process_suspend,
             process.cold().current_source);
@@ -315,13 +348,27 @@ void Interpreter::Impl::disable_process_interval(
     const InstructionIndex end,
     const bool include_end)
 {
+    // A task the block called is inside it too (IEEE 1800-2023 9.6.2): the
+    // outermost call the block made ends with every activation it started.
+    // A call made inside [begin, end) returns to a target in (begin, end].
+    std::optional<std::size_t> depth;
+    if (!owner.halted && !owner.executor) {
+        const auto& stack = owner.cold().dynamic_call_stack;
+        for (std::size_t entry = 0U; entry < stack.size(); ++entry) {
+            if (stack[entry] > begin && stack[entry] <= end) {
+                depth = entry;
+                break;
+            }
+        }
+    }
     std::vector<ProcessId> scoped_children;
     if (const auto* const fork_state = owner.cold().fork_state.get()) {
         for (const auto child_id : fork_state->live_children) {
             const auto& child = get_process(child_id);
-            if (child.cold().fork_site
-                && *child.cold().fork_site >= begin
-                && *child.cold().fork_site < end) {
+            if ((child.cold().fork_site
+                    && *child.cold().fork_site >= begin
+                    && *child.cold().fork_site < end)
+                || (depth && child.cold().fork_depth > *depth)) {
                 scoped_children.push_back(child_id);
             }
         }
@@ -333,10 +380,43 @@ void Interpreter::Impl::disable_process_interval(
             complete_fork_child(child, ProcessStatus::killed);
         }
     }
-    const bool owner_inside = owner.pc >= begin
-        && (owner.pc < end || (include_end && owner.pc == end));
+    const bool owner_inside = depth
+        || (owner.pc >= begin
+            && (owner.pc < end || (include_end && owner.pc == end)));
     if (!owner_inside || owner.halted) {
         return;
+    }
+    if (depth) {
+        // The calls end as their returns would: their automatic frames
+        // restore the caller's values, innermost first.
+        // A suspended owner's live values are its suspension snapshot,
+        // which it takes again with the caller's values restored.
+        if (&owner != &process) {
+            restore_callable_context(owner);
+        }
+        auto& frames = owner.cold().callable_frames;
+        const auto pc = owner.pc;
+        while (!frames.empty() && frames.back().call_depth >= *depth) {
+            CallableFramePop pop;
+            pop.identity = frames.back().identity;
+            pop_callable_frame(owner, pop);
+        }
+        owner.pc = pc;
+        owner.cold().dynamic_call_stack.resize(*depth);
+        if (&owner != &process) {
+            snapshot_callable_context(owner);
+        }
+    }
+    // A suspended owner inside a DPI import call chain gives its C code the
+    // disable, with the operations the block covers (IEEE 1800-2023 35.9),
+    // or the whole chain when the block called the task it waits in.
+    // The running process is not inside a chain that waits for it.
+    if (&owner != &process) {
+        if (depth) {
+            DpiCallProcess::disabled(owner.id);
+        } else {
+            DpiCallProcess::disabled(owner.id, begin, end);
+        }
     }
     clear_wait_timeout(owner);
     owner.cold().waiting_for_children = false;
@@ -507,6 +587,11 @@ void Interpreter::Impl::complete_process(
     if (terminal_status != ProcessStatus::finished
         && terminal_status != ProcessStatus::killed) {
         fail(process, "process completion requires a terminal status");
+    }
+    // A process killed inside a DPI import call chain gives its C code the
+    // disable first (IEEE 1800-2023 35.9).
+    if (terminal_status == ProcessStatus::killed && !process.halted) {
+        DpiCallProcess::disabled(process.id);
     }
     process.halted = true;
     process.killed = terminal_status == ProcessStatus::killed;
@@ -901,6 +986,7 @@ void Interpreter::Impl::spawn_fork(
         child.cold().random_state = initial_random_state(root_seed, child_id);
         child.cold().fork_parent = parent_id;
         child.cold().fork_site = instruction;
+        child.cold().fork_depth = parent.cold().dynamic_call_stack.size();
         if (operation.join != ForkJoinKind::none) {
             child.cold().fork_group = group_id;
         }

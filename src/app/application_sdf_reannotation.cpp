@@ -123,6 +123,9 @@ namespace {
         const elaboration::VerilogSpecifyPathInfo& source)
     {
         target.delays = source.delays;
+        target.minimum_delays = source.minimum_delays;
+        target.typical_delays = source.typical_delays;
+        target.maximum_delays = source.maximum_delays;
         target.pulse_reject_limit = source.pulse_reject_limit;
         target.pulse_error_limit = source.pulse_error_limit;
         target.pulse_reject_delays = source.pulse_reject_delays;

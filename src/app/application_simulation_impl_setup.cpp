@@ -272,6 +272,8 @@ void application_detail::plan_kernel_access(BuiltProject& built,
 
 namespace {
 
+std::uint64_t time_resolution_femtoseconds(const BuiltProject& built);
+
 std::unique_ptr<runtime::simir::Interpreter> create_simulation_interpreter(
     BuiltProject& built, const std::uint64_t max_deltas,
     const SimulationEngine engine)
@@ -396,6 +398,10 @@ std::unique_ptr<runtime::simir::Interpreter> create_simulation_interpreter(
         // A trivial plan (no processes, no specification) runs on the
         // ordinary path: there is nothing for the kernel to schedule.
         if (!plan.disabled && plan.spec) {
+            // The kernel lowers $time before the interpreter's resolution
+            // is set (apply_time_resolution).
+            plan.spec->time_resolution_femtoseconds
+                = time_resolution_femtoseconds(built);
             // Partition combinational members by module instance.
             const auto& design_ir = built.design_ir;
             std::vector<std::uint32_t> instance_of;
@@ -634,7 +640,65 @@ void restore_random_state(runtime::SystemVerilogClassObject& object,
     object.random_call_ordinals = std::move(ordinals);
 }
 
+// The design's time resolution (IEEE 1800-2023 3.14.3): it scales $time and
+// is run state ("time_format"), so a reset twin needs it as the run has it.
+std::uint64_t time_resolution_femtoseconds(const BuiltProject& built)
+{
+    const auto resolution = application_detail::magnitude_and_unit(
+        built.time_resolution);
+    const auto factor = resolution
+        ? application_detail::unit_femtoseconds(resolution->unit)
+        : std::nullopt;
+    if (!resolution || !factor || resolution->magnitude == 0
+        || resolution->magnitude
+            > std::numeric_limits<std::uint64_t>::max() / *factor) {
+        throw std::logic_error {
+            "built project has an invalid time resolution"
+        };
+    }
+    return resolution->magnitude * *factor;
+}
+
+void apply_time_resolution(
+    runtime::simir::Interpreter& interpreter, const BuiltProject& built)
+{
+    interpreter.set_time_resolution_femtoseconds(
+        time_resolution_femtoseconds(built));
+}
+
 } // namespace
+
+std::unique_ptr<runtime::simir::Interpreter> Simulation::Impl::make_reset_twin(
+    BuiltProject fresh, const std::uint64_t max_deltas,
+    const SimulationEngine engine)
+{
+    // Everything the run decided before it started (seed, access plan, cone
+    // fusion, cache and file roots) is copied from the running design, so
+    // the twin is the same program at time zero. A kernel plan changed after
+    // start (a lazily made-live gate) makes the restore refuse, and the
+    // reset fails with it.
+    fresh.seed = built.seed;
+    fresh.entropy_seed = built.entropy_seed;
+    fresh.optimization = built.optimization;
+    fresh.cache_path = built.cache_path;
+    fresh.file_root = built.file_root;
+    fresh.cone_fusion = built.cone_fusion;
+    fresh.kernel_access = built.kernel_access;
+    fresh.code_coverage_enabled = built.code_coverage_enabled;
+    // The twin runs the package and class static initializers that are not
+    // literals once (Interpreter::start), as the design's time-zero state;
+    // the run takes the result. It has no output, DPI, VPI or system-command
+    // hooks, so what those initializers print or call out to is discarded and
+    // never reaches the user or a library (owner decision 2026-11-07).
+    auto twin = create_simulation_interpreter(fresh, max_deltas, engine);
+    if (twin) {
+        // The run's constructor sets the resolution on its interpreter; the
+        // twin's time_format is restored over the run's.
+        apply_time_resolution(*twin, fresh);
+        register_foreign_net_delays(*twin);
+    }
+    return twin;
+}
 
 Simulation::Impl::Impl(
     BuiltProject project,
@@ -728,12 +792,26 @@ Simulation::Impl::Impl(
           built.systemverilog_hir,
           class_heap)
     , design_process_count(built.design.process_count())
+    , simulation_control_tasks(built.design.uses_simulation_control())
     , interpreter(create_simulation_interpreter(built, max_deltas, engine))
 {
     if (interpreter) {
         interpreter->retain_state_until_exit();
-        register_foreign_net_delays();
+        register_foreign_net_delays(*interpreter);
+        register_save_sections();
     }
+    // The interactive scope is one setting of the tool (IEEE 1800-2023
+    // 38.4 vpiSetInteractiveScope, D.11 $scope): every front end that
+    // changes it announces the new scope, and $showscopes and $showvars read
+    // it from here. First in the hook list, so the foreign callbacks that
+    // hear of the change already find it set.
+    lifecycle_hooks.push_back(
+        [this](const Simulation::LifecycleEvent event,
+            const std::string_view location) {
+            if (event == Simulation::LifecycleEvent::scope_change) {
+                interactive_scope = std::string { location };
+            }
+        });
     uvm_components.set_post_destroy_hook(
         [this](const runtime::SystemVerilogUvmComponentSnapshot& object) {
             class_owner_parameter_values.erase(object.object);
@@ -1164,20 +1242,7 @@ Simulation::Impl::Impl(
             interpreter->deposit_container_object(*index, std::move(value));
             return true;
         });
-    const auto resolution = application_detail::magnitude_and_unit(
-        built.time_resolution);
-    const auto factor = resolution
-        ? application_detail::unit_femtoseconds(resolution->unit)
-        : std::nullopt;
-    if (!resolution || !factor || resolution->magnitude == 0
-        || resolution->magnitude
-            > std::numeric_limits<std::uint64_t>::max() / *factor) {
-        throw std::logic_error {
-            "built project has an invalid time resolution"
-        };
-    }
-    interpreter->set_time_resolution_femtoseconds(
-        resolution->magnitude * *factor);
+    apply_time_resolution(*interpreter, built);
     interpreter->set_system_command_hook(
         [](const std::optional<std::string_view> command) {
             if (!command) {
@@ -2284,6 +2349,11 @@ Simulation::Impl::Impl(
             const std::int64_t start) {
             publish_assertion_attempt_start(process, start);
         });
+    interpreter->set_sva_step_hook(
+        [this](const runtime::simir::ProcessId process,
+            const runtime::sva::StepRecord& step) {
+            publish_assertion_step(process, step);
+        });
     interpreter_output_hook =
         [this](
             const runtime::simir::ProcessId process,
@@ -2315,6 +2385,23 @@ Simulation::Impl::Impl(
                 "\x1f"
                 "fsim.printtimescale|"
             };
+            constexpr std::string_view scope_task_marker {
+                "\x1f"
+                "fsim.scope-task|"
+            };
+            if (text.starts_with(runtime::simir::simulation_control_marker)) {
+                // $save, $incsave, $restart and $reset (IEEE 1800-2023
+                // D.8, D.9).
+                run_simulation_control(process,
+                    text.substr(
+                        runtime::simir::simulation_control_marker.size()));
+                return;
+            }
+            if (text.starts_with(scope_task_marker)) {
+                run_scope_task(process,
+                    text.substr(scope_task_marker.size()), time, delta);
+                return;
+            }
             if (text.starts_with(print_timescale_marker)) {
                 const auto runtime_process = interpreter->design_process(process);
                 const auto process_occurrence = std::ranges::find(
@@ -2700,6 +2787,23 @@ Simulation::Impl::Impl(
                             coverage_key);
                         return;
                     }
+                    if (outcome == "start") {
+                        // An attempt of an evaluator that is not the
+                        // monitor starts; assertion controls stop new
+                        // attempts (39.5.2), as for the monitor.
+                        if (concurrent_assertion_design_processes.contains(
+                                coverage_key)
+                            && !enabled_vpi_assertion_processes.contains(
+                                coverage_key)
+                            && (!concurrent_assertions_enabled
+                                || disabled_vpi_assertion_processes.contains(
+                                    coverage_key))) {
+                            return;
+                        }
+                        publish_assertion_attempt_start(
+                            coverage_key, static_cast<std::int64_t>(time));
+                        return;
+                    }
                     if (outcome == "abort") {
                         const std::array processes { coverage_key };
                         interpreter->kill_dynamic_processes(processes);
@@ -2788,13 +2892,17 @@ Simulation::Impl::Impl(
                     } else {
                         event.outcome = ConcurrentAssertionOutcome::failure;
                         ++coverage.failures;
+                        // The expression that rejected the attempt.
+                        if (const auto where
+                            = interpreter->sva_outcome_fail(coverage_key)) {
+                            event.fail_line = where->first;
+                            event.fail_column = where->second;
+                        }
                     }
-                    concurrent_assertion_events.push_back(std::move(event));
-                    publish_vpi_assertion(
-                        concurrent_assertion_events.back());
+                    // Not retained: a long run would grow without bound.
+                    publish_vpi_assertion(event);
                     if (concurrent_assertion_hook) {
-                        concurrent_assertion_hook(
-                            concurrent_assertion_events.back());
+                        concurrent_assertion_hook(event);
                     }
                 }
                 return;
@@ -3150,11 +3258,17 @@ void Simulation::Impl::finish_concurrent_assertions(
     const SimulationTick time,
     const std::uint64_t delta)
 {
-    std::vector<std::pair<runtime::simir::ProcessId,
-        const PendingConcurrentAssertion*>>
-        finished;
+    // Each entry carries the tick its attempt started at when the monitor
+    // knows it (attemptStartTime of an attempt the end of simulation ends,
+    // IEEE 1800-2023 39.4.2).
+    struct FinishedAttempt {
+        runtime::simir::ProcessId process { };
+        const PendingConcurrentAssertion* pending { };
+        std::optional<std::int64_t> start;
+    };
+    std::vector<FinishedAttempt> finished;
     for (const auto& [process, pending] : pending_concurrent_assertions) {
-        finished.emplace_back(process, &pending);
+        finished.push_back({ process, &pending, std::nullopt });
     }
     for (const auto& obligation : interpreter
              ? interpreter->finish_sva_monitors()
@@ -3163,18 +3277,26 @@ void Simulation::Impl::finish_concurrent_assertions(
             found != sva_obligations.end()) {
             for (std::size_t count = 0; count < obligation.failures;
                 ++count) {
-                finished.emplace_back(obligation.process, &found->second);
+                finished.push_back({ obligation.process, &found->second,
+                    count < obligation.failure_starts.size()
+                        ? std::optional<std::int64_t> {
+                              obligation.failure_starts[count] }
+                        : std::nullopt });
             }
         }
         if (const auto found
             = sva_vacuous_obligations.find(obligation.process);
             found != sva_vacuous_obligations.end()) {
             for (std::size_t count = 0; count < obligation.holds; ++count) {
-                finished.emplace_back(obligation.process, &found->second);
+                finished.push_back({ obligation.process, &found->second,
+                    count < obligation.hold_starts.size()
+                        ? std::optional<std::int64_t> {
+                              obligation.hold_starts[count] }
+                        : std::nullopt });
             }
         }
     }
-    for (const auto& [process, pending_entry] : finished) {
+    for (const auto& [process, pending_entry, attempt_start] : finished) {
         const auto& pending = *pending_entry;
         const auto index = ensure_concurrent_assertion_coverage(
             pending.design_process, pending.slot, pending.kind, pending.name);
@@ -3193,15 +3315,18 @@ void Simulation::Impl::finish_concurrent_assertions(
         event.source_span = coverage.source_span;
         event.time = time;
         event.delta = delta;
+        if (attempt_start) {
+            event.attempt_start
+                = static_cast<runtime::SimulationTick>(*attempt_start);
+        }
         event.outcome = pending.vacuous
             ? ConcurrentAssertionOutcome::vacuous
             : ConcurrentAssertionOutcome::failure;
         event.action_suppressed = !concurrent_assertion_action_enabled(
             pending.design_process, pending.vacuous ? "vacuous" : "failure");
-        concurrent_assertion_events.push_back(event);
-        publish_vpi_assertion(concurrent_assertion_events.back());
+        publish_vpi_assertion(event);
         if (concurrent_assertion_hook) {
-            concurrent_assertion_hook(concurrent_assertion_events.back());
+            concurrent_assertion_hook(event);
         }
         if (event.action_suppressed)
             continue;

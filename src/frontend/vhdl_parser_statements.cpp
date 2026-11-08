@@ -86,7 +86,7 @@ void VhdlParser::parse_sequential_block_declarations(
         TokenKind::Colon,
         "':' after variable names",
         "FSIM-VHDL-PARSE-289");
-    const auto type = parse_vhdl_type(true, true);
+    const auto type = parse_vhdl_resolved_subtype();
     std::optional<Expression> initializer;
     if (match(TokenKind::ColonEqual)) {
       initializer = parse_expression();

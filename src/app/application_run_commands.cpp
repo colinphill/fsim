@@ -3,6 +3,7 @@
 #include "application_vhpi_foreign.hpp"
 #include "application_vpi_foreign.hpp"
 #include "application_dpi_foreign.hpp"
+#include "application_foreign_run_state.hpp"
 #include "application_trace_control.hpp"
 #include "application_trace_hierarchy.hpp"
 #include "application_trace_observation.hpp"
@@ -12,11 +13,14 @@
 #endif
 #include "fsim/runtime/fst_value_encoder.hpp"
 #include "fsim/runtime/fst_writer.hpp"
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
+#include "fsim/support/payload_checksum.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <fstream>
 #include <iostream>
 #include <optional>
 #include <string>
@@ -362,10 +366,30 @@ std::unique_ptr<ForeignLibraries> attach_foreign_libraries(
         }
         return result;
     };
+    // The VHDL units analyzed into a library, read from the workspace library
+    // catalog (read-only) when a VHPI program lists the library's design
+    // units (IEEE 1076-2019 19.4.5).
+    const auto vhpi_library_units = [root = config.base_directory](
+                                        const std::string_view library) {
+        std::vector<VhpiCatalogUnit> result;
+        std::string failure;
+        if (const auto catalog
+            = workspace::Store { root }.read_library(library, failure)) {
+            for (const auto& record : catalog->artifacts) {
+                for (const auto& owned : record.units) {
+                    if (owned.unit.language == "vhdl") {
+                        result.push_back({ owned.unit.kind, owned.unit.name,
+                            owned.unit.primary_name });
+                    }
+                }
+            }
+        }
+        return result;
+    };
     if (vhpi_wanted && !vhpi_modules) {
         impl.vhpi = attach_vhpi_modules(
             simulation, {}, {}, vhpi_print(), plusargs, diagnostics, {},
-            vhpi_libraries);
+            vhpi_libraries, vhpi_library_units);
         if (!impl.vhpi) {
             return failed();
         }
@@ -421,7 +445,7 @@ std::unique_ptr<ForeignLibraries> attach_foreign_libraries(
             config.run.vhpi_modules, config.run.vhpi_registries, vhpi_print(),
             plusargs, diagnostics,
             impl.vpi ? impl.vpi->calls() : ForeignCompanion {},
-            vhpi_libraries);
+            vhpi_libraries, vhpi_library_units);
         if (!impl.vhpi) {
             return failed();
         }
@@ -429,6 +453,27 @@ std::unique_ptr<ForeignLibraries> attach_foreign_libraries(
     if (impl.vpi && impl.vhpi) {
         impl.vpi->set_companion(impl.vhpi->calls());
         impl.vhpi->set_companion(impl.vpi->calls());
+    }
+    // What the libraries put while saving and the restart callbacks they
+    // registered travel in the run-state file (IEEE 1800-2023 38.36.3, IEEE
+    // 1076-2019 20.7).
+    {
+        runtime::RunStateSectionRegistry foreign_sections;
+        register_foreign_run_state_sections(
+            foreign_sections, impl.vpi.get(), impl.vhpi.get());
+        simulation.set_foreign_run_state_sections(std::move(foreign_sections));
+    }
+    // A reset disables the DPI call chains in flight after the libraries
+    // heard cbStartOfReset (registered last, so it runs last; IEEE 1800-2023
+    // D.8 a).
+    if (impl.dpi) {
+        simulation.add_lifecycle_hook(
+            [dpi = impl.dpi.get()](const Simulation::LifecycleEvent event,
+                const std::string_view) {
+                if (event == Simulation::LifecycleEvent::start_of_reset) {
+                    dpi->reset();
+                }
+            });
     }
     return libraries;
 }
@@ -440,12 +485,35 @@ int run_built_project(
     const std::span<const std::string> plusargs,
     diagnostic::Engine& diagnostics,
     std::ostream& output,
-    const SimulationOutputSink sink)
+    const SimulationOutputSink sink,
+    std::function<std::optional<BuiltProject>()> reload_design)
 {
     const auto duration = configured_duration(
         config, built.time_resolution, diagnostics);
     if (config.run.duration && !duration) {
         return 1;
+    }
+    // `--save-at TIME --save-file FILE` saves the run state at the end of the
+    // time slot at TIME (IEEE 1800-2023 D.9); both are needed.
+    std::optional<SimulationTick> save_at;
+    if (config.run.save_at.has_value() != config.run.save_file.has_value()) {
+        diagnostics.error("FSIM-SAVE-0020",
+            "--save-at and --save-file are used together");
+        return 1;
+    }
+    if (config.run.save_at) {
+        project::Config save_config = config;
+        save_config.run.duration = config.run.save_at;
+        save_at = configured_duration(
+            save_config, built.time_resolution, diagnostics);
+        if (!save_at) {
+            return 1;
+        }
+        if (duration && *duration < *save_at) {
+            diagnostics.error("FSIM-SAVE-0022",
+                "--save-at is after --duration, so the run ends first");
+            return 1;
+        }
     }
     if (built.entropy_seed) {
         output << "random seed " << built.seed << '\n';
@@ -544,6 +612,75 @@ int run_built_project(
         foreign ? SystemVerilogVpiRuntimeUpdates::enabled
                     : SystemVerilogVpiRuntimeUpdates::omitted);
     simulation.set_foreign_probes(foreign && config.run.foreign_probes);
+    // $reset, vpi_control(vpiReset) and vhpi_control(vhpiReset) rebuild the
+    // time-zero state from the design artifact (IEEE 1800-2023 D.8, 38.4;
+    // IEEE 1076-2019 20.9). Installed before the foreign libraries attach so
+    // that they see reset_supported().
+    if (reload_design) {
+        simulation.set_reset_design_source(
+            std::move(reload_design), config.run.max_deltas, engine);
+    }
+    {
+        // A restart repeats the command line of the save (IEEE 1800-2023
+        // D.9): the libraries, plusargs and options that shape the run state
+        // are part of the identity a saved file records.
+        std::string identity = std::string { "engine=" }
+            + (engine == SimulationEngine::interpreter ? "interpreter"
+                    : engine == SimulationEngine::debug ? "debug"
+                                                        : "v4");
+        const auto append = [&](const std::string_view key, const auto& values) {
+            identity += ';';
+            identity += key;
+            identity += '=';
+            for (const auto& value : values) {
+                identity += value;
+                identity += ',';
+            }
+        };
+        // A restart loads the same builds of the libraries: a registration
+        // is stored as module and offset, which only the same file keeps
+        // valid (FSIM-SAVE-0016 otherwise).
+        const auto build_hashes = [](const auto& paths) {
+            std::vector<std::string> hashes;
+            for (const auto& path : paths) {
+                // `lib[:bootstrap]` names the file before the colon.
+                auto input = support::native_fs::open_ifstream(
+                    std::filesystem::path { std::string { path } }, std::ios::binary);
+                if (!input) {
+                    if (const auto colon = path.rfind(':');
+                        colon != std::string::npos && colon != 0U) {
+                        input = support::native_fs::open_ifstream(
+                            std::filesystem::path { path.substr(0U, colon) },
+                            std::ios::binary);
+                    }
+                }
+                if (!input) {
+                    hashes.emplace_back("unreadable");
+                    continue;
+                }
+                support::Xxh64 state;
+                std::array<char, 65536> buffer;
+                while (input.read(buffer.data(),
+                           static_cast<std::streamsize>(buffer.size()))
+                    || input.gcount() > 0) {
+                    state.update(std::string_view { buffer.data(),
+                        static_cast<std::size_t>(input.gcount()) });
+                }
+                hashes.push_back(support::payload_checksum(state));
+            }
+            return hashes;
+        };
+        append("vpi", config.run.vpi_modules);
+        append("vpi_build", build_hashes(config.run.vpi_modules));
+        append("sv_libs_build", build_hashes(config.run.sv_libs));
+        append("vhpi_build", build_hashes(config.run.vhpi_modules));
+        append("sv_libs", config.run.sv_libs);
+        append("vhpi", config.run.vhpi_modules);
+        append("vhpi_registry", config.run.vhpi_registries);
+        append("plusargs", plusargs);
+        identity += config.run.foreign_probes ? ";probes" : "";
+        simulation.set_state_file_identity(std::move(identity));
+    }
     simulation.set_vhpi_end_of_step_timers(
         config.run.vhpi_end_of_step_timers);
 #if defined(FSIM_ENABLE_ALLOCATION_PROFILING)
@@ -627,7 +764,66 @@ int run_built_project(
 #if defined(FSIM_ENABLE_ALLOCATION_PROFILING)
         allocation_profile_session.after_prepare();
 #endif
-        const auto result = simulation.run(duration);
+        // `--restart FILE`: the saved state replaces time zero (IEEE 1800-2023
+        // D.9); FSIM-SAVE-* errors name what did not fit.
+        const auto report_state_error = [&](const std::string& message) {
+            const auto separator = message.find(": ");
+            if (message.starts_with("FSIM-SAVE-")
+                && separator != std::string::npos) {
+                diagnostics.error(
+                    message.substr(0U, separator), message.substr(separator + 2U));
+            } else {
+                diagnostics.error("FSIM-SAVE-0018", message);
+            }
+        };
+        if (config.run.restart_file) {
+            const auto restored
+                = simulation.restore_state(*config.run.restart_file);
+            if (!restored.ok) {
+                report_state_error(restored.error);
+                return 1;
+            }
+        }
+        // A $restart inside the run takes time back to the saved time, which
+        // a trace file cannot follow: the trace ends and a new file starts at
+        // the restored state, named for the restart (IEEE 1800-2023 D.9; owner
+        // decision: wave traces start a new file at restart).
+        const auto trace_restarts = std::make_shared<unsigned>(0U);
+        if (trace) {
+            simulation.add_lifecycle_hook(
+                [&, trace_restarts](const Simulation::LifecycleEvent event,
+                    const std::string_view) {
+                    if (event != Simulation::LifecycleEvent::end_of_restart
+                        || !trace) {
+                        return;
+                    }
+                    (void)finish_trace(*trace, diagnostics);
+                    auto rotated = trace_config;
+                    auto name = trace->output_path.stem().string();
+                    name += ".restart" + std::to_string(++*trace_restarts);
+                    name += trace->output_path.extension().string();
+                    rotated.run.trace_file
+                        = trace->output_path.parent_path() / name;
+                    trace = attach_trace(simulation, rotated, diagnostics,
+                        false, {});
+                });
+        }
+        auto result = simulation.run(save_at ? save_at : duration);
+        if (save_at && result.status == runtime::RunStatus::time_limit) {
+            // The run stopped after the time slot at --save-at, the point D.9
+            // saves at; it then goes on to the end or to --duration.
+            const auto saved = simulation.save_state(*config.run.save_file);
+            if (!saved.ok) {
+                report_state_error(saved.error);
+                return 1;
+            }
+            if (!duration || *duration > *save_at) {
+                result = simulation.run(duration);
+            }
+        } else if (save_at) {
+            diagnostics.error("FSIM-SAVE-0022",
+                "the simulation ended before --save-at, so nothing was saved");
+        }
         if (sink == SimulationOutputSink::builtin_stdout) {
             (void)std::fflush(stdout);
         }
@@ -687,6 +883,14 @@ int run_built_project(
                    << milliseconds(std::chrono::steady_clock::now()
                           - simulation_run_end)
                    << '\n';
+        }
+        // A split vpi_put_delays asked for failed at its safe point after
+        // the put returned success: the old timing ran, so the run fails.
+        if (!simulation.deferred_split_errors().empty()) {
+            for (const auto& message : simulation.deferred_split_errors()) {
+                diagnostics.error("FSIM-VPI-SPLIT-001", message);
+            }
+            return 1;
         }
         if (result.simulator_status) {
             if (*result.simulator_status < 0
@@ -778,7 +982,9 @@ int handle_run(
     }
     return run_built_project(
         std::move(*built), SimulationEngine::compiled,
-        config, invocation.plusargs, diagnostics, output);
+        config, invocation.plusargs, diagnostics, output,
+        SimulationOutputSink::callback,
+        [&config, &diagnostics] { return build_project(config, diagnostics); });
 }
 
 int handle_run_stdio(
@@ -795,7 +1001,8 @@ int handle_run_stdio(
     return run_built_project(
         std::move(*built), SimulationEngine::compiled,
         config, invocation.plusargs, diagnostics, output,
-        SimulationOutputSink::builtin_stdout);
+        SimulationOutputSink::builtin_stdout,
+        [&config, &diagnostics] { return build_project(config, diagnostics); });
 }
 
 } // namespace fsim::app::application_detail

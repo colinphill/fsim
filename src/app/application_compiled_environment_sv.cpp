@@ -164,11 +164,15 @@ private:
         const frontend::DesignUnit& consumer,
         const frontend::SourceSpan& source)
     {
-        if (provider.standard != frontend::revision_string(consumer.standard_revision)
-            || provider.compatibility_profile != consumer.verilog_compatibility_profile) {
+        // Units of different standard revisions mix; package members keep
+        // the revision the package was analyzed under.  Only differing
+        // compatibility profiles (keyword/implicit-net/... switches) are refused.
+        if (provider.compatibility_profile != consumer.verilog_compatibility_profile) {
             error("FSIM-FE-STANDARD-003", "compiled SystemVerilog package '"
                 + provider.library + "::" + provider.name
-                + "' uses an incompatible standard or compatibility profile", source);
+                + "' was analyzed with compatibility profile '"
+                + provider.compatibility_profile + "' but the importing unit uses '"
+                + consumer.verilog_compatibility_profile + "'", source);
         }
     }
 
@@ -507,8 +511,11 @@ private:
         declarations(process.variables, scope);
         for (auto& function : process.functions)
             callable(function, scope);
-        for (auto& sensitivity : process.sensitivities)
+        for (auto& sensitivity : process.sensitivities) {
             expression(sensitivity.expression, scope);
+            if (sensitivity.guard)
+                expression(*sensitivity.guard, scope);
+        }
         statements(process.statements, scope);
     }
 
@@ -812,8 +819,17 @@ private:
         const auto receiver_count = static_access ? 0U : 1U;
         if (!validate_call(*selected, output.operands.size() - receiver_count, output.span))
             return { };
+        // `super.m()` names the base class method itself and is not a
+        // virtual call (IEEE 1800-2023 8.15); the source-level resolver marks
+        // it the same way when the base class is in the same source.
+        const bool base_call = !static_access && !selected->static_method
+            && !output.operands.empty()
+            && output.operands.front().kind
+                == frontend::ExpressionKind::Identifier
+            && output.operands.front().text == "super";
         output.text = std::string { selected->static_method
-                ? "@sv-static-method:" : "@sv-method:" }
+                ? "@sv-static-method:"
+                : base_call ? "@sv-base-method:" : "@sv-method:" }
             + selected->canonical_identity;
         if (selected->static_method && !static_access)
             output.operands.erase(output.operands.begin());
@@ -1140,8 +1156,11 @@ private:
             expression(argument, scope);
         for (auto& output : input.output_values)
             expression(output.value, scope);
-        for (auto& sensitivity : input.sensitivities)
+        for (auto& sensitivity : input.sensitivities) {
             expression(sensitivity.expression, scope);
+            if (sensitivity.guard)
+                expression(*sensitivity.guard, scope);
+        }
         if (input.kind == frontend::StatementKind::TaskCall)
             task(input, scope);
         statements(input.loop_updates, scope, returned);
@@ -1315,11 +1334,12 @@ private:
         const auto* provider = package(owner, spelling, source, required);
         if (provider == nullptr)
             return;
-        if (provider->standard != owner.standard
-            || provider->compatibility_profile != owner.compatibility_profile) {
+        if (provider->compatibility_profile != owner.compatibility_profile) {
             diagnostics_.error("FSIM-FE-STANDARD-003", "compiled SystemVerilog package '"
                 + provider->library + "::" + provider->name
-                + "' uses an incompatible standard or compatibility profile", source_span(source));
+                + "' was analyzed with compatibility profile '"
+                + provider->compatibility_profile + "' but the referencing unit uses '"
+                + owner.compatibility_profile + "'", source_span(source));
         }
         spelling = std::string { effective_library(provider->library) }
             + "::" + provider->name;

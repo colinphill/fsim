@@ -976,14 +976,25 @@ bool Interpreter::Impl::execute_operation(ProcessState& process,
         } else if constexpr (std::is_same_v<OperationType, StringMethod>) {
             execute_string(process, op);
         } else if constexpr (std::is_same_v<OperationType, PlusArgSelect>) {
-            const auto selected = select_plusarg(plusargs,
-                get_string_register(process, op.query), op.format_query);
-            if (op.selected) {
-                get_string_register(process, *op.selected).assign(
-                    selected.value_or(std::string_view { }));
+            if (op.host_value != 0U) {
+                // $reset_count and $reset_value (IEEE 1800-2023 D.8).
+                get_register(process, op.destination)
+                    = PackedLogic4::from_aval_bval(32,
+                        static_cast<std::uint32_t>(op.host_value == 1U
+                                ? reset_count_result
+                                : reset_value_result),
+                        0);
+            } else {
+                const auto selected = select_plusarg(plusargs,
+                    get_string_register(process, op.query), op.format_query);
+                if (op.selected) {
+                    get_string_register(process, *op.selected).assign(
+                        selected.value_or(std::string_view { }));
+                }
+                get_register(process, op.destination)
+                    = PackedLogic4::from_aval_bval(
+                        32, selected ? 1U : 0U, 0);
             }
-            get_register(process, op.destination) = PackedLogic4::from_aval_bval(
-                32, selected ? 1U : 0U, 0);
             ++process.pc;
         } else if constexpr (std::is_same_v<OperationType, SystemCommand>) {
             if (!system_command_hook) {
@@ -1855,7 +1866,9 @@ bool Interpreter::Impl::execute_operation(ProcessState& process,
             }
             ++process.pc;
         } else if constexpr (std::is_same_v<OperationType, Display>) {
-            if (op.postponed) {
+            if (op.inert && !assertion_starts_bound) {
+                // An unbound attempt-start report (Display::inert).
+            } else if (op.postponed) {
                 auto publish = [this,
                                    process_id = process.id,
                                    text = op.text,
@@ -2476,15 +2489,9 @@ void Interpreter::Impl::schedule_after_update(const ProcessId driver,
             driver, signal, std::move(value), offset, domain, delay);
         return;
     }
-    scheduler.schedule_after(delay, SchedulerPhase::update, driver,
-        [this, driver, signal, offset, value = std::move(value)](
-            Scheduler&) mutable {
-            if (offset) {
-                stage_update_slice(driver, signal, std::move(value), *offset);
-            } else {
-                stage_update(driver, signal, std::move(value));
-            }
-        });
+    schedule_delayed_update(offset ? DelayedUpdateKind::slice
+                                   : DelayedUpdateKind::whole,
+        driver, signal, std::move(value), { }, offset.value_or(0U), delay);
 }
 
 TransitionDelays Interpreter::Impl::write_delayed_delays(

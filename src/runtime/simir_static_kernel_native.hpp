@@ -88,6 +88,26 @@ struct StaticKernelWriteQueue {
 
 inline constexpr std::uint32_t static_kernel_no_fast_notify_value = 0xFFFF'FFFFU;
 
+/// Generated code's view of the concurrent assertion state (task #186;
+/// KOp::sva_tick, sva_outcome, sva_sampled_load). Field offsets are part of
+/// the ABI (static_asserts in the code generator).
+struct StaticKernelSvaTable {
+    /// The attempt block base of each bound directive (sva::AttemptStorage
+    /// publishes growth here), null until its monitor is bound.
+    std::int64_t** blocks { };
+    /// Per member, the first entry of its directives in `blocks`.
+    const std::uint32_t* member_base { };
+    /// Impl::sva_pop_serial: an inline outcome pop increments it and stamps
+    /// the block with the result.
+    std::int64_t* pop_serial { };
+    /// Impl::sampled_ring_words (clocked sampled-value histories).
+    const std::uint64_t* rings { };
+    /// Impl::sampled_value_words (the Preponed sampled values).
+    const std::uint64_t* sampled { };
+    /// The current time step, for the $past sample test.
+    const std::int64_t* now { };
+};
+
 /// Generated code's view of one unit activation. Field offsets are part of
 /// the ABI and are checked by static_asserts in the code generator.
 struct StaticKernelNativeFrame {
@@ -135,6 +155,14 @@ struct StaticKernelNativeFrame {
     /// code does not queue it. Null where writes go elsewhere (worker
     /// lanes, multi-threaded kernels).
     std::uint32_t* write_marks { };
+    /// Nonzero once a library has bound the attempt-start reports of the
+    /// concurrent assertion evaluators (Impl::assertion_starts_bound, IEEE
+    /// 1800-2023 39.4.2): a KOp::generic instruction with aux 2 (a
+    /// Display::inert) calls its helper only then. Set from the kernel at each
+    /// activation, so binding takes effect at any time in the run.
+    std::uint32_t assertion_starts { };
+    /// The concurrent assertion tables (null in a kernel without any).
+    const StaticKernelSvaTable* sva { };
 };
 inline constexpr std::uint32_t static_kernel_no_fast_notify = static_kernel_no_fast_notify_value;
 
@@ -160,11 +188,6 @@ struct StaticKernelNativeHelpers {
         static_kernel_detail::kernel_op_count> effect_ops { };
     void (*notify)(StaticKernelNativeFrame*, std::uint32_t slot,
         std::uint64_t changed) { };
-    /// Pure kernel_word::binary for operators generated code does not
-    /// inline: `operation_width` is the operator | width << 8.
-    void (*binary)(std::uint64_t operation_width, std::uint64_t la,
-        std::uint64_t lb, std::uint64_t ra, std::uint64_t rb,
-        std::uint64_t* out) { };
     /// `notify` for a field of a wide slot: `changed` is relative to bit
     /// `field_offset`.
     void (*notify_field)(StaticKernelNativeFrame*, std::uint32_t slot,
@@ -184,6 +207,14 @@ struct StaticKernelNativeHelpers {
     /// instruction `at` against the caller's registers.
     void (*net_delay)(StaticKernelNativeFrame*, kernel_word::Word* registers,
         std::uint32_t at) { };
+    /// A concurrent assertion's clock tick (`fsim_sk_sva_tick`,
+    /// KOp::sva_tick): instruction `at` against the caller's registers.
+    void (*sva_tick)(StaticKernelNativeFrame*, kernel_word::Word* registers,
+        std::uint32_t at) { };
+    /// Binds the directive of instruction `at` to its table entry and
+    /// returns its block base (`fsim_sk_sva_bind`, KOp::sva_outcome on a
+    /// null entry); null when no monitor exists yet.
+    std::int64_t* (*sva_bind)(StaticKernelNativeFrame*, std::uint32_t at) { };
     /// Wide-register instructions by kind (`fsim_sk_wide_<op>`): instruction
     /// `at` with the caller's register file, where wide values live, and the
     /// narrow operand words x, y and z; `out` receives a narrow result and

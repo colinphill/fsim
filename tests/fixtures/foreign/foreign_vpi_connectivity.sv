@@ -43,7 +43,10 @@ module top;
     end
 
     // DPI imports and exports are task and function objects (35.5, 37.40);
-    // the calls of an import name it.
+    // the calls of an import name it. Each has the vpiIODecl formal x (an
+    // input int: dir 1 = vpiInput, size 32, signed) and, for a function, a
+    // result variable of vpiIntVar type named like the function (37.41
+    // details 1-3); a task has none.
     import "DPI-C" pure c_conn_twice = function int dpi_twice(input int x);
     import "DPI-C" context c_conn_note = task dpi_note(input int x);
     function automatic int dpi_exp(input int x);
@@ -74,3 +77,14 @@ module top;
     logic [3:0] nsrc;
     wire [1:0] nd = nsrc[3:2];
 endmodule
+
+// A function and a task of a package are objects named pkg::name (IEEE
+// 1800-2023 3.13, 37.10, 37.41) with the formals and result of any other.
+package cp;
+    function automatic int twice(input int x);
+        return 2 * x;
+    endfunction
+    task automatic note(input integer n, output integer m);
+        m = n;
+    endtask
+endpackage

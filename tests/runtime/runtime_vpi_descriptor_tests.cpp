@@ -355,10 +355,28 @@ void test_systemverilog_vpi_recursive_type_descriptors()
                                    root.value,
                                    "bad_memory",
                                    std::nullopt,
-                                   descriptor_type(associative) })
+                                   descriptor_type(scalar()) })
+                    .error
+                == SystemVerilogVpiObjectError::InvalidType
+            && registry.create(SystemVerilogVpiObjectDescriptor {
+                                   SystemVerilogVpiObjectKind::Memory,
+                                   root.value,
+                                   "bad_struct_memory",
+                                   std::nullopt,
+                                   descriptor_type(record) })
                     .error
                 == SystemVerilogVpiObjectError::InvalidType,
         "VPI descriptors reject excessive recursion and object-kind mismatches");
+    // An associative array is a memory whose words follow its keys (IEEE
+    // 1800-2023 37.17, 37.25 detail 2).
+    require_vpi_descriptor(
+        static_cast<bool>(registry.create(SystemVerilogVpiObjectDescriptor {
+            SystemVerilogVpiObjectKind::Memory,
+            root.value,
+            "keyed_words",
+            std::nullopt,
+            descriptor_type(associative) })),
+        "VPI memory objects accept associative array descriptors");
 
     auto legacy_queue_type = descriptor_type(queue);
     legacy_queue_type.language = SystemVerilogVpiLanguage::Verilog2005;

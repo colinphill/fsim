@@ -69,6 +69,12 @@ struct Instruction {
     std::uint32_t c { };
     Bound lo;
     Bound hi;
+    // The source position of the boolean expression a `check` or
+    // `throughout_begin` evaluates (1-based; 0 when it has none, as for a
+    // synthesized truth guard): the failing expression a rejected attempt
+    // reports (IEEE 1800-2023 39.4.2 failExpr).
+    std::uint32_t line { };
+    std::uint32_t column { };
 };
 
 struct Sequence {
@@ -116,6 +122,20 @@ struct Property {
     std::vector<std::uint32_t> children;
     Bound lo;
     Bound hi;
+    // The position of the leftmost boolean expression of the property: what
+    // a rejected attempt reports when the property fails without a failing
+    // check (a negation whose operand held, an `eventually` that never
+    // happened).
+    std::uint32_t line { };
+    std::uint32_t column { };
+};
+
+// The source position (1-based; 0 when none) of the boolean expression a
+// guard samples: what a step callback names as its matched expression
+// (IEEE 1800-2023 39.4.2 matched_exprs).
+struct GuardSpan {
+    std::uint32_t line { };
+    std::uint32_t column { };
 };
 
 struct Plan {
@@ -124,6 +144,8 @@ struct Plan {
     std::uint32_t root { };
     std::uint32_t guards { };
     std::uint32_t bounds { };
+    // One span per guard (plan text "sva3"); empty for older plan texts.
+    std::vector<GuardSpan> guard_spans;
     // `cover sequence` reports every match (16.14.3).
     bool every_match { };
     // A multiclocked plan: the guard that is true when clock i ticked in

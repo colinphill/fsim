@@ -1142,9 +1142,14 @@ gives fsim's result in each case checked.
 ## Tagged unions, guarded events and VHDL predefined operations (batch 42)
 
 - `@(e iff g) S` waits for `e` until `g` holds, then runs `S` (IEEE
-  1800-2017 9.4.2). It lowers to `do @(e); while (!g);`, so one guarded
-  event per control is supported; several are reported
-  (`FSIM-SV-UNSUPPORTED-048`).
+  1800-2017 9.4.2). A control of one event lowers to `do @(e); while
+  (!g);`. Each event of a control of several may carry its own guard
+  (`@(posedge clk iff en or posedge rst)`); the wake tests the guard of the
+  event that fired (9.4.2.3; `sv_event_iff_guards_ab4`). A process whose
+  events are plain scalar signals keeps its static edge sensitivity; its body
+  begins by finding which events fired (`SignalEvent`, `SignalLastValue`) and
+  testing their guards. Gate note: `@(posedge a or negedge b iff g)` now binds
+  `g` to `negedge b` only (9.4.2 grammar); it used to guard the whole control.
 - `if (e matches p) s1 else s2` is parsed as `case (e) matches p: s1;
   default: s2; endcase` with generated tokens (12.6.2). Pattern variables
   are procedural names of the item, so they are not undeclared

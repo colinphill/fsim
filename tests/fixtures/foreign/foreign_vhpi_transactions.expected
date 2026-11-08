@@ -1,0 +1,13 @@
+#c top.s drivers=1
+#c   tx time=10 ns null=0 value=1
+#c   tx time=20 ns null=0 value=0
+#c top.v(1) drivers=1
+#c   tx time=5 ns null=0 value=1
+#c   tx time=15 ns null=0 value=0
+#c top.v(0) drivers=1
+#c   tx time=5 ns null=0 value=0
+#c   tx time=15 ns null=0 value=1
+#c top.n drivers=1
+#c   tx time=3 ns null=0 value=7
+#c top.q drivers=1
+#c   none

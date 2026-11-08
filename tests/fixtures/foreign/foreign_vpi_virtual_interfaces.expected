@@ -17,3 +17,7 @@
 #c t.bus typespec type=vpiInterfaceTypespec defname=SBus modport=0 parent=-
 #c t.pbus type=vpiVirtualInterfaceVar name=pbus modport=1 expr=- actual=-
 #c t.pbus typespec type=vpiInterfaceTypespec defname=phy modport=1 parent=SBus
+#c Xactor virtual bus
+#c Xactor virtual pbus
+#c t virtual bus
+#c t virtual pbus

@@ -219,6 +219,11 @@ struct StaticKernelRuntimeSpec {
     /// Specializations restored from an earlier run (members not listed are
     /// specialized as usual).
     std::shared_ptr<StaticKernelSpecializations> specializations;
+    /// The design's time resolution in femtoseconds (IEEE 1800-2023 3.14.3):
+    /// an inline $time or $stime divides the kernel's time by its unit's
+    /// ticks. The interpreter's time_format is set only after the kernel
+    /// builds, so the builder passes it here.
+    std::uint64_t time_resolution_femtoseconds { };
     /// When set, the kernel records every VHDL member's specialization here.
     std::shared_ptr<StaticKernelSpecializations> record_specializations;
     /// Compiled member bodies from an earlier run of the same build
@@ -258,9 +263,27 @@ struct ReplanRequest {
         /// only those units and updating their sensitivities, partition
         /// readers and levels. Uses `graft`.
         graft_net_delay,
+        /// Rewrite the delay-free continuous writes of one gate driver as
+        /// interconnect-style delayed writes (WriteNetDelay) at the same
+        /// operation positions, so that its first vpi_put_delays or
+        /// acc_replace_delays gives the gate a delay slot (IEEE 1800-2023
+        /// 38.32, 28.16). The driver is a combinational member; one that a
+        /// partition fused is taken out of the partition's pass (gated, as
+        /// a foreign write gates it) and runs on its own from then on. The
+        /// slot it writes stays a kernel slot. Uses `gate_process` and
+        /// `gate_program`.
+        split_gate_delay,
     };
     Kind kind { Kind::graft_net_delay };
     NetDelayGraft graft;
+    /// split_gate_delay: the driver, and its program as it must run from
+    /// now on: the same operations with WriteNetDelay in place of the
+    /// WriteUpdate or WriteUpdateSlice that write the gate's output.
+    ProcessId gate_process { };
+    Process gate_program;
+    /// split_gate_delay: only check that the split can be made (no safe
+    /// point needed, nothing changes).
+    bool gate_dry_run { };
 };
 
 /// The outcome of a re-plan: `done` is false, with the kernel unchanged, and

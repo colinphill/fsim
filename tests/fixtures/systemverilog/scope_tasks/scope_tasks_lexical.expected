@@ -1,0 +1,7 @@
+$showscopes: scopes at top
+  task top.ta
+  module top.u
+$showscopes: scopes at top.ta.outer.deep
+  (none)
+$showscopes: scopes at top.ta.outer.deep
+  (none)

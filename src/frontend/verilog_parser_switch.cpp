@@ -420,6 +420,10 @@ void VerilogParser::parse_switch_primitive(
               ExpressionKind::Identifier, control_name, {}, start.span};
           control_driver.value = mapped[2];
           control_driver.delay = std::move(control_delay);
+          // Named after the switch, so that vpi_put_delays can find the driver
+          // that carries the turn-on and turn-off delays.
+          control_driver.label = instance_name.empty()
+              ? std::string{} : instance_name + "$control";
           control_driver.span = start.span;
           statements.push_back(std::move(control_driver));
           mapped[2] = Expression{

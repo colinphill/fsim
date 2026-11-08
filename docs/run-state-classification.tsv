@@ -1,0 +1,1773 @@
+# SPDX-License-Identifier: Apache-2.0
+# Run-state classification for save/restart/reset (#128; IEEE 1800-2023 D.8, D.9
+# and 36/38 vpiReset, IEEE 1076-2019 20.7-20.9, IEEE 1364-2001 tf_write_save).
+# One row per data member of the classes listed in
+# scripts/check_run_state_classification.py (ctest fsim.run-state-classification
+# fails on a member without a row or a row without a member).
+# Columns: scope, member, class, note.
+# Classes:
+#   P     plain value, saved as is
+#   P+ids saved with ids/handles rebound on restore
+#   C     closure: saved only through a registered scheduler event kind (an
+#         unregistered closure refuses the save)
+#   D     derived: rebuilt from saved state or the artifact
+#   S     scratch: empty at the save point (a non-empty one refuses the save with
+#         FSIM-SAVE-0011; an exact check beside an FSIM_RS_IDLE marker tests it)
+#   W     working storage or cache: assigned or cleared before every use (the
+#         note names the site), so its content at rest is dead and a restore
+#         starts it afresh; no check, no state
+#   Cfg   configuration or hook: rebuilt from the same command line
+#   Prof  profile counter: not saved
+# Rows marked "unreviewed" or "(S5)/(S6)/(S7)" are classified from the declaration
+# and are re-checked when the wave that saves them lands.
+scope	member	class	note
+sched.impl	options	Cfg	SchedulerOptions from the same command line
+sched.impl	reusable_queue_storage	W	allocator cache or spare buffer: holds capacity, never run state
+sched.impl	free_queue_storage_slots	W	allocator cache or spare buffer: holds capacity, never run state
+sched.impl	available_queue_storage_slots	W	allocator cache or spare buffer: holds capacity, never run state
+sched.impl	free_queue_storage_count	W	allocator cache or spare buffer: holds capacity, never run state
+sched.impl	available_queue_storage_count	W	allocator cache or spare buffer: holds capacity, never run state
+sched.impl	future	C	pending events; saved as registered kinds (S1), an unregistered closure refuses the save
+sched.impl	reusable_future_node	W	allocator cache or spare buffer: holds capacity, never run state
+sched.impl	current	C	the time slot being run; at a save point its queues are saved as events (Scheduler::save_future) and the cycle counters in the scheduler state
+sched.impl	now	P	simulation time and counters (IEEE 1076-2019 20.7: Tn is saved)
+sched.impl	cycles	P	simulation time and counters (IEEE 1076-2019 20.7: Tn is saved)
+sched.impl	callbacks	P	simulation time and counters (IEEE 1076-2019 20.7: Tn is saved)
+sched.impl	next_sequence	P	restored above every saved sequence so ordering is exact; the saved value leaves out derived events (the owner re-arms them and each takes a sequence)
+sched.impl	next_systemverilog_group_batch_reservation_id	W	monotonic generation counter; the handles it validates are never saved (0 = none)
+sched.impl	active_systemverilog_group_batch_reservation_id	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+sched.impl	active_systemverilog_group_batch_queue	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+sched.impl	active_systemverilog_group_batch_ticket	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+sched.impl	active_systemverilog_group_batch_task	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+sched.impl	active_systemverilog_group_batch_ordered_task	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+sched.impl	active_systemverilog_group_batch_key	W	set with the reservation (scheduler_systemverilog.cpp); read only while active_systemverilog_group_batch_reservation_id is non-zero, which the save checks
+sched.impl	active_systemverilog_group_batch_count	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+sched.impl	active_systemverilog_group_batch_previous_count	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+sched.impl	active_systemverilog_group_batch_new_ticket	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+sched.impl	reservation_epoch	W	monotonic generation counter; the handles it validates are never saved (0 = none)
+sched.impl	current_phase_revision	W	monotonic generation counter; the handles it validates are never saved (0 = none)
+sched.impl	in_run	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+sched.impl	in_callback	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+sched.impl	in_safe_point	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+sched.impl	in_runtime_slot_quiet_point	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+sched.impl	discarding	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+sched.impl	stop	W	host stop request: cleared at run() entry (scheduler.cpp), reported to the host as a run status, not simulation state
+sched.impl	cancel_slots	D	rebuilt by restore; owners rebind handles from cancel tags
+sched.impl	slot_start_hook	Cfg	hooks installed by the owner at startup
+sched.impl	slot_start_hooks	Cfg	hooks installed by the owner at startup
+sched.impl	slot_start_hook_snapshot	Cfg	hooks installed by the owner at startup
+sched.impl	next_slot_start_hook_token	Cfg	hooks installed by the owner at startup
+sched.impl	runtime_slot_quiet_context	Cfg	hooks installed by the owner at startup
+sched.impl	runtime_slot_quiet_hook	Cfg	hooks installed by the owner at startup
+sched.impl	safe_point_hook	Cfg	hooks installed by the owner at startup
+sched.impl	safe_point_hooks	Cfg	hooks installed by the owner at startup
+sched.impl	safe_point_hook_snapshot	Cfg	hooks installed by the owner at startup
+sched.impl	next_safe_point_hook_token	Cfg	hooks installed by the owner at startup
+sched.impl	discard_hooks	Cfg	hooks installed by the owner at startup
+sched.impl	next_discard_hook_token	Cfg	hooks installed by the owner at startup
+sched.impl	batch_entries	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+sched.impl	batch_payloads	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+sched.impl	systemverilog_batch_tickets	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+sched.impl	systemverilog_batch_ticket_members	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+sched.impl	systemverilog_readiness_ticket_reach	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+sched.impl	generic_readiness_ticket_reach	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+sched.impl	systemverilog_readiness_tickets	W	ticket pool: only tickets below *_readiness_ticket_reach are live and the save checks none is active and unexhausted
+sched.impl	systemverilog_readiness_ticket_members	W	ticket pool: only tickets below *_readiness_ticket_reach are live and the save checks none is active and unexhausted
+sched.impl	systemverilog_readiness_compact_members	W	ticket pool: only tickets below *_readiness_ticket_reach are live and the save checks none is active and unexhausted
+sched.impl	systemverilog_readiness_ticket_overflow	W	ticket pool: only tickets below *_readiness_ticket_reach are live and the save checks none is active and unexhausted
+sched.impl	systemverilog_readiness_ticket_member_overflow	W	ticket pool: only tickets below *_readiness_ticket_reach are live and the save checks none is active and unexhausted
+sched.impl	systemverilog_readiness_compact_member_overflow	W	ticket pool: only tickets below *_readiness_ticket_reach are live and the save checks none is active and unexhausted
+sched.impl	generic_readiness_tickets	W	ticket pool: only tickets below *_readiness_ticket_reach are live and the save checks none is active and unexhausted
+sched.impl	generic_readiness_compact_members	W	ticket pool: only tickets below *_readiness_ticket_reach are live and the save checks none is active and unexhausted
+sched.impl	generic_readiness_ticket_overflow	W	ticket pool: only tickets below *_readiness_ticket_reach are live and the save checks none is active and unexhausted
+sched.impl	generic_readiness_compact_member_overflow	W	ticket pool: only tickets below *_readiness_ticket_reach are live and the save checks none is active and unexhausted
+sched.impl	systemverilog_batch_compaction_stats	Prof	compaction counters
+sched.impl	generic_batch_compaction_stats	Prof	compaction counters
+sched.impl	recent_signals	Prof	delta-limit diagnostics and compaction heuristics
+sched.impl	recent_signal_cursor	Prof	delta-limit diagnostics and compaction heuristics
+sched.impl	cancellations_since_compaction	Prof	delta-limit diagnostics and compaction heuristics
+sched.impl	cancellation_compaction_threshold	Prof	delta-limit diagnostics and compaction heuristics
+sched.impl	trace_context	Cfg	hooks installed by the owner at startup
+sched.impl	trace_hook	Cfg	hooks installed by the owner at startup
+sched.impl	quiet_request_context	Cfg	one-shot save-point request (request_quiet_point); the save driver re-arms it
+sched.impl	quiet_request	Cfg	one-shot save-point request (request_quiet_point); the save driver re-arms it
+sched.impl	cycle_end_request_token	Cfg	one-shot cycle-end request hook token
+sched.current_slot	time	P	slot time and delta cycle (cycle-end save)
+sched.current_slot	delta	P	slot time and delta cycle (cycle-end save)
+sched.current_slot	phase	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+sched.current_slot	current	C	pending events at a VHDL cycle end are saved as registered kinds
+sched.current_slot	next_delta	C	pending events at a VHDL cycle end are saved as registered kinds
+sched.current_slot	systemverilog	C	pending events at a VHDL cycle end are saved as registered kinds
+sched.current_slot	systemverilog_running	C	pending events at a VHDL cycle end are saved as registered kinds
+sched.current_slot	systemverilog_phase	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+sched.current_slot	systemverilog_round	W	SystemVerilog region round counter of the running slot: at a save point no SystemVerilog work is pending, so a restored slot starts the count afresh (it only feeds the delta limit)
+sched.current_slot	last_systemverilog_phase	W	SystemVerilog region round counter of the running slot: at a save point no SystemVerilog work is pending, so a restored slot starts the count afresh (it only feeds the delta limit)
+sched.current_slot	end_of_slot	C	pending events at a VHDL cycle end are saved as registered kinds
+sched.current_slot	executing_end_of_slot	W	assigned at the start of every dispatch iteration (scheduler_dispatch.cpp) before it is read
+sched.future_slot	generic	C	pending events saved as registered kinds
+sched.future_slot	systemverilog	C	pending events saved as registered kinds
+sched.future_slot	end_of_slot	C	pending events saved as registered kinds
+sched.work_queue	entries	C	pending events saved as registered kinds
+sched.work_queue	current_insertions	C	pending events saved as registered kinds
+sched.work_queue	cursor	D	ordering metadata of one queue, rebuilt by the pushes that restore its events
+sched.work_queue	pushes_since_compaction	D	ordering metadata of one queue, rebuilt by the pushes that restore its events
+sched.work_queue	needs_sort	D	ordering metadata of one queue, rebuilt by the pushes that restore its events
+sched.work_queue	prepared	D	ordering metadata of one queue, rebuilt by the pushes that restore its events
+sched.work_queue	has_cancelable	D	ordering metadata of one queue, rebuilt by the pushes that restore its events
+sched.work_queue	dispatching_ticket	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+sched.work_queue	dispatching_ticket_count	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+sched.work_queue	compact_dispatch_scratch	W	allocator cache or spare buffer: holds capacity, never run state
+sched.work_queue	reserved_entries_capacity	W	allocator cache or spare buffer: holds capacity, never run state
+sched.work_queue	reserved_insertions_capacity	W	allocator cache or spare buffer: holds capacity, never run state
+interp.impl	scheduler	Cfg	the scheduler (own rows under sched.*)
+interp.impl	scheduler_discard_hook	Cfg	hook or callback installed by the embedder
+interp.impl	start_restoring	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+interp.impl	update_commit_callback	D	built on first dispatch of the interp.update_commit event
+interp.impl	systemverilog_update_slots	P	SV update slot pool (large payloads use the pool pattern)
+interp.impl	systemverilog_update_free_head	P	SV update slot pool (large payloads use the pool pattern)
+interp.impl	delayed_update_slots	P	delayed generic update pool (VHDL after, VITAL triggers); event interp.delayed_update holds slot and generation
+interp.impl	delayed_update_free_head	P	delayed generic update pool free list
+interp.impl	cohort_snapshots	P+ids	snapshots of queued cohort wakes: a VHDL cycle-end save holds the next-delta wakes (event interp.cohort_wake, S2); the pool is saved with the host state
+interp.impl	active_cohort_ready	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+interp.impl	cohort_overflow_contexts	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+interp.impl	cohort_overflow_entries	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+interp.impl	cohort_overflow_scratch_in_use	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+interp.impl	root_seed	Cfg	configuration from the artifact or command line
+interp.impl	signals	P	signal values, driver contributions, forces and history
+interp.impl	signal_cold	Cfg	signal declarations from the artifact
+interp.impl	switch_connections	Cfg	configuration from the artifact or command line
+interp.impl	switch_endpoint_adjacency	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	switch_control_adjacency	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	switch_source_readers	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	switch_components	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	switch_component_by_signal	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	switch_component_by_connection	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	dirty_switch_components	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	switch_components_built	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	string_objects	P+ids	object tables; write values, keep ids
+interp.impl	container_objects	P+ids	object tables; write values, keep ids
+interp.impl	container_value_reference_exposed	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	container_value_reference_exposure_in_progress	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+interp.impl	exposed_container_value_references	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	active_container_reference_refresh	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+interp.impl	default_container_values	Cfg	configuration from the artifact or command line
+interp.impl	container_signal_aliases	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	container_element_signal_aliases	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	container_alias_write_batches	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	container_aggregate_signal_aliases	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	container_aggregate_current_revisions	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	container_aggregate_stored_revisions	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	retained_aggregate_authorities	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	container_materialized_revisions	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	signal_container_aliases	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	signal_container_element_aliases	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	signal_container_aggregate_aliases	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	has_container_aggregate_aliases	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	aggregate_signal_current_projection	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	aggregate_signal_stored_projection	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	aggregate_signal_batches	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	aggregate_signal_current_projection_revisions	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	aggregate_signal_stored_projection_revisions	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	aggregate_signal_last_changes	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	aggregate_signal_last_projection_revisions	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	file_root	Cfg	configuration from the artifact or command line
+interp.impl	operation_budget	Cfg	configuration from the artifact or command line
+interp.impl	vhdl_working_directory	Cfg	configuration from the artifact or command line
+interp.impl	plusargs	Cfg	configuration from the artifact or command line
+interp.impl	reset_count_result	P	$reset_count value; the embedder sets it after a reset or restart (app.control section)
+interp.impl	reset_value_result	P	$reset_value value; the embedder sets it after a reset or restart (app.control section)
+interp.impl	time_format	P	plain run state
+interp.impl	system_random_seed	P	plain run state
+interp.impl	files	P+ids	object tables; write values, keep ids
+interp.impl	invalid_systemverilog_file	D	rebuilt from the artifact; own rows under kernel.*
+interp.impl	next_file_handle	P	plain run state
+interp.impl	next_multichannel_channel	P	plain run state
+interp.impl	direct_signal_read_capabilities	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	direct_signal_read_owner_token	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	direct_signal_read_capability_epoch	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	direct_signal_read_capability_epoch_exhausted	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	direct_signal_plane_layout_available	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	direct_signal_aval	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	direct_signal_bval	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	direct_signal_logic9_plane0	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	direct_signal_logic9_plane1	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	direct_signal_logic9_plane2	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	direct_signal_logic9_plane3	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	direct_signal_last_aval	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	direct_signal_last_bval	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	direct_signal_last_logic9_plane0	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	direct_signal_last_logic9_plane1	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	direct_signal_last_logic9_plane2	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	direct_signal_last_logic9_plane3	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	direct_signal_materialization_pending	D	flushed into signal values by save_host (materialize_direct_signal) before the sections are written
+interp.impl	direct_wide_signal_aval	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	direct_wide_signal_bval	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	direct_wide_signal_logic9_plane2	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	direct_wide_signal_logic9_plane3	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	direct_wide_signal_offsets	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	direct_single_driver_processes	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	stable_single_writer_processes	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	signal_transaction_observed	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	signal_writer_counts	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	signal_writer_revision	W	monotonic revision stamp; the caches it validates are rebuilt
+interp.impl	driven_values	P	signal values, driver contributions, forces and history
+interp.impl	vhdl_resolvers	Cfg	configuration from the artifact or command line
+interp.impl	vhdl_conversion_dependents	Cfg	configuration from the artifact or command line
+interp.impl	vhdl_conversion_drivers	P+ids	driver registrations made after start; replayed from the host.structure journal
+interp.impl	vhdl_scalar_widths	Cfg	configuration from the artifact or command line
+interp.impl	vhdl_disconnected_drivers	P	signal values, driver contributions, forces and history
+interp.impl	vhdl_created_drivers	P+ids	driver registrations made after start; replayed from the host.structure journal
+interp.impl	vhdl_resolved_values	P	signal values, driver contributions, forces and history
+interp.impl	vhdl_driver_initial_values	Cfg	configuration from the artifact or command line
+interp.impl	pending_vhdl_resolutions	S	commit scratch, empty at a save point
+interp.impl	pending_vhdl_resolution_set	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+interp.impl	running_vhdl_resolvers	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+interp.impl	vhdl_resolver_read_systemverilog_change	W	assigned false before each resolver pass (simir_scheduling_commit.cpp)
+interp.impl	vhdl_next_cycle_resolutions	P	signal values, driver contributions, forces and history
+interp.impl	vhdl_deposited_before_start	P	signal values, driver contributions, forces and history
+interp.impl	driver_values	P	signal values, driver contributions, forces and history
+interp.impl	forced_driver_values	P	signal values, driver contributions, forces and history
+interp.impl	forced_driver_masks	P	signal values, driver contributions, forces and history
+interp.impl	external_driver_values	P	signal values, driver contributions, forces and history
+interp.impl	charge_decay_handles	P+ids	trireg decay handle; event interp.charge_decay rebinds it (cancel key = signal)
+interp.impl	charge_values	P	signal values, driver contributions, forces and history
+interp.impl	signal_last_values	P	signal values, driver contributions, forces and history
+interp.impl	signal_selection_histories	P	signal values, driver contributions, forces and history
+interp.impl	signal_selection_transaction_region_pending	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+interp.impl	signal_selection_transaction_pending_listed	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+interp.impl	signal_selection_pending_transaction_signals	S	commit scratch, empty at a save point
+interp.impl	signal_value_revisions	P	signal values, driver contributions, forces and history
+interp.impl	static_kernel_input_marks	W	assigned for every input at each kernel setup (simir_static_kernel.cpp)
+interp.impl	static_kernel_dirty_inputs	P	inputs the idle kernel has not yet read; saved in kernel.state, marks set again at restore
+interp.impl	sampled_values	P	signal values, driver contributions, forces and history
+interp.impl	sampled_defaults	Cfg	configuration from the artifact or command line
+interp.impl	sampled_value_dependency_mask	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	sampled_value_dependencies_unknown	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	requires_sampled_values	Cfg	configuration from the artifact or command line
+interp.impl	native_signal_dependency_mask	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	module_path_destination_mask	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	native_signal_publication_shape_certificate	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	native_signal_dependencies_unknown	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	sampled_ring_words	P	sampled-value rings, one flat block (SampledRing layout)
+interp.impl	sampled_ring_offsets	P	ring start of each sampled-history key
+interp.impl	sampled_value_words	D	flat Logic4 copy of sampled_values for the compiled kernel, rebuilt from them after a restore
+interp.impl	sampled_value_word_offsets	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	sampled_history_keys_by_clock	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	sampled_ring_layout_baked	D	set again when the compiled kernel built after a restore binds the ring layout
+interp.impl	sampled_ring_layout_building	W	true only while the start-of-run ring layout runs (laid out from the plan); false at rest
+interp.impl	forced_values	P	signal values, driver contributions, forces and history
+interp.impl	forced_masks	P	signal values, driver contributions, forces and history
+interp.impl	port_force_layers	P	signal values, driver contributions, forces and history
+interp.impl	assign_layers	P	signal values, driver contributions, forces and history
+interp.impl	event_identities	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	event_identity_members	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	processes	P+ids	object tables; write values, keep ids
+interp.impl	process_program_templates	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	validated_program_templates	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	startup_write_body_caches	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	operation_body_kinds	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	mailboxes	P	plain run state
+interp.impl	dynamic_events	P	plain run state
+interp.impl	semaphores	P	plain run state
+interp.impl	stochastic_queues	P	plain run state
+interp.impl	sva_monitors	P	plan, bounds and flat attempt block of each monitor (sva::Monitor::run_state_io)
+interp.impl	sva_pop_serial	P	serial of the last outcome pop; stamps the monitor that popped (h_pop_serial)
+interp.impl	sva_attempt_hook	Cfg	hook or callback installed by the embedder
+interp.impl	sva_step_hook	Cfg	hook or callback installed by the embedder
+interp.impl	sva_step_requests	Cfg	step requests a foreign library made; it makes them again after a restart
+interp.impl	module_paths	Cfg	configuration from the artifact or command line
+interp.impl	module_timing_checks	Cfg	configuration from the artifact or command line
+interp.impl	module_timing_check_states	P	timing check windows
+interp.impl	fork_groups	P+ids	object tables; write values, keep ids
+interp.impl	next_fork_group	P	plain run state
+interp.impl	named_scope_intervals	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	next_process_generation	P	plain run state
+interp.impl	static_fanout_entries	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	static_fanout_offsets	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	static_fanout_category_entries	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	static_fanout_category_spans	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	static_fanout_dirty	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	static_sensitivity_cohorts	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	static_sensitivity_cohort_by_process	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	static_sensitivity_cohort_by_key	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	static_fanout_visit_generation	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	callback_observation_complete	Cfg	configuration from the artifact or command line
+interp.impl	dynamic_fanout	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	dynamic_fanout_active_counts	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	dynamic_fanout_tombstone_counts	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	container_dynamic_fanout	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	event_states	P	plain run state
+interp.impl	signal_events	P	plain run state
+interp.impl	signal_event_scheduling_stamps	P	plain run state
+interp.impl	signal_transactions	P	plain run state
+interp.impl	signal_transaction_systemverilog	P	plain run state
+interp.impl	vhdl_stamp_origins	Cfg	configuration from the artifact or command line
+interp.impl	pending_updates	S	commit scratch, empty at a save point
+interp.impl	pending_update_values	S	commit scratch, empty at a save point
+interp.impl	unresolved_update_scratch	W	staging scratch sized per design and written before it is read in each commit pass (simir_scheduling_stage.cpp)
+interp.impl	unresolved_update_owner_provenance	W	staging scratch sized per design and written before it is read in each commit pass (simir_scheduling_stage.cpp)
+interp.impl	unresolved_update_owner_provenance_signals	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+interp.impl	driver_update_scratch	W	staging scratch sized per design and written before it is read in each commit pass (simir_scheduling_stage.cpp)
+interp.impl	driver_update_index	W	staging scratch sized per design and written before it is read in each commit pass (simir_scheduling_stage.cpp)
+interp.impl	direct_single_driver_routes	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	direct_single_driver_word_scratch	W	staging scratch sized per design and written before it is read in each commit pass (simir_scheduling_stage.cpp)
+interp.impl	direct_single_driver_logic9_word_scratch	W	staging scratch sized per design and written before it is read in each commit pass (simir_scheduling_stage.cpp)
+interp.impl	unresolved_update_signals	S	commit scratch, empty at a save point
+interp.impl	direct_single_driver_update_signals	S	commit scratch, empty at a save point
+interp.impl	native_word_update_signals	S	commit scratch, empty at a save point
+interp.impl	native_word_update_count	S	commit scratch, empty at a save point
+interp.impl	native_logic9_word_update_signals	S	commit scratch, empty at a save point
+interp.impl	native_logic9_word_update_count	S	commit scratch, empty at a save point
+interp.impl	direct_single_driver_commit_marked	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+interp.impl	driver_update_signals	S	commit scratch, empty at a save point
+interp.impl	resolved_update_signals	S	commit scratch, empty at a save point
+interp.impl	resolved_update_marked	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+interp.impl	update_commit_scratch	W	staging scratch sized per design and written before it is read in each commit pass (simir_scheduling_stage.cpp)
+interp.impl	update_commit_words	W	staging scratch sized per design and written before it is read in each commit pass (simir_scheduling_stage.cpp)
+interp.impl	pending_channel_updates	S	SystemC primitive-channel updates are host-closure events (FSIM-SAVE-0004); a SystemC run refuses the save
+interp.impl	pending_inertial_writes	P+ids	pending inertial delayed writes; event interp.inertial_mature rebinds the handle by key digest and the record holds the value
+interp.impl	driver_delay_overrides	P	runtime delay changes (SDF, VPI); also journaled in host.structure
+interp.impl	net_delay_overrides	P	runtime delay changes (SDF, VPI); also journaled in host.structure
+interp.impl	foreign_net_delay_loads	P	runtime delay changes (SDF, VPI); also journaled in host.structure
+interp.impl	net_delay_force_before	Cfg	hook or callback installed by the embedder
+interp.impl	net_delay_force_after	Cfg	hook or callback installed by the embedder
+interp.impl	pending_net_delay_writes	P+ids	pending interconnect-delay changes; event interp.net_delay_mature rebinds the wake handles in time order
+interp.impl	delayed_net_initial_values	Cfg	configuration from the artifact or command line
+interp.impl	elaborated_net_initial_values	Cfg	configuration from the artifact or command line
+interp.impl	pending_module_path_writes	P+ids	pending module-path bits; events interp.module_path_mature (rebinds the handle) and interp.module_path_pulse_x
+interp.impl	projected_drivers	P+ids	projected transactions; events interp.projected_transaction_mature (rebinds by id) and interp.projected_group_mature (consecutive ids)
+interp.impl	next_projected_transaction_id	P	next projected transaction id, restored above every saved id
+interp.impl	signal_change_hook	Cfg	hook or callback installed by the embedder
+interp.impl	native_signal_observation_required_hook	Cfg	hook or callback installed by the embedder
+interp.impl	native_signal_observation_any_hook	Cfg	hook or callback installed by the embedder
+interp.impl	stored_signal_change_hook	Cfg	hook or callback installed by the embedder
+interp.impl	driver_change_hook	Cfg	hook or callback installed by the embedder
+interp.impl	event_trigger_hook	Cfg	hook or callback installed by the embedder
+interp.impl	force_statement_hook	Cfg	hook or callback installed by the embedder
+interp.impl	signal_transaction_hook	Cfg	hook or callback installed by the embedder
+interp.impl	driver_transaction_hook	Cfg	hook or callback installed by the embedder
+interp.impl	container_object_change_hook	Cfg	hook or callback installed by the embedder
+interp.impl	container_element_change_hook	Cfg	hook or callback installed by the embedder
+interp.impl	scalar_signal_change_hook	Cfg	hook or callback installed by the embedder
+interp.impl	execution_point_hook	Cfg	hook or callback installed by the embedder
+interp.impl	output_hook	Cfg	hook or callback installed by the embedder
+interp.impl	report_hook	Cfg	hook or callback installed by the embedder
+interp.impl	timing_violation_hook	Cfg	hook or callback installed by the embedder
+interp.impl	coverage_sample_hook	Cfg	hook or callback installed by the embedder
+interp.impl	coverage_query_hook	Cfg	hook or callback installed by the embedder
+interp.impl	vhdl_psl_api_hook	Cfg	hook or callback installed by the embedder
+interp.impl	vhdl_assert_counts	P	plain run state
+interp.impl	vhdl_assert_enabled	P	plain run state
+interp.impl	vhdl_assert_formats	P	plain run state
+interp.impl	vhdl_read_severity	P	plain run state
+interp.impl	vhdl_reflection_mirrors	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	coverage_control_hook	Cfg	hook or callback installed by the embedder
+interp.impl	coverage_access_hook	Cfg	hook or callback installed by the embedder
+interp.impl	code_coverage_counters	P	plain run state
+interp.impl	code_coverage_overflow_hook	Cfg	hook or callback installed by the embedder
+interp.impl	system_command_hook	Cfg	hook or callback installed by the embedder
+interp.impl	vcd_control_hook	Cfg	hook or callback installed by the embedder
+interp.impl	coverage_database_control_hook	Cfg	hook or callback installed by the embedder
+interp.impl	fork_spawn_filter	Cfg	hook or callback installed by the embedder
+interp.impl	fork_spawn_filter_observes	Cfg	hook or callback installed by the embedder
+interp.impl	class_allocate_context_hook	Cfg	hook or callback installed by the embedder
+interp.impl	pending_class_allocation_seed	P	plain run state
+interp.impl	class_property_read_hook	Cfg	hook or callback installed by the embedder
+interp.impl	class_property_write_hook	Cfg	hook or callback installed by the embedder
+interp.impl	class_property_container_hook	Cfg	hook or callback installed by the embedder
+interp.impl	class_method_call_context_hook	Cfg	hook or callback installed by the embedder
+interp.impl	class_static_property_read_hook	Cfg	hook or callback installed by the embedder
+interp.impl	class_static_property_write_hook	Cfg	hook or callback installed by the embedder
+interp.impl	class_static_method_call_context_hook	Cfg	hook or callback installed by the embedder
+interp.impl	dpi_function_call_hook	Cfg	hook or callback installed by the embedder
+interp.impl	dpi_site_hooks	Cfg	hook or callback installed by the embedder
+interp.impl	dpi_sites	Cfg	hook or callback installed by the embedder
+interp.impl	monitor	P	plain run state
+interp.impl	monitor_signal_watch_mask	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	monitor_signal_watches_unknown	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	monitor_process	P	plain run state
+interp.impl	monitor_file_handle	P	plain run state
+interp.impl	monitor_enabled	P	plain run state
+interp.impl	monitor_generation	P	plain run state
+interp.impl	monitor_publication	P	plain run state
+interp.impl	monitor_systemverilog_publication	P	plain run state
+interp.impl	update_commit_scheduled	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+interp.impl	update_commit_running	S	commit scratch, empty at a save point
+interp.impl	has_bidirectional_switches	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	switch_refreshing	S	commit scratch, empty at a save point
+interp.impl	started	P	plain run state
+interp.impl	reset_source	Cfg	factory the embedder installs; rebuilt from the same command line
+interp.impl	run_state_event_host	Cfg	the embedder's scheduler-event owners and handle takers (Interpreter::set_run_state_event_host), installed by the application from the same command line
+interp.impl	plan_journal	Cfg	the foreign requests that change the plan (watches, boundary, foreign writes, grafts), in order; replay_plan_onto gives them to the reset twin, and the same libraries make the startup ones again in a restarted process (dropped callbacks need no plan)
+interp.impl	plan_watched	Cfg	dedup set of plan_journal
+interp.impl	plan_transactions	Cfg	dedup set of plan_journal
+interp.impl	plan_written	Cfg	dedup set of plan_journal
+interp.impl	plan_boundary_open	Cfg	dedup flag of plan_journal
+interp.impl	replaying_plan	W	set by replay_plan_onto (RAII) around its replay and cleared before it returns
+interp.impl	restoring_plan	W	set by Interpreter::set_plan_replay (RAII in Simulation::Impl::replay_late_splits) around the restart replay and cleared before it returns
+interp.impl	reset_failure	W	cleared at the start of every reset_run_state and set on each failure
+interp.impl	late_process_registration	P	plain run state
+interp.impl	late_process_kernel_member	P	plain run state
+interp.impl	package_static_startup_actions_entered	P	plain run state
+interp.impl	start_in_progress	S	commit scratch, empty at a save point
+interp.impl	package_static_initialization_active	S	commit scratch, empty at a save point
+interp.impl	package_static_initialization_process	D	assigned once at start from the design's package initialization process
+interp.impl	package_static_startup_signal_processes	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	validation_only	Cfg	configuration from the artifact or command line
+interp.impl	stopped_by_design	P	plain run state
+interp.impl	paused_in_final	P	plain run state
+interp.impl	simulator_status	P	plain run state
+interp.impl	finals_ran	P	plain run state
+interp.impl	process_profile_enabled	Prof	profile counters, not saved
+interp.impl	process_profile_reported	Prof	profile counters, not saved
+interp.impl	update_profile_enabled	Prof	profile counters, not saved
+interp.impl	update_profile_reported	Prof	profile counters, not saved
+interp.impl	commit_signal_profile_enabled	Prof	profile counters, not saved
+interp.impl	retain_state_until_exit	Cfg	configuration from the artifact or command line
+interp.impl	container_aggregate_extract_revisions	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	fused_cones	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	fused_cone_by_signal	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	fusion_dormant_process	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	static_kernel_event_driven_process	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	fused_cone_materializing	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+interp.impl	static_kernel	D	rebuilt from the artifact; own rows under kernel.*
+interp.impl	interpreted_executes	Prof	profile counters, not saved
+interp.impl	constant_driver_executes	Prof	profile counters, not saved
+interp.impl	interpreted_programs	Prof	profile counters, not saved
+interp.impl	static_kernel_owned_signal	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	static_kernel_materializing	S	commit scratch, empty at a save point
+interp.impl	static_kernel_import_enabled	Cfg	configuration from the artifact or command line
+interp.impl	static_kernel_region_host	P	plain run state
+interp.impl	static_kernel_region_host_phase	W	assigned before each kernel member runs (simir_static_kernel.cpp)
+interp.impl	static_kernel_publishing	S	commit scratch, empty at a save point
+interp.impl	static_kernel_hosted_process	D	derived tables rebuilt from the artifact or from saved values
+interp.impl	commit_signal_profile_rows	Prof	profile counters, not saved
+interp.impl	update_profile_commits	Prof	profile counters, not saved
+interp.impl	update_profile_updates	Prof	profile counters, not saved
+interp.impl	update_profile_whole	Prof	profile counters, not saved
+interp.impl	update_profile_slices	Prof	profile counters, not saved
+interp.impl	update_profile_unresolved	Prof	profile counters, not saved
+interp.impl	update_profile_resolved	Prof	profile counters, not saved
+interp.impl	update_profile_resolved_single_driver	Prof	profile counters, not saved
+interp.impl	update_profile_bits	Prof	profile counters, not saved
+interp.impl	native_phase_profile_enabled	Prof	profile counters, not saved
+interp.impl	native_phase_profile_attempts	Prof	profile counters, not saved
+interp.impl	native_phase_profile_published	Prof	profile counters, not saved
+interp.impl	native_phase_profile_shape_certificate_hits	Prof	profile counters, not saved
+interp.impl	native_phase_profile_shape_certificate_misses	Prof	profile counters, not saved
+interp.impl	native_phase_profile_rejected_structure	Prof	profile counters, not saved
+interp.impl	native_phase_profile_rejected_observer	Prof	profile counters, not saved
+interp.impl	native_phase_profile_rejected_route	Prof	profile counters, not saved
+interp.impl	native_phase_profile_rejected_semantics	Prof	profile counters, not saved
+interp.impl	native_phase_profile_rejected_runtime	Prof	profile counters, not saved
+interp.impl	native_phase_profile_single_resumes	Prof	profile counters, not saved
+interp.impl	native_phase_profile_cohort_resumes	Prof	profile counters, not saved
+interp.impl	native_phase_profile_cohort_members	Prof	profile counters, not saved
+interp.impl	native_process_count_profile_enabled	Prof	profile counters, not saved
+interp.impl	native_process_resume_counts	Prof	profile counters, not saved
+interp.impl	native_process_single_resume_counts	Prof	profile counters, not saved
+interp.impl	native_process_single_static_wait_counts	Prof	profile counters, not saved
+interp.impl	native_process_cohort_resume_counts	Prof	profile counters, not saved
+interp.impl	native_process_cohort_static_wait_counts	Prof	profile counters, not saved
+interp.impl	native_process_word_fanout_ready_counts	Prof	profile counters, not saved
+interp.impl	native_process_static_trigger_counts	Prof	profile counters, not saved
+interp.impl	native_process_single_wave_processes	Prof	profile counters, not saved
+interp.impl	native_process_single_wave_offsets	Prof	profile counters, not saved
+interp.impl	native_process_single_wave_identity	Prof	profile counters, not saved
+interp.impl	native_process_single_boundary_counts	Prof	profile counters, not saved
+interp.impl	native_process_cohort_boundary_counts	Prof	profile counters, not saved
+interp.impl	native_process_simir_boundary_groups	Prof	profile counters, not saved
+interp.impl	native_process_scheduling_boundaries	Prof	profile counters, not saved
+interp.impl	native_process_word_changes	Prof	profile counters, not saved
+interp.impl	native_process_word_fanout_matches	Prof	profile counters, not saved
+interp.impl	native_process_word_fanout_ready	Prof	profile counters, not saved
+interp.impl	native_update_profile_enabled	Prof	profile counters, not saved
+interp.impl	native_update_profile_calls	Prof	profile counters, not saved
+interp.impl	native_update_profile_fallbacks	Prof	profile counters, not saved
+interp.impl	native_update_profile_batches	Prof	profile counters, not saved
+interp.impl	native_update_profile_slots	Prof	profile counters, not saved
+interp.impl	native_update_profile_inactive	Prof	profile counters, not saved
+interp.impl	native_update_profile_untouched	Prof	profile counters, not saved
+interp.impl	native_update_profile_unchanged	Prof	profile counters, not saved
+interp.impl	native_update_profile_unchanged_direct_word	Prof	profile counters, not saved
+interp.impl	native_update_profile_unchanged_direct_packed	Prof	profile counters, not saved
+interp.impl	native_update_profile_unchanged_unresolved	Prof	profile counters, not saved
+interp.impl	native_update_profile_unchanged_resolved	Prof	profile counters, not saved
+interp.impl	native_update_profile_unchanged_owned	Prof	profile counters, not saved
+interp.impl	native_update_profile_direct_word	Prof	profile counters, not saved
+interp.impl	native_update_profile_direct_packed	Prof	profile counters, not saved
+interp.impl	native_update_profile_unresolved	Prof	profile counters, not saved
+interp.impl	native_update_profile_resolved	Prof	profile counters, not saved
+interp.impl	native_update_profile_changed_owned	Prof	profile counters, not saved
+interp.impl	native_update_profile_schedule_requests	Prof	profile counters, not saved
+interp.impl	native_update_profile_schedule_coalesced	Prof	profile counters, not saved
+interp.impl	native_update_profile_commits	Prof	profile counters, not saved
+interp.impl	native_update_profile_commit_word_signals	Prof	profile counters, not saved
+interp.impl	native_update_profile_commit_value_signals	Prof	profile counters, not saved
+interp.impl	native_update_profile_word_calls	Prof	profile counters, not saved
+interp.impl	native_update_profile_words	Prof	profile counters, not saved
+interp.impl	native_update_profile_word_fallbacks	Prof	profile counters, not saved
+interp.impl	native_update_profile_word_scalar	Prof	profile counters, not saved
+interp.impl	native_update_profile_word_unchanged	Prof	profile counters, not saved
+interp.impl	native_update_profile_word_direct	Prof	profile counters, not saved
+interp.impl	native_update_profile_word_unresolved	Prof	profile counters, not saved
+interp.impl	native_update_profile_word_resolved	Prof	profile counters, not saved
+interp.impl	jit_skip_callable_frames	Cfg	configuration from the artifact or command line
+interp.impl	profile_static_cohorts_enabled	Prof	profile counters, not saved
+interp.impl	profile_processes_all_enabled	Prof	profile counters, not saved
+interp.impl	fanout_cohort_grouping_enabled	Cfg	configuration from the artifact or command line
+interp.impl	static_phase_batches_enabled	Cfg	configuration from the artifact or command line
+interp.impl	direct_word_commit_disabled	Cfg	configuration from the artifact or command line
+interp.impl	logic9_batch_profile_enabled	Prof	profile counters, not saved
+interp.impl	program_owners	P	plain run state
+interp.impl	exited_programs	P	plain run state
+interp.impl	assertion_starts_bound	D	set again when a library registers an assertion-attempt callback (a restart re-registers them)
+interp.impl	vhdl_pending_disconnects	P	pending null transactions of VHDL drivers (14.7.2), read by the VHPI projected-waveform walk; saved in host.run beside the disconnect events
+interp.impl	split_gate_drivers	D	gate drivers a vpi_put_delays split; rebuilt by replaying the split from the plan journal (wave AE: the journal records gate splits and a restart replays its run-time steps)
+interp.signal_hot	initial_value	P	the signal's current value (updated in place despite the name)
+interp.signal_hot	resolution	Cfg	signal declaration from the artifact
+interp.signal_hot	value_kind	Cfg	signal declaration from the artifact
+interp.signal_hot	systemverilog_scalar	Cfg	signal declaration from the artifact
+interp.signal_hot	event_variable	Cfg	signal declaration from the artifact
+interp.signal_hot	has_implicit_driver	Cfg	signal declaration from the artifact
+interp.signal_hot	has_charge_strength	Cfg	signal declaration from the artifact
+interp.signal_hot	public_value_reference_exposed	D	exposure flags, recomputed on demand
+interp.signal_hot	public_value_alias_exposure_in_progress	D	exposure flags, recomputed on demand
+interp.signal_hot	public_value_aliases_exposed	D	exposure flags, recomputed on demand
+interp.signal_cold	name	Cfg	signal declaration from the artifact
+interp.signal_cold	implicit_driver	Cfg	signal declaration from the artifact
+interp.signal_cold	implicit_drive_strength	Cfg	signal declaration from the artifact
+interp.signal_cold	charge_strength	Cfg	signal declaration from the artifact
+interp.signal_cold	charge_decay	Cfg	signal declaration from the artifact
+interp.update_slot	process	P	pending SV update payload
+interp.update_slot	signal	P	pending SV update payload
+interp.update_slot	value	P	pending SV update payload
+interp.update_slot	offset	P	pending SV update payload
+interp.update_slot	origin	P	pending SV update payload
+interp.update_slot	next_free	P	slot pool bookkeeping saved with the pool
+interp.update_slot	generation	P	slot pool bookkeeping saved with the pool
+interp.update_slot	occupied	P	slot pool bookkeeping saved with the pool
+interp.update_slot	reserved	P	slot pool bookkeeping saved with the pool
+interp.update_slot	retired	P	slot pool bookkeeping saved with the pool
+interp.pending_update	signal	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+interp.pending_update	driver	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+interp.pending_update	offset	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+interp.pending_update	packed_value	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+interp.pending_update	word	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+interp.pending_update	flags	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+interp.pending_inertial	handle	P+ids	cancel tag rebinds the scheduled commit (interp.inertial_mature)
+interp.pending_inertial	source_value	P	inertial source value
+interp.projected_driver	transactions	P+ids	projected waveform, rebound to driver ids
+interp.mailbox	element_kind	P	mailbox contents and blocked processes (ids)
+interp.mailbox	element_width	P	mailbox contents and blocked processes (ids)
+interp.mailbox	capacity	P	mailbox contents and blocked processes (ids)
+interp.mailbox	entries	P	mailbox contents and blocked processes (ids)
+interp.mailbox	string_entries	P	mailbox contents and blocked processes (ids)
+interp.mailbox	string_bytes	P	mailbox contents and blocked processes (ids)
+interp.mailbox	readers	P	mailbox contents and blocked processes (ids)
+interp.mailbox	writers	P	mailbox contents and blocked processes (ids)
+interp.semaphore	keys	P	key count and waiters (ids)
+interp.semaphore	waiters	P	key count and waiters (ids)
+interp.dynamic_event	waiters	P	event waiters and last trigger time
+interp.dynamic_event	last_trigger	P	event waiters and last trigger time
+interp.event_state	kind	P	pending event kind, due time and generation
+interp.event_state	due	P	pending event kind, due time and generation
+interp.event_state	generation	P	pending event kind, due time and generation
+interp.event_state	origin	P	pending event kind, due time and generation
+interp.fork_group	parent	P+ids	fork group over process ids
+interp.fork_group	site	P+ids	fork group over process ids
+interp.fork_group	join	P+ids	fork group over process ids
+interp.fork_group	children	P+ids	fork group over process ids
+interp.fork_group	parent_resumed	P+ids	fork group over process ids
+interp.cohort	members	D	built from the sensitivity tables
+interp.cohort	ready	W	cohort work list and visit stamp: cleared and refilled before each use (simir_state.cpp)
+interp.cohort	pending	P+ids	snapshot token of a queued cohort wake (event interp.cohort_wake); the token is saved with the pool
+interp.cohort	fanout_visit	W	cohort work list and visit stamp: cleared and refilled before each use (simir_state.cpp)
+interp.file	owner	P	file table entry (path, mode, pushback)
+interp.file	path	P	file table entry (path, mode, pushback)
+interp.file	logical_name	P	file table entry (path, mode, pushback)
+interp.file	mode	P	file table entry (path, mode, pushback)
+interp.file	stream	P+ids	reopened without truncation and seeked to the saved offset (owner decision 4)
+interp.file	pushback	P	file table entry (path, mode, pushback)
+interp.file	last_error	P	file table entry (path, mode, pushback)
+interp.file	closed	P	file table entry (path, mode, pushback)
+interp.file	readable	P	file table entry (path, mode, pushback)
+interp.file	writable	P	file table entry (path, mode, pushback)
+interp.file	vhdl	P	file table entry (path, mode, pushback)
+process.state	id	P	reference process control state
+process.state	pc	P	reference process control state
+process.state	wait_timeout_origin	P	reference process control state
+process.state	frame	P+ids	register frame values
+process.state	executor	D	native resume state, rebuilt (S4 audits the executor)
+process.state	executor_lifecycle_generation	D	native resume state, rebuilt (S4 audits the executor)
+process.state	static_trigger_mask	P	reference process control state
+process.state	execution_phase	P	reference process control state
+process.state	queued	P	reference process control state
+process.state	timer_wake	P	reference process control state
+process.state	waiting_on_static	P	reference process control state
+process.state	waiting_on_signal	P	reference process control state
+process.state	generation	P	reference process control state
+process.state	timer_epoch	P	reference process control state
+process.state	status	P	reference process control state
+process.state	suspended_status	P	reference process control state
+process.state	suspended	P	reference process control state
+process.state	suspended_wake	P	reference process control state
+process.state	halted	P	reference process control state
+process.state	killed	P	reference process control state
+process.state	has_callable_frame_push	P	reference process control state
+process.state	cold_state	P+ids	see process.cold
+process.cold	local_program_storage	Cfg	program binding from the artifact
+process.cold	retained_program_storage	Cfg	program binding from the artifact
+process.cold	design_process	Cfg	program binding from the artifact
+process.cold	deferred_executor	Cfg	program binding from the artifact
+process.cold	current_source	Cfg	program binding from the artifact
+process.cold	current_scope	Cfg	program binding from the artifact
+process.cold	random_state	P	process cold state
+process.cold	vital_state	P+ids	see the process.* rows
+process.cold	dynamic_wait_state	P+ids	see the process.* rows
+process.cold	callable_frames	P+ids	see the process.* rows
+process.cold	callable_frame_storage_bytes	P	accounting of the callable frames, saved with them
+process.cold	escaping_callable_contexts	P+ids	see the process.* rows
+process.cold	suspended_callable_context	P+ids	see the process.* rows
+process.cold	callable_context_storage_bytes	P	accounting of the suspended snapshot, saved with it
+process.cold	callable_registers_suspended	P	process cold state
+process.cold	pending_mailbox_result	P	process cold state
+process.cold	pending_dynamic_event	P	process cold state
+process.cold	pending_mailbox_string_result	P	process cold state
+process.cold	fork_parent	P	process cold state
+process.cold	thread_announced	P	process cold state
+process.cold	fork_site	P	process cold state
+process.cold	fork_depth	P	process cold state
+process.cold	fork_detached	P	process cold state
+process.cold	fork_group	P	process cold state
+process.cold	fork_state	P+ids	see the process.* rows
+process.cold	waiting_for_children	P	process cold state
+process.cold	waiting_fork_group	P	process cold state
+process.cold	profile_calls	Prof	profile counters
+process.cold	profile_interpreter_operations	Prof	profile counters
+process.cold	profile_native_resumes	Prof	profile counters
+process.cold	profile_updates	Prof	profile counters
+process.cold	profile_total_nanoseconds	Prof	profile counters
+process.cold	profile_native_nanoseconds	Prof	profile counters
+process.cold	track_interpreter_operations	Prof	profile counters
+process.cold	interpreter_operations	Prof	profile counters
+process.cold	dynamic_call_stack	P	process cold state
+process.cold	hosted_tier	Cfg	program binding from the artifact
+process.cold	hosted_tier_list	Cfg	program binding from the artifact
+process.cold	hosted_tier_body	Cfg	program binding from the artifact
+process.cold	hosted_tier_size	Cfg	program binding from the artifact
+process.dynamic_wait	waiting_process	P	dynamic wait registration
+process.dynamic_wait	process_waiters	P	dynamic wait registration
+process.dynamic_wait	dynamic_sensitivity	P	dynamic wait registration
+process.dynamic_wait	dynamic_triggered	P	dynamic wait registration
+process.dynamic_wait	dynamic_fanout_positions	D	recomputed with the fanout tables
+process.dynamic_wait	waiting_on_container	P	dynamic wait registration
+process.dynamic_wait	dynamic_wait_all	P	dynamic wait registration
+process.dynamic_wait	wait_order_events	P	dynamic wait registration
+process.dynamic_wait	wait_order_index	P	dynamic wait registration
+process.dynamic_wait	wait_order_result	P	dynamic wait registration
+process.dynamic_wait	wait_timeout_deadline	P	dynamic wait registration
+process.dynamic_wait	wait_timeout_result	P	dynamic wait registration
+process.dynamic_wait	wait_timeout_generation	P	dynamic wait registration
+process.dynamic_wait	dynamic_wait_generation	P	dynamic wait registration
+process.callable_frame	identity	P+ids	callable frame values, node table ids
+process.callable_frame	call_depth	P+ids	callable frame values, node table ids
+process.callable_frame	packed_ids	P+ids	callable frame values, node table ids
+process.callable_frame	string_ids	P+ids	callable frame values, node table ids
+process.callable_frame	container_ids	P+ids	callable frame values, node table ids
+process.callable_frame	packed	P+ids	callable frame values, node table ids
+process.callable_frame	strings	P+ids	callable frame values, node table ids
+process.callable_frame	containers	P+ids	callable frame values, node table ids
+process.callable_frame	storage_bytes	P	accounting of the frame values, saved with them
+process.callable_frame	escaping_context	P+ids	callable frame values, node table ids
+process.fork	live_children	P+ids	fork children over process ids
+process.fork	active_sites	P+ids	fork children over process ids
+process.fork	access_binding_attestation	D	rebound from the artifact
+process.vital	timing	P	VITAL timing and delay state
+process.vital	delay	P	VITAL timing and delay state
+kernel.impl	slot_conversions_	D	derived from the artifact or rebuilt after restore
+kernel.impl	conversion_members_	D	derived from the artifact or rebuilt after restore
+kernel.impl	conversion_queue_	S	scratch: empty at a save point (a non-empty queue refuses the save)
+kernel.impl	conversion_queued_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	running_conversions_	S	scratch: empty at a save point (a non-empty queue refuses the save)
+kernel.impl	quiet_commit_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	quiet_changes_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	profile_commit_writes_	Prof	profile counters
+kernel.impl	forwarded_loads_	Prof	profile counters
+kernel.impl	dpi_sites_	D	derived from the artifact or rebuilt after restore
+kernel.impl	dpi_bound_	D	DPI bindings are re-resolved after restore
+kernel.impl	fused_running_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	profile_fused_groups_	Prof	profile counters
+kernel.impl	profile_fused_runs_	Prof	profile counters
+kernel.impl	profile_partition_pass_ops_	Prof	profile counters
+kernel.impl	profile_partition_first_wake_	Prof	profile counters
+kernel.impl	fast_runs_	D	derived from the artifact or rebuilt after restore
+kernel.impl	weak_possible_	D	derived from the artifact or rebuilt after restore
+kernel.impl	image_reasons_	D	derived from the artifact or rebuilt after restore
+kernel.impl	prune_cache_	D	derived from the artifact or rebuilt after restore
+kernel.impl	impl_	Cfg	owning interpreter
+kernel.impl	sensitive_programs_	D	derived from the artifact or rebuilt after restore
+kernel.impl	members_	P	kernel dynamic state (S5)
+kernel.impl	partitions_	D	derived from the artifact or rebuilt after restore
+kernel.impl	partition_readers_	D	derived from the artifact or rebuilt after restore
+kernel.impl	partition_reader_slots_	D	derived from the artifact or rebuilt after restore
+kernel.impl	dissolved_	P	kernel dynamic state (S5)
+kernel.impl	dissolve_checked_	D	derived from the artifact or rebuilt after restore
+kernel.impl	pending_dissolves_	S	per-step scratch, empty at a save point
+kernel.impl	member_of_process_	D	derived from the artifact or rebuilt after restore
+kernel.impl	slot_override_	P	kernel dynamic state (S5)
+kernel.impl	overrides_active_	P	kernel dynamic state (S5)
+kernel.impl	last_writer_	P	kernel dynamic state (S5)
+kernel.impl	member_schedule_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	partition_queued_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	partition_level_	D	derived from the artifact or rebuilt after restore
+kernel.impl	partition_queue_slot_	D	derived from the artifact or rebuilt after restore
+kernel.impl	slot_notify_	D	derived from the design at kernel setup (analysis, restored_update_writers_)
+kernel.impl	fast_notify_	D	derived from the design at kernel setup (analysis, restored_update_writers_)
+kernel.impl	write_marks_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	write_round_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	transaction_slots_	D	rebuilt when the foreign libraries register their value-change watches and transaction callbacks again at a restart
+kernel.impl	threads_	P	kernel dynamic state (S5)
+kernel.impl	free_threads_	P	kernel dynamic state (S5)
+kernel.impl	child_threads_	P	kernel dynamic state (S5)
+kernel.impl	fork_groups_	P	kernel dynamic state (S5)
+kernel.impl	free_fork_groups_	P	kernel dynamic state (S5)
+kernel.impl	ready_threads_	P	kernel dynamic state (S5)
+kernel.impl	ready_threads_spare_	W	allocator cache or spare buffer: holds capacity, never run state
+kernel.impl	inactive_threads_	P	kernel dynamic state (S5)
+kernel.impl	slot_waiters_	P	kernel dynamic state (S5)
+kernel.impl	input_waiters_	P	kernel dynamic state (S5)
+kernel.impl	wait_entries_	P	kernel dynamic state (S5)
+kernel.impl	transaction_inputs_	D	rebuilt when the foreign libraries register their value-change watches and transaction callbacks again at a restart
+kernel.impl	switch_members_	D	derived from the artifact or rebuilt after restore
+kernel.impl	switch_wakes_	P	kernel dynamic state (S5)
+kernel.impl	yield_wakes_	S	scratch: empty at a save point (a non-empty queue refuses the save)
+kernel.impl	timers_	P	kernel dynamic state (S5)
+kernel.impl	timer_sequence_	P	kernel dynamic state (S5)
+kernel.impl	net_delay_sites_	P	kernel dynamic state (S5)
+kernel.impl	net_delay_site_of_	D	derived from the artifact or rebuilt after restore
+kernel.impl	armed_timer_	D	derived: the kernel.timer doorbell is not saved; rearm() arms it for the earliest saved timer (S5)
+kernel.impl	vhdl_ready_threads_	P	kernel dynamic state (S5)
+kernel.impl	vhdl_ready_threads_spare_	W	allocator cache or spare buffer: holds capacity, never run state
+kernel.impl	vhdl_timers_	P	kernel dynamic state (S5)
+kernel.impl	armed_vhdl_timer_	D	derived: the kernel.vhdl_timer doorbell is not saved; rearm() arms it for the earliest saved VHDL timer (S5)
+kernel.impl	vhdl_timers_released_	P	kernel dynamic state (S5)
+kernel.impl	vhdl_threads_	Cfg	kernel mode from the artifact or command line
+kernel.impl	behavioral_	Cfg	kernel mode from the artifact or command line
+kernel.impl	stopped_	P	kernel dynamic state (S5)
+kernel.impl	paused_thread_	P	kernel dynamic state (S5)
+kernel.impl	mixed_	Cfg	kernel mode from the artifact or command line
+kernel.impl	host_boundary_	Cfg	kernel mode from the artifact or command line
+kernel.impl	time_warp_	S	save is refused while the kernel warps time
+kernel.impl	lazy_epoch_	P	kernel dynamic state (S5)
+kernel.impl	closed_	P	kernel dynamic state (S5)
+kernel.impl	warp_time_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	profile_warps_	Prof	profile counters
+kernel.impl	written_inputs_	D	plan-derived scan list of the inputs some process writes (plus host-written ones, note_external_write); rebuilt with the plan, not pending work
+kernel.impl	scan_order_	D	derived from the artifact or rebuilt after restore
+kernel.impl	committing_round_	S	scratch: empty at a save point (a non-empty queue refuses the save)
+kernel.impl	sv_draining_	S	scratch: empty at a save point (a non-empty queue refuses the save)
+kernel.impl	sv_woken_round_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	sv_woken_threads_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	sv_woken_writes_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	collapse_enabled_	Cfg	kernel mode from the artifact or command line
+kernel.impl	collapsing_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	collapse_buckets_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	collapse_batch_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	collapse_pending_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	collapse_low_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	collapse_floor_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	member_guard_	D	derived from the artifact or rebuilt after restore
+kernel.impl	guard_groups_	P	kernel dynamic state (S5)
+kernel.impl	guard_time_	P	kernel dynamic state (S5)
+kernel.impl	guard_epoch_	P	kernel dynamic state (S5)
+kernel.impl	guard_commit_	P	kernel dynamic state (S5)
+kernel.impl	replaying_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	restored_collapse_	D	derived from the artifact or rebuilt after restore
+kernel.impl	recording_image_	D	derived from the artifact or rebuilt after restore
+kernel.impl	restored_host_scan_	D	derived from the artifact or rebuilt after restore
+kernel.impl	update_writers_	D	derived from the design at kernel setup (analysis, restored_update_writers_)
+kernel.impl	restored_update_writers_	D	derived from the artifact or rebuilt after restore
+kernel.impl	self_waking_	D	derived from the design at kernel setup (analysis, restored_update_writers_)
+kernel.impl	next_round_	S	scratch: empty at a save point (a non-empty queue refuses the save)
+kernel.impl	round_	S	scratch: empty at a save point (a non-empty queue refuses the save)
+kernel.impl	round_bits_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	deferred_targets_	S	scratch: empty at a save point (a non-empty queue refuses the save)
+kernel.impl	deferred_buffer_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	deferred_threads_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	parked_writes_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	parked_storage_	W	backing store of a write queue, kept for its capacity; the queue's count (writes_, parked_writes_) is the state at rest and is checked
+kernel.impl	parked_pending_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	held_round_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	held_threads_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	host_process_	Cfg	kernel mode from the artifact or command line
+kernel.impl	slot_waitable_	D	derived from the artifact or rebuilt after restore
+kernel.impl	slot_wait_seen_	P	kernel dynamic state (S5)
+kernel.impl	redirect_pc_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	behavioral_entry_	Cfg	kernel mode from the artifact or command line
+kernel.impl	behavioral_suspended_	P	kernel dynamic state (S5)
+kernel.impl	deopt_resume_	P	kernel dynamic state (S5)
+kernel.impl	operation_tiers_	D	derived from the artifact or rebuilt after restore
+kernel.impl	operation_tier_store_	D	derived from the artifact or rebuilt after restore
+kernel.impl	shared_operation_tiers_	D	derived from the artifact or rebuilt after restore
+kernel.impl	operation_tiers_by_content_	D	derived from the artifact or rebuilt after restore
+kernel.impl	hosted_tier_store_	D	derived from the artifact or rebuilt after restore
+kernel.impl	hosted_tiers_by_content_	D	derived from the artifact or rebuilt after restore
+kernel.impl	behavioral_boundary_helper_	D	derived from the artifact or rebuilt after restore
+kernel.impl	operation_tier_thread_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	operation_tier_steps_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	operation_tier_boundary_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	operation_tier_pc_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	named_disable_	Cfg	kernel mode from the artifact or command line
+kernel.impl	named_scopes_	D	derived from the artifact or rebuilt after restore
+kernel.impl	process_records_	P	kernel dynamic state (S5)
+kernel.impl	synchronization_waits_	P	kernel dynamic state (S5)
+kernel.impl	program_members_	D	derived from the artifact or rebuilt after restore
+kernel.impl	notify_targets_	D	derived from the artifact or rebuilt after restore
+kernel.impl	templates_	D	derived from the artifact or rebuilt after restore
+kernel.impl	codegen_	D	derived from the artifact or rebuilt after restore
+kernel.impl	lazy_templates_	D	derived from the artifact or rebuilt after restore
+kernel.impl	full_templates_	D	derived from the artifact or rebuilt after restore
+kernel.impl	template_codes_	D	derived from the artifact or rebuilt after restore
+kernel.impl	continuations_	D	derived from the artifact or rebuilt after restore
+kernel.impl	lazy_pending_	P	kernel dynamic state (S5)
+kernel.impl	lazy_threshold_	Cfg	kernel mode from the artifact or command line
+kernel.impl	executed_steps_	Prof	profile counters
+kernel.impl	native_helpers_	D	derived from the artifact or rebuilt after restore
+kernel.impl	native_units_	D	derived from the artifact or rebuilt after restore
+kernel.impl	scratch_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	worker_lane_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	lane_epoch_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	pool_	Cfg	kernel mode from the artifact or command line
+kernel.impl	lanes_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	lane_runs_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	batch_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	unit_parallel_	D	derived from the artifact or rebuilt after restore
+kernel.impl	unit_cost_	D	derived from the artifact or rebuilt after restore
+kernel.impl	parallel_planned_	D	derived from the artifact or rebuilt after restore
+kernel.impl	mt_threads_	Cfg	kernel mode from the artifact or command line
+kernel.impl	parallel_body_	D	derived from the artifact or rebuilt after restore
+kernel.impl	replay_words_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	mt_min_cost_	Cfg	kernel mode from the artifact or command line
+kernel.impl	mt_force_	Cfg	kernel mode from the artifact or command line
+kernel.impl	mt_shuffle_	Cfg	kernel mode from the artifact or command line
+kernel.impl	shuffle_order_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	shuffle_state_	P	kernel dynamic state (S5)
+kernel.impl	replay_edge_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	mt_stats_	Prof	profile counters
+kernel.impl	arena_	P	kernel dynamic state (S5)
+kernel.impl	published_	P	kernel dynamic state (S5)
+kernel.impl	pending_watches_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	pending_revivals_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	boundary_requested_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	boundary_opened_	D	rebuilt when the foreign libraries register their value-change watches and transaction callbacks again at a restart
+kernel.impl	activating_	S	scratch: empty at a save point (a non-empty queue refuses the save)
+kernel.impl	vhdl_	Cfg	kernel mode from the artifact or command line
+kernel.impl	debug_points_	Cfg	kernel mode from the artifact or command line
+kernel.impl	weak_sources_	Cfg	kernel mode from the artifact or command line
+kernel.impl	time_resolution_	Cfg	the design's time resolution from the artifact
+kernel.impl	host_original_	D	derived from the artifact or rebuilt after restore
+kernel.impl	host_program_	D	derived from the artifact or rebuilt after restore
+kernel.impl	debug_stopped_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	debug_children_	P	kernel dynamic state (S5)
+kernel.impl	next_child_process_	P	kernel dynamic state (S5)
+kernel.impl	running_thread_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	touched_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	round_before_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	write_storage_	W	backing store of a write queue, kept for its capacity; the queue's count (writes_, parked_writes_) is the state at rest and is checked
+kernel.impl	writes_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	profile_deopts_	Prof	profile counters
+kernel.impl	profile_generic_runs_	Prof	profile counters
+kernel.impl	interpreted_bytecode_runs_	Prof	profile counters
+kernel.impl	interpreted_operations_	Prof	profile counters
+kernel.impl	interpreted_deopts_	Prof	profile counters
+kernel.impl	interpreted_by_cause_	Prof	profile counters
+kernel.impl	interpreting_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	not_compiled_reason_	Prof	profile counters
+kernel.impl	profile_member_deopts_	Prof	profile counters
+kernel.impl	verify_	Cfg	kernel mode from the artifact or command line
+kernel.impl	check_inputs_	Cfg	kernel mode from the artifact or command line
+kernel.impl	slots_	P	kernel dynamic state (S5)
+kernel.impl	commit_slots_	D	derived from the artifact or rebuilt after restore
+kernel.impl	wires_	D	derived from the artifact or rebuilt after restore
+kernel.impl	slot_wires_	D	derived from the artifact or rebuilt after restore
+kernel.impl	slot_of_signal_	D	derived from the artifact or rebuilt after restore
+kernel.impl	family_of_signal_	D	derived from the artifact or rebuilt after restore
+kernel.impl	families_	D	derived from the artifact or rebuilt after restore
+kernel.impl	inputs_	P	kernel dynamic state (S5)
+kernel.impl	input_of_signal_	D	derived from the artifact or rebuilt after restore
+kernel.impl	mirror_of_signal_	D	derived from the artifact or rebuilt after restore
+kernel.impl	containers_	P	kernel dynamic state (S5)
+kernel.impl	container_info_	D	derived from the artifact or rebuilt after restore
+kernel.impl	sva_blocks_	D	block bases the monitors publish; rebound lazily after a restore (reset_sva_blocks)
+kernel.impl	sva_member_base_	D	derived from the artifact or rebuilt after restore
+kernel.impl	sva_table_	D	pointers into the host's sampled words and the block table, refreshed per frame
+kernel.impl	sva_table_used_	D	set when the kernel's code has an SVA operation (lowering or a restored body), a function of the artifact
+kernel.impl	sva_now_	W	the time step copied for generated code at each frame bind
+kernel.impl	container_elements_	D	derived from the artifact or rebuilt after restore
+kernel.impl	member_process_	D	derived from the artifact or rebuilt after restore
+kernel.impl	container_of_object_	D	derived from the artifact or rebuilt after restore
+kernel.impl	nba_	S	scratch: empty at a save point (a non-empty queue refuses the save)
+kernel.impl	pending_generic_	S	scratch: empty at a save point (a non-empty queue refuses the save)
+kernel.impl	output_queue_	S	scratch: empty at a save point (a non-empty queue refuses the save)
+kernel.impl	trigger_queue_	S	scratch: empty at a save point (a non-empty queue refuses the save)
+kernel.impl	triggered_	S	scratch: empty at a save point (a non-empty queue refuses the save)
+kernel.impl	nba_spare_	W	allocator cache or spare buffer: holds capacity, never run state
+kernel.impl	pending_generic_spare_	W	allocator cache or spare buffer: holds capacity, never run state
+kernel.impl	output_queue_spare_	W	allocator cache or spare buffer: holds capacity, never run state
+kernel.impl	triggered_spare_	W	allocator cache or spare buffer: holds capacity, never run state
+kernel.impl	dispatch_groups_	D	derived from the artifact or rebuilt after restore
+kernel.impl	expanded_groups_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	batch_groups_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	buckets_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	scan_level_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	queued_count_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	domains_	D	derived from the artifact or rebuilt after restore
+kernel.impl	unit_domain_	D	derived from the artifact or rebuilt after restore
+kernel.impl	unit_bucket_	D	derived from the artifact or rebuilt after restore
+kernel.impl	unit_bit_	D	derived from the artifact or rebuilt after restore
+kernel.impl	slot_logged_	D	rebuilt when the foreign libraries register their value-change watches and transaction callbacks again at a restart
+kernel.impl	active_domains_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	domain_moves_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	domain_seen_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	domain_epoch_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	merge_items_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	domain_limit_	Cfg	kernel mode from the artifact or command line
+kernel.impl	domain_body_	D	derived from the artifact or rebuilt after restore
+kernel.impl	slot_commit_domain_	D	derived from the artifact or rebuilt after restore
+kernel.impl	container_commit_domain_	D	derived from the artifact or rebuilt after restore
+kernel.impl	slot_reader_domain_	D	derived from the artifact or rebuilt after restore
+kernel.impl	container_reader_domain_	D	derived from the artifact or rebuilt after restore
+kernel.impl	commit_owner_	D	derived from the artifact or rebuilt after restore
+kernel.impl	member_domain_	D	derived from the artifact or rebuilt after restore
+kernel.impl	member_private_	D	derived from the artifact or rebuilt after restore
+kernel.impl	member_foreign_	D	derived from the artifact or rebuilt after restore
+kernel.impl	step_item_base_	D	derived from the artifact or rebuilt after restore
+kernel.impl	private_writes_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	private_domains_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	private_more_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	batch_dispatch_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	commit_body_	D	derived from the artifact or rebuilt after restore
+kernel.impl	mt_affinity_	Cfg	kernel mode from the artifact or command line
+kernel.impl	mt_fused_	Cfg	kernel mode from the artifact or command line
+kernel.impl	domain_lane_	D	derived from the artifact or rebuilt after restore
+kernel.impl	pinned_items_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	pinned_target_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	pinned_body_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	mt_commit_min_	Cfg	kernel mode from the artifact or command line
+kernel.impl	mt_commit_	Cfg	kernel mode from the artifact or command line
+kernel.impl	replay_external_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	reconstructing_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	batch_pinned_body_	D	derived from the artifact or rebuilt after restore
+kernel.impl	batch_private_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	step_item_offset_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	initialized_	P	kernel dynamic state (S5)
+kernel.impl	vhdl_round_deferred_	P	doorbell flag: its scheduler event kernel.vhdl_round is derived (not saved); rearm() re-creates it from this flag (S5)
+kernel.impl	vhdl_round_task_	P	kernel dynamic state (S5)
+kernel.impl	nonblocking_committed_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	host_active_staged_	W	hint cleared at the start of every activation (StaticKernel::activate); stale content is dead
+kernel.impl	host_nba_staged_	W	hint read only with host_nba_time_ == now and cleared in commit_pending; a save point is a slot end with no pending update, so stale content is dead
+kernel.impl	host_nba_time_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	host_nba_wakes_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	nonblocking_after_host_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	nonblocking_deferred_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	nonblocking_region_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	in_host_nonblocking_region_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	after_procedure_members_	D	derived from the artifact or rebuilt after restore
+kernel.impl	start_once_	P	kernel dynamic state (S5)
+kernel.impl	start_once_next_	P	kernel dynamic state (S5)
+kernel.impl	yield_requested_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	vhdl_host_cycles_	Cfg	kernel mode from the artifact or command line
+kernel.impl	late_members_	P	kernel dynamic state (S5)
+kernel.impl	late_start_armed_	P	doorbell flag: its scheduler event kernel.late_start is derived (not saved); rearm() re-creates it from this flag (S5)
+kernel.impl	late_start_due_	P	kernel dynamic state (S5)
+kernel.impl	has_hosted_	D	derived from the artifact or rebuilt after restore
+kernel.impl	in_activation_	S	scratch: empty at a save point (a non-empty queue refuses the save)
+kernel.impl	hosted_inactive_task_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	host_active_yield_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	batch_hosted_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	batch_threads_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	host_batch_resume_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	batch_resume_queued_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	hosted_inactive_region_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	hosted_inactive_deferred_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	hosted_running_inactive_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	hosted_active_	S	scratch: empty at a save point (a non-empty queue refuses the save)
+kernel.impl	hosted_inactive_	S	scratch: empty at a save point (a non-empty queue refuses the save)
+kernel.impl	hosted_active_spare_	W	allocator cache or spare buffer: holds capacity, never run state
+kernel.impl	hosted_inactive_spare_	W	allocator cache or spare buffer: holds capacity, never run state
+kernel.impl	merged_hosted_spare_	W	allocator cache or spare buffer: holds capacity, never run state
+kernel.impl	merged_threads_spare_	W	allocator cache or spare buffer: holds capacity, never run state
+kernel.impl	hosted_regions_	S	scratch: empty at a save point (a non-empty queue refuses the save)
+kernel.impl	hosted_region_bell_	D	derived: the kernel.hosted_region doorbells are not saved; rearm() rings them for the saved hosted regions (S5)
+kernel.impl	hosted_running_region_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	hosted_next_delta_	P	kernel dynamic state (S5)
+kernel.impl	hosted_timers_	P	kernel dynamic state (S5)
+kernel.impl	hosted_sequence_	P	kernel dynamic state (S5)
+kernel.impl	final_members_	D	derived from the artifact or rebuilt after restore
+kernel.impl	startup_members_	D	derived from the artifact or rebuilt after restore
+kernel.impl	resolver_members_	D	derived from the artifact or rebuilt after restore
+kernel.impl	host_delayed_writes_	Cfg	kernel mode from the artifact or command line
+kernel.impl	armed_hosted_timer_	D	derived: the kernel.hosted_timer doorbell is not saved; rearm() arms it for the earliest saved hosted timer (S5)
+kernel.impl	profile_	Prof	profile counters
+kernel.impl	trace_	Cfg	kernel mode from the artifact or command line
+kernel.impl	profile_domain_status_	Prof	profile counters
+kernel.impl	profile_domain_status_names_	Prof	profile counters
+kernel.impl	batch_profile_	Prof	profile counters
+kernel.impl	profile_activations_	Prof	profile counters
+kernel.impl	profile_activation_ns_	Prof	profile counters
+kernel.impl	profile_native_calls_	Prof	profile counters
+kernel.impl	profile_template_runs_	Prof	profile counters
+kernel.impl	profile_slot_changes_	Prof	profile counters
+kernel.impl	profile_slot_change_counts_	Prof	profile counters
+kernel.impl	profile_schedules_	Prof	profile counters
+kernel.impl	profile_schedule_outcomes_	Prof	profile counters
+kernel.impl	profile_collapsed_runs_	Prof	profile counters
+kernel.impl	profile_cone_of_	Prof	profile counters
+kernel.impl	profile_cone_size_	Prof	profile counters
+kernel.impl	profile_cone_phase_	Prof	profile counters
+kernel.impl	profile_cones_	Prof	profile counters
+kernel.impl	profile_guards_	Prof	profile counters
+kernel.impl	profile_generic_ops_	Prof	profile counters
+kernel.impl	profile_runs_	Prof	profile counters
+kernel.impl	profile_compiled_runs_	Prof	profile counters
+kernel.impl	profile_partition_runs_	Prof	profile counters
+kernel.impl	profile_partition_counts_	Prof	profile counters
+kernel.impl	profile_partition_operations_	Prof	profile counters
+kernel.impl	profile_operations_	Prof	profile counters
+kernel.impl	profile_input_changes_	Prof	profile counters
+kernel.impl	profile_publishes_	Prof	profile counters
+kernel.impl	import_before_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	profile_member_runs_	Prof	profile counters
+kernel.impl	profile_names_	Prof	profile counters
+kernel.impl	compiled_members_	Prof	profile counters
+kernel.impl	specialized_members_	D	derived from the artifact or rebuilt after restore
+kernel.impl	specialize_seconds_	Prof	profile counters
+kernel.impl	specialize_cache_	Prof	profile counters
+kernel.impl	restored_specializations_	D	derived from the artifact or rebuilt after restore
+kernel.impl	recorded_specializations_	D	derived from the artifact or rebuilt after restore
+kernel.impl	restored_bodies_	D	derived from the artifact or rebuilt after restore
+kernel.impl	recorded_bodies_	D	derived from the artifact or rebuilt after restore
+kernel.impl	restored_native_	D	derived from the artifact or rebuilt after restore
+kernel.impl	recorded_native_	D	derived from the artifact or rebuilt after restore
+kernel.impl	specialize_cache_hits_	Prof	profile counters
+kernel.impl	compile_failure_detail_	D	derived from the artifact or rebuilt after restore
+kernel.impl	wide_members_	Prof	profile counters
+kernel.impl	wide_member_ops_	Prof	profile counters
+kernel.impl	wide_member_total_ops_	Prof	profile counters
+kernel.impl	unknown_census_	Prof	profile counters
+kernel.impl	range_failure_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	range_failure_at_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	family_generic_	W	compile_once scratch: set and read within one member compile
+kernel.impl	family_widths_	W	compile_once scratch: set and read within one member compile
+kernel.impl	family_in_place_	W	compile_once scratch: set and read within one member compile
+kernel.member	process	D	static member structure from the artifact
+kernel.member	kind	D	static member structure from the artifact
+kernel.member	vhdl	D	static member structure from the artifact
+kernel.member	vhdl_2019	D	static member structure from the artifact
+kernel.member	run_at_start	D	static member structure from the artifact
+kernel.member	start_late	D	static member structure from the artifact
+kernel.member	prearmed	D	static member structure from the artifact
+kernel.member	root_thread	P	member dynamic state (S5)
+kernel.member	start_waiting	D	static member structure from the artifact
+kernel.member	after_procedures	D	static member structure from the artifact
+kernel.member	final_block	D	static member structure from the artifact
+kernel.member	package_startup	D	static member structure from the artifact
+kernel.member	resolver	D	static member structure from the artifact
+kernel.member	resolver_inputs	D	static member structure from the artifact
+kernel.member	phase	D	static member structure from the artifact
+kernel.member	assertion	D	static member structure from the artifact
+kernel.member	program_owner	D	static member structure from the artifact
+kernel.member	program_ended	P	member dynamic state (S5)
+kernel.member	lazy	D	static member structure from the artifact
+kernel.member	lazy_inputs	D	static member structure from the artifact
+kernel.member	lazy_stamp	P	member dynamic state (S5)
+kernel.member	collapse	D	static member structure from the artifact
+kernel.member	collapse_inputs	D	static member structure from the artifact
+kernel.member	collapse_outputs	D	static member structure from the artifact
+kernel.member	first_delta	D	static member structure from the artifact
+kernel.member	conversion	D	static member structure from the artifact
+kernel.member	body_begin	D	static member structure from the artifact
+kernel.member	body_end	D	static member structure from the artifact
+kernel.member	family_expansion_begin	D	set when the kernel specializes the member (expand_family_accesses), a function of the artifact
+kernel.member	exit_alt	D	static member structure from the artifact
+kernel.member	level	D	static member structure from the artifact
+kernel.member	operations_	D	static member structure from the artifact
+kernel.member	operations_source	D	static member structure from the artifact
+kernel.member	inlined_calls	D	static member structure from the artifact
+kernel.member	dpi_site_at	D	static member structure from the artifact
+kernel.member	registers	P	member dynamic state (S5)
+kernel.member	register_kinds	D	static member structure from the artifact
+kernel.member	container_registers	D	static member structure from the artifact
+kernel.member	copy_storage	D	static member structure from the artifact
+kernel.member	dynamic_containers	P	member dynamic state (S5)
+kernel.member	body_identity	D	static member structure from the artifact
+kernel.member	call_stack	P	member dynamic state (S5)
+kernel.member	frames	P	member dynamic state (S5)
+kernel.member	frame_bytes	P	member dynamic state (S5)
+kernel.member	saved_arrays	P	member dynamic state (S5)
+kernel.member	saved_array_marks	P	member dynamic state (S5)
+kernel.member	private_frame_identities	P	member dynamic state (S5)
+kernel.member	compiled	D	static member structure from the artifact
+kernel.member	piece_continuations	D	static member structure from the artifact (specialize)
+kernel.member	native	D	static member structure from the artifact
+kernel.member	registers_known	P	member dynamic state (S5)
+kernel.member	two_state_deopts	P	member dynamic state (S5)
+kernel.member	two_state_off	P	member dynamic state (S5)
+kernel.member	off_runs	P	member dynamic state (S5)
+kernel.member	off_retry	P	member dynamic state (S5)
+kernel.member	partition_key	D	static member structure from the artifact
+kernel.member	rewrites_signal	D	static member structure from the artifact
+kernel.member	wakes_itself	D	static member structure from the artifact
+kernel.member	partition	D	static member structure from the artifact
+kernel.member	position	D	static member structure from the artifact
+kernel.member	fresh	P	member dynamic state (S5)
+kernel.member	prologue_end	D	static member structure from the artifact
+kernel.member	generic_mode	D	static member structure from the artifact
+kernel.member	frames_elided	D	static member structure from the artifact
+kernel.member	thread_contexts	D	static member structure from the artifact
+kernel.member	isolated_forks	D	static member structure from the artifact
+kernel.member	strings	D	static member structure from the artifact
+kernel.member	wait_sensitivity	D	static member structure from the artifact
+kernel.member	origin	D	static member structure from the artifact
+kernel.member	stripped_origin	D	static member structure from the artifact
+kernel.member	debug_pc	W	debugger scratch of the member being stepped
+kernel.member	debug_hit	D	static member structure from the artifact
+kernel.member	debug_defined	W	debugger scratch of the member being stepped
+kernel.member	debug_defined_pc	W	debugger scratch of the member being stepped
+kernel.member	retired_partition	D	plan structure: set when a member leaves its partition, rebuilt with the plan
+kernel.partition	members	D	partition structure from the artifact
+kernel.partition	level	D	partition structure from the artifact
+kernel.partition	program	D	partition structure from the artifact
+kernel.partition	native	D	partition structure from the artifact
+kernel.partition	forwarded	D	partition structure from the artifact
+kernel.dissolved	begin	P	dissolved partitions are saved and replayed through dissolve_member
+kernel.dissolved	readers	P	dissolved partitions are saved and replayed through dissolve_member
+kernel.dissolved	seen	P	dissolved partitions are saved and replayed through dissolve_member
+kernel.dissolved	due	P	dissolved partitions are saved and replayed through dissolve_member
+kernel.dissolved	gated	P	dissolved partitions are saved and replayed through dissolve_member
+kernel.dissolved	retired	D	plan structure: set when a dissolved partition retires a member, rebuilt with the plan
+kernel.slot	signal	D	slot structure from the artifact
+kernel.slot	width	D	slot structure from the artifact
+kernel.slot	words	D	slot structure from the artifact
+kernel.slot	planes	D	slot structure from the artifact
+kernel.slot	offset	D	slot structure from the artifact
+kernel.slot	readers	D	slot structure from the artifact
+kernel.slot	ranged	D	slot structure from the artifact
+kernel.slot	chunk_shift	D	slot structure from the artifact
+kernel.slot	chunk_begin	D	slot structure from the artifact
+kernel.slot	chunk_readers	D	slot structure from the artifact
+kernel.slot	reader_group	D	slot structure from the artifact
+kernel.slot	targets	D	slot structure from the artifact
+kernel.slot	edges	D	slot structure from the artifact
+kernel.slot	edge_seen	P	slot dynamic fields (S5)
+kernel.slot	trigger_pending	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.slot	output	D	slot structure from the artifact
+kernel.slot	output_pending	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.slot	publish_nba	D	slot structure from the artifact
+kernel.slot	vhdl_written	P	slot dynamic fields (S5)
+kernel.slot	published	P	slot dynamic fields (S5)
+kernel.slot	writers	D	slot structure from the artifact
+kernel.slot	disjoint_writers	D	slot structure from the artifact
+kernel.slot	silent	D	slot structure from the artifact
+kernel.slot	lazy_writers	D	slot structure from the artifact
+kernel.slot	deferred_write	P	slot dynamic fields (S5)
+kernel.slot	last_writer	P	slot dynamic fields (S5)
+kernel.slot	tracks_writer	D	slot structure from the artifact
+kernel.slot	mirror	D	slot structure from the artifact
+kernel.slot	resolved	D	slot structure from the artifact
+kernel.slot	net_processes	D	slot structure from the artifact
+kernel.input	signal	D	input structure from the artifact
+kernel.input	cached	P	input state; revision pairs with the host signal_value_revisions
+kernel.input	mirror	D	input structure from the artifact
+kernel.input	revision	P	input state; revision pairs with the host signal_value_revisions
+kernel.input	event_seen	P	input state; revision pairs with the host signal_value_revisions
+kernel.input	deposited	P	input state; revision pairs with the host signal_value_revisions
+kernel.input	transaction_seen	P	input state; revision pairs with the host signal_value_revisions
+kernel.input	readers	D	input structure from the artifact
+kernel.input	edges	D	input structure from the artifact
+kernel.input	unwritten	P	input state; revision pairs with the host signal_value_revisions
+kernel.input	sole_writer	D	input structure from the artifact
+kernel.container	object	D	container map from the artifact
+kernel.container	type	D	container map from the artifact
+kernel.container	count	D	container map from the artifact
+kernel.container	storage	D	container map from the artifact
+kernel.container	element_words	D	container map from the artifact
+kernel.container	element_offset	D	container map from the artifact
+kernel.container	element_slots	D	container map from the artifact
+kernel.container	packed_slot	D	container map from the artifact
+kernel.thread	member	P	kernel thread state
+kernel.thread	pc	P	kernel thread state
+kernel.thread	call_stack	P	kernel thread state
+kernel.thread	frames	P	kernel thread state
+kernel.thread	frame_bytes	P	kernel thread state
+kernel.thread	saved_arrays	P	kernel thread state
+kernel.thread	saved_array_marks	P	kernel thread state
+kernel.thread	parent	P	kernel thread state
+kernel.thread	group	P	kernel thread state
+kernel.thread	fork_site	P	kernel thread state
+kernel.thread	fork_depth	P	kernel thread state
+kernel.thread	contexts	P+ids	callable contexts, deduplicated on save
+kernel.thread	isolated	P+ids	callable contexts, deduplicated on save
+kernel.thread	children	P	kernel thread state
+kernel.thread	child_records	P	kernel thread state
+kernel.thread	ended_record	P	kernel thread state
+kernel.thread	waiting_children	P	kernel thread state
+kernel.thread	detached	P	kernel thread state
+kernel.thread	generation	P	kernel thread state
+kernel.thread	handle	P	its handle was taken (process::self); saved with the thread
+kernel.thread	suspended	P	kernel thread state
+kernel.thread	suspended_wake	P	kernel thread state
+kernel.thread	suspended_running	P	kernel thread state
+kernel.thread	entered	P	kernel thread state
+kernel.thread	random_state	P	kernel thread state
+kernel.thread	epoch	P	kernel thread state
+kernel.thread	alive	P	kernel thread state
+kernel.thread	queued	P	kernel thread state
+kernel.thread	reclaim	P	killed while a ready list names it; saved with the thread
+kernel.thread	deadline	P	kernel thread state
+kernel.thread	timeout_result	P	kernel thread state
+kernel.thread	delivered	P	kernel thread state
+kernel.thread	stack	P	kernel thread state
+kernel.thread	last_point	P	last debug point passed; saved with the thread
+kernel.thread	debug_process	P	debugger process number of a fork child; saved with the thread
+kernel.thread	order	P	kernel thread state
+kernel.fork_group	parent	P	kernel fork group
+kernel.fork_group	join	P	kernel fork group
+kernel.fork_group	remaining	P	kernel fork group
+kernel.fork_group	resumed	P	kernel fork group
+kernel.waiter	thread	P	thread wait registration
+kernel.waiter	epoch	P	thread wait registration
+kernel.waiter	edge	P	thread wait registration
+kernel.waiter	offset	P	thread wait registration
+kernel.waiter	width	P	thread wait registration
+kernel.timer	time	P	timers saved, re-armed through rearm()
+kernel.timer	order	P	timers saved, re-armed through rearm()
+kernel.timer	sequence	P	timers saved, re-armed through rearm()
+kernel.timer	thread	P	timers saved, re-armed through rearm()
+kernel.timer	epoch	P	timers saved, re-armed through rearm()
+kernel.timer	net_delay	P	timers saved, re-armed through rearm()
+kernel.net_delay_site	member	P	sites are made at the first execution of the operation, so a run holds them as state
+kernel.net_delay_site	pc	P	sites are made at the first execution of the operation, so a run holds them as state
+kernel.net_delay_site	slot	P	sites are made at the first execution of the operation, so a run holds them as state
+kernel.net_delay_site	offset	P	sites are made at the first execution of the operation, so a run holds them as state
+kernel.net_delay_site	width	P	sites are made at the first execution of the operation, so a run holds them as state
+kernel.net_delay_site	pending	P	pending delayed net writes
+kernel.net_delay_site	part	P	field of a net-delay site, saved with net_delay_sites_ (FSIM_RS_IO kernel.impl)
+kernel.process_record	generation	P	process records over thread ids
+kernel.process_record	thread	P	process records over thread ids
+kernel.process_record	ended	P	process records over thread ids
+kernel.process_record	status	P	process records over thread ids
+kernel.process_record	random_state	P	process records over thread ids
+kernel.process_record	awaiting	P	process records over thread ids
+kernel.sync_wait	thread	P	synchronization wait registration
+kernel.sync_wait	epoch	P	synchronization wait registration
+kernel.sync_wait	dynamic_event	P	synchronization wait registration
+kernel.hosted_timer	time	P	hosted wake timer
+kernel.hosted_timer	sequence	P	hosted wake timer
+kernel.hosted_timer	ready	P	hosted wake timer
+kernel.hosted_ready	order	P	hosted ready entry
+kernel.hosted_ready	process	P	hosted ready entry
+kernel.hosted_ready	epoch	P	hosted ready entry
+kernel.hosted_ready	timer	P	hosted ready entry
+kernel.hosted_ready	wake	P	hosted ready entry
+kernel.hosted_ready	phase	P	hosted ready entry
+kernel.hosted_ready	thread	P	hosted ready entry
+kernel.hosted_delayed	time	P	hosted next-delta wake
+kernel.hosted_delayed	delta	P	hosted next-delta wake
+kernel.hosted_delayed	ready	P	hosted next-delta wake
+sim.impl	dpi_function_hook	Cfg	observers and hooks installed by the embedder
+sim.impl	uvm_phase_objects	P+ids	UVM live state, extends uvm_checkpoint (S6)
+sim.impl	uvm_run_test	P+ids	application run state (S6)
+sim.impl	uvm_tlm_owners	P+ids	UVM live state, extends uvm_checkpoint (S6)
+sim.impl	uvm_analysis_connections	P+ids	UVM live state, extends uvm_checkpoint (S6)
+sim.impl	uvm_sequence_sequencers	P+ids	UVM live state, extends uvm_checkpoint (S6)
+sim.impl	uvm_sequencer_items	P+ids	UVM live state, extends uvm_checkpoint (S6)
+sim.impl	uvm_sequencer_current	P+ids	UVM live state, extends uvm_checkpoint (S6)
+sim.impl	uvm_pending_items	P+ids	UVM live state, extends uvm_checkpoint (S6)
+sim.impl	uvm_root_report_object	P+ids	application run state (S6)
+sim.impl	built	D	artifact products and caches
+sim.impl	generated_class_specializations	D	artifact products and caches
+sim.impl	generated_class_index	D	artifact products and caches
+sim.impl	class_instance_parameter_cache	D	artifact products and caches
+sim.impl	vpi_runtime_updates_enabled	P	lifecycle flags (SystemC refuses save)
+sim.impl	class_heap	P+ids	application run state (S6)
+sim.impl	class_constraint_property_types	D	artifact products and caches
+sim.impl	class_constraint_state_variables	D	artifact products and caches
+sim.impl	static_constraint_modes	D	artifact products and caches
+sim.impl	static_constraint_identities	D	artifact products and caches
+sim.impl	class_owner_parameter_values	P+ids	application run state (S6)
+sim.impl	chandle_registry	P+ids	application run state (S6)
+sim.impl	class_static_store	P+ids	application run state (S6)
+sim.impl	class_methods	P+ids	application run state (S6)
+sim.impl	uvm_objects	P+ids	UVM live state, extends uvm_checkpoint (S6)
+sim.impl	uvm_components	P+ids	UVM live state, extends uvm_checkpoint (S6)
+sim.impl	uvm_activity	P+ids	UVM live state, extends uvm_checkpoint (S6)
+sim.impl	uvm_phases	P+ids	UVM live state, extends uvm_checkpoint (S6)
+sim.impl	uvm_objections	P+ids	UVM live state, extends uvm_checkpoint (S6)
+sim.impl	uvm_tlm1	P+ids	UVM live state, extends uvm_checkpoint (S6)
+sim.impl	uvm_tlm2	P+ids	UVM live state, extends uvm_checkpoint (S6)
+sim.impl	uvm_sequences	P+ids	UVM live state, extends uvm_checkpoint (S6)
+sim.impl	uvm_callbacks	P+ids	UVM live state, extends uvm_checkpoint (S6)
+sim.impl	uvm_transactions	P+ids	UVM live state, extends uvm_checkpoint (S6)
+sim.impl	uvm_register_model	P+ids	UVM live state, extends uvm_checkpoint (S6)
+sim.impl	uvm_foreign	P+ids	UVM live state, extends uvm_checkpoint (S6)
+sim.impl	uvm_registry	P+ids	UVM live state, extends uvm_checkpoint (S6)
+sim.impl	uvm_factory	P+ids	UVM live state, extends uvm_checkpoint (S6)
+sim.impl	uvm_resources	P+ids	UVM live state, extends uvm_checkpoint (S6)
+sim.impl	uvm_synchronization	P+ids	UVM live state, extends uvm_checkpoint (S6)
+sim.impl	uvm_config_db	P+ids	UVM live state, extends uvm_checkpoint (S6)
+sim.impl	uvm_command_line	P+ids	UVM live state, extends uvm_checkpoint (S6)
+sim.impl	uvm_test_runner	P+ids	UVM live state, extends uvm_checkpoint (S6)
+sim.impl	uvm_reports	P+ids	UVM live state, extends uvm_checkpoint (S6)
+sim.impl	uvm_report_setting_tasks	P+ids	UVM report settings with a time; event sim.uvm_report_setting rebinds each handle (S2), live state extends uvm_checkpoint (S6)
+sim.impl	numeric_metavalue_reports	P+ids	application run state (S6)
+sim.impl	uvm_roots_by_scope	P+ids	UVM live state, extends uvm_checkpoint (S6)
+sim.impl	class_execution	D	unreviewed: derived (S6 reviews)
+sim.impl	class_hir_execution	D	unreviewed: derived (S6 reviews)
+sim.impl	design_process_count	D	artifact products and caches
+sim.impl	simulation_control_tasks	D	read from the design at construction
+sim.impl	interpreter	D	artifact products and caches
+sim.impl	vpi_registry	Cfg	VPI services; handles are not saved, only restart callbacks (owner decision 5)
+sim.impl	vpi_time	Cfg	VPI services; handles are not saved, only restart callbacks (owner decision 5)
+sim.impl	vpi_data_read	Cfg	VPI services; handles are not saved, only restart callbacks (owner decision 5)
+sim.impl	vpi_callbacks	Cfg	VPI services; handles are not saved, only restart callbacks (owner decision 5)
+sim.impl	vpi_values	Cfg	VPI services; handles are not saved, only restart callbacks (owner decision 5)
+sim.impl	vpi_control	Cfg	VPI services; handles are not saved, only restart callbacks (owner decision 5)
+sim.impl	vpi_assertions	Cfg	VPI services; handles are not saved, only restart callbacks (owner decision 5)
+sim.impl	vpi_coverage	Cfg	VPI services; handles are not saved, only restart callbacks (owner decision 5)
+sim.impl	vpi_systems	Cfg	VPI services; handles are not saved, only restart callbacks (owner decision 5)
+sim.impl	vpi_signal_handles	D	VPI handle tables, rebuilt on demand; not saved
+sim.impl	vpi_ports	D	VPI handle tables, rebuilt on demand; not saved
+sim.impl	vpi_handle_signals	D	VPI handle tables, rebuilt on demand; not saved
+sim.impl	vpi_statement_counters	D	VPI handle tables, rebuilt on demand; not saved
+sim.impl	vpi_assertion_coverage_keys	D	VPI handle tables, rebuilt on demand; not saved
+sim.impl	vpi_driver_bindings	D	VPI handle tables, rebuilt on demand; not saved
+sim.impl	vpi_event_handles	D	VPI handle tables, rebuilt on demand; not saved
+sim.impl	vpi_event_signals	D	VPI handle tables, rebuilt on demand; not saved
+sim.impl	vpi_assertion_handles	D	VPI handle tables, rebuilt on demand; not saved
+sim.impl	vpi_assertion_processes	D	VPI handle tables, rebuilt on demand; not saved
+sim.impl	vpi_scalar_kinds	D	VPI handle tables, rebuilt on demand; not saved
+sim.impl	vpi_categories	D	VPI handle tables, rebuilt on demand; not saved
+sim.impl	vpi_container_words	D	VPI handle tables, rebuilt on demand; not saved
+sim.impl	vpi_read_only_container_words	D	VPI handle tables, rebuilt on demand; not saved
+sim.impl	vpi_live_memories	D	VPI handle tables, rebuilt on demand; not saved
+sim.impl	vpi_size_change_hook	D	VPI handle tables, rebuilt on demand; not saved
+sim.impl	class_reclaim_hook	Cfg	observers and hooks installed by the embedder
+sim.impl	class_created_hook	Cfg	observers and hooks installed by the embedder
+sim.impl	constructed_classes	P+ids	application run state (S6)
+sim.impl	vpi_deferred_children	D	VPI handle tables, rebuilt on demand; not saved
+sim.impl	vpi_driver_handles	D	VPI handle tables, rebuilt on demand; not saved
+sim.impl	vpi_driver_announced	D	VPI handle tables, rebuilt on demand; not saved
+sim.impl	vpi_watched_signals	D	VPI handle tables, rebuilt on demand; not saved
+sim.impl	vpi_watched_containers	D	VPI handle tables, rebuilt on demand; not saved
+sim.impl	vpi_watch_all_values	D	VPI handle tables, rebuilt on demand; not saved
+sim.impl	vpi_some_signal_watched	D	VPI handle tables, rebuilt on demand; not saved
+sim.impl	vpi_watched_handles	D	VPI handle tables, rebuilt on demand; not saved
+sim.impl	vpi_word_handles	D	VPI handle tables, rebuilt on demand; not saved
+sim.impl	vpi_string_handles	D	VPI handle tables, rebuilt on demand; not saved
+sim.impl	vpi_watched_strings	D	VPI handle tables, rebuilt on demand; not saved
+sim.impl	vpi_string_watch_observer	D	VPI handle tables, rebuilt on demand; not saved
+sim.impl	vpi_container_scalar_kinds	D	VPI handle tables, rebuilt on demand; not saved
+sim.impl	vpi_container_categories	D	VPI handle tables, rebuilt on demand; not saved
+sim.impl	vpi_value_state_observer	D	VPI handle tables, rebuilt on demand; not saved
+sim.impl	vpi_forced_signals	D	VPI handle tables, rebuilt on demand; not saved
+sim.impl	vpi_bridge_mutex	D	VPI handle tables, rebuilt on demand; not saved
+sim.impl	vpi_started	P	lifecycle flags (SystemC refuses save)
+sim.impl	foreign_update_serial	P	lifecycle flags (SystemC refuses save)
+sim.impl	vpi_ended	P	lifecycle flags (SystemC refuses save)
+sim.impl	lifecycle_hooks	Cfg	observers and hooks installed by the embedder
+sim.impl	foreign_structure	P	first foreign-created structure; refuses a reset (FSIM-SAVE-0018), saved in app.control
+sim.impl	reset_requests	S	exact test in the app.control audit (FSIM-SAVE-0011): a $reset or $restart stops the run and is carried out before the next save point; a failed save ends the run
+sim.impl	reset_count	P+ids	application run state (S6)
+sim.impl	reset_value	P+ids	application run state (S6)
+sim.impl	section_registry	Cfg	registered at construction; the registry itself holds no run state
+sim.impl	state_file_identity	Cfg	the command line and libraries of the run, set by the driver
+sim.impl	reset_arguments	S	exact test in the app.control audit (FSIM-SAVE-0011): a $reset or $restart stops the run and is carried out before the next save point; a failed save ends the run
+sim.impl	save_requests	W	drained by save_quiet_point, which pops each request before it writes; a request behind the one being written is an action of the saving run that a restart does not repeat (IEEE 1800-2023 D.9 saves state, not pending save commands)
+sim.impl	restart_request	S	exact test in the app.control audit (FSIM-SAVE-0011): a $reset or $restart stops the run and is carried out before the next save point; a failed save ends the run
+sim.impl	last_full_save	Cfg	the base of a following $incsave: the last full file saved or restored
+sim.impl	last_full_save_file	Cfg	the base of a following $incsave: the last full file saved or restored
+sim.impl	save_failure	S	exact test in the app.control audit (FSIM-SAVE-0011): a $reset or $restart stops the run and is carried out before the next save point; a failed save ends the run
+sim.impl	vhdl_vhpi_registry	D	artifact products and caches
+sim.impl	vhdl_psl	P+ids	application run state (S6)
+sim.impl	signal_change_hook	Cfg	observers and hooks installed by the embedder
+sim.impl	signal_observers	Cfg	observers and hooks installed by the embedder
+sim.impl	signal_observer_snapshot	Cfg	observers and hooks installed by the embedder
+sim.impl	signal_observer_generation	Cfg	observers and hooks installed by the embedder
+sim.impl	signal_observer_snapshot_dirty	Cfg	observers and hooks installed by the embedder
+sim.impl	signal_observer_hook_depth	Cfg	observers and hooks installed by the embedder
+sim.impl	signal_observation_bridge_installed	Cfg	observers and hooks installed by the embedder
+sim.impl	next_signal_observer	Cfg	observers and hooks installed by the embedder
+sim.impl	scalar_signal_change_hook	Cfg	observers and hooks installed by the embedder
+sim.impl	scalar_signal_observers	Cfg	observers and hooks installed by the embedder
+sim.impl	scalar_signal_observer_snapshot	Cfg	observers and hooks installed by the embedder
+sim.impl	scalar_signal_observer_generation	Cfg	observers and hooks installed by the embedder
+sim.impl	scalar_signal_observer_snapshot_dirty	Cfg	observers and hooks installed by the embedder
+sim.impl	scalar_signal_observer_hook_depth	Cfg	observers and hooks installed by the embedder
+sim.impl	scalar_signal_observation_bridge_installed	Cfg	observers and hooks installed by the embedder
+sim.impl	observation_hooks_refresh_pending	Cfg	observers and hooks installed by the embedder
+sim.impl	native_signal_observation_hooks_installed	Cfg	observers and hooks installed by the embedder
+sim.impl	vpi_observation_hooks_installed	D	VPI handle tables, rebuilt on demand; not saved
+sim.impl	vpi_container_hook_installed	D	VPI handle tables, rebuilt on demand; not saved
+sim.impl	next_scalar_signal_observer	Cfg	observers and hooks installed by the embedder
+sim.impl	safe_point_hook	Cfg	observers and hooks installed by the embedder
+sim.impl	safe_point_observers	Cfg	observers and hooks installed by the embedder
+sim.impl	net_delay_split_requests	D	artifact products and caches
+sim.impl	net_delay_split_observer	Cfg	observers and hooks installed by the embedder
+sim.impl	net_delay_split_refusals	D	artifact products and caches
+sim.impl	grafted_process_ids	D	artifact products and caches
+sim.impl	net_delay_split_refused	D	artifact products and caches
+sim.impl	sdf_net_delay_epoch	P	live SDF reannotation epoch, saved with the VPI net delay puts it guards (net_put_epoch_)
+sim.impl	next_safe_point_observer	Cfg	observers and hooks installed by the embedder
+sim.impl	force_statement_observers	Cfg	observers and hooks installed by the embedder
+sim.impl	execution_point_primary	Cfg	observers and hooks installed by the embedder
+sim.impl	execution_point_observers	Cfg	observers and hooks installed by the embedder
+sim.impl	foreign_probes	Cfg	observers and hooks installed by the embedder
+sim.impl	vhpi_end_of_step_timers	Cfg	observers and hooks installed by the embedder
+sim.impl	signal_transaction_observers	Cfg	observers and hooks installed by the embedder
+sim.impl	driver_transaction_observers	Cfg	observers and hooks installed by the embedder
+sim.impl	next_activity_observer	Cfg	observers and hooks installed by the embedder
+sim.impl	output_hook	Cfg	observers and hooks installed by the embedder
+sim.impl	interpreter_output_hook	Cfg	observers and hooks installed by the embedder
+sim.impl	trusted_builtin_stdout_output	Cfg	observers and hooks installed by the embedder
+sim.impl	report_hook	Cfg	observers and hooks installed by the embedder
+sim.impl	trusted_text_report_hook	Cfg	observers and hooks installed by the embedder
+sim.impl	hdl_vcd	P	coverage accumulators; the VCD state restarts with a new trace file (owner decision 4)
+sim.impl	concurrent_assertion_coverage	P+ids	application run state (S6)
+sim.impl	coverage_execution_state	P	coverage accumulators; the VCD state restarts with a new trace file (owner decision 4)
+sim.impl	coverage_execution_mode	P	coverage accumulators; the VCD state restarts with a new trace file (owner decision 4)
+sim.impl	stopped_covergroups	P+ids	application run state (S6)
+sim.impl	coverage_diagnostics	P	coverage accumulators; the VCD state restarts with a new trace file (owner decision 4)
+sim.impl	coverage_database_path	D	artifact products and caches
+sim.impl	standard_coverage_history	P	coverage accumulators; the VCD state restarts with a new trace file (owner decision 4)
+sim.impl	standard_coverage_run_identity	P	coverage accumulators; the VCD state restarts with a new trace file (owner decision 4)
+sim.impl	concurrent_assertion_hook	Cfg	observers and hooks installed by the embedder
+sim.impl	assertion_attempt_hook	Cfg	observers and hooks installed by the embedder
+sim.impl	assertion_step_hook	Cfg	observers and hooks installed by the embedder
+sim.impl	vpi_process_assertions	D	VPI handle tables, rebuilt on demand; not saved
+sim.impl	vhdl_psl_attempt_hook	Cfg	observers and hooks installed by the embedder
+sim.impl	concurrent_assertion_indices	P+ids	application run state (S6)
+sim.impl	concurrent_assertion_design_processes	D	unreviewed: derived (S6 reviews)
+sim.impl	disabled_vpi_assertion_processes	P+ids	application run state (S6)
+sim.impl	enabled_vpi_assertion_processes	P+ids	application run state (S6)
+sim.impl	concurrent_assertion_actions_suppressed	P+ids	application run state (S6)
+sim.impl	pending_concurrent_assertions	P+ids	application run state (S6)
+sim.impl	sva_obligations	P+ids	application run state (S6)
+sim.impl	sva_vacuous_obligations	P+ids	application run state (S6)
+sim.impl	concurrent_assertions_enabled	P+ids	application run state (S6)
+sim.impl	concurrent_assertion_pass_actions_enabled	P+ids	application run state (S6)
+sim.impl	concurrent_assertion_vacuous_actions_enabled	P+ids	application run state (S6)
+sim.impl	concurrent_assertion_failure_actions_enabled	P+ids	application run state (S6)
+sim.impl	concurrent_assertion_action_overrides	P+ids	application run state (S6)
+sim.impl	class_property_change_hook	Cfg	observers and hooks installed by the embedder
+sim.impl	class_heap_change_signal	P+ids	application run state (S6)
+sim.impl	source_function_dispatch_depth	P	lifecycle flags (SystemC refuses save)
+sim.impl	class_static_property_change_hook	Cfg	observers and hooks installed by the embedder
+sim.impl	lifecycle	P	lifecycle flags (SystemC refuses save)
+sim.impl	systemc_start_attempted	P	lifecycle flags (SystemC refuses save)
+sim.impl	systemc_ended	P	lifecycle flags (SystemC refuses save)
+sim.impl	interactive_scope	P	the interactive scope ($scope, vpiSetInteractiveScope; IEEE 1800-2023 D.11), a hierarchical name
+sim.impl	scope_design	D	the VPI design of the scope tasks, rebuilt from the artifact
+foreign.vpi_host	companion	Cfg	companion hand-off
+foreign.vpi_host	startup_phase	Cfg	companion hand-off
+foreign.vpi_live	simulation_	Cfg	loaded modules and registrations from the same command line (identity-checked at restart)
+foreign.vpi_live	registry_	Cfg	loaded modules and registrations from the same command line (identity-checked at restart)
+foreign.vpi_live	print_	Cfg	loaded modules and registrations from the same command line (identity-checked at restart)
+foreign.vpi_live	libraries_	Cfg	loaded modules and registrations from the same command line (identity-checked at restart)
+foreign.vpi_live	systfs_	Cfg	loaded modules and registrations from the same command line (identity-checked at restart)
+foreign.vpi_live	systf_by_name_	Cfg	loaded modules and registrations from the same command line (identity-checked at restart)
+foreign.vpi_live	calls_	D	call-site table made on first use by call_site() (identity to index); every call assigns its arguments before calltf runs, so what it holds at rest is dead
+foreign.vpi_live	call_by_identity_	D	call-site table made on first use by call_site() (identity to index); every call assigns its arguments before calltf runs, so what it holds at rest is dead
+foreign.vpi_live	call_stack_	S	exact test in LiveService::audit_rest_state (FSIM-SAVE-0011): set and cleared inside one routine, or drained by a safe-point hook that runs after every phase
+foreign.vpi_live	finish_requested_	P	vpi_put_data store (IEEE 1800-2023 38.31) and delay edits made through VPI
+foreign.vpi_live	next_callback_	P	vpi_put_data store (IEEE 1800-2023 38.31) and delay edits made through VPI
+foreign.vpi_live	callbacks_	P+ids	only cbStartOfRestart/cbEndOfRestart survive a restart, as reason + library + routine offset + integer user data + serial (owner decision 5)
+foreign.vpi_live	fired_callbacks_	Cfg	user callback or hook, dropped at restart (owner decision 5)
+foreign.vpi_live	end_of_compile_	Cfg	loaded modules and registrations from the same command line (identity-checked at restart)
+foreign.vpi_live	feature_callbacks_	Cfg	user callback or hook, dropped at restart (owner decision 5)
+foreign.vpi_live	scope_change_object_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	save_phase_	W	assigned by every save, restart and reset lifecycle event (LiveService::lifecycle) before anything reads it
+foreign.vpi_live	save_location_	P	vpi_put_data store (IEEE 1800-2023 38.31) and delay edits made through VPI
+foreign.vpi_live	save_data_	P	vpi_put_data store (IEEE 1800-2023 38.31) and delay edits made through VPI
+foreign.vpi_live	last_save_restart_id_	P	vpi_put_data store (IEEE 1800-2023 38.31) and delay edits made through VPI
+foreign.vpi_live	run_error_callbacks_	Cfg	user callback or hook, dropped at restart (owner decision 5)
+foreign.vpi_live	unresolved_callbacks_	Cfg	user callback or hook, dropped at restart (owner decision 5)
+foreign.vpi_live	pli_error_callbacks_	Cfg	user callback or hook, dropped at restart (owner decision 5)
+foreign.vpi_live	tchk_callbacks_	Cfg	user callback or hook, dropped at restart (owner decision 5)
+foreign.vpi_live	in_pli_error_	S	exact test in LiveService::audit_rest_state (FSIM-SAVE-0011): set and cleared inside one routine, or drained by a safe-point hook that runs after every phase
+foreign.vpi_live	signal_traps_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	signal_hook_	Cfg	user callback or hook, dropped at restart (owner decision 5)
+foreign.vpi_live	statement_drivers_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	member_watches_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	member_watch_hook_	Cfg	user callback or hook, dropped at restart (owner decision 5)
+foreign.vpi_live	next_iterator_	W	vpi_iterate creates, vpi_scan or vpi_free_object ends; a restore drops the handles a library holds (restore_run_state clears the table, IEEE 1800-2023 38.36.3)
+foreign.vpi_live	iterators_	W	vpi_iterate creates, vpi_scan or vpi_free_object ends; a restore drops the handles a library holds (restore_run_state clears the table, IEEE 1800-2023 38.36.3)
+foreign.vpi_live	user_data_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	strings_	W	return-string ring: slot = strings_[string_cursor_++ % size] is assigned before its pointer is handed out
+foreign.vpi_live	array_buffer_	W	vpi_get_value_array assigns array_buffer_ before it returns the pointer
+foreign.vpi_live	selects_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	constants_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	clocking_skews_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	clocking_events_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	statement_model_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	class_model_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	class_defns_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	class_defns_built_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	class_objects_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	class_object_serials_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	class_members_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	class_member_index_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	size_callbacks_	Cfg	user callback or hook, dropped at restart (owner decision 5)
+foreign.vpi_live	reclaim_callbacks_	Cfg	user callback or hook, dropped at restart (owner decision 5)
+foreign.vpi_live	create_callbacks_	Cfg	user callback or hook, dropped at restart (owner decision 5)
+foreign.vpi_live	size_hooked_	Cfg	user callback or hook, dropped at restart (owner decision 5)
+foreign.vpi_live	reclaim_hooked_	Cfg	user callback or hook, dropped at restart (owner decision 5)
+foreign.vpi_live	create_hooked_	Cfg	user callback or hook, dropped at restart (owner decision 5)
+foreign.vpi_live	frames_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	frame_variables_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	frame_variable_index_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	frame_callbacks_	Cfg	user callback or hook, dropped at restart (owner decision 5)
+foreign.vpi_live	frame_hook_	Cfg	user callback or hook, dropped at restart (owner decision 5)
+foreign.vpi_live	thread_sources_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	thread_sources_built_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	pending_forces_	S	exact test in LiveService::audit_rest_state (FSIM-SAVE-0011): set and cleared inside one routine, or drained by a safe-point hook that runs after every phase
+foreign.vpi_live	force_callbacks_	Cfg	user callback or hook, dropped at restart (owner decision 5)
+foreign.vpi_live	force_hook_	Cfg	user callback or hook, dropped at restart (owner decision 5)
+foreign.vpi_live	force_delivery_hook_	Cfg	user callback or hook, dropped at restart (owner decision 5)
+foreign.vpi_live	statement_callbacks_	Cfg	user callback or hook, dropped at restart (owner decision 5)
+foreign.vpi_live	statement_hook_	Cfg	user callback or hook, dropped at restart (owner decision 5)
+foreign.vpi_live	disable_callbacks_	Cfg	user callback or hook, dropped at restart (owner decision 5)
+foreign.vpi_live	pending_disables_	S	exact test in LiveService::audit_rest_state (FSIM-SAVE-0011): set and cleared inside one routine, or drained by a safe-point hook that runs after every phase
+foreign.vpi_live	disable_hook_	Cfg	user callback or hook, dropped at restart (owner decision 5)
+foreign.vpi_live	statement_points_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	frame_scopes_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	process_scopes_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	assertion_callbacks_	Cfg	user callback or hook, dropped at restart (owner decision 5)
+foreign.vpi_live	assertion_system_callbacks_	Cfg	user callback or hook, dropped at restart (owner decision 5)
+foreign.vpi_live	locked_assertions_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	assertion_system_hooks_	Cfg	user callback or hook, dropped at restart (owner decision 5)
+foreign.vpi_live	assertion_system_hooked_	Cfg	user callback or hook, dropped at restart (owner decision 5)
+foreign.vpi_live	assertion_start_hooked_	Cfg	user callback or hook, dropped at restart (owner decision 5)
+foreign.vpi_live	assertion_step_hooked_	Cfg	user callback or hook, dropped at restart (owner decision 5)
+foreign.vpi_live	assertion_system_locked_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	assertion_system_ended_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	ranges_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	subarrays_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	typespecs_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	typespec_index_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	typespec_members_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	enum_constants_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	declared_typespec_nodes_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	declared_typespecs_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	derived_typespecs_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	queued_path_delays_	P	saved in the foreign.vpi section, version 2 (LiveService::io_delay_edits): delay edits made through vpi_put_delays; net_put_epoch_ is saved with the record epoch and rebased on restore
+foreign.vpi_live	queued_check_limits_	P	saved in the foreign.vpi section, version 2 (LiveService::io_delay_edits): delay edits made through vpi_put_delays; net_put_epoch_ is saved with the record epoch and rebased on restore
+foreign.vpi_live	primitive_delay_rows_	P	saved in the foreign.vpi section, version 2 (LiveService::io_delay_edits): delay edits made through vpi_put_delays; net_put_epoch_ is saved with the record epoch and rebased on restore
+foreign.vpi_live	path_delay_rows_	P	saved in the foreign.vpi section, version 2 (LiveService::io_delay_edits): delay edits made through vpi_put_delays; net_put_epoch_ is saved with the record epoch and rebased on restore
+foreign.vpi_live	check_delay_rows_	P	saved in the foreign.vpi section, version 2 (LiveService::io_delay_edits): delay edits made through vpi_put_delays; net_put_epoch_ is saved with the record epoch and rebased on restore
+foreign.vpi_live	net_delay_overrides_	P	saved in the foreign.vpi section, version 2 (LiveService::io_delay_edits): delay edits made through vpi_put_delays; net_put_epoch_ is saved with the record epoch and rebased on restore
+foreign.vpi_live	net_pulse_overrides_	P	saved in the foreign.vpi section, version 2 (LiveService::io_delay_edits): delay edits made through vpi_put_delays; net_put_epoch_ is saved with the record epoch and rebased on restore
+foreign.vpi_live	mipd_rows_	P	saved in the foreign.vpi section, version 2 (LiveService::io_delay_edits): delay edits made through vpi_put_delays; net_put_epoch_ is saved with the record epoch and rebased on restore
+foreign.vpi_live	net_put_epoch_	P	saved in the foreign.vpi section, version 2 (LiveService::io_delay_edits): delay edits made through vpi_put_delays; net_put_epoch_ is saved with the record epoch and rebased on restore
+foreign.vpi_live	primitive_delay_objects_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	time_queues_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	callback_due_	Cfg	user callback or hook, dropped at restart (owner decision 5)
+foreign.vpi_live	mipd_pulses_	P	saved in the foreign.vpi section, version 2 (LiveService::io_delay_edits): delay edits made through vpi_put_delays; net_put_epoch_ is saved with the record epoch and rebased on restore
+foreign.vpi_live	path_delay_hook_	Cfg	user callback or hook, dropped at restart (owner decision 5)
+foreign.vpi_live	string_cursor_	W	return-string ring: slot = strings_[string_cursor_++ % size] is assigned before its pointer is handed out
+foreign.vpi_live	vectors_	W	return-vector ring: slot = vectors_[vector_cursor_++ % size] is assigned before its pointer is handed out
+foreign.vpi_live	vector_cursor_	W	return-vector ring: slot = vectors_[vector_cursor_++ % size] is assigned before its pointer is handed out
+foreign.vpi_live	strengths_	W	return-strength ring: slot = strengths_[strength_cursor_++ % size] is assigned before its pointer is handed out
+foreign.vpi_live	strength_cursor_	W	return-strength ring: slot = strengths_[strength_cursor_++ % size] is assigned before its pointer is handed out
+foreign.vpi_live	primitive_index_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	times_	W	return-time ring: slot = times_[time_cursor_++ % size] is assigned before its pointer is handed out
+foreign.vpi_live	time_cursor_	W	return-time ring: slot = times_[time_cursor_++ % size] is assigned before its pointer is handed out
+foreign.vpi_live	argv_storage_	Cfg	the simulator arguments of vpi_get_vlog_info, built at attach from the same command line
+foreign.vpi_live	argv_	Cfg	the simulator arguments of vpi_get_vlog_info, built at attach from the same command line
+foreign.vpi_live	product_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	version_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	error_	W	invoke() clears error_ at every routine but vpi_chk_error and sets the message with it; a restore starts with no error
+foreign.vpi_live	error_message_	W	invoke() clears error_ at every routine but vpi_chk_error and sets the message with it; a restore starts with no error
+foreign.vpi_live	read_only_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	error_code_	W	invoke() clears error_ at every routine but vpi_chk_error and sets the message with it; a restore starts with no error
+foreign.vpi_live	split_error_code_	Cfg	the constant code vpi_chk_error reports for a failed deferred split
+foreign.vpi_live	companion_calls_	S	exact test in LiveService::audit_rest_state (FSIM-SAVE-0011): set and cleared inside one routine, or drained by a safe-point hook that runs after every phase
+foreign.vpi_live	assertion_fail_expressions_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	constant_statements_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	immediate_assertion_callbacks_	Cfg	user callback or hook, dropped at restart (owner decision 5)
+foreign.vpi_live	immediate_assertion_hook_	Cfg	user callback or hook, dropped at restart (owner decision 5)
+foreign.vpi_live	call_results_	P	value each user function call returned at its last evaluation (--foreign-probes), written by LiveService::save_run_state into foreign.vpi v2 (ForeignRunState::call_results)
+foreign.vhpi_live	simulation_	Cfg	loaded modules and registrations from the same command line (identity-checked at restart)
+foreign.vhpi_live	hir_	Cfg	loaded modules and registrations from the same command line (identity-checked at restart)
+foreign.vhpi_live	design_	Cfg	loaded modules and registrations from the same command line (identity-checked at restart)
+foreign.vhpi_live	print_	Cfg	loaded modules and registrations from the same command line (identity-checked at restart)
+foreign.vhpi_live	femtoseconds_per_tick_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	enum_bound_objects_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	phys_bound_objects_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	real_bound_objects_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	host_	Cfg	loaded modules and registrations from the same command line (identity-checked at restart)
+foreign.vhpi_live	arguments_	Cfg	loaded modules and registrations from the same command line (identity-checked at restart)
+foreign.vhpi_live	libraries_	Cfg	loaded modules and registrations from the same command line (identity-checked at restart)
+foreign.vhpi_live	module_libraries_	Cfg	loaded modules and registrations from the same command line (identity-checked at restart)
+foreign.vhpi_live	registry_functions_	Cfg	loaded modules and registrations from the same command line (identity-checked at restart)
+foreign.vhpi_live	objects_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	loop_numbers_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	literal_objects_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	integer_objects_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	protected_held_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	physical_literals_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	callback_pool_	Cfg	user callbacks, dropped at restart (owner decision 5)
+foreign.vhpi_live	free_callbacks_	Cfg	user callbacks, dropped at restart (owner decision 5)
+foreign.vhpi_live	callbacks_	P+ids	only vhpiCbStartOfRestart/vhpiCbEndOfRestart survive a restart; vhpiAutomaticRestoreP is 0 (owner decision 5)
+foreign.vhpi_live	pending_updates_	S	exact test in LiveService::audit_rest_state (FSIM-SAVE-0011): set and cleared inside one routine, callback delivery or safe-point drain; restore_run_state clears them (reset_cycle_state)
+foreign.vhpi_live	iterators_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	strings_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	instances_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	standard_types_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	library_decls_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	library_units_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	declared_types_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	defined_types_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	argvs_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	resolving_aliases_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	packages_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	declaration_units_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	signal_infos_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	lifecycle_	P	vhpi_put_data store (IEEE 1076-2019 23.27) and lifecycle phase
+foreign.vhpi_live	next_time_	D	the NextTime callback ensure_next_time() registers on demand; a restore drops the manager record (owner decision 5), reset_cycle_state removes it
+foreign.vhpi_live	changed_	S	exact test in LiveService::audit_rest_state (FSIM-SAVE-0011): set and cleared inside one routine, callback delivery or safe-point drain; restore_run_state clears them (reset_cycle_state)
+foreign.vhpi_live	flushing_	S	exact test in LiveService::audit_rest_state (FSIM-SAVE-0011): set and cleared inside one routine, callback delivery or safe-point drain; restore_run_state clears them (reset_cycle_state)
+foreign.vhpi_live	flushing_registered_	S	exact test in LiveService::audit_rest_state (FSIM-SAVE-0011): set and cleared inside one routine, callback delivery or safe-point drain; restore_run_state clears them (reset_cycle_state)
+foreign.vhpi_live	forces_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	transaction_watch_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	active_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	driver_active_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	driver_token_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	force_token_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	execution_token_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	running_	D	probe state rebuilt from execution points as they occur (deliver_point: process_entry, call, suspend); reset_cycle_state clears it at a restore
+foreign.vhpi_live	process_runs_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	reads_cache_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	connections_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	owners_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	statement_at_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	all_processes_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	all_bodies_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	call_at_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	params_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	process_objects_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	transaction_token_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	root_	Cfg	loaded modules and registrations from the same command line (identity-checked at restart)
+foreign.vhpi_live	tool_	Cfg	loaded modules and registrations from the same command line (identity-checked at restart)
+foreign.vhpi_live	dispatching_	S	exact test in LiveService::audit_rest_state (FSIM-SAVE-0011): set and cleared inside one routine, callback delivery or safe-point drain; restore_run_state clears them (reset_cycle_state)
+foreign.vhpi_live	current_callback_	Cfg	user callbacks, dropped at restart (owner decision 5)
+foreign.vhpi_live	library_source_	Cfg	loaded modules and registrations from the same command line (identity-checked at restart)
+foreign.vhpi_live	library_directories_	Cfg	loaded modules and registrations from the same command line (identity-checked at restart)
+foreign.vhpi_live	foreign_models_	Cfg	loaded modules and registrations from the same command line (identity-checked at restart)
+foreign.vhpi_live	foreign_bindings_	Cfg	loaded modules and registrations from the same command line (identity-checked at restart)
+foreign.vhpi_live	foreign_instances_	Cfg	loaded modules and registrations from the same command line (identity-checked at restart)
+foreign.vhpi_live	created_drivers_	P+ids	drivers created by vhpi_create, journaled in host.structure
+foreign.vhpi_live	foreign_collected_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	active_call_	S	exact test in LiveService::audit_rest_state (FSIM-SAVE-0011): set and cleared inside one routine, callback delivery or safe-point drain; restore_run_state clears them (reset_cycle_state)
+foreign.vhpi_live	frames_	D	probe state rebuilt from execution points as they occur (deliver_point: process_entry, call, suspend); reset_cycle_state clears it at a restore
+foreign.vhpi_live	call_process_	S	exact test in LiveService::audit_rest_state (FSIM-SAVE-0011): set and cleared inside one routine, callback delivery or safe-point drain; restore_run_state clears them (reset_cycle_state)
+foreign.vhpi_live	safe_point_token_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	change_token_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	next_order_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	phase_	W	assigned by every phase event (phase_event) before it is read; the restart sets the simulation phase (20.8)
+foreign.vhpi_live	resumed_phase_	W	assigned by every phase event (phase_event) before it is read; the restart sets the simulation phase (20.8)
+foreign.vhpi_live	last_id_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	issued_ids_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	save_data_	P	vhpi_put_data store (IEEE 1076-2019 23.27) and lifecycle phase
+foreign.vhpi_live	save_location_	P	vhpi_put_data store (IEEE 1076-2019 23.27) and lifecycle phase
+foreign.vhpi_live	has_error_	W	guarded_on() calls clear_error() at the entry of every routine and error() assigns them before vhpi_check_error reads them
+foreign.vhpi_live	error_severity_	W	guarded_on() calls clear_error() at the entry of every routine and error() assigns them before vhpi_check_error reads them
+foreign.vhpi_live	error_message_	W	guarded_on() calls clear_error() at the entry of every routine and error() assigns them before vhpi_check_error reads them
+foreign.vhpi_live	error_subject_	W	guarded_on() calls clear_error() at the entry of every routine and error() assigns them before vhpi_check_error reads them
+foreign.vhpi_live	error_file_	W	guarded_on() calls clear_error() at the entry of every routine and error() assigns them before vhpi_check_error reads them
+foreign.vhpi_live	stopping_	D	tool status of the saving process (vhpi_control stop and finish, a failure severity): the restarted process begins with them false; reset_cycle_state clears them at a restore
+foreign.vhpi_live	finishing_	D	tool status of the saving process (vhpi_control stop and finish, a failure severity): the restarted process begins with them false; reset_cycle_state clears them at a restore
+foreign.vhpi_live	failed_	D	tool status of the saving process (vhpi_control stop and finish, a failure severity): the restarted process begins with them false; reset_cycle_state clears them at a restore
+foreign.vhpi_live	finished_	D	tool status of the saving process (vhpi_control stop and finish, a failure severity): the restarted process begins with them false; reset_cycle_state clears them at a restore
+foreign.vhpi_live	simulation_ended_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	simulation_ending_	S	exact test in LiveService::audit_rest_state (FSIM-SAVE-0011): set and cleared inside one routine, callback delivery or safe-point drain; restore_run_state clears them (reset_cycle_state)
+foreign.vhpi_live	time_step_ended_	S	exact test in LiveService::audit_rest_state (FSIM-SAVE-0011): set and cleared inside one routine, callback delivery or safe-point drain; restore_run_state clears them (reset_cycle_state)
+foreign.vhpi_live	postponed_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	end_of_time_step_pending_	D	position in the VHPI cycle bookkeeping (14.7.5.3): follows the scheduler events a restore drops, so reset_cycle_state starts it afresh
+foreign.vhpi_live	in_pli_error_	S	exact test in LiveService::audit_rest_state (FSIM-SAVE-0011): set and cleared inside one routine, callback delivery or safe-point drain; restore_run_state clears them (reset_cycle_state)
+foreign.vhpi_live	interrupt_trap_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	cycle_started_	D	position in the VHPI cycle bookkeeping (14.7.5.3): follows the scheduler events a restore drops, so reset_cycle_state starts it afresh
+foreign.vhpi_live	awaiting_update_	D	position in the VHPI cycle bookkeeping (14.7.5.3): follows the scheduler events a restore drops, so reset_cycle_state starts it afresh
+foreign.vhpi_live	due_timeouts_	D	position in the VHPI cycle bookkeeping (14.7.5.3): follows the scheduler events a restore drops, so reset_cycle_state starts it afresh
+foreign.vhpi_live	stepped_at_	D	position in the VHPI cycle bookkeeping (14.7.5.3): follows the scheduler events a restore drops, so reset_cycle_state starts it afresh
+foreign.vhpi_live	initialized_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	cycled_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	companion_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	resolved_function_	D	lazily built object for IEEE.STD_LOGIC_1164.RESOLVED
+foreign.vhpi_live	catalog_source_	Cfg	library catalog reader installed by the embedder
+foreign.vhpi_live	catalog_read_	D	lazy cache: libraries whose catalog was read
+foreign.vhpi_live	catalog_units_	D	lazy cache of catalog-only design units
+foreign.tf_coordinator	scheduler	Cfg	wiring to the scheduler
+foreign.tf_coordinator	stable_order_base	Cfg	wiring to the scheduler
+foreign.tf_coordinator	owner	Cfg	wiring to the scheduler
+foreign.tf_coordinator	next_call	P	id counters
+foreign.tf_coordinator	next_callback	P	id counters
+foreign.tf_coordinator	next_stable_order	P	id counters
+foreign.tf_coordinator	publish	Cfg	wiring to the scheduler
+foreign.tf_coordinator	mutex	Cfg	wiring to the scheduler
+foreign.tf_coordinator	dispatching	S	exact test in TfSchedulerCoordinator::audit_rest_state (FSIM-SAVE-0011); the application creates no coordinator today
+foreign.tf_coordinator	calls	C	scheduled TF callbacks are foreign-callback closures (S2): the save drops and counts them
+foreign.tf_coordinator	pending	C	scheduled TF callbacks are foreign-callback closures (S2): the save drops and counts them
+foreign.vpi_callbacks	owner	Cfg	wiring
+foreign.vpi_callbacks	next_id	P	id counters
+foreign.vpi_callbacks	observer	Cfg	wiring
+foreign.vpi_callbacks	stable_order_base	Cfg	wiring
+foreign.vpi_callbacks	registry	Cfg	wiring
+foreign.vpi_callbacks	scheduler	Cfg	wiring
+foreign.vpi_callbacks	time_service	Cfg	wiring
+foreign.vpi_callbacks	prepare_observation	Cfg	observation hook installed by the simulation setup
+foreign.vpi_callbacks	slot_start_hook	Cfg	wiring
+foreign.vpi_callbacks	slot_start_waiting	C	the waiting cbNextSimTime and slot-start delay registrations: records of the callbacks, dropped with them at a restart (owner decision 5), like records
+foreign.vpi_callbacks	mutex	Cfg	wiring
+foreign.vpi_callbacks	records	C	delayed callbacks (cbAfterDelay, synchronization, end of time slot) are foreign-callback closures (S2): the save drops and counts them (owner decision 5)
+foreign.vpi_callbacks	retired_status	P	id counters
+foreign.vpi_callbacks	retired	P	id counters
+foreign.vpi_callbacks	value_change_callbacks_by_object	Cfg	wiring
+foreign.vpi_callbacks	next_change	P	id counters
+foreign.vpi_callbacks	pending_value_objects	C	value-change deliveries run inside their time slot, so a save finds none; callbacks drop at restart (owner decision 5)
+foreign.vpi_callbacks	pending_values	C	value-change deliveries run inside their time slot, so a save finds none; callbacks drop at restart (owner decision 5)
+foreign.vpi_callbacks	dispatching	S	exact test in SystemVerilogVpiCallbackManager::audit_rest_state (FSIM-SAVE-0011): set only inside dispatch_callbacks
+foreign.vpi_callbacks	has_registrations	Cfg	wiring
+foreign.vpi_control	owner	Cfg	wiring
+foreign.vpi_control	next_id	P	id counter
+foreign.vpi_control	stable_order_base	Cfg	wiring
+foreign.vpi_control	registry	Cfg	wiring
+foreign.vpi_control	scheduler	Cfg	wiring
+foreign.vpi_control	callbacks	Cfg	wiring
+foreign.vpi_control	state	Cfg	wiring
+foreign.vpi_control	dispatch_finish_lifecycle	Cfg	wiring
+foreign.vpi_control	reset_supported	Cfg	wiring
+foreign.vpi_control	mutex	Cfg	wiring
+foreign.vpi_control	records	C	control requests (force, release, stop, finish, reset) run inside the current slot, so the save waits for them; delayed vpi_put_value is the data event vpi.scheduled_write (S2)
+foreign.vpi_time	owner	Cfg	wiring
+foreign.vpi_time	next_id	P	id counter
+foreign.vpi_time	scheduler	Cfg	wiring
+foreign.vpi_time	profile	Cfg	wiring
+foreign.vpi_time	valid	Cfg	wiring
+foreign.vpi_time	mutex	Cfg	wiring
+foreign.vpi_time	records	C	timed callbacks are foreign-callback closures (S2): the save drops and counts them (owner decision 5)
+sim.impl	restoring_state	W	set only while read_state_file restores (RAII); the VHPI start-of-simulation hook reads it to fire no phase on a restart
+sim.impl	foreign_section_registry	Cfg	filled by register_foreign_run_state_sections when the same libraries attach
+sim.impl	gate_delay_requests	D	as net_delay_split_requests: artifact products and caches
+sim.impl	gate_delay_observer	Cfg	observers and hooks installed by the embedder
+sim.impl	gate_delay_split	D	drivers split by vpi_put_delays; rebuilt with the replayed gate splits of the plan journal (wave AE)
+sim.impl	late_splits	P	the gate delay slots, switch control copies and load-port net-delay copies vpi_put_delays added after the start: saved in app.late_splits and replayed by read_state_file (replay_late_splits) before the engine restores
+sim.impl	gate_delay_refused	D	as net_delay_split_refused: artifact products and caches
+sim.impl	gate_delay_split_refusals	D	as net_delay_split_refusals: artifact products and caches
+sim.impl	deferred_split_errors	D	as net_delay_split_refusals: diagnostics of this process's run
+sim.impl	deferred_split_errors_taken	D	as net_delay_split_refusals: how many vpi_chk_error has handed out
+sim.impl	tranif_requests	D	as net_delay_split_requests: artifact products and caches
+sim.impl	tranif_observer	Cfg	observers and hooks installed by the embedder
+sim.impl	tranif_controls	D	tranif control splits made by vpi_put_delays; rebuilt with the replayed gate splits of the plan journal (wave AE)
+sim.impl	gate_delay_error	W	set by gate_delay_program and read by the same vpi_put_delays call

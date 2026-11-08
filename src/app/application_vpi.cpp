@@ -3,9 +3,11 @@
 #include "application_vpi_statements.hpp"
 #include "fsim/support/index_distance.hpp"
 #include "fsim/semantic/systemverilog_structure_image.hpp"
+#include "fsim/runtime/output_format.hpp"
 #include "fsim/runtime/vpi_type_descriptor.hpp"
 
 #include <algorithm>
+#include <array>
 #include <iterator>
 #include <atomic>
 #include <bit>
@@ -209,6 +211,43 @@ namespace {
             identity = unit->library + "::" + unit->name;
         }
         apply_vpi_unit_provenance(type, project, identity);
+    }
+
+    // The library.cell name of the SystemVerilog configuration that controls
+    // an instance's binding (IEEE 1800-2023 33.7 vpiConfig). The elaboration
+    // records the controlling configuration as the "__configuration"
+    // identity "sv-config-v1;<len>:<library>;<len>:<name>;..."; a nested
+    // `use config` rule replaces it for the instances beneath.
+    [[nodiscard]] std::string vpi_configuration_name(
+        const elaboration::SpecializationInfo& recorded)
+    {
+        constexpr std::string_view prefix = "sv-config-v1;";
+        for (const auto& [name, identity] : recorded.parameter_identity_values) {
+            if (name != "__configuration"
+                || !std::string_view { identity }.starts_with(prefix)) {
+                continue;
+            }
+            std::string_view rest { identity };
+            rest.remove_prefix(prefix.size());
+            std::array<std::string, 2> fields;
+            for (auto& field : fields) {
+                const auto colon = rest.find(':');
+                if (colon == std::string_view::npos) {
+                    return { };
+                }
+                std::size_t length { };
+                const auto parsed = std::from_chars(
+                    rest.data(), rest.data() + colon, length);
+                if (parsed.ec != std::errc { }
+                    || rest.size() < colon + 1U + length + 1U) {
+                    return { };
+                }
+                field = std::string { rest.substr(colon + 1U, length) };
+                rest.remove_prefix(colon + 1U + length + 1U);
+            }
+            return fields[0].empty() ? fields[1] : fields[0] + '.' + fields[1];
+        }
+        return { };
     }
 
     [[nodiscard]] runtime::SystemVerilogVpiObjectKind vpi_instance_kind(
@@ -1334,11 +1373,33 @@ namespace {
             // A dynamic array or a queue holds its elements without a fixed
             // range (IEEE 1800-2023 7.5, 7.10).
             runtime::SystemVerilogVpiTypeDescriptor array;
-            array.kind = type.queue
+            array.kind = type.associative
+                ? runtime::SystemVerilogVpiDescriptorKind::AssociativeArray
+                : type.queue
                 ? runtime::SystemVerilogVpiDescriptorKind::Queue
                 : runtime::SystemVerilogVpiDescriptorKind::DynamicArray;
             array.category = runtime::SystemVerilogVpiValueCategory::None;
             array.width = 0U;
+            if (type.associative) {
+                // An associative array's first child is its index type
+                // (IEEE 1800-2023 37.25 detail 2).
+                runtime::SystemVerilogVpiTypeDescriptor index;
+                if (type.string_indices) {
+                    index.kind
+                        = runtime::SystemVerilogVpiDescriptorKind::String;
+                    index.category
+                        = runtime::SystemVerilogVpiValueCategory::String;
+                    index.width = 0U;
+                } else {
+                    index.category = type.index_width == 32U
+                            && type.signed_indices
+                        ? runtime::SystemVerilogVpiValueCategory::Integer4
+                        : runtime::SystemVerilogVpiValueCategory::Logic4;
+                    index.width = type.index_width;
+                    index.is_signed = type.signed_indices;
+                }
+                array.children.push_back(std::move(index));
+            }
             array.children.push_back(std::move(descriptor));
             descriptor = std::move(array);
         }
@@ -1369,8 +1430,9 @@ namespace {
         const runtime::simir::ContainerType& type)
     {
         using Kind = runtime::simir::ContainerElementKind;
-        if (type.associative
-            || (type.element_kind != Kind::Packed
+        // An associative array is an array object of its entries in key
+        // order (IEEE 1800-2023 37.17); its size is the entry count.
+        if ((type.element_kind != Kind::Packed
                 && type.element_kind != Kind::Scalar
                 && type.element_kind != Kind::String)) {
             return false;
@@ -2312,16 +2374,54 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
     for (const auto& process : project.systemverilog_hir.processes()) {
         hir_processes.emplace(process.id.value(), &process);
     }
+    // The DPI properties of an import or export (IEEE 1800-2023 37.40
+    // details 6-10) and where its declaration is for the formals (37.41).
+    const auto apply_dpi = [&](runtime::SystemVerilogVpiTypeInfo& scope_type,
+                               const semantic::sv::DpiDeclaration& dpi,
+                               const std::uint32_t dpi_unit,
+                               const std::uint32_t dpi_index) {
+        const auto import_declaration
+            = dpi.direction == semantic::sv::DpiDirection::import;
+        scope_type.dpi_access = import_declaration
+            ? runtime::SystemVerilogVpiTypeInfo::DpiAccess::Import
+            : runtime::SystemVerilogVpiTypeInfo::DpiAccess::Export;
+        scope_type.dpi_pure = dpi.qualifier == semantic::sv::DpiQualifier::pure;
+        scope_type.dpi_context
+            = dpi.qualifier == semantic::sv::DpiQualifier::context;
+        scope_type.dpi_legacy_string = dpi.link_name == "DPI";
+        scope_type.dpi_c_identifier
+            = dpi.c_identifier.value_or(dpi.systemverilog_name);
+        if (import_declaration) {
+            const auto dpi_result = vpi_dpi_result(dpi);
+            scope_type.dpi_func_type = dpi_result.func_type;
+            scope_type.dpi_size = dpi_result.size;
+            scope_type.dpi_signed = dpi_result.is_signed;
+            // The declaration's place joins the scope's provenance; a scope
+            // with none (the stub $unit package) keeps none, since a source
+            // without its unit is no valid provenance.
+            if (scope_type.semantic_unit_id) {
+                apply_vpi_source(scope_type, project, dpi.source);
+            }
+            scope_type.dpi_has_declaration = true;
+            scope_type.dpi_unit = dpi_unit;
+            scope_type.dpi_index = dpi_index;
+        }
+    };
+    // `separator` joins the scope path and a member's name: "." in an
+    // instance, "::" in a package (IEEE 1800-2023 3.13, 37.10, 37.41).
     const auto publish_callable_scopes = [&](const semantic::sv::Unit& unit,
                                              const std::string& instance_path,
                                              const fsim_vpi_handle_v1 parent,
-                                             const runtime::SystemVerilogVpiTypeInfo& type) {
+                                             const runtime::SystemVerilogVpiTypeInfo& type,
+                                             const std::string_view separator = ".") {
+        const bool in_package = separator != ".";
         const auto publish_scope = [&](const runtime::SystemVerilogVpiObjectKind kind,
                                        const std::string& name,
                                        const std::string& path,
                                        const fsim_vpi_handle_v1 owner,
                                        const semantic::sv::DpiDeclaration* const dpi
-                                       = nullptr) {
+                                       = nullptr,
+                                       const std::uint32_t dpi_unit = 0U) {
             if (published_scopes.contains(path) || instance_paths.contains(path)) {
                 return std::optional<fsim_vpi_handle_v1> { };
             }
@@ -2333,25 +2433,9 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             scope_type.is_cell = false;
             // A DPI import or export (IEEE 1800-2023 37.40 details 6-10).
             if (dpi != nullptr) {
-                const auto import_declaration
-                    = dpi->direction == semantic::sv::DpiDirection::import;
-                scope_type.dpi_access = import_declaration
-                    ? runtime::SystemVerilogVpiTypeInfo::DpiAccess::Import
-                    : runtime::SystemVerilogVpiTypeInfo::DpiAccess::Export;
-                scope_type.dpi_pure
-                    = dpi->qualifier == semantic::sv::DpiQualifier::pure;
-                scope_type.dpi_context
-                    = dpi->qualifier == semantic::sv::DpiQualifier::context;
-                scope_type.dpi_legacy_string = dpi->link_name == "DPI";
-                scope_type.dpi_c_identifier
-                    = dpi->c_identifier.value_or(dpi->systemverilog_name);
-                if (import_declaration) {
-                    const auto dpi_result = vpi_dpi_result(*dpi);
-                    scope_type.dpi_func_type = dpi_result.func_type;
-                    scope_type.dpi_size = dpi_result.size;
-                    scope_type.dpi_signed = dpi_result.is_signed;
-                    apply_vpi_source(scope_type, project, dpi->source);
-                }
+                apply_dpi(scope_type, *dpi, dpi_unit,
+                    static_cast<std::uint32_t>(
+                        dpi - unit.dpi_declarations.data()));
             }
             scope.type = scope_type;
             const auto handle = create_checked(
@@ -2396,7 +2480,8 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
                         != semantic::sv::DeclarationForm::function)) {
                 continue;
             }
-            const auto path = instance_path + "." + declaration->name;
+            const auto path = instance_path + std::string { separator }
+                + declaration->name;
             const auto function
                 = declaration->form == semantic::sv::DeclarationForm::function;
             // A task or function the unit exports to C is a DPI export.
@@ -2423,15 +2508,23 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         // A DPI import is a task or function object of the scope that
         // declares it (IEEE 1800-2023 37.40, 35.5.4).
         for (const auto& dpi : unit.dpi_declarations) {
+            // The imports of a compilation unit belong to its `$unit`
+            // package and are published there under their own names.
             if (dpi.direction != semantic::sv::DpiDirection::import
-                || !dpi.validated || dpi.systemverilog_name.empty()) {
+                || !dpi.validated || dpi.systemverilog_name.empty()
+                || (in_package && unit.name.starts_with("fsim_unit_"))) {
                 continue;
             }
             publish_scope(dpi.callable_kind == semantic::sv::DpiCallableKind::function
                     ? runtime::SystemVerilogVpiObjectKind::Function
                     : runtime::SystemVerilogVpiObjectKind::Task,
                 dpi.systemverilog_name,
-                instance_path + "." + dpi.systemverilog_name, parent, &dpi);
+                instance_path + std::string { separator }
+                    + dpi.systemverilog_name,
+                parent, &dpi, unit.id.value());
+        }
+        if (in_package) {
+            return;
         }
         for (const auto process_id : unit.processes) {
             const auto found = hir_processes.find(process_id.value());
@@ -2602,6 +2695,12 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             apply_vpi_source(definition, project, unit->source);
             scope_type.definition_path = std::move(definition.source_path);
             scope_type.definition_line = definition.source_line;
+            if (specialization.id.value()
+                < project.design.specializations().size()) {
+                scope_type.configuration = vpi_configuration_name(
+                    project.design.specializations()[
+                        specialization.id.value()]);
+            }
             const auto& nettype = unit->compilation.default_nettype;
             scope_type.default_net_kind = nettype.empty()
                 ? runtime::SystemVerilogVpiNetKind::Wire
@@ -2656,13 +2755,14 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         return unit->name.starts_with("fsim_unit_");
     });
     const bool vpi_language_present = !relevant_specializations.empty();
+    fsim_vpi_handle_v1 unit_stub { };
     if (vpi_language_present && (package_units.empty()
             || !package_units.front()->name.starts_with("fsim_unit_"))) {
         runtime::SystemVerilogVpiObjectDescriptor descriptor;
         descriptor.kind = runtime::SystemVerilogVpiObjectKind::Package;
         descriptor.name = "fsim_unit_";
         descriptor.type = runtime::SystemVerilogVpiTypeInfo { };
-        (void)create_checked(
+        unit_stub = create_checked(
             *result.registry, std::move(descriptor), "fsim_unit_");
     }
     std::map<std::string, fsim_vpi_handle_v1, std::less<>> packages;
@@ -2684,6 +2784,89 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             *result.registry, std::move(descriptor), unit.name);
         packages.emplace(unit.name, package);
         packages.emplace(unit.library + "::" + unit.name, package);
+        // The tasks and functions of a package, named `pkg::name` (IEEE
+        // 1800-2023 37.10, 37.41).
+        if (type.semantic_unit_id) {
+            publish_callable_scopes(
+                unit, unit.name + "::", package, type, "");
+        }
+    }
+
+    // DPI imports declared in a compilation unit are tasks and functions of
+    // its `$unit` package (IEEE 1800-2023 37.10 vpiUnit, 35.5.4). The
+    // package is the one built from the same file as the declaration; a
+    // design with a single `$unit` package puts them there.
+    {
+        std::vector<fsim_vpi_handle_v1> unit_packages;
+        std::vector<const semantic::sv::Unit*> unit_package_units;
+        for (const auto* const package_unit : package_units) {
+            if (package_unit->name.starts_with("fsim_unit_")) {
+                unit_packages.push_back(
+                    packages.at(package_unit->name));
+                unit_package_units.push_back(package_unit);
+            }
+        }
+        if (unit_packages.empty()) {
+            if (unit_stub != 0U) {
+                unit_packages.push_back(unit_stub);
+                unit_package_units.push_back(nullptr);
+            }
+        }
+        const auto source_file = [&](const semantic::SourceSpanId span) {
+            const auto& spans = project.semantics.source_spans();
+            return span.valid() && span.value() < spans.size()
+                ? spans.at(span.value()).file.value()
+                : std::numeric_limits<std::uint32_t>::max();
+        };
+        std::uint32_t index { };
+        // Every managed object of a design unit that calls a `$unit` import
+        // carries its own copy of the declaration, so the linked design holds
+        // one copy per such object; it is one task or function of its `$unit`
+        // package (IEEE 1800-2023 35.5.4, 37.10).
+        std::set<std::pair<fsim_vpi_handle_v1, std::string>, std::less<>>
+            published_imports;
+        for (const auto& dpi : project.systemverilog_hir.dpi_declarations()) {
+            const auto position = index++;
+            if (dpi.owner_kind != semantic::sv::DpiOwnerKind::compilation_unit
+                || dpi.direction != semantic::sv::DpiDirection::import
+                || !dpi.validated || dpi.systemverilog_name.empty()
+                || unit_packages.empty()) {
+                continue;
+            }
+            std::size_t chosen = 0U;
+            for (std::size_t candidate = 0U;
+                 candidate < unit_package_units.size(); ++candidate) {
+                if (unit_package_units[candidate] != nullptr
+                    && source_file(unit_package_units[candidate]->source)
+                        == source_file(dpi.source)) {
+                    chosen = candidate;
+                    break;
+                }
+            }
+            if (!published_imports.emplace(
+                    unit_packages[chosen], dpi.systemverilog_name).second) {
+                continue;
+            }
+            runtime::SystemVerilogVpiObjectDescriptor scope;
+            scope.kind = dpi.callable_kind
+                    == semantic::sv::DpiCallableKind::function
+                ? runtime::SystemVerilogVpiObjectKind::Function
+                : runtime::SystemVerilogVpiObjectKind::Task;
+            scope.parent = unit_packages[chosen];
+            scope.name = dpi.systemverilog_name;
+            // The import has its `$unit` package's language and provenance.
+            runtime::SystemVerilogVpiTypeInfo scope_type;
+            if (const auto owner = result.registry->lookup(scope.parent);
+                owner && owner.value->type) {
+                scope_type = *owner.value->type;
+            }
+            apply_dpi(scope_type, dpi, std::numeric_limits<std::uint32_t>::max(),
+                position);
+            scope.type = scope_type;
+            const auto path = std::string { "fsim_unit_::" }
+                + std::to_string(position) + "::" + dpi.systemverilog_name;
+            (void)create_checked(*result.registry, std::move(scope), path);
+        }
     }
 
     for (const auto& [instance_id, package_identity]
@@ -3896,8 +4079,12 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             continue;
         }
         std::vector<fsim_vpi_handle_v1> live_words;
+        const auto associative_names
+            = systemverilog_vpi_associative_word_names(value);
         for (std::size_t ordinal = 0; ordinal < word_count; ++ordinal) {
-            const auto word_name = memory_word_name(type, ordinal);
+            const auto word_name = ordinal < associative_names.size()
+                ? associative_names[ordinal]
+                : memory_word_name(type, ordinal);
             const auto element_alias = container_element_aliases.find(
                 { container, ordinal });
             const elaboration::SignalInfo* element_signal_info { };
@@ -3981,7 +4168,8 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         if (!type.fixed) {
             result.live_memories.emplace(container,
                 SystemVerilogVpiLiveMemory { memory, path,
-                    std::move(word_type), std::move(live_words) });
+                    std::move(word_type), std::move(live_words),
+                    std::move(associative_names) });
         }
     }
 
@@ -4150,12 +4338,8 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             const auto local_name = process_leaf == std::string::npos
                 ? std::string_view { process.name }
                 : std::string_view { process.name }.substr(process_leaf + 1U);
-            const auto found = std::ranges::find(
-                unit->concurrent_assertions, local_name,
-                &semantic::sv::ConcurrentAssertion::name);
-            if (found != unit->concurrent_assertions.end()) {
-                assertion_source = &*found;
-            }
+            assertion_source = semantic::sv::find_concurrent_assertion(
+                *unit, local_name);
         }
         runtime::SystemVerilogVpiObjectDescriptor descriptor;
         descriptor.kind = runtime::SystemVerilogVpiObjectKind::Process;
@@ -4909,6 +5093,77 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
     return result;
 }
 
+std::vector<std::string> systemverilog_vpi_associative_word_names(
+    const runtime::simir::ContainerValue& value)
+{
+    std::vector<std::string> names;
+    if (!value.type.associative) {
+        return names;
+    }
+    if (value.type.string_indices) {
+        for (const auto& key : value.string_keys) {
+            // The index is written as the string literal that selects the
+            // word (vpiDecompile form, IEEE 1800-2023 37.17 detail 28), with
+            // the escapes of 5.9.1 for '"', '\' and unprintable characters.
+            std::string text;
+            for (const char character : key) {
+                const auto code = static_cast<unsigned char>(character);
+                switch (character) {
+                case '"': text += "\\\""; continue;
+                case '\\': text += "\\\\"; continue;
+                case '\n': text += "\\n"; continue;
+                case '\t': text += "\\t"; continue;
+                case '\v': text += "\\v"; continue;
+                case '\f': text += "\\f"; continue;
+                case '\a': text += "\\a"; continue;
+                default: break;
+                }
+                if (code < 0x20U || code >= 0x7fU) {
+                    constexpr std::string_view digits { "0123456789abcdef" };
+                    text += "\\x";
+                    text += digits[code >> 4U];
+                    text += digits[code & 15U];
+                } else {
+                    text += character;
+                }
+            }
+            names.push_back("[\"" + text + "\"]");
+        }
+        return names;
+    }
+    for (const auto& key : value.keys) {
+        // A key wider than one word is named by its decimal value.
+        if (key.width() == 0U || key.width() > 64U || key.is_logic9()) {
+            const auto text = runtime::simir::format_output_value(key,
+                runtime::simir::OutputFormat::decimal,
+                value.type.signed_indices, true);
+            names.push_back(text.find_first_of("xXzZ") != std::string::npos
+                    ? std::string { "[x]" }
+                    : "[" + text + "]");
+            continue;
+        }
+        const auto word = key.low_word();
+        if (word.bval != 0U) {
+            names.push_back("[x]");
+            continue;
+        }
+        const auto width = std::min<std::uint32_t>(
+            value.type.index_width, 64U);
+        if (value.type.signed_indices && width != 0U && width < 64U
+            && ((word.aval >> (width - 1U)) & 1U) != 0U) {
+            names.push_back("[" + std::to_string(
+                static_cast<std::int64_t>(word.aval)
+                - (std::int64_t { 1 } << width)) + "]");
+        } else if (value.type.signed_indices && width == 64U) {
+            names.push_back("[" + std::to_string(
+                static_cast<std::int64_t>(word.aval)) + "]");
+        } else {
+            names.push_back("[" + std::to_string(word.aval) + "]");
+        }
+    }
+    return names;
+}
+
 fsim_vpi_handle_v1 create_systemverilog_vpi_live_word(
     runtime::SystemVerilogVpiObjectRegistry& registry,
     const SystemVerilogVpiLiveMemory& memory, const std::size_t ordinal)
@@ -4916,7 +5171,9 @@ fsim_vpi_handle_v1 create_systemverilog_vpi_live_word(
     runtime::SystemVerilogVpiObjectDescriptor word;
     word.kind = runtime::SystemVerilogVpiObjectKind::Variable;
     word.parent = memory.memory;
-    word.name = "[" + std::to_string(ordinal) + "]";
+    word.name = ordinal < memory.word_names.size()
+        ? memory.word_names[ordinal]
+        : "[" + std::to_string(ordinal) + "]";
     word.type = memory.word_type;
     const auto identity = memory.path + word.name;
     return create_checked(registry, std::move(word), identity);

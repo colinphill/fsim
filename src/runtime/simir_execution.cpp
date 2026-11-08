@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "fsim/runtime/scheduler_events.hpp"
 #include "fsim/runtime/scope_randomize.hpp"
 #include "fsim/runtime/string_methods.hpp"
 #include "fsim/runtime/systemverilog_string.hpp"
@@ -72,6 +73,7 @@ Interpreter::Impl::Impl(
             }
             sampled_values[signal]
                 = logical_signal_value(static_cast<SignalId>(signal));
+            store_sampled_value_words(static_cast<SignalId>(signal));
         }
     });
 }
@@ -387,7 +389,10 @@ void Interpreter::Impl::request_channel_update(
     if (!pending_channel_updates.insert(channel).second) {
         return;
     }
-    auto callback =
+    // SystemC primitive-channel updates belong to the co-simulated SystemC
+    // kernel, which cannot be saved: a pending one refuses the save
+    // (FSIM-SAVE-0004).
+    auto callback = host_closure_task("SystemC primitive-channel update",
         [this, process_id, channel](Scheduler&) {
             auto& state = get_process(process_id);
             ExecutionContext context { *this, process_id };
@@ -398,7 +403,7 @@ void Interpreter::Impl::request_channel_update(
                 throw;
             }
             pending_channel_updates.erase(channel);
-        };
+        });
     const auto phase = scheduler.current_phase();
     if (phase
         && (*phase == SchedulerPhase::update
@@ -504,6 +509,7 @@ void Interpreter::Impl::push_callable_frame(
     }
     ProcessState::CallableFrameState frame;
     frame.identity = operation.identity;
+    frame.call_depth = process.cold().dynamic_call_stack.size();
     frame.packed_ids = operation.packed;
     frame.string_ids = operation.strings;
     frame.container_ids = operation.containers;

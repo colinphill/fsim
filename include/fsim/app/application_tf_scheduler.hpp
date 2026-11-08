@@ -9,6 +9,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace fsim::app {
@@ -138,6 +139,11 @@ public:
   [[nodiscard]] TfSchedulerInvokeResult invoke(
       TfSchedulerCallHandle call,
       std::span<const runtime::TfArgumentValue> values = {}) noexcept;
+
+  /// Appends an FSIM-SAVE-0011 line when a callback dispatch is in progress:
+  /// a save point is outside every dispatch (#128). The application does not
+  /// create a coordinator today; the audit is for the owner that does.
+  void audit_rest_state(std::vector<std::string>& messages) const;
 
   [[nodiscard]] TfSchedulerCallSnapshot snapshot(
       TfSchedulerCallHandle call) const noexcept;

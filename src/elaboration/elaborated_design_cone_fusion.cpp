@@ -312,6 +312,7 @@ ConeFusionPlan ElaboratedDesign::plan_cone_fusion() const
             || view.string_register_count() != 0U
             || view.container_register_count() != 0U
             || !view.debug_locals().empty()
+            || !view.call_results().empty()
             || !view.debug_string_locals().empty()
             || !view.debug_container_locals().empty()
             || !view.static_trigger_regions().empty()
@@ -695,6 +696,7 @@ ConeFusionPlan ElaboratedDesign::plan_cone_fusion() const
         auto fused = views[sink].materialize();
         fused.static_sensitivity.clear();
         fused.debug_locals.clear();
+        fused.call_results.clear();
         fused.expression_profiles = { };
         fused.register_value_kinds = { };
         fused.static_trigger_regions = { };

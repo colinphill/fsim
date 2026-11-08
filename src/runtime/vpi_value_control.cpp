@@ -1,9 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/vpi_value_control.hpp"
 
+#include "fsim/runtime/scheduler_events.hpp"
+
+#include <algorithm>
 #include <atomic>
+#include <bit>
 #include <limits>
 #include <mutex>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -129,6 +134,252 @@ SystemVerilogVpiValueError SystemVerilogVpiValueControl::apply(
       *impl_->registry, object, kind, value ? &*value : nullptr);
 }
 
+// The scheduler event of a pending delayed write (#128). The payload names the
+// control and the record; the record (object, value, kind) is saved with the
+// foreign state, so the event is plain data.
+struct SystemVerilogVpiValueControlEvents {
+  using Impl = SystemVerilogVpiValueControl::Impl;
+  struct Payload {
+    Impl* owner{};
+    std::uint64_t id{};
+  };
+  struct Domain {
+    static constexpr std::string_view name{"vpi_value_control"};
+  };
+  struct Codec
+      : OwnedFieldsSchedulerEventCodec<Payload, Impl, Domain, &Payload::owner,
+                                       &Payload::id> {
+    static std::uint64_t cancel_key(const Payload& payload) {
+      return payload.id;
+    }
+  };
+
+  static Scheduler::Task task(Impl* owner, const std::uint64_t id) {
+    return Scheduler::Task{
+        detail::make_scheduler_task_descriptor<Payload, &dispatch>(
+            Payload{owner, id})};
+  }
+
+  static void dispatch(Scheduler&, const Payload& scheduled) {
+    Impl* const state = scheduled.owner;
+    const auto id = scheduled.id;
+    fsim_vpi_handle_v1 scheduled_object{};
+    SystemVerilogVpiWriteKind scheduled_kind{
+        SystemVerilogVpiWriteKind::Deposit};
+    SystemVerilogVpiStoredValue scheduled_value;
+    bool scheduled_has_value = false;
+    {
+      std::scoped_lock callback_lock{state->mutex};
+      const auto found = state->records.find(id);
+      if (found == state->records.end()
+          || found->second.status
+              != SystemVerilogVpiScheduledWriteStatus::Pending) {
+        return;
+      }
+      scheduled_object = found->second.object;
+      scheduled_kind = found->second.kind;
+      if (found->second.value) {
+        scheduled_value = *found->second.value;
+        scheduled_has_value = true;
+      }
+    }
+
+    const auto write_error = apply_write(
+        *state->registry,
+        scheduled_object,
+        scheduled_kind,
+        scheduled_has_value ? &scheduled_value : nullptr);
+    std::scoped_lock callback_lock{state->mutex};
+    const auto found = state->records.find(id);
+    if (found == state->records.end()
+        || found->second.status
+            != SystemVerilogVpiScheduledWriteStatus::Pending) {
+      return;
+    }
+    if (!found->second.retained) {
+      state->records.erase(found);
+      return;
+    }
+    found->second.value_error = write_error;
+    found->second.status =
+        write_error == SystemVerilogVpiValueError::None
+        ? SystemVerilogVpiScheduledWriteStatus::Applied
+        : SystemVerilogVpiScheduledWriteStatus::Failed;
+  }
+
+  static void register_kind() {
+    static_cast<void>(register_scheduler_event_kind<Payload, &dispatch, Codec>(
+        "vpi.scheduled_write", SchedulerEventClass::data));
+  }
+};
+
+namespace {
+[[maybe_unused]] const bool vpi_value_control_kinds_registered =
+    (SystemVerilogVpiValueControlEvents::register_kind(), true);
+}  // namespace
+
+void SystemVerilogVpiValueControl::bind_event_owner(
+    SchedulerEventOwners& owners) {
+  owners.bind(SystemVerilogVpiValueControlEvents::Domain::name, impl_.get());
+}
+
+bool SystemVerilogVpiValueControl::bind_restored_write(
+    const std::uint64_t id, const ScheduledTaskHandle& handle) {
+  std::scoped_lock lock{impl_->mutex};
+  const auto found = impl_->records.find(id);
+  if (found == impl_->records.end()) {
+    return false;
+  }
+  found->second.scheduler_handle = handle;
+  return true;
+}
+
+namespace {
+
+// The payload of a stored value as plain fields.
+void encode_value(const SystemVerilogVpiStoredValue& value,
+    SystemVerilogVpiSavedWrite& out) {
+  struct Encoder {
+    SystemVerilogVpiSavedWrite& out;
+    void operator()(const std::monostate&) const { out.value_kind = 0U; }
+    void operator()(const PackedBit2& value) const {
+      out.value_kind = 1U;
+      out.text = value.to_msb_string();
+    }
+    void operator()(const PackedLogic4& value) const {
+      out.value_kind = 2U;
+      out.text = value.to_msb_string();
+    }
+    void operator()(const PackedLogic9& value) const {
+      out.value_kind = 3U;
+      out.text = value.to_msb_string();
+    }
+    void operator()(const double value) const {
+      out.value_kind = 4U;
+      out.bits = std::bit_cast<std::uint64_t>(value);
+    }
+    void operator()(const float value) const {
+      out.value_kind = 5U;
+      out.bits = std::bit_cast<std::uint32_t>(value);
+    }
+    void operator()(const std::string& value) const {
+      out.value_kind = 6U;
+      out.text = value;
+    }
+    void operator()(const std::uint64_t value) const {
+      out.value_kind = 7U;
+      out.bits = value;
+    }
+  };
+  std::visit(Encoder{out}, value.payload);
+  out.has_strength = value.strength.has_value();
+  if (value.strength) {
+    out.strength_zero = static_cast<std::uint8_t>(value.strength->zero);
+    out.strength_one = static_cast<std::uint8_t>(value.strength->one);
+  }
+}
+
+std::optional<SystemVerilogVpiStoredValue> decode_value(
+    const SystemVerilogVpiSavedWrite& in) {
+  SystemVerilogVpiStoredValue value;
+  switch (in.value_kind) {
+    case 0U:
+      return std::nullopt;
+    case 1U:
+      value.payload = PackedBit2::from_msb_string(in.text);
+      break;
+    case 2U:
+      value.payload = PackedLogic4::from_msb_string(in.text);
+      break;
+    case 3U:
+      value.payload = PackedLogic9::from_msb_string(in.text);
+      break;
+    case 4U:
+      value.payload = std::bit_cast<double>(in.bits);
+      break;
+    case 5U:
+      value.payload = std::bit_cast<float>(static_cast<std::uint32_t>(in.bits));
+      break;
+    case 6U:
+      value.payload = in.text;
+      break;
+    default:
+      value.payload = in.bits;
+      break;
+  }
+  if (in.has_strength) {
+    value.strength = SystemVerilogVpiDriveStrength{
+        static_cast<SystemVerilogVpiStrengthRank>(in.strength_zero),
+        static_cast<SystemVerilogVpiStrengthRank>(in.strength_one)};
+  }
+  return value;
+}
+
+}  // namespace
+
+SystemVerilogVpiSavedWrites SystemVerilogVpiValueControl::save_pending()
+    const {
+  SystemVerilogVpiSavedWrites saved;
+  std::scoped_lock lock{impl_->mutex};
+  saved.next_id = impl_->next_id;
+  for (const auto& [id, record] : impl_->records) {
+    if (record.status != SystemVerilogVpiScheduledWriteStatus::Pending) {
+      continue;
+    }
+    SystemVerilogVpiSavedWrite write;
+    write.id = id;
+    if (const auto object = impl_->registry->lookup(record.object)) {
+      write.object = object.value->full_name;
+    }
+    write.kind = static_cast<std::uint8_t>(record.kind);
+    if (record.value) {
+      encode_value(*record.value, write);
+    }
+    write.due = record.due;
+    write.retained = record.retained;
+    saved.writes.push_back(std::move(write));
+  }
+  // The table is unordered; the file's bytes must not depend on it.
+  std::ranges::sort(saved.writes, [](const auto& left, const auto& right) {
+    return left.id < right.id;
+  });
+  return saved;
+}
+
+bool SystemVerilogVpiValueControl::restore_pending(
+    SystemVerilogVpiSavedWrites saved, std::string& error) {
+  std::scoped_lock lock{impl_->mutex};
+  impl_->records.clear();
+  for (auto& write : saved.writes) {
+    const auto object = impl_->registry->find(write.object);
+    if (!object) {
+      error = "the object '" + write.object + "' of a pending vpi_put_value "
+          "is not in this design";
+      return false;
+    }
+    if (write.kind
+        > static_cast<std::uint8_t>(SystemVerilogVpiWriteKind::Release)) {
+      error = "a pending vpi_put_value has an unknown kind";
+      return false;
+    }
+    Impl::Record record;
+    record.object = object.value->handle;
+    record.kind = static_cast<SystemVerilogVpiWriteKind>(write.kind);
+    record.value = decode_value(write);
+    record.status = SystemVerilogVpiScheduledWriteStatus::Pending;
+    record.due = write.due;
+    record.retained = write.retained;
+    impl_->records.emplace(write.id, std::move(record));
+  }
+  impl_->next_id = std::max(impl_->next_id, saved.next_id);
+  return true;
+}
+
+void SystemVerilogVpiValueControl::reset_records() {
+  std::scoped_lock lock{impl_->mutex};
+  impl_->records.clear();
+}
+
 SystemVerilogVpiScheduleWriteResult
 SystemVerilogVpiValueControl::schedule(
     const fsim_vpi_handle_v1 object,
@@ -201,61 +452,13 @@ SystemVerilogVpiValueControl::schedule(
         SystemVerilogVpiWriteControlError::ResourceLimit);
   }
 
-  const std::weak_ptr<Impl> weak = impl_;
   try {
     position->second.scheduler_handle =
         impl_->scheduler->schedule_after_cancelable(
             delay,
             SchedulerPhase::update,
             impl_->stable_order_base + id,
-            [weak, id](Scheduler&) {
-              const auto state = weak.lock();
-              if (!state) {
-                return;
-              }
-              fsim_vpi_handle_v1 scheduled_object{};
-              SystemVerilogVpiWriteKind scheduled_kind{
-                  SystemVerilogVpiWriteKind::Deposit};
-              SystemVerilogVpiStoredValue scheduled_value;
-              bool scheduled_has_value = false;
-              {
-                std::scoped_lock callback_lock{state->mutex};
-                const auto found = state->records.find(id);
-                if (found == state->records.end()
-                    || found->second.status
-                        != SystemVerilogVpiScheduledWriteStatus::Pending) {
-                  return;
-                }
-                scheduled_object = found->second.object;
-                scheduled_kind = found->second.kind;
-                if (found->second.value) {
-                  scheduled_value = *found->second.value;
-                  scheduled_has_value = true;
-                }
-              }
-
-              const auto write_error = apply_write(
-                  *state->registry,
-                  scheduled_object,
-                  scheduled_kind,
-                  scheduled_has_value ? &scheduled_value : nullptr);
-              std::scoped_lock callback_lock{state->mutex};
-              const auto found = state->records.find(id);
-              if (found == state->records.end()
-                  || found->second.status
-                      != SystemVerilogVpiScheduledWriteStatus::Pending) {
-                return;
-              }
-              if (!found->second.retained) {
-                state->records.erase(found);
-                return;
-              }
-              found->second.value_error = write_error;
-              found->second.status =
-                  write_error == SystemVerilogVpiValueError::None
-                  ? SystemVerilogVpiScheduledWriteStatus::Applied
-                  : SystemVerilogVpiScheduledWriteStatus::Failed;
-            });
+            SystemVerilogVpiValueControlEvents::task(impl_.get(), id));
   } catch (...) {
     impl_->records.erase(position);
     return schedule_failure(

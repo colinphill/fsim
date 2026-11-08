@@ -473,6 +473,43 @@ static std::optional<CompilationWorkspace> check_project_impl(
   std::vector<std::optional<ParsedSnapshot>> parsed_inputs(
       groups.size());
   std::vector<std::exception_ptr> parse_failures(groups.size());
+  // A SystemVerilog group sees the packages of the groups before it as it
+  // would see them compiled (IEEE 1800-2023 26.3), whatever standard,
+  // profile or compilation-unit split separates them; those groups parse in
+  // order, before the others parse in parallel.
+  std::vector<bool> chained(groups.size());
+  {
+    std::vector<std::size_t> ordered;
+    for (std::size_t index = 0; index < groups.size(); ++index) {
+      if (groups[index].language == frontend::Language::SystemVerilog2017
+          && !groups[index].inputs.empty()) {
+        ordered.push_back(index);
+      }
+    }
+    if (ordered.size() > 1U) {
+      const auto earlier
+          = std::make_shared<frontend::SystemVerilogPackageMembers>();
+      for (const auto index : ordered) {
+        chained[index] = true;
+        auto& group = groups[index];
+        group.package_member_lookup = [earlier,
+            fallback = std::move(group.package_member_lookup)](
+            const std::string_view package, const std::string_view member) {
+          return earlier->find(package, member, fallback);
+        };
+        try {
+          parsed_inputs[index] = parse_group_snapshot(group);
+          for (const auto& unit : parsed_inputs[index]->result.design.units) {
+            if (unit.kind == frontend::UnitKind::SystemVerilogPackage) {
+              earlier->add(unit);
+            }
+          }
+        } catch (...) {
+          parse_failures[index] = std::current_exception();
+        }
+      }
+    }
+  }
   std::atomic_size_t next_input{0};
   auto job_count = config.build.jobs == 0
       ? static_cast<std::size_t>(std::thread::hardware_concurrency())
@@ -488,6 +525,9 @@ static std::optional<CompilationWorkspace> check_project_impl(
             next_input.fetch_add(1, std::memory_order_relaxed);
         if (index >= groups.size()) {
           return;
+        }
+        if (chained[index]) {
+          continue;
         }
         try {
           parsed_inputs[index] =
@@ -937,21 +977,15 @@ static std::optional<CompilationWorkspace> check_project_impl(
       for (const auto& import : unit.systemverilog_imports) {
           const auto package = package_standards.find(import.package);
           if (package != package_standards.end()
-              && (package->second.standard != unit.standard_revision
-                  || package->second.compatibility_profile
-                      != unit.verilog_compatibility_profile)) {
+              && package->second.compatibility_profile
+                  != unit.verilog_compatibility_profile) {
               diagnostics.error(
                   "FSIM-FE-STANDARD-003",
                   "SystemVerilog package '" + import.package
-                      + "' was analyzed as "
-                      + std::string { frontend::to_string(
-                          package->second.standard) }
-                      + " with compatibility profile '"
+                      + "' was analyzed with compatibility profile '"
                       + package->second.compatibility_profile + "'"
                       + " but consuming unit '" + unit.name + "' uses "
-                      + std::string { frontend::to_string(
-                          unit.standard_revision) }
-                      + " with compatibility profile '"
+                      + "compatibility profile '"
                       + unit.verilog_compatibility_profile + "'",
                   span(import.span));
           }

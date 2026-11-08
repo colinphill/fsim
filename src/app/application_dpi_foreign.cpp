@@ -1276,6 +1276,22 @@ public:
 
     void set_clock(Clock clock) override { clock_ = std::move(clock); }
 
+    void reset() override
+    {
+        // Each disable removes its flight, so the loop ends; a protocol
+        // violation of the C code (35.9 b, c) is an error of the run.
+        while (!flights_.empty()) {
+            process_disabled(flights_.back()->process, 0U,
+                runtime::DpiCallProcess::unknown_position);
+        }
+        scope_ = nullptr;
+        file_.clear();
+        line_ = 0;
+        for (auto& entry : scopes_) {
+            entry.second->user_data.clear();
+        }
+    }
+
     [[nodiscard]] bool load(const std::span<const std::string> libraries,
         diagnostic::Engine& diagnostics)
     {

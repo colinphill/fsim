@@ -144,6 +144,9 @@ struct SystemVerilogVpiLiveMemory {
     std::string path;
     runtime::SystemVerilogVpiTypeInfo word_type;
     std::vector<fsim_vpi_handle_v1> words;
+    // The names of the words of an associative array, by position: its index
+    // keys (IEEE 1800-2023 37.17); empty for other memories.
+    std::vector<std::string> word_names;
 };
 
 // Objects created on first access beneath their parent (a lookup below it
@@ -241,10 +244,17 @@ struct SystemVerilogVpiPublishedDesign {
 };
 
 // The word of a live memory at `ordinal`, created under its memory with the
-// word name `[ordinal]`.
+// word name `[ordinal]`, or for an associative array the name its index key
+// gives (`[5]`, `["k"]`).
 [[nodiscard]] fsim_vpi_handle_v1 create_systemverilog_vpi_live_word(
     runtime::SystemVerilogVpiObjectRegistry& registry,
     const SystemVerilogVpiLiveMemory& memory, std::size_t ordinal);
+
+// The word names of an associative array's entries in key order: the
+// decimal index (`[5]`) or the quoted string key (`["k"]`), IEEE 1800-2023
+// 37.17. Empty for any other container.
+[[nodiscard]] std::vector<std::string> systemverilog_vpi_associative_word_names(
+    const runtime::simir::ContainerValue& value);
 
 // Create the deferred children of `parent` with their current values: the
 // words first, then the processes, then the drivers, the order the design
@@ -935,6 +945,46 @@ vhdl_package_dependencies(const CheckedProject& checked);
     std::string_view artifact,
     diagnostic::Engine& diagnostics);
 
+/// The package family of a VHDL standard: 1 for 1987, 1993, 2000 and 2002,
+/// 2 for 2008 and 2019, 0 for anything else. In 1993 STD_LOGIC_VECTOR is a
+/// distinct type; from 2008 it is a subtype of STD_ULOGIC_VECTOR, so units
+/// of different families cannot share one IEEE 1164 / NUMERIC_STD.
+[[nodiscard]] int vhdl_package_family(std::string_view standard) noexcept;
+
+/// The FSIM-ART-VHDEP-001 text for units of two package families.
+[[nodiscard]] std::string vhdl_mixed_family_message(
+    std::string_view first, std::string_view second);
+
+/// How the VHDL objects of one design share compiler-supplied packages.
+struct VhdlMixedEnvironmentPlan {
+    /// The objects were analyzed under more than one standard of one
+    /// family: they share one package set, of the newest standard present.
+    bool mixed { };
+    /// That newest standard ("2019", ...); empty when every object has the
+    /// same standard.
+    std::string newest;
+    /// For each "library.package" the object (an index into the plan's
+    /// input) whose copy the design keeps: the newest standard's, the first
+    /// such object on a tie.
+    std::map<std::string, std::size_t> winner;
+};
+
+struct VhdlObjectEnvironment {
+    /// Empty for an object that has no VHDL units.
+    std::string standard;
+    std::vector<library::VhdlPackageDependency> dependencies;
+    /// The compiler-owned compatibility profile; mixed objects must agree.
+    std::string compatibility_profile;
+};
+
+/// Decide the shared package environment of the VHDL objects in order.
+/// Objects of different families, or whose copies of one package differ in
+/// revision or source digest, are refused with FSIM-ART-VHDEP-001.
+[[nodiscard]] std::optional<VhdlMixedEnvironmentPlan>
+plan_vhdl_mixed_environment(
+    std::span<const VhdlObjectEnvironment> objects,
+    diagnostic::Engine& diagnostics);
+
 [[nodiscard]] bool compiled_vhdl_package_dependencies_match(
     const semantic::CompiledDesign& design,
     std::span<const library::VhdlPackageDependency> archived,
@@ -1330,7 +1380,8 @@ int run_built_project(
     std::span<const std::string> plusargs,
     diagnostic::Engine& diagnostics,
     std::ostream& output,
-    SimulationOutputSink sink = SimulationOutputSink::callback);
+    SimulationOutputSink sink = SimulationOutputSink::callback,
+    std::function<std::optional<BuiltProject>()> reload_design = { });
 
 bool compile_object(
     const project::Config& config,

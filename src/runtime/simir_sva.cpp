@@ -58,6 +58,97 @@ void Interpreter::Impl::execute_sampled_read(
     run_sampled_read(storage, operation);
 }
 
+sva::Monitor* Interpreter::Impl::sva_monitor_find(const ProcessId process,
+    const std::uint32_t site) noexcept
+{
+    const auto found = sva_monitors.find({ process, site });
+    return found == sva_monitors.end() ? nullptr : found->second.get();
+}
+
+sva::Monitor& Interpreter::Impl::sva_monitor_bind(AssertionStorage& storage,
+    const SvaOperation& operation)
+{
+    auto& active_monitor = sva_monitors[{ storage.process(), operation.site }];
+    if (active_monitor) {
+        return *active_monitor;
+    }
+    auto plan = semantic::sva::decode(operation.plan);
+    if (!plan || plan->bounds != operation.bounds.size()
+        || plan->guards != operation.guard_count) {
+        storage.fail("concurrent property plan is malformed");
+    }
+    std::vector<std::int64_t> bounds;
+    for (const auto bound : operation.bounds) {
+        const auto value = storage.read(bound, 64U).known_signed_value();
+        if (!value || *value < 0) {
+            storage.fail(
+                "concurrent property delay and repetition bounds "
+                "must be known nonnegative constants");
+        }
+        bounds.push_back(*value);
+    }
+    std::string error;
+    try {
+        active_monitor
+            = std::make_unique<sva::Monitor>(operation.plan, std::move(bounds));
+    } catch (const std::runtime_error& failure) {
+        error = failure.what();
+    }
+    if (!active_monitor) {
+        storage.fail(error);
+    }
+    // The step requests a library made for this assertion's attempts
+    // before the monitor existed (39.5.2); they name attempts that have
+    // not started, so none is refused.
+    if (const auto requests = sva_step_requests.find(storage.design_process());
+        requests != sva_step_requests.end()) {
+        for (const auto start : requests->second) {
+            (void)active_monitor->request_step(start, true);
+        }
+    }
+    return *active_monitor;
+}
+
+std::size_t Interpreter::Impl::sva_tick_core(AssertionStorage& storage,
+    sva::Monitor& active_monitor, const std::vector<bool>& guards, bool start,
+    const bool disabled)
+{
+    // $assertoff and its VPI form stop new attempts; attempts already
+    // running complete (IEEE 1800-2017 20.12).
+    if (const auto filter = fork_spawn_filter; start && filter) {
+        if (fork_spawn_filter_observes) {
+            prepare_callback_observation();
+        }
+        start = (*filter)(storage.design_process());
+    }
+    std::string error;
+    try {
+        active_monitor.tick(guards, start, disabled,
+            static_cast<std::int64_t>(scheduler.now()));
+    } catch (const std::runtime_error& failure) {
+        error = failure.what();
+    }
+    if (!error.empty()) {
+        storage.fail(error);
+    }
+    const auto attempt_starts = active_monitor.take_started();
+    if (sva_attempt_hook) {
+        for (const auto when : attempt_starts) {
+            sva_attempt_hook(storage.design_process(), when);
+        }
+    }
+    // The tick produced step events only for attempts stepping is on for.
+    if (active_monitor.has_step_events()) {
+        const auto events = active_monitor.take_step_events();
+        if (sva_step_hook) {
+            for (const auto& event : events) {
+                sva_step_hook(storage.design_process(), event);
+            }
+        }
+    }
+    return active_monitor.pending_outcomes();
+}
+
 void Interpreter::Impl::run_sva(
     AssertionStorage& storage,
     const SvaOperation& operation)
@@ -76,46 +167,20 @@ void Interpreter::Impl::run_sva(
             PackedLogic4::from_aval_bval(
                 32U, static_cast<std::uint32_t>(value), 0));
     };
-    auto& active_monitor = sva_monitors[{ storage.process(), operation.site }];
     if (operation.kind == SvaKind::outcome) {
-        if (!active_monitor) {
+        // The same pop as the compiled kernel's inline KOp::sva_outcome;
+        // the start and fail position of the outcome stay in the block.
+        auto* const active_monitor
+            = sva_monitor_find(storage.process(), operation.site);
+        if (active_monitor == nullptr) {
             write_result(0U);
             return;
         }
-        const auto outcome = active_monitor->next_outcome();
-        if (outcome != sva::Outcome::none) {
-            sva_outcome_starts[storage.design_process()]
-                = active_monitor->last_outcome_start();
-        }
-        write_result(static_cast<std::size_t>(outcome));
+        write_result(static_cast<std::size_t>(
+            active_monitor->next_outcome(++sva_pop_serial)));
         return;
     }
-    if (!active_monitor) {
-        auto plan = semantic::sva::decode(operation.plan);
-        if (!plan || plan->bounds != operation.bounds.size()
-            || plan->guards != operation.guard_count) {
-            storage.fail("concurrent property plan is malformed");
-        }
-        std::vector<std::int64_t> bounds;
-        for (const auto bound : operation.bounds) {
-            const auto value = storage.read(bound, 64U).known_signed_value();
-            if (!value || *value < 0) {
-                storage.fail(
-                    "concurrent property delay and repetition bounds "
-                    "must be known nonnegative constants");
-            }
-            bounds.push_back(*value);
-        }
-        std::string error;
-        try {
-            active_monitor = std::make_unique<sva::Monitor>(std::move(*plan), bounds);
-        } catch (const std::runtime_error& failure) {
-            error = failure.what();
-        }
-        if (!active_monitor) {
-            storage.fail(error);
-        }
-    }
+    auto& active_monitor = sva_monitor_bind(storage, operation);
     std::vector<bool> guards(operation.guard_count);
     if (operation.guard_count != 0U) {
         const auto values = storage.read(operation.guards, operation.guard_count);
@@ -123,33 +188,9 @@ void Interpreter::Impl::run_sva(
             guards[index] = known_one(values, index);
         }
     }
-    bool start = known_one(storage.read(operation.start, 1U), 0U);
-    // $assertoff and its VPI form stop new attempts; attempts already
-    // running complete (IEEE 1800-2017 20.12).
-    if (const auto filter = fork_spawn_filter; start && filter) {
-        if (fork_spawn_filter_observes) {
-            prepare_callback_observation();
-        }
-        start = (*filter)(storage.design_process());
-    }
+    const bool start = known_one(storage.read(operation.start, 1U), 0U);
     const bool disabled = known_one(storage.read(operation.disabled, 1U), 0U);
-    std::string error;
-    try {
-        active_monitor->tick(guards, start, disabled,
-            static_cast<std::int64_t>(scheduler.now()));
-    } catch (const std::runtime_error& failure) {
-        error = failure.what();
-    }
-    if (!error.empty()) {
-        storage.fail(error);
-    }
-    const auto attempt_starts = active_monitor->take_started();
-    if (sva_attempt_hook) {
-        for (const auto when : attempt_starts) {
-            sva_attempt_hook(storage.design_process(), when);
-        }
-    }
-    write_result(active_monitor->pending_outcomes());
+    write_result(sva_tick_core(storage, active_monitor, guards, start, disabled));
 }
 
 } // namespace fsim::runtime::simir

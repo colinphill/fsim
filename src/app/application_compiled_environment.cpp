@@ -226,11 +226,24 @@ bool install_compiled_environment(CompilationWorkspace& checked,
             });
         if (local == checked.vhdl_hir.units().end())
             continue;
-        if (unit.standard != local->standard
-            || unit.compatibility_profile != local->compatibility_profile
+        // Units of standards in one package family mix: the package copies
+        // differ only by the standard stamp, and the design keeps one set
+        // (the newest standard's) when it is elaborated. The predefined
+        // environment identity names the standard, so it is compared only
+        // between copies of one standard.
+        const bool same_standard = unit.standard == local->standard;
+        if (!same_standard
+            && vhdl_package_family(unit.standard)
+                != vhdl_package_family(local->standard)) {
+            diagnostics.error("FSIM-ART-VHDEP-001",
+                vhdl_mixed_family_message(unit.standard, local->standard));
+            return false;
+        }
+        if (unit.compatibility_profile != local->compatibility_profile
             || unit.standard_package_revision != local->standard_package_revision
-            || unit.predefined_environment.identity
-                != local->predefined_environment.identity) {
+            || (same_standard
+                && unit.predefined_environment.identity
+                    != local->predefined_environment.identity)) {
             diagnostics.error("FSIM-ART-VHDEP-001",
                 "compiled library selects a different compiler-supplied VHDL "
                 "package environment for '" + unit.library + "." + unit.name

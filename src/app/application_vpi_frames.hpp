@@ -33,6 +33,11 @@ public:
         // The statement the thread executes outside any frame.
         runtime::simir::SourceLocation statement;
         bool has_statement { };
+        // The last call the thread made: where the next frame it starts
+        // was called from (the call point follows the arguments, before the
+        // callee's frame starts).
+        runtime::simir::SourceLocation call_site;
+        bool has_call_site { };
     };
 
     struct Frame {
@@ -53,6 +58,11 @@ public:
         runtime::simir::SourceLocation statement;
         bool has_origin { };
         bool has_statement { };
+        // The source position of the call expression that started the
+        // frame (the call point's position), which names the call whose
+        // value the frame's result is (IEEE 1800-2023 38.15, 37.42).
+        runtime::simir::SourceLocation call_site;
+        bool has_call_site { };
     };
 
     enum class Event : std::uint8_t {

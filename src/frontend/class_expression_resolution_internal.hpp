@@ -371,6 +371,18 @@ class Resolver final {
       const std::optional<std::string>& return_class,
       SystemVerilogScalarKind return_scalar =
           SystemVerilogScalarKind::None);
+  // resolve_statement's own work, out of its recursive frame: the scope of
+  // the statement's declarations, the statement before its loop updates
+  // (false when it was rewritten and is done), and the rest before its
+  // child statements.
+  std::unique_ptr<Scope> declare_statement_scope(
+      Statement& statement, const Scope& inherited_scope);
+  bool resolve_statement_head(
+      Statement& statement,
+      const Scope& scope,
+      const std::optional<std::string>& return_class,
+      SystemVerilogScalarKind return_scalar);
+  void resolve_statement_tail(Statement& statement, const Scope& scope);
   void resolve_function(FunctionDeclaration& function, Scope scope);
   void resolve_task(TaskDeclaration& task, Scope scope);
   void resolve_class(

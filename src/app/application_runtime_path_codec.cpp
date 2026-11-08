@@ -649,6 +649,7 @@ bool visit_runtime_paths(StateType& state, Callback&& callback)
         state.code_coverage_inventory, state.signal_driver_inventory,
         state.verilog_primitives, state.sdf_net_delays,
         state.systemverilog_interface_handles, state.hierarchical_reads,
+        state.uses_simulation_control,
     };
 }
 

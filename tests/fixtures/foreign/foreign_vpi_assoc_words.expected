@@ -1,0 +1,14 @@
+#c t3 aa[5] name=aa[5] full=top.aa[5] value=50
+#c t3 aa[9] name=aa[9] full=top.aa[9] value=90
+#c t3 sa[a.b] name=sa["a.b"] full=top.sa["a.b"] value=1
+#c t3 sa[q"t] name=sa["q\"t"] full=top.sa["q\"t"] value=2
+#c t3 aa size=2
+#c t5 held aa[5] name=aa[5] full=top.aa[5] value=50
+#c t5 held aa[9] name=aa[9] full=top.aa[9] value=90
+#c t5 aa[2] name=aa[2] full=top.aa[2] value=20
+#c t5 lookup is held=1
+#c t7 held aa[5] name=aa[5] full=top.aa[5] value=50
+#c t7 aa[9] null
+#c t7 aa size=2
+#c valuechange t=8 value=55
+#c t9 held aa[5] name=aa[5] full=top.aa[5] value=55

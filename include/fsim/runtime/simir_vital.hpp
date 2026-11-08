@@ -126,25 +126,10 @@ struct VitalWireSource {
   std::array<SimulationTick, 6> delays{};
 };
 
-/// One intrinsic VITAL signal, wire, or path-delay call site.
-struct VitalDelay {
-  VitalDelayKind kind{VitalDelayKind::signal};
-  VitalDelayShape shape{VitalDelayShape::single};
-  SignalId output{};
-  RegisterId source{};
-  std::optional<RegisterId> glitch_data;
-  std::vector<VitalPathCandidate> paths;
-  std::array<RegisterId, 6> default_delays{};
-  VitalGlitchMode mode{VitalGlitchMode::on_event};
-  RegisterId output_map{};
-  bool x_on{true};
-  bool message_on{true};
-  bool negative_preemption{};
-  bool ignore_default_delay{};
-  bool reject_fast_path{};
-  AssertionSeverity severity{AssertionSeverity::warning};
-  std::string message;
-  SourceLocation source_location;
+/// The VitalWireDelay parts of a VitalDelay call site: few call sites have
+/// them, so VitalDelay holds them through VitalWireCallBox and stays small
+/// (it sizes every signal operation's storage).
+struct VitalWireCall {
   /// The interconnect delay generic a VitalWireDelay call names (lower case),
   /// when its delay actual is that generic; empty otherwise.
   std::string wire_generic;
@@ -166,6 +151,71 @@ struct VitalDelay {
   std::optional<std::uint32_t> output_offset;
   std::optional<std::uint32_t> input_offset;
   std::optional<std::int64_t> wire_index;
+};
+
+/// A copyable, nullable box of a VitalWireCall: reads of an empty box see an
+/// empty call (single source mode, scalar, no generic).
+class VitalWireCallBox {
+public:
+  VitalWireCallBox() = default;
+  VitalWireCallBox(const VitalWireCallBox& other)
+      : value_(other.value_ ? std::make_unique<VitalWireCall>(*other.value_)
+                            : nullptr) {}
+  VitalWireCallBox(VitalWireCallBox&&) noexcept = default;
+  VitalWireCallBox& operator=(const VitalWireCallBox& other) {
+    if (this != &other) {
+      value_ = other.value_ ? std::make_unique<VitalWireCall>(*other.value_)
+                            : nullptr;
+    }
+    return *this;
+  }
+  VitalWireCallBox& operator=(VitalWireCallBox&&) noexcept = default;
+  ~VitalWireCallBox() = default;
+
+  [[nodiscard]] bool has_value() const noexcept { return value_ != nullptr; }
+  [[nodiscard]] const VitalWireCall& operator*() const noexcept {
+    return value_ ? *value_ : empty();
+  }
+  [[nodiscard]] const VitalWireCall* operator->() const noexcept {
+    return &**this;
+  }
+  /// The call, created empty on first use.
+  [[nodiscard]] VitalWireCall& edit() {
+    if (!value_) {
+      value_ = std::make_unique<VitalWireCall>();
+    }
+    return *value_;
+  }
+
+private:
+  [[nodiscard]] static const VitalWireCall& empty() noexcept {
+    static const VitalWireCall none{};
+    return none;
+  }
+  std::unique_ptr<VitalWireCall> value_;
+};
+
+/// One intrinsic VITAL signal, wire, or path-delay call site.
+struct VitalDelay {
+  VitalDelayKind kind{VitalDelayKind::signal};
+  VitalDelayShape shape{VitalDelayShape::single};
+  SignalId output{};
+  RegisterId source{};
+  std::optional<RegisterId> glitch_data;
+  std::vector<VitalPathCandidate> paths;
+  std::array<RegisterId, 6> default_delays{};
+  VitalGlitchMode mode{VitalGlitchMode::on_event};
+  RegisterId output_map{};
+  bool x_on{true};
+  bool message_on{true};
+  bool negative_preemption{};
+  bool ignore_default_delay{};
+  bool reject_fast_path{};
+  AssertionSeverity severity{AssertionSeverity::warning};
+  std::string message;
+  SourceLocation source_location;
+  /// The VitalWireDelay parts of the call (VitalWireCall).
+  VitalWireCallBox wire;
 };
 
 struct VitalDelayState {

@@ -351,15 +351,16 @@ end architecture;
     test_context_dependency_fingerprints(design, compiled_context->identity->id,
         architecture->identity->id);
 
-    fsim::diagnostic::Engine mismatch;
-    const auto incompatible = compile(directory, "standard_mismatch", R"(
+    // A VHDL-2019 consumer of a VHDL-2008 context: one package family.
+    fsim::diagnostic::Engine family;
+    const auto newer = compile(directory, "standard_family", R"(
 library support;
 context support.shared_context;
 entity newer_consumer is end entity;
 )",
-        mismatch, &context, "work", "2019");
-    assert(!incompatible);
-    assert(has_code(mismatch, "FSIM-FE-VHORDER-011"));
+        family, &context, "work", "2019");
+    assert(newer);
+    assert(!has_code(family, "FSIM-FE-VHORDER-011"));
 }
 
 
@@ -726,20 +727,37 @@ entity newer_consumer is
   generic (value : integer := base);
 end entity;
 )");
-    const auto incompatible = compile_source("incompatible.vhd", "vhdl", "2019", R"(
+    // VHDL-2019 units use VHDL-2008 ones: standards of one package family
+    // mix.
+    const auto family = compile_source("family.vhd", "vhdl", "2019", R"(
 use work.legacy_values.all;
-entity incompatible_package is end entity;
+entity family_package is end entity;
 context work.legacy_context;
-entity incompatible_context is end entity;
-architecture incompatible_architecture of legacy_entity is
+entity family_context is end entity;
+architecture family_architecture of legacy_entity is
+begin
+end architecture;
+)");
+    assert(family.find("FSIM-FE-VHORDER-011") == std::string::npos);
+    // The 1987-2002 and 2008-2019 families do not mix.
+    compile_source("ancient.vhd", "vhdl", "1993", R"(
+package ancient_values is
+  constant base : integer := 3;
+end package;
+entity ancient_entity is end entity;
+)");
+    const auto incompatible = compile_source("incompatible.vhd", "vhdl", "2019", R"(
+use work.ancient_values.all;
+entity incompatible_package is end entity;
+architecture incompatible_architecture of ancient_entity is
 begin
 end architecture;
 )",
         false);
     assert(incompatible.find("FSIM-FE-VHORDER-011") != std::string::npos);
     assert(incompatible.find("VHDL package") != std::string::npos);
-    assert(incompatible.find("VHDL context") != std::string::npos);
     assert(incompatible.find("VHDL entity") != std::string::npos);
+    assert(incompatible.find("cannot be mixed") != std::string::npos);
     const auto replaced = compile_source("legacy.vhd", "vhdl", "2019", R"(
 use work.legacy_values.all;
 entity replacement is end entity;
@@ -788,18 +806,14 @@ library support;
 context support.ctx;
 entity context_consumer is end entity;
 )";
+        // A VHDL-2019 consumer of a VHDL-2008 context (one package family)
+        // finds it only under the same identifier.
+        const bool exact = producer_extended == consumer_extended;
         const auto diagnostic = compile_source("consumer.vhd", "vhdl", "2019",
-            consumer, false);
-        assert(diagnostic.find("FSIM-FE-VHORDER-003")
-                != std::string::npos
-                || diagnostic.find("FSIM-FE-VHORDER-011")
-                    != std::string::npos);
-        const auto expected = producer_extended == consumer_extended
-            ? "FSIM-FE-VHORDER-011" : "FSIM-FE-VHORDER-003";
-        const auto forbidden = producer_extended == consumer_extended
-            ? "FSIM-FE-VHORDER-003" : "FSIM-FE-VHORDER-011";
-        assert(diagnostic.find(expected) != std::string::npos);
-        assert(diagnostic.find(forbidden) == std::string::npos);
+            consumer, exact);
+        assert((diagnostic.find("FSIM-FE-VHORDER-003") != std::string::npos)
+            == !exact);
+        assert(diagnostic.find("FSIM-FE-VHORDER-011") == std::string::npos);
     };
     for (const auto& [case_name, producer_extended, consumer_extended] : {
              std::tuple { "basic-exact", false, false },

@@ -1,0 +1,6 @@
+#c vpi: t=5 watching sig
+#c vpi: t=10 sig=3
+#c vpi: t=20 sig=4
+#c vpi: start of reset t=21
+#c vpi: end of reset t=0
+#c done t=30 sig=4 count=1 value=5

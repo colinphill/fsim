@@ -451,6 +451,11 @@ enum class DebugPointKind : std::uint8_t {
     // After a lowered class constructor completed (IEEE 1800-2023 38.36.1
     // cbCreateObj). Probe runs only.
     class_constructed,
+    // The branch of an immediate or deferred assertion that follows a pass
+    // or a failure of its condition (IEEE 1800-2023 39.4.1 cbAssertionSuccess
+    // and cbAssertionFailure on an immediate assertion). Probe runs only.
+    assertion_pass,
+    assertion_fail,
 };
 
 struct DebugPoint {
@@ -516,6 +521,21 @@ struct Display {
     std::string text;
     bool newline { true };
     bool postponed { };
+    /// The attempt-start report of a concurrent assertion evaluator (IEEE
+    /// 1800-2023 39.4.2 cbAssertionStart): it does nothing until a library
+    /// registers an attempt callback (Interpreter::bind_assertion_start_
+    /// reports), so other runs pay nothing per attempt.
+    bool inert { };
+};
+
+/// The text a Display or FormatDisplay begins with when it carries a
+/// simulation-control request to the host: $save, $incsave, $restart and
+/// $reset (IEEE 1800-2023 D.7-D.9). The rest is `task|payload`, or
+/// `arg|index|` before a FormatDisplay value. Only a design that uses one of
+/// these tasks holds such an operation.
+inline constexpr std::string_view simulation_control_marker {
+    "\x1f"
+    "fsim.simulation-control|"
 };
 
 enum class OutputFormat : std::uint8_t {
@@ -639,6 +659,10 @@ struct PlusArgSelect {
     // `query` is a $value$plusargs user string whose plusarg string precedes
     // its one conversion (IEEE 1800-2017 21.6).
     bool format_query { };
+    /// Not a plusarg query: the destination reads a value the host keeps for
+    /// the running design. 1 is $reset_count and 2 is $reset_value (IEEE
+    /// 1800-2023 D.8); `query` is unused then. Zero is the plusarg query.
+    std::uint8_t host_value { };
 };
 
 /// Execute the standard SystemVerilog $system host boundary. An absent command

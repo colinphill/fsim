@@ -987,6 +987,20 @@ Statement VerilogParser::parse_procedural_foreach_statement(
         nothing.span = statement.span;
         return nothing;
     }
+    // A string collection keeps the loop as written, so the statement keeps
+    // the foreach statement's own parts for the VPI model (37.51), as the
+    // block of a desugared foreach does.
+    if (string_collection && diagnostics_.size() == saved_diagnostics) {
+        statement.foreach_collection = statement.target;
+        if (statement.condition.operands.size() > 1U) {
+            statement.foreach_variables.assign(
+                statement.condition.operands.begin() + 1,
+                statement.condition.operands.end());
+        }
+        if (body_end > body_begin) {
+            statement.foreach_body_span = tokens_[body_begin].span;
+        }
+    }
     // Only a collection known to be a string keeps the SystemVerilog-2023
     // string form; arrays of any declared shape iterate their dimensions.
     if (language_ != Language::SystemVerilog2017 || string_collection

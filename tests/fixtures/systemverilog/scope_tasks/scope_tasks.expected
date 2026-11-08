@@ -1,0 +1,31 @@
+$showscopes: scopes at top
+  module top.u
+$showscopes: scopes in or below top
+  module top.u
+  named block top.u.blk
+  function top.u.fn
+  module top.u.g.gl
+  module top.u.lf
+  task top.u.tk
+  named block top.u.tk.inner
+$showscopes: scopes at top.u
+  named block top.u.blk
+  function top.u.fn
+  module top.u.lf
+  task top.u.tk
+$showvars: variables in top.u
+  reg [15:0] top.u.cnt = 16'b0000000000000111
+  wire [3:0] top.u.n = 4'b1010 strength0=strong strength1=strong
+  reg [7:0] top.u.r = 8'b00101010
+  real top.u.rv = 2.5
+$showvars: listed variables
+  reg [7:0] top.u.r = 8'b00101010
+  reg [7:0] top.a = 8'b00000101
+  reg [15:0] top.u.cnt = 16'b0000000000000111
+$showscopes: scopes at top.u.tk
+  named block top.u.tk.inner
+$showscopes: scopes at top.u.blk
+  (none)
+$showvars: variables in top
+  reg [7:0] top.a = 8'b00000101
+done

@@ -1,0 +1,16 @@
+#c drc asynchon=0
+#c paramdrc change=1 argument=1 time=5
+#c paramdrc change=2 argument=1 time=11
+#c paramdrc change=3 argument=1 time=14
+#c drc asynchon=0
+#c paramdrc change=4 argument=1 time=105
+#c paramdrc change=5 argument=1 time=108
+#c paramdrc change=6 argument=1 time=111
+#c drc asynchon=0
+#c paramdrc change=7 argument=1 time=205
+#c paramdrc change=8 argument=1 time=211
+#c drc asynchon=0
+#c paramdrc change=9 argument=1 time=305
+#c paramdrc change=10 argument=1 time=308
+#c paramdrc change=11 argument=1 time=311
+#c paramdrc change=12 argument=1 time=317

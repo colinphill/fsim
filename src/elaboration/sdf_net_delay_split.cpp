@@ -1073,13 +1073,31 @@ SdfNetDelaySplitResult split_sdf_net_delays(ElaboratedDesignState& state)
             flatten(work);
             std::vector<MarkedRead> applied;
             for (const auto& mark : marks) {
+                if (mark.read->sensitivity) {
+                    // An event control through the load port's name waits on
+                    // the delayed copy, which is what the name denotes there.
+                    bool waits { };
+                    for (auto& sensitivity : work.static_sensitivity) {
+                        if (sensitivity.signal == mark.read->signal) {
+                            sensitivity.signal = copies.at(*mark.owner);
+                            waits = true;
+                        }
+                    }
+                    if (waits) {
+                        normalize_sensitivities(work.static_sensitivity);
+                        // The trigger masks index the old sensitivity order.
+                        work.static_trigger_regions.clear();
+                        applied.push_back(mark);
+                    }
+                    continue;
+                }
                 if (rename_marked_read(work, mark.read->reg, mark.read->signal,
                         copies.at(*mark.owner))) {
                     applied.push_back(mark);
                 }
             }
             for (const auto& mark : applied) {
-                if (mark.read->implicit) {
+                if (mark.read->implicit && !mark.read->sensitivity) {
                     follow_copy_sensitivity(work, mark.read->signal,
                         copies.at(*mark.owner));
                 }
@@ -1607,6 +1625,192 @@ std::optional<SdfNetDelayGraft> plan_sdf_net_delay_graft(
     }
     result.grown = std::move(grown);
     return result;
+}
+
+
+std::optional<SdfNetDelayGraft> plan_tranif_control_graft(
+    const ElaboratedDesign& running, const std::string_view switch_name,
+    const NetDelayTable& table, const std::size_t process_count,
+    const std::function<const runtime::simir::Process&(
+        runtime::simir::ProcessId)>& running_program,
+    std::string& reason)
+{
+    using namespace runtime::simir;
+    auto state = running.state();
+    if (state.processes.empty()) {
+        state.processes.reserve(process_count);
+        for (std::size_t index = 0U; index < process_count; ++index) {
+            state.processes.push_back(
+                running_program(static_cast<ProcessId>(index)));
+        }
+    }
+    // The switch's two conducting processes (`<name>$left`, `<name>$right`)
+    // read its control; the control is delayed for them alone (IEEE 1800-2023
+    // 28.16: the turn-on and turn-off delays are the control's).
+    const std::string left = std::string { switch_name } + "$left";
+    const std::string right = std::string { switch_name } + "$right";
+    std::vector<std::size_t> loads;
+    std::optional<SignalId> control;
+    for (std::size_t index = 0U; index < state.processes.size(); ++index) {
+        const auto& process = state.processes[index];
+        if (process.name != left && process.name != right) {
+            continue;
+        }
+        if (!process.switch_control
+            || (control && *control != *process.switch_control)) {
+            reason = "the switch's control is not one signal";
+            return std::nullopt;
+        }
+        control = process.switch_control;
+        loads.push_back(index);
+    }
+    if (loads.empty() || !control || *control >= state.signals.size()) {
+        reason = "the switch has no conducting process with a control";
+        return std::nullopt;
+    }
+    const auto first_signal = state.signals.size();
+    const auto first_process = state.processes.size();
+    const auto copy_id = static_cast<SignalId>(first_signal);
+    {
+        auto signal = state.signals[*control];
+        signal.name = std::string { switch_name } + ".$control";
+        signal.implicit_driver.reset();
+        signal.charge_strength.reset();
+        signal.charge_decay.reset();
+        auto info = state.signal_info[*control];
+        info.id = copy_id;
+        info.name = signal.name;
+        info.is_port = false;
+        info.direction = frontend::PortDirection::Unknown;
+        state.signals.push_back(std::move(signal));
+        state.signal_info.push_back(std::move(info));
+    }
+    const auto kind = state.signals[*control].value_kind;
+    const auto width = state.signals[*control].initial_value.width();
+    Process driver;
+    driver.id = static_cast<ProcessId>(first_process);
+    driver.name = std::string { switch_name } + "$control";
+    driver.scheduling_domain = ProcessSchedulingDomain::systemverilog;
+    driver.static_sensitivity.push_back({ *control, EdgeKind::any });
+    driver.operations.emplace_back(ReadSignal { 0U, *control });
+    driver.register_value_kinds.push_back(kind);
+    driver.operations.emplace_back(WriteNetDelay { copy_id, 0U, std::nullopt,
+        table.values(), SignalUpdateDomain::systemverilog_active });
+    driver.operations.emplace_back(WaitSensitivity { });
+    driver.operations.emplace_back(Jump { 0U });
+    driver.register_count = 1U;
+    driver.driver_regions = elaboration_detail::collect_driver_regions(
+        driver, std::vector<std::size_t> { width });
+    state.processes.push_back(std::move(driver));
+    const std::map<SignalId, SignalId> renames { { *control, copy_id } };
+    SdfNetDelayGraft result;
+    for (const auto index : loads) {
+        bool changed { };
+        auto process = state.processes[index];
+        if (const auto why = rename_reads(process, renames, changed);
+            !why.empty() || !changed) {
+            reason = why.empty() ? std::string { "the switch does not read its control" }
+                                 : why;
+            return std::nullopt;
+        }
+        state.processes[index] = process;
+        result.graft.rewritten.emplace_back(
+            static_cast<ProcessId>(index), std::move(process));
+    }
+    result.driver = static_cast<ProcessId>(first_process);
+    result.graft.signals.assign(
+        state.signals.begin() + static_cast<std::ptrdiff_t>(first_signal),
+        state.signals.end());
+    result.graft.processes.assign(
+        state.processes.begin() + static_cast<std::ptrdiff_t>(first_process),
+        state.processes.end());
+    auto grown = ElaboratedDesign::from_state(std::move(state));
+    if (!grown) {
+        reason = "the split design has invalid state";
+        return std::nullopt;
+    }
+    result.grown = std::move(grown);
+    return result;
+}
+
+
+std::size_t apply_sdf_device_gate_delays(ElaboratedDesignState& state,
+    const std::span<const SdfDeviceGateDelay> devices)
+{
+    using namespace runtime::simir;
+    std::size_t rewritten { };
+    for (const auto& device : devices) {
+        const auto table = NetDelayTable::from_gate_delays(device.delays).values();
+        for (auto& primitive : state.verilog_primitives) {
+            if (primitive.instance != device.instance) {
+                continue;
+            }
+            const bool drives = std::ranges::any_of(primitive.terminals,
+                [&](const VerilogPrimitiveTerminalInfo& terminal) {
+                    return terminal.direction
+                            == frontend::VerilogPrimitiveTerminalDirection::Output
+                        && terminal.signal == device.signal;
+                });
+            if (!drives) {
+                continue;
+            }
+            for (std::size_t id = 0U; id < state.processes.size(); ++id) {
+                auto& process = state.processes[id];
+                // The labels the front end gives a gate's drivers: `g`,
+                // `g$one`, `g$output<n>`.
+                const std::string_view name { process.name };
+                if (!name.starts_with(primitive.full_name)) {
+                    continue;
+                }
+                const auto rest = name.substr(primitive.full_name.size());
+                if (!(rest.empty() || rest == "$one" || rest.starts_with("$output"))) {
+                    continue;
+                }
+                flatten(process);
+                bool changed { };
+                for (std::size_t index = 0U; index < process.operations.size(); ++index) {
+                    auto operation = process.operations.expanded(index);
+                    if (const auto* const update = operation_get_if<WriteUpdate>(&operation);
+                        update != nullptr && update->signal == device.signal) {
+                        // A gate with a delay writes inertially, like one
+                        // declared with `#(rise, fall, turn-off)` (IEEE
+                        // 1364-2005 7.14), so a later put retimes it.
+                        operation = WriteInertial { update->signal, update->source,
+                            device.delays, update->domain };
+                    } else if (const auto* const slice
+                        = operation_get_if<WriteUpdateSlice>(&operation);
+                        slice != nullptr && slice->signal == device.signal) {
+                        operation = WriteNetDelay { slice->signal, slice->source,
+                            slice->offset, table, slice->domain };
+                    } else if (auto* const inertial
+                        = operation_get_if<WriteInertial>(&operation);
+                        inertial != nullptr && inertial->signal == device.signal) {
+                        inertial->delays = device.delays;
+                    } else if (auto* const delayed
+                        = operation_get_if<WriteNetDelay>(&operation);
+                        delayed != nullptr && delayed->signal == device.signal) {
+                        delayed->table = table;
+                    } else {
+                        continue;
+                    }
+                    process.operations.replace(index, std::move(operation));
+                    changed = true;
+                }
+                if (changed) {
+                    ++rewritten;
+                    // The gate is delayed now, so its driver takes a delay
+                    // slot like one declared with a delay
+                    // (bind_primitive_delay_slots).
+                    const auto driver = static_cast<ProcessId>(id);
+                    if (std::ranges::find(primitive.drivers, driver)
+                        == primitive.drivers.end()) {
+                        primitive.drivers.push_back(driver);
+                    }
+                }
+            }
+        }
+    }
+    return rewritten;
 }
 
 } // namespace fsim::elaboration

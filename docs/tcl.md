@@ -66,6 +66,8 @@ takes precedence.
 | `fsim::deposit_signal`, `fsim::force_signal` | `SIGNAL VALUE`; change or force a signal value. |
 | `fsim::release_signal` | `SIGNAL`; release a forced value. |
 | `fsim::run` | `?DURATION?`; run the loaded simulation. |
+| `fsim::save` | `FILE ?incremental?`; write the run state of the loaded simulation to FILE, at a save point (between run commands, at the end of a time slot). `incremental` writes what changed since the last full `fsim::save` or `$save` of the session (IEEE 1800-2023 D.9). |
+| `fsim::restart` | `FILE`; restore the run state of the loaded simulation from a file `fsim::save`, `$save` or `simulate --save-at` wrote. The simulation must be loaded from the same design with the same options (IEEE 1800-2023 D.9). |
 | `fsim::get_simulation` | Return the loaded simulation state. |
 | `fsim::get_diagnostics`, `fsim::clear_diagnostics` | Return or discard structured diagnostics. |
 | `fsim::debug` | `status`, `step`, `continue`, `break`, `watch`, `frames`, `frame`, `scope`, `inspect`, `restart`, or `provenance`. |
@@ -179,6 +181,9 @@ to apply them.
 | `simulate.duration` | text |  | time to simulate, e.g. 10us; empty runs to the end |
 | `simulate.foreign_probes` | boolean | `false` | statement, call and suspend callbacks for VPI/VHPI libraries |
 | `simulate.max_deltas` | integer | `100000` | delta cycles allowed in one time step |
+| `simulate.restart` | text |  | run-state file the simulation starts from (repeat the command line of the save) |
+| `simulate.save_at` | text |  | time at which the run state is saved, e.g. 10us; needs simulate.save_file |
+| `simulate.save_file` | text |  | run-state file written at simulate.save_at |
 | `simulate.seed` | text | `1` | random seed, or 'random' |
 | `simulate.sv_libs` | list |  | DPI-C libraries loaded for simulation |
 | `simulate.trace` | boolean | `true` | write the waveform trace |

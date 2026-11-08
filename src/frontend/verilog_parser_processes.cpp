@@ -37,7 +37,9 @@ Process VerilogParser::parse_initial()
     current_procedural_types_.clear();
     Process process;
     process.kind = ProcessKind::Initial;
+    const auto body_begin = index_;
     auto body = parse_statement();
+    const auto body_end = index_;
     if (body) {
         if (body->kind == StatementKind::Block
             && body->label.empty()
@@ -50,6 +52,7 @@ Process VerilogParser::parse_initial()
         }
     }
     process.span = span_from(start, previous());
+    record_procedure_clock_inference(process, 0U, 0U, body_begin, body_end);
     current_procedural_names_.clear();
     current_procedural_types_.clear();
     return process;
@@ -480,6 +483,7 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
     if (verilog_attribute_instance_start()) {
         parse_verilog_attribute_instances();
     }
+    std::optional<Token> assertion_label;
     // A statement label names the block it precedes (IEEE 1800-2017
     // 9.3.5): `name: begin ... end: name`.
     if (at(TokenKind::Identifier) && at(TokenKind::Colon, 1)
@@ -494,8 +498,9 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
         && !keyword_reserved(keyword_set_, current().text)
         && (keyword("assert", 2) || keyword("assume", 2)
             || keyword("cover", 2))) {
-        // A label on an immediate assertion names it (9.3.5, 16.3).
-        (void)advance();
+        // A label on an immediate assertion names it (9.3.5, 16.3); one on a
+        // concurrent assertion statement names that assertion (16.14.6).
+        assertion_label = advance();
         (void)advance();
     }
     if (const auto required = verilog_system_service_standard(current().text)) {
@@ -893,7 +898,8 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
         statement.kind = StatementKind::Null;
         statement.procedural_concurrent_assertion
             = std::make_shared<SystemVerilogConcurrentAssertion>(
-                parse_concurrent_assertion(directive, kind));
+                parse_concurrent_assertion(
+                    directive, kind, std::move(assertion_label)));
         statement.span = span_from(directive, previous());
         return statement;
     }
@@ -901,7 +907,11 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
             && match_keyword("assert"))
         || (at(TokenKind::Identifier)
             && current().text == "assert" && (advance(), true))) {
-        return parse_immediate_assertion(previous());
+        auto immediate = parse_immediate_assertion(previous());
+        if (assertion_label) {
+            immediate.immediate_label = std::string { assertion_label->text };
+        }
+        return immediate;
     }
     // Immediate assume behaves as assert in simulation; immediate cover
     // runs its pass statement when the expression holds (IEEE 1800-2017
@@ -912,7 +922,11 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
                 || at(TokenKind::Hash, 1));
     };
     if (immediate_directive("assume")) {
-        return parse_immediate_assertion(advance());
+        auto immediate = parse_immediate_assertion(advance());
+        if (assertion_label) {
+            immediate.immediate_label = std::string { assertion_label->text };
+        }
+        return immediate;
     }
     if (immediate_directive("cover")) {
         const auto start = advance();
@@ -934,6 +948,9 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
         statement.immediate_directive = Statement::ImmediateDirective::Cover;
         statement.immediate_deferred = deferred;
         statement.immediate_final = final_cover;
+        if (assertion_label) {
+            statement.immediate_label = std::string { assertion_label->text };
+        }
         expect(TokenKind::LeftParen, "'(' after cover",
             "FSIM-SV-PARSE-137");
         statement.condition = parse_expression();
@@ -941,6 +958,14 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
             "FSIM-SV-PARSE-138");
         if (auto action = parse_statement()) {
             statement.statements.push_back(std::move(*action));
+        }
+        // 16.4: the action of a deferred cover is a single subroutine call.
+        if ((deferred || final_cover) && !statement.statements.empty()
+            && !valid_deferred_action(statement.statements.front(), final_cover)) {
+            error(start, "FSIM-SV-SEM-250",
+                final_cover
+                    ? "a final deferred assertion action must be null or a single subroutine call that may be called in the Postponed region"
+                    : "an observed deferred assertion action must be null or a single subroutine call");
         }
         statement.span = span_from(start, previous());
         return statement;
@@ -1500,6 +1525,16 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
         statement.output_newline = newline;
         statement.output_postponed = postponed;
         statement.output_monitor = monitor;
+        // A string literal argument as the expression parse_expression
+        // makes of it (VPI vpiArgument, IEEE 1800-2023 37.62).
+        const auto string_argument = [&](const Token& token) {
+            auto literal = Expression {
+                ExpressionKind::StringLiteral, token.text, { }, token.span
+            };
+            literal.decoded_string = decoded_string_literal_text(token);
+            literal.generated_text = token.generated_text;
+            return literal;
+        };
         // An argument list with an empty argument, or with a string literal
         // after the first argument, is formatted left to right: an empty
         // argument prints a space, and every string literal argument is a
@@ -1561,6 +1596,8 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
                     && (at(TokenKind::Comma, 1U)
                         || at(TokenKind::RightParen, 1U))) {
                     const auto format_token = advance();
+                    statement.output_arguments.push_back(
+                        string_argument(format_token));
                     if (statement.output_source.size() == 1U
                         && statement.output_values.empty()
                         && pending.empty()
@@ -1592,6 +1629,7 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
                             && !at(TokenKind::RightParen, 1U)) {
                             advance();
                             value = parse_expression();
+                            statement.output_arguments.push_back(value);
                         } else if (takes_value
                             && conversion.format != OutputFormat::Time) {
                             error(
@@ -1614,8 +1652,10 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
                     }
                     pending += parsed_format.trailing_text;
                 } else {
+                    auto value = parse_expression();
+                    statement.output_arguments.push_back(value);
                     statement.output_values.push_back(OutputValue {
-                        parse_expression(),
+                        std::move(value),
                         default_format,
                         std::exchange(pending, std::string { }) });
                 }
@@ -1636,6 +1676,8 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
             if (!at(TokenKind::RightParen)) {
                 if (at(TokenKind::StringLiteral)) {
                     const auto format_token = advance();
+                    statement.output_arguments.push_back(
+                        string_argument(format_token));
                     statement.output_generated_text
                         = format_token.generated_text;
                     if (format_token.generated_text == GeneratedTextKind::none) {
@@ -1647,6 +1689,7 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
                     std::vector<Expression> values;
                     while (match(TokenKind::Comma)) {
                         values.push_back(parse_expression());
+                        statement.output_arguments.push_back(values.back());
                     }
                     const auto consumes_value =
                         [](const OutputFormat format) {
@@ -1751,6 +1794,7 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
                     std::vector<Expression> values;
                     do {
                         values.push_back(parse_expression());
+                        statement.output_arguments.push_back(values.back());
                     } while (match(TokenKind::Comma));
                     if (default_format == OutputFormat::Decimal
                         && values.size() == 1

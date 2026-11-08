@@ -131,6 +131,33 @@ bool CodeCoverageCounters::clear(
     return true;
 }
 
+std::span<const std::uint8_t> CodeCoverageCounters::overflow_flags() const noexcept
+{
+    return overflowed_;
+}
+
+std::span<const std::uint8_t> CodeCoverageCounters::enabled_flags() const noexcept
+{
+    return enabled_counters_;
+}
+
+bool CodeCoverageCounters::restore_flags(
+    const std::span<const std::uint8_t> overflowed,
+    const std::span<const std::uint8_t> enabled) noexcept
+{
+    if (overflowed.size() != overflowed_.size()
+        || enabled.size() != enabled_counters_.size()) {
+        return false;
+    }
+    std::ranges::copy(overflowed, overflowed_.begin());
+    std::ranges::copy(enabled, enabled_counters_.begin());
+    overflow_count_ = static_cast<std::size_t>(std::ranges::count_if(
+        overflowed_, [](const auto flag) { return flag != 0U; }));
+    enabled_ = std::ranges::all_of(
+        enabled_counters_, [](const auto flag) { return flag != 0U; });
+    return true;
+}
+
 std::span<const std::uint64_t> CodeCoverageCounters::values() const noexcept
 {
     return values_;

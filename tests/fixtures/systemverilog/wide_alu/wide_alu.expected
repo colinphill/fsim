@@ -1,0 +1,4 @@
+wide_alu W=128 checks=416 mismatches=0
+wide_alu W=200 checks=416 mismatches=0
+wide_alu W=256 checks=416 mismatches=0
+wide_alu W=65 checks=416 mismatches=0

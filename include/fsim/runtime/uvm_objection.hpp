@@ -22,6 +22,7 @@
 namespace fsim::runtime {
 
 class SystemVerilogUvmObjectionService;
+struct SystemVerilogUvmObjectionDrainEvent;
 
 class SystemVerilogUvmObjectionSourceHandle final {
  public:
@@ -224,6 +225,15 @@ class SystemVerilogUvmObjectionService final {
   [[nodiscard]] std::vector<SystemVerilogUvmDrainSnapshot>
   drain_snapshots() const;
 
+  /// Run-state save and restart of a pending drain (#128): a drain delay is
+  /// the scheduler event kind "uvm.objection_drain" (data: the service and
+  /// the drain generation). These bind the owner domain "uvm_objection" for
+  /// the event codec and give a restored event's handle back to its pending
+  /// drain, which the UVM checkpoint restores before the events.
+  void bind_event_owner(SchedulerEventOwners& owners);
+  [[nodiscard]] bool bind_restored_drain(
+      std::uint64_t generation, const ScheduledTaskHandle& handle);
+
   [[nodiscard]] std::uint64_t source_count(
       SystemVerilogUvmPhaseHandle phase,
       SystemVerilogUvmObjectionSourceHandle source,
@@ -272,6 +282,7 @@ class SystemVerilogUvmObjectionService final {
   }
 
  private:
+  friend struct SystemVerilogUvmObjectionDrainEvent;
   SystemVerilogUvmObjectionService(
       SystemVerilogUvmObjectService& objects,
       SystemVerilogUvmComponentService& components,

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/uvm_objection.hpp"
 
+#include "fsim/runtime/scheduler_events.hpp"
+
 #include <algorithm>
 #include <exception>
 #include <limits>
@@ -676,6 +678,65 @@ bool SystemVerilogUvmObjectionService::root_has_pending_drain(
       });
 }
 
+// The drain event (#128): the pending drain is found by its generation, which
+// is unique, so the payload needs no source key.
+struct SystemVerilogUvmObjectionDrainEvent {
+  struct Payload {
+    SystemVerilogUvmObjectionService* owner{};
+    std::uint64_t generation{};
+  };
+  struct Domain {
+    static constexpr std::string_view name{"uvm_objection"};
+  };
+  struct Codec
+      : OwnedFieldsSchedulerEventCodec<
+            Payload, SystemVerilogUvmObjectionService, Domain,
+            &Payload::owner, &Payload::generation> {
+    static std::uint64_t cancel_key(const Payload& payload) {
+      return payload.generation;
+    }
+  };
+
+  static void dispatch(Scheduler&, const Payload& scheduled) {
+    auto& service = *scheduled.owner;
+    for (const auto& [key, pending] : service.pending_drains_) {
+      if (pending.generation == scheduled.generation) {
+        // A copy: finishing the drain erases the map entry.
+        service.finish_pending_drain(key, scheduled.generation);
+        return;
+      }
+    }
+  }
+
+  static void register_kind() {
+    static_cast<void>(
+        register_scheduler_event_kind<Payload, &dispatch, Codec>(
+            "uvm.objection_drain", SchedulerEventClass::data));
+  }
+};
+
+namespace {
+[[maybe_unused]] const bool uvm_objection_kinds_registered =
+    (SystemVerilogUvmObjectionDrainEvent::register_kind(), true);
+}  // namespace
+
+void SystemVerilogUvmObjectionService::bind_event_owner(
+    SchedulerEventOwners& owners) {
+  owners.bind(SystemVerilogUvmObjectionDrainEvent::Domain::name, this);
+}
+
+bool SystemVerilogUvmObjectionService::bind_restored_drain(
+    const std::uint64_t generation, const ScheduledTaskHandle& handle) {
+  for (auto& [key, pending] : pending_drains_) {
+    static_cast<void>(key);
+    if (pending.generation == generation) {
+      pending.task = handle;
+      return true;
+    }
+  }
+  return false;
+}
+
 void SystemVerilogUvmObjectionService::cancel_pending_drain(
     const SourceKey& key,
     const SystemVerilogUvmObjectionOperation operation,
@@ -724,9 +785,10 @@ void SystemVerilogUvmObjectionService::start_pending_drain(
       delay,
       SchedulerPhase::reactive,
       next_drain_order_++,
-      [this, key, generation](Scheduler&) {
-        finish_pending_drain(key, generation);
-      });
+      Scheduler::Task{detail::make_scheduler_task_descriptor<
+          SystemVerilogUvmObjectionDrainEvent::Payload,
+          &SystemVerilogUvmObjectionDrainEvent::dispatch>(
+          SystemVerilogUvmObjectionDrainEvent::Payload{this, generation})});
   pending_drains_.emplace(key, std::move(pending));
   reserved_trace_records_ += 3U;
   SystemVerilogUvmObjectionEvent event{

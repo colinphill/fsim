@@ -706,6 +706,7 @@ add_library(
   ${FSIM_SUBSYSTEM_LIBRARY_TYPE}
     src/runtime/code_coverage.cpp
     src/runtime/class_heap.cpp
+    src/runtime/class_heap_save.cpp
     src/runtime/class_randomize.cpp
     src/runtime/class_containers.cpp
     src/runtime/class_methods.cpp
@@ -744,7 +745,9 @@ add_library(
   src/runtime/uvm_register_model_sequences.cpp
   src/runtime/uvm_register_model_coverage.cpp
     src/runtime/uvm_checkpoint.cpp
+    src/runtime/run_state_archive.cpp
     src/runtime/run_state_image.cpp
+    src/runtime/run_state_sections.cpp
     src/runtime/uvm_foreign.cpp
     src/runtime/uvm_foreign_integration.cpp
     src/runtime/uvm_objection.cpp
@@ -807,6 +810,7 @@ add_library(
     src/runtime/packed_value.cpp
     src/runtime/scheduler.cpp
     src/runtime/scheduler_dispatch.cpp
+    src/runtime/scheduler_events.cpp
     src/runtime/scheduler_systemverilog.cpp
     src/runtime/scheduler_generic_update.cpp
     src/runtime/vhdl_psl.cpp
@@ -818,6 +822,7 @@ add_library(
     src/runtime/simir.cpp
     src/runtime/simir_sensitivity.cpp
     src/runtime/simir_region_graph.cpp
+    src/runtime/simir_events.cpp
     src/runtime/simir_signal_driver_inventory.cpp
     src/runtime/simir_observation.cpp
     src/runtime/simir_process_execution_context.cpp
@@ -834,6 +839,7 @@ add_library(
     src/runtime/simir_execution.cpp
     src/runtime/simir_sva.cpp
     src/runtime/sva_engine.cpp
+    src/runtime/sva_storage.cpp
     src/runtime/simir_execution_part2.cpp
     src/runtime/simir_fused_cone.cpp
     src/runtime/simir_static_kernel.cpp
@@ -858,6 +864,10 @@ add_library(
     src/runtime/simir_files.cpp
     src/runtime/simir_format.cpp
     src/runtime/simir_interpreter.cpp
+    src/runtime/simir_run_state_host.cpp
+    src/runtime/simir_run_state_kernel.cpp
+    src/runtime/simir_run_state_process.cpp
+    src/runtime/simir_run_state_reset.cpp
     src/runtime/simir_foreign_net_delay.cpp
     src/runtime/simir_process_program.cpp
     src/runtime/simir_interpreter_profiles.cpp
@@ -1349,7 +1359,8 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_class_hir_execution.cpp
       src/app/application_vhdl_debug.cpp
       src/app/application_vpi.cpp
-      src/app/application_foreign_signal.cpp
+      src/app/application_foreign_run_state.cpp
+    src/app/application_foreign_signal.cpp
       src/app/application_vpi_class_model.cpp
       src/app/application_vpi_foreign.cpp
       src/app/application_vpi_frames.cpp
@@ -1361,6 +1372,8 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_simulation_accessors.cpp
       src/app/application_simulation_impl_core.cpp
       src/app/application_simulation_impl_coverage.cpp
+      src/app/application_simulation_impl_save.cpp
+      src/app/application_simulation_impl_scope.cpp
       src/app/application_simulation_impl_setup.cpp
       src/app/application_simulation_impl_setup_execution.cpp
       src/app/application_simulation_impl_source.cpp

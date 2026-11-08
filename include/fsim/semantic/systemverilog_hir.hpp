@@ -436,6 +436,9 @@ struct Sensitivity {
     std::optional<ExpressionId> expression;
     SourceSpanId source;
     std::uint64_t source_order { };
+    /// The `iff` guard of this event in a multi-event control (IEEE 1800-2023
+    /// 9.4.2.3): the wake tests the guard of the event that fired.
+    std::optional<ExpressionId> guard { };
 };
 
 struct TaskAssociation {
@@ -531,6 +534,9 @@ struct Statement {
     ImmediateDirective immediate_directive { ImmediateDirective::none };
     bool immediate_deferred { };
     bool immediate_final { };
+    // The label that names a labelled immediate assertion (IEEE 1800-2023
+    // 16.3, 37.49 vpiName).
+    std::string immediate_label;
     // A foreach statement desugared to nested loops: its collection, loop
     // variables left to right (none for a skipped one) and where its body's
     // first token is (IEEE 1800-2023 12.7.3, 37.51).
@@ -558,6 +564,8 @@ struct Statement {
     // VPI-only: the output task as written ([0], with its radix suffix) and
     // its leading format string literal ([1]), when the call had one.
     std::vector<std::string> output_source;
+    // Every argument of a Display task in source order (37.62 vpiArgument).
+    std::vector<ExpressionId> output_arguments;
     std::vector<StatementId> statements;
     std::vector<StatementId> else_statements;
     CaseMatchKind case_match { CaseMatchKind::exact };
@@ -1054,6 +1062,11 @@ struct CallableProfile {
     TypeReference return_type;
     std::vector<DeclarationId> formals;
     Lifetime lifetime { Lifetime::implicit };
+    // An `extern` prototype of an interface subroutine, whose body a module
+    // exports through a modport, and the `extern forkjoin task` form that
+    // several modules may export (IEEE 1800-2023 25.7.3).
+    bool extern_prototype { };
+    bool extern_forkjoin { };
 };
 
 struct Declaration {
@@ -1254,6 +1267,9 @@ struct PrimitiveInstance {
     SourceSpanId source;
 };
 
+struct ConcurrentAssertion;
+struct AssertionDeclaration;
+
 struct GenerateRegion {
     DeclarationId declaration;
     ScopeId scope;
@@ -1272,6 +1288,12 @@ struct GenerateRegion {
     std::vector<ProcessId> processes;
     std::vector<StatementId> concurrent_statements;
     std::vector<PrimitiveInstance> primitives;
+    // The concurrent assertion statements of the block (IEEE 1800-2023
+    // 27.3, 37.49).
+    std::vector<ConcurrentAssertion> concurrent_assertions;
+    // The property and sequence declarations of the block, among them the
+    // ones its inline assertions name (IEEE 1800-2023 27.3).
+    std::vector<AssertionDeclaration> assertion_declarations;
     std::vector<Defparam> defparams;
     std::vector<std::string> class_declarations;
     std::vector<GenerateAlternative> alternatives;
@@ -1886,6 +1908,85 @@ struct AssertionObserverPolicy {
     bool coverage_enabled { true };
 };
 
+/// The operator of a published property or sequence node (IEEE 1800-2023
+/// 37.52, 37.54 vpiOpType); same order as the frontend's.
+enum class AssertionOperator : std::uint8_t {
+    not_operator,
+    overlap_imply,
+    nonoverlap_imply,
+    overlap_followed_by,
+    nonoverlap_followed_by,
+    if_operator,
+    if_else,
+    iff,
+    implies,
+    until,
+    until_with,
+    nexttime,
+    always,
+    eventually,
+    accept_on,
+    reject_on,
+    sync_accept_on,
+    sync_reject_on,
+    comp_and,
+    comp_or,
+    cycle_delay,
+    unary_cycle_delay,
+    repeat,
+    consecutive_repeat,
+    goto_repeat,
+    intersect,
+    first_match,
+    throughout,
+    within,
+};
+
+/// An operand of a published node: another node of the tree, or an
+/// expression (a boolean, condition, bound or actual).
+struct AssertionTreeOperand {
+    std::int32_t node { -1 };
+    std::optional<ExpressionId> expression;
+};
+
+/// An operation or an instance of a property or sequence expression (IEEE
+/// 1800-2023 37.50-37.54); the operands are in the order the standard gives.
+struct AssertionTreeNode {
+    // The kinds after `instance` are those of IEEE 1800-2023 37.52 and
+    // 37.56: a clocked property and the clocked sequences of a multiclocked
+    // sequence expression carry their clocking event, a case property holds
+    // its case expression and then its case items, and a case item holds its
+    // expressions and then its property (a default item the property only).
+    enum class Kind : std::uint8_t {
+        operation,
+        instance,
+        clocked_property,
+        clocked_sequence,
+        multiclock_sequence,
+        case_property,
+        case_item,
+    };
+    Kind kind { Kind::operation };
+    AssertionOperator op { AssertionOperator::not_operator };
+    bool strong { };
+    bool sequence { };
+    std::vector<AssertionTreeOperand> operands;
+    // The declaration an instance names.
+    std::string instance;
+    // The clocking event of a clocked property or clocked sequence.
+    std::vector<Sensitivity> clock_events;
+    // The default item of a case property: it has no expression.
+    bool default_item { };
+    SourceSpanId source;
+};
+
+struct AssertionTree {
+    std::vector<AssertionTreeNode> nodes;
+    AssertionTreeOperand root;
+    // One per formal of the declaration: the default value.
+    std::vector<std::optional<ExpressionId>> formal_defaults;
+};
+
 struct ConcurrentAssertion {
     ConcurrentAssertionKind kind { ConcurrentAssertionKind::assertion };
     ConcurrentAssertionForm form { ConcurrentAssertionForm::property };
@@ -1905,6 +2006,25 @@ struct ConcurrentAssertion {
     std::optional<SourceSpanId> label_source;
     std::optional<SourceSpanId> pass_action_source;
     std::optional<SourceSpanId> failure_action_source;
+    // The pass and fail action statements, each a statement of its own
+    // (IEEE 1800-2023 16.14.1, 37.50 vpiStmt and vpiElseStmt); empty for an
+    // omitted action, a null statement is kept as a null statement.
+    std::vector<StatementId> pass_statements;
+    std::vector<StatementId> failure_statements;
+    // The clocking event of an assertion in an always procedure, inferred
+    // from the procedure's event control (IEEE 1800-2023 16.14.6, 37.50
+    // vpiClockingEvent); empty when the assertion names its own clock or
+    // sits outside a procedure.
+    std::vector<Sensitivity> inferred_clock_events;
+    // The clocking event and the `disable iff` condition written in the
+    // body of an inline `cover sequence`, which no property declaration
+    // holds (IEEE 1800-2023 16.14.3, 37.50 vpiClockingEvent and
+    // vpiDisableCondition).
+    std::vector<Sensitivity> inline_clock_events;
+    std::optional<ExpressionId> inline_disable_condition;
+    // The property instance the assertion names (37.50 vpiProperty); empty
+    // for an inline property.
+    std::optional<AssertionTree> property_instance;
     OriginId origin;
 };
 
@@ -2036,11 +2156,17 @@ struct AssertionLocalVariable {
 struct AssertionClock {
     std::vector<SourceToken> event_tokens;
     SourceSpanId source;
+    // The clocking event as sensitivities (IEEE 1800-2023 37.50
+    // vpiClockingEvent); empty when the tokens are not an event list.
+    std::vector<Sensitivity> events;
 };
 
 struct AssertionDisable {
     std::vector<SourceToken> condition_tokens;
     SourceSpanId source;
+    // The disable condition (37.50 vpiDisableCondition), when it is an
+    // ordinary expression.
+    std::optional<ExpressionId> condition;
 };
 
 enum class AssertionReferenceKind : std::uint8_t {
@@ -2240,6 +2366,8 @@ struct AssertionDeclaration {
     std::optional<SequenceExpression> sequence_expression;
     std::optional<PropertyExpression> property_expression;
     std::vector<SequenceEndpoint> sequence_endpoints;
+    // The expression tree (37.52, 37.54) with its expressions resolved.
+    std::optional<AssertionTree> tree;
     std::vector<AssertionDeclaration> checker_declarations;
     std::vector<ConcurrentAssertion> checker_assertions;
     SourceSpanId source;
@@ -2327,6 +2455,63 @@ struct Unit {
     // The nets declared implicitly in the unit (IEEE 1800-2023 6.10).
     std::vector<std::string> implicit_nets;
 };
+
+/// The property or sequence declaration named `name` in the unit or in one of
+/// its generate blocks; null when there is none.
+[[nodiscard]] inline const AssertionDeclaration* find_assertion_declaration(
+    const Unit& unit, const std::string_view name)
+{
+    for (const auto& declaration : unit.assertion_declarations) {
+        if (declaration.name == name) {
+            return &declaration;
+        }
+    }
+    const auto search = [&](const auto& self,
+                            const std::vector<GenerateRegion>& regions)
+        -> const AssertionDeclaration* {
+        for (const auto& region : regions) {
+            for (const auto& declaration : region.assertion_declarations) {
+                if (declaration.name == name) {
+                    return &declaration;
+                }
+            }
+            if (const auto* found = self(self, region.nested)) {
+                return found;
+            }
+        }
+        return nullptr;
+    };
+    return search(search, unit.generates);
+}
+
+/// The concurrent assertion statement named `name` in the unit or in one of
+/// its generate blocks (IEEE 1800-2023 27.3, 37.49); null when there is none.
+/// Loop-generate copies of a block share one statement.
+[[nodiscard]] inline const ConcurrentAssertion* find_concurrent_assertion(
+    const Unit& unit, const std::string_view name)
+{
+    for (const auto& assertion : unit.concurrent_assertions) {
+        if (assertion.name == name) {
+            return &assertion;
+        }
+    }
+    const auto search = [&](const auto& self,
+                            const std::vector<GenerateRegion>& regions)
+        -> const ConcurrentAssertion* {
+        for (const auto& region : regions) {
+            for (const auto& assertion : region.concurrent_assertions) {
+                if (assertion.name == name) {
+                    return &assertion;
+                }
+            }
+            if (const auto* found = self(self, region.nested)) {
+                return found;
+            }
+        }
+        return nullptr;
+    };
+    return search(search, unit.generates);
+}
 
 /// Owning SystemVerilog semantic HIR, including opaque class-handle operations.
 class Hir final {

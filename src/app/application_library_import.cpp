@@ -11,11 +11,13 @@
 #include "fsim/support/path.hpp"
 #include "fsim/support/payload_checksum.hpp"
 #include "fsim/support/sha256.hpp"
+#include "fsim/support/vhdl_identifier.hpp"
 #include "fsim/systemc_abi.h"
 
 #include <algorithm>
 #include <map>
 #include <set>
+#include <span>
 #include <sstream>
 
 namespace fsim::app::application_detail {
@@ -406,6 +408,33 @@ bool load_required_mapped_libraries(
     std::vector<library::VhdlPackageDependency> vhdl_dependency_identity;
     std::optional<semantic::CompiledDesign> vhdl_dependency_bundle;
     std::optional<std::string> vhdl_dependency_bundle_bytes;
+    // The standard of a dependency set (its packages' one standard), empty
+    // when they name none or several.
+    const auto dependency_standard
+        = [](const std::span<const library::VhdlPackageDependency> set) {
+              std::string standard;
+              for (const auto& dependency : set) {
+                  if (standard.empty()) {
+                      standard = dependency.standard;
+                  } else if (dependency.standard != standard) {
+                      return std::string { };
+                  }
+              }
+              return standard;
+          };
+    // Two dependency sets name the same packages at the same revisions and
+    // sources, whatever standard each was analyzed with.
+    const auto same_packages
+        = [](const std::span<const library::VhdlPackageDependency> left,
+              const std::span<const library::VhdlPackageDependency> right) {
+              return std::ranges::equal(left, right,
+                  [](const auto& first, const auto& second) {
+                      return support::ascii_lower(first.package)
+                          == support::ascii_lower(second.package)
+                          && first.revision == second.revision
+                          && first.source_digest == second.source_digest;
+                  });
+          };
     const auto load_one = [&](const auto& self, const std::string& library_name)
         -> bool {
         if (const auto state = states.find(library_name); state != states.end()) {
@@ -608,17 +637,21 @@ bool load_required_mapped_libraries(
                 }
                 for (const auto& context : owner.vhdl_context) {
                     for (const auto& selected : context.selected_names) {
+                        // Standards of one package family mix.
                         if (selected.starts_with(library_name + ".")
-                            && owner.vhdl_standard != *mapped_vhdl_standard) {
+                            && vhdl_package_family(
+                                   frontend::to_string(owner.vhdl_standard))
+                                != vhdl_package_family(frontend::to_string(
+                                    *mapped_vhdl_standard))) {
                             diagnostics.error(
                                 "FSIM-FE-VHORDER-011",
                                 "mapped VHDL library '" + library_name
-                                    + "' was analyzed as "
-                                    + std::string { frontend::to_string(
-                                        *mapped_vhdl_standard) }
-                                    + " but the owning source uses "
-                                    + std::string { frontend::to_string(
-                                        owner.vhdl_standard) },
+                                    + "': "
+                                    + vhdl_mixed_family_message(
+                                        frontend::to_string(
+                                            *mapped_vhdl_standard),
+                                        frontend::to_string(
+                                            owner.vhdl_standard)),
                                 span(context.span));
                         }
                     }
@@ -873,15 +906,33 @@ bool load_required_mapped_libraries(
                         != vhdl_dependency_identity
                     || *dependency_bytes
                         != *vhdl_dependency_bundle_bytes);
-            if (incompatible_environment) {
+            // Libraries of standards in one package family share one package
+            // set, the newest standard's, when each package is the same
+            // revision and source (as for workspace objects).
+            const auto standard = dependency_standard(
+                metadata->vhdl_package_dependencies);
+            const auto held = dependency_standard(vhdl_dependency_identity);
+            const bool family_mix = incompatible_environment
+                && !standard.empty() && !held.empty() && standard != held
+                && vhdl_package_family(standard) != 0
+                && vhdl_package_family(standard) == vhdl_package_family(held)
+                && same_packages(metadata->vhdl_package_dependencies,
+                    vhdl_dependency_identity);
+            if (incompatible_environment && !family_mix) {
                 diagnostics.error(
                     "FSIM-ART-VHDEP-001",
-                    "mapped libraries select incompatible compiler-supplied "
-                    "VHDL package environments; regenerate every .fsimlib "
-                    "with one VHDL standard and this fsim build");
+                    !standard.empty() && !held.empty()
+                            && vhdl_package_family(standard)
+                                != vhdl_package_family(held)
+                        ? vhdl_mixed_family_message(held, standard)
+                        : "mapped libraries select incompatible "
+                          "compiler-supplied VHDL package environments; "
+                          "regenerate every .fsimlib with one VHDL standard "
+                          "and this fsim build");
                 return false;
             }
-            if (vhdl_dependency_identity.empty()) {
+            if (vhdl_dependency_identity.empty()
+                || (family_mix && standard > held)) {
                 vhdl_dependency_identity
                     = metadata->vhdl_package_dependencies;
                 vhdl_dependency_bundle_bytes

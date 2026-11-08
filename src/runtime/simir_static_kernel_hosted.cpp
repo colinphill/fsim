@@ -26,6 +26,7 @@
 // host_touched), so every read and write takes the reference path and the
 // kernel sees the writes through scan_inputs and publish, as it does for any
 // host process.
+#include "fsim/runtime/scheduler_events.hpp"
 #include "simir_static_kernel_state.hpp"
 
 #include "fsim/runtime/scheduler.hpp"
@@ -321,6 +322,11 @@ void Interpreter::Impl::StaticKernel::ring_hosted_region(
                 scheduled.phase)] = false;
             kernel.run_hosted_region(scheduled.phase);
         }>(HostedRegionTask { &impl_, host_process_, phase });
+    // The kernel re-arms this event when it is restored (#128), so a save
+    // leaves it out; the first scheduling registers the kind.
+    static const bool registered_kind = (register_derived_scheduler_event_kind(
+        "kernel.hosted_region", task.invoke), true);
+    static_cast<void>(registered_kind);
     impl_.scheduler.schedule_internal_systemverilog_at(
         impl_.scheduler.now(), phase, host_process_, task);
 }
@@ -454,6 +460,11 @@ void Interpreter::Impl::StaticKernel::run_finals(const bool discarded)
                         scheduled.member);
                 }
             }>(KernelFinalTask { &impl_, index });
+        // The kernel re-arms this event when it is restored (#128), so a save
+        // leaves it out; the first scheduling registers the kind.
+        static const bool registered_kind = (register_derived_scheduler_event_kind(
+            "kernel.final_member", task.invoke), true);
+        static_cast<void>(registered_kind);
         impl_.scheduler.schedule_internal_systemverilog_at(impl_.scheduler.now(),
             SchedulerPhase::active, StableOrder { process }, task);
     }
@@ -760,6 +771,11 @@ void Interpreter::Impl::StaticKernel::queue_batch_resume(
                 }
             }
         }>(BatchResumeTask { &impl_ });
+    // The kernel re-arms this event when it is restored (#128), so a save
+    // leaves it out; the first scheduling registers the kind.
+    static const bool registered_kind = (register_derived_scheduler_event_kind(
+        "kernel.batch_resume", task.invoke), true);
+    static_cast<void>(registered_kind);
     impl_.scheduler.schedule_internal_systemverilog_running_active(
         order, task);
 }
@@ -1033,6 +1049,11 @@ void Interpreter::Impl::StaticKernel::defer_hosted_inactive()
                 scheduled.owner->queue_next_delta(scheduled.host);
             }
         }>(HostedInactiveTask { &impl_, host_process_ });
+    // The kernel re-arms this event when it is restored (#128), so a save
+    // leaves it out; the first scheduling registers the kind.
+    static const bool registered_kind = (register_derived_scheduler_event_kind(
+        "kernel.hosted_inactive", task.invoke), true);
+    static_cast<void>(registered_kind);
     impl_.scheduler.schedule_internal_systemverilog_at(impl_.scheduler.now(),
         SchedulerPhase::inactive, host_process_, task);
 }
@@ -1078,6 +1099,11 @@ void Interpreter::Impl::StaticKernel::arm_hosted_timer()
                     scheduled.time);
             }
         }>(HostedTimerTask { &impl_, time });
+    // The kernel re-arms this event when it is restored (#128), so a save
+    // leaves it out; the first scheduling registers the kind.
+    static const bool registered_kind = (register_derived_scheduler_event_kind(
+        "kernel.hosted_timer", task.invoke), true);
+    static_cast<void>(registered_kind);
     impl_.scheduler.schedule_internal_systemverilog_at(
         time, SchedulerPhase::active, host_process_, task);
 }

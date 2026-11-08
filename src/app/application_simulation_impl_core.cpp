@@ -205,8 +205,39 @@ Simulation::Impl::apply_uvm_report_settings(
         uvm_components, uvm_reports, phase, time);
 }
 
+void Simulation::Impl::UvmReportSettingEvent::dispatch(
+    runtime::Scheduler&, const Payload& scheduled)
+{
+    static_cast<void>(
+        scheduled.owner->apply_uvm_report_settings("time", scheduled.offset));
+}
+
+void Simulation::Impl::register_event_kinds()
+{
+    static const bool registered = [] {
+        static_cast<void>(runtime::register_scheduler_event_kind<
+            UvmReportSettingEvent::Payload, &UvmReportSettingEvent::dispatch,
+            UvmReportSettingEvent::Codec>("sim.uvm_report_setting",
+            runtime::SchedulerEventClass::data));
+        return true;
+    }();
+    static_cast<void>(registered);
+}
+
+bool Simulation::Impl::bind_restored_event_handle(const std::string_view kind,
+    const std::uint64_t key, const runtime::ScheduledTaskHandle& handle)
+{
+    static_cast<void>(key);
+    if (kind == "sim.uvm_report_setting") {
+        uvm_report_setting_tasks.push_back(handle);
+        return true;
+    }
+    return false;
+}
+
 void Simulation::Impl::schedule_uvm_report_settings()
 {
+    register_event_kinds();
     auto& scheduler = interpreter->scheduler();
     for (const auto& handle : uvm_report_setting_tasks) {
         (void)scheduler.cancel(handle);
@@ -226,9 +257,11 @@ void Simulation::Impl::schedule_uvm_report_settings()
         uvm_report_setting_tasks.push_back(
             scheduler.schedule_after_cancelable(
                 offset - now, runtime::SchedulerPhase::active, order++,
-                [this, offset](runtime::Scheduler&) {
-                    (void)apply_uvm_report_settings("time", offset);
-                }));
+                runtime::Scheduler::Task { runtime::detail::
+                        make_scheduler_task_descriptor<
+                            UvmReportSettingEvent::Payload,
+                            &UvmReportSettingEvent::dispatch>(
+                            UvmReportSettingEvent::Payload { this, offset }) }));
     }
 }
 
@@ -2962,7 +2995,8 @@ void Simulation::Impl::announce_vpi_driver(
         "driver publication");
 }
 
-void Simulation::Impl::register_foreign_net_delays()
+void Simulation::Impl::register_foreign_net_delays(
+    runtime::simir::Interpreter& target)
 {
     using namespace runtime::simir;
     // The delayed loads: copy -> the net the load reads.
@@ -2987,7 +3021,7 @@ void Simulation::Impl::register_foreign_net_delays()
     std::map<SignalId, Found> loads;
     for (std::size_t index = 0U; index < design_process_count; ++index) {
         const auto driver = running_process(static_cast<ProcessId>(index));
-        const auto& program = interpreter->process_program(driver);
+        const auto& program = target.process_program(driver);
         if (program.name.find(".$mipd_driver") == std::string::npos) {
             continue;
         }
@@ -3011,7 +3045,7 @@ void Simulation::Impl::register_foreign_net_delays()
                     delayed->offset
                         ? slice_width
                         : static_cast<std::uint32_t>(
-                            interpreter->signal_value(delayed->signal).width()),
+                            target.signal_value(delayed->signal).width()),
                     NetDelayTable::from_values(delayed->table) });
                 break;
             } else if (const auto* const plain
@@ -3024,7 +3058,7 @@ void Simulation::Impl::register_foreign_net_delays()
                 load.grouped = load.grouped || *read != copy->second;
                 load.groups.push_back({ driver, 0U,
                     static_cast<std::uint32_t>(
-                        interpreter->signal_value(plain->signal).width()),
+                        target.signal_value(plain->signal).width()),
                     NetDelayTable { } });
                 break;
             } else if (const auto* const slice
@@ -3043,15 +3077,19 @@ void Simulation::Impl::register_foreign_net_delays()
     }
     for (auto& [copy, load] : loads) {
         if (load.grouped) {
-            interpreter->add_foreign_net_delay_load(
+            target.add_foreign_net_delay_load(
                 nets.at(copy), copy, std::move(load.groups));
         }
     }
 }
 
-void Simulation::Impl::start_interpreter()
+void Simulation::Impl::start_interpreter(const bool restoring)
 {
-    interpreter->start();
+    if (restoring) {
+        interpreter->start_for_restore();
+    } else {
+        interpreter->start();
+    }
     refresh_observation_hooks();
 }
 
@@ -3112,6 +3150,24 @@ void Simulation::Impl::publish_vpi_container(
     // Only the words whose value changed are announced (IEEE 1800-2023
     // 38.36.1); the previous value is kept for watched memories alone.
     const auto& previous = watched->second;
+    // An associative array's word is compared with its key's previous value,
+    // not with the word that held its position before a key was added or
+    // removed.
+    std::vector<std::string> current_names;
+    std::unordered_map<std::string, std::size_t> previous_positions;
+    const auto associative = previous && value.type.associative;
+    if (associative) {
+        current_names = live != vpi_live_memories.end()
+            ? live->second.word_names
+            : systemverilog_vpi_associative_word_names(value);
+        auto previous_names
+            = systemverilog_vpi_associative_word_names(*previous);
+        for (std::size_t ordinal = 0; ordinal < previous_names.size();
+             ++ordinal) {
+            previous_positions.emplace(
+                std::move(previous_names[ordinal]), ordinal);
+        }
+    }
     if (const auto words = vpi_container_words.find(object);
         words != vpi_container_words.end()) {
         for (const auto& [handle, ordinal] : words->second) {
@@ -3122,8 +3178,18 @@ void Simulation::Impl::publish_vpi_container(
             auto current = systemverilog_vpi_container_word_value(value,
                 ordinal, vpi_container_scalar_kinds.at(object),
                 vpi_container_categories.at(object));
-            if (previous && ordinal < runtime::simir::container_value_size(*previous)
-                && systemverilog_vpi_container_word_value(*previous, ordinal,
+            auto before = std::optional<std::size_t> { ordinal };
+            if (associative) {
+                const auto found = ordinal < current_names.size()
+                    ? previous_positions.find(current_names[ordinal])
+                    : previous_positions.end();
+                before = found == previous_positions.end()
+                    ? std::nullopt
+                    : std::optional<std::size_t> { found->second };
+            }
+            if (previous && before
+                && *before < runtime::simir::container_value_size(*previous)
+                && systemverilog_vpi_container_word_value(*previous, *before,
                        vpi_container_scalar_kinds.at(object),
                        vpi_container_categories.at(object))
                     == current) {
@@ -3171,6 +3237,54 @@ void Simulation::Impl::sync_vpi_live_memory(
     auto& memory = vpi_live_memories.at(object);
     auto& words = vpi_container_words[object];
     const auto size = runtime::simir::container_value_size(value);
+    // An associative array's words are named by their keys (IEEE 1800-2023
+    // 37.17 detail 28), and a word's handle stays valid while its key exists
+    // (37.3.8): a word whose key remains moves to the key's new position,
+    // and only the words of removed keys are released.
+    if (value.type.associative) {
+        auto names = systemverilog_vpi_associative_word_names(value);
+        if (names != memory.word_names) {
+            std::unordered_map<std::string_view, std::size_t> position;
+            for (std::size_t ordinal = 0; ordinal < names.size(); ++ordinal) {
+                position.emplace(names[ordinal], ordinal);
+            }
+            std::vector<std::optional<fsim_vpi_handle_v1>> kept(names.size());
+            for (std::size_t ordinal = 0; ordinal < memory.words.size();
+                 ++ordinal) {
+                const auto handle = memory.words[ordinal];
+                const auto found = ordinal < memory.word_names.size()
+                    ? position.find(memory.word_names[ordinal])
+                    : position.end();
+                if (found != position.end() && !kept[found->second]) {
+                    kept[found->second] = handle;
+                    vpi_word_handles[handle] = std::pair { object, found->second };
+                    continue;
+                }
+                if (vpi_registry->release(handle)
+                    != runtime::SystemVerilogVpiObjectError::None) {
+                    throw std::logic_error {
+                        "live VPI memory cannot release a removed word"
+                    };
+                }
+                vpi_word_handles.erase(handle);
+            }
+            memory.word_names = std::move(names);
+            memory.words.clear();
+            words.clear();
+            for (std::size_t ordinal = 0; ordinal < kept.size(); ++ordinal) {
+                auto handle = kept[ordinal];
+                if (!handle) {
+                    handle = create_systemverilog_vpi_live_word(
+                        *vpi_registry, memory, ordinal);
+                    require_vpi_value(vpi_registry->bind_live_value(*handle),
+                        "memory-word creation");
+                    vpi_word_handles.emplace(*handle, std::pair { object, ordinal });
+                }
+                words.push_back({ *handle, ordinal });
+                memory.words.push_back(*handle);
+            }
+        }
+    }
     while (memory.words.size() > size) {
         const auto handle = memory.words.back();
         if (vpi_registry->release(handle)
@@ -3452,7 +3566,13 @@ void Simulation::Impl::publish_vpi_strings()
         if (!current || *current == announced) {
             continue;
         }
+        // A string whose length changed announces its size first, before
+        // its value (IEEE 1800-2023 37.17 detail 14).
+        const auto before = announced.size();
         announced = *current;
+        if (vpi_size_change_hook && before != current->size()) {
+            vpi_size_change_hook(handle, before, current->size());
+        }
         runtime::SystemVerilogVpiStoredValue value;
         value.payload = *current;
         require_vpi_value(
@@ -3497,6 +3617,8 @@ void Simulation::Impl::publish_vpi_assertion(
     published.source_span = event.source_span;
     published.action_suppressed = event.action_suppressed;
     published.attempt_start = event.attempt_start;
+    published.fail_line = event.fail_line;
+    published.fail_column = event.fail_column;
     const auto error = vpi_assertions->observe(
         object->second, std::move(published));
     if (error != runtime::SystemVerilogVpiAssertionApiError::None) {
@@ -3523,7 +3645,23 @@ void Simulation::Impl::publish_assertion_attempt_start(
         object->second, static_cast<runtime::SimulationTick>(start));
 }
 
-void Simulation::Impl::start_vpi()
+void Simulation::Impl::publish_assertion_step(
+    const runtime::simir::ProcessId design_process,
+    const runtime::sva::StepRecord& step)
+{
+    if (!assertion_step_hook || !vpi_runtime_updates_enabled) {
+        return;
+    }
+    const auto object = vpi_process_assertions.find(design_process);
+    if (object == vpi_process_assertions.end()) {
+        return;
+    }
+    // The callback may read values of the design.
+    interpreter->prepare_output_callback_observation();
+    assertion_step_hook(object->second, step);
+}
+
+void Simulation::Impl::start_vpi(const bool restoring)
 {
     if (vpi_started) {
         return;
@@ -3532,10 +3670,18 @@ void Simulation::Impl::start_vpi()
     if (sealed != runtime::SystemVerilogVpiSystemError::None) {
         throw std::logic_error { "failed to seal VPI system registrations" };
     }
-    const auto callback = vpi_callbacks->dispatch_lifecycle_now(
-        runtime::SystemVerilogVpiCallbackKind::StartOfSimulation);
-    if (callback != runtime::SystemVerilogVpiCallbackError::None) {
-        throw std::logic_error { "failed to dispatch VPI start callbacks" };
+    // A restart (IEEE 1800-2023 D.9) is not a start of simulation: the model
+    // is restored past it, and the only callbacks that exist are
+    // cbStartOfRestart and cbEndOfRestart (38.36.3). So nothing registered for
+    // cbStartOfSimulation hears this one, the host services' own
+    // registrations (the VHPI bridge) included; each service sets its phase
+    // from the restart events instead (IEEE 1076-2019 20.8 NOTE 2).
+    if (!restoring) {
+        const auto callback = vpi_callbacks->dispatch_lifecycle_now(
+            runtime::SystemVerilogVpiCallbackKind::StartOfSimulation);
+        if (callback != runtime::SystemVerilogVpiCallbackError::None) {
+            throw std::logic_error { "failed to dispatch VPI start callbacks" };
+        }
     }
     vpi_started = true;
 }
@@ -3544,19 +3690,55 @@ bool Simulation::Impl::perform_reset()
 {
     const auto request = reset_requests.front();
     reset_requests.erase(reset_requests.begin());
+    // IEEE 1800-2023 38.36.3 and D.8, IEEE 1076-2019 20.9, in this order:
+    //  1. cbStartOfReset / vhpiCbStartOfReset run first, while the old run is
+    //     intact ("before the simulation time has been reset to 0"). The VHPI
+    //     hook then removes every callback but vhpiCbEndOfReset (20.9 b).
+    //  2. The DPI hook, registered last, disables the DPI chains in flight and
+    //     drops the user data tables (D.8 a), so a library frees its pointers
+    //     in the start callback above and finds them cleared afterwards.
     for (std::size_t index = 0U; index < lifecycle_hooks.size(); ++index) {
         lifecycle_hooks[index](Simulation::LifecycleEvent::start_of_reset, {});
     }
     interpreter->scheduler().clear_stop();
+    //  3. The engine returns to time zero with the initial values and every
+    //     scheduled event cancelled (D.8 b; 20.9 c, d); the application's own
+    //     state goes with it.
     if (!interpreter->reset_run_state()) {
-        throw std::logic_error { "the engine cannot reset the run" };
+        throw std::runtime_error {
+            interpreter->reset_failure().empty()
+                ? std::string { "FSIM-SAVE-0018: the engine cannot reset the "
+                                "run" }
+                : interpreter->reset_failure()
+        };
     }
+    reset_application_state();
+    //  4. $reset_count and $reset_value are the only state that survives (D.8).
     ++reset_count;
     reset_value = request.reset_value;
+    interpreter->set_reset_values(
+        static_cast<std::int32_t>(reset_count), reset_value);
+    //  5. cbEndOfReset / vhpiCbEndOfReset run last: after the reset to time 0
+    //     and the initial values, before the first procedural statement
+    //     (38.36.3; 20.9 e; no callback fires between 3 and 5, 21.3.8.4 NOTE 2).
     for (std::size_t index = 0U; index < lifecycle_hooks.size(); ++index) {
         lifecycle_hooks[index](Simulation::LifecycleEvent::end_of_reset, {});
     }
     return request.stop_value != 0;
+}
+
+void Simulation::Impl::reset_application_state()
+{
+    // Class objects and their static members are variables (D.8: all
+    // variables contain their initial values); a delayed vpi_put_value is a
+    // scheduled event, which the engine's reset cancelled.
+    class_heap.clear();
+    class_owner_parameter_values.clear();
+    class_static_store.reset_values();
+    class_static_store.initialize_all();
+    if (vpi_values) {
+        vpi_values->reset_records();
+    }
 }
 
 void Simulation::Impl::end_vpi()

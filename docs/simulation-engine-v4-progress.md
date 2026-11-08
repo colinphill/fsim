@@ -138,7 +138,130 @@ per completed phase).
 
 ## 4. Log
 
-### 2026-11-07: SDF net delays and SystemVerilog <-> VHDL ports gate, #149, #152, #164–#171 (this commit, sweeps `sd1g`, `sd1ga`)
+### 2026-11-08: Wave AE gate: SVA operations in the kernel, wide operations inline, save/restart/reset, conformance rows (this commit, sweeps `ae4g`, `ae4ga`)
+
+This commit holds everything since `bf5d40be`. That is waves Y through AE (#166, #172–#191, #128/#185, #150, #109, #186) under the 11-07 scope freeze (`.local-artifacts/followups/freeze-1107.md`), and the fixes for the ae3 sweep regressions. Design notes for #166 and #186 are in the entries below and in the Wave AC/AD/AE sections at the end of this file.
+
+**Contents:**
+- **SVA in the compiled kernel (#186, #182):**
+  - Assertion evaluators and region members compile (wave AC).
+  - Each directive has one attempt block (`sva::AttemptStorage`) with sampled-history rings (stage 1).
+  - New ops `KOp::sva_tick`, `sva_outcome` and `sva_sampled_load` (stage 2).
+  - The plan text is now `sva3`, with one span per guard.
+  - Stepping is strict (39.5.2): a step at or before the last tick, or on a running attempt, is refused.
+  - Attempt-start reports bind when a library first registers `cbAssertionStart`.
+- **Wide operations inline (#166):**
+  - `KOp::wide_alu` handles all the binary, shift, reduction, select, field and matching families.
+  - Above 8 chunks every wide family compiles as an IR word loop (owner 11-08). That covers the ALU families plus load, copy, constant, concat, the slot/shared/resolved stores, moves, memory elements and the part-insert copy.
+  - Narrow dynamic extract and part-select are inline.
+  - Inline writes now also cover memory element part writes, and dynamic and part writes to resolved slots.
+  - A Logic9 value written to a four-state slot collapses its codes.
+- **Save, restart and reset (#128, #185):**
+  - Commands: `$save`, `$incsave`, `$restart`, `$reset`, `$reset_count`, `$reset_value`; `simulate --save-at/--save-file/--restart`; Tcl `fsim::save` and `fsim::restart`.
+  - Foreign lifecycle callbacks: VPI, VHPI and PLI TF.
+  - New tables `docs/run-state-classification.tsv` and the check `fsim.run-state-classification`.
+  - Refusals: `FSIM-SAVE-0001`–`0022`. UVM state stays refused (#188).
+- **Conformance (#150, #109):**
+  - VPI: assertion, primitive/UDP, class, clocking, timing-check, delay and frame rows.
+  - VHPI: `vhpi_create` and driver rows, the PostAnalysis audit and the capability claim.
+  - PLI: ACC delay and TF reason rows.
+  - DPI: export dispatch scope and the disable protocol (35.9).
+  - `vpi_put_delays` gate, tranif and net splits are journalled, so they survive restart and reset. A split that fails at the safe point reports `FSIM-VPI-SPLIT-001` and the run exits non-zero.
+- **Language:**
+  - Annex D `$scope`/`$showscopes`/`$showvars`; `$list` is refused.
+  - A disable of a block ends the tasks it called (#174, 9.6.2).
+  - Deferred assertion actions (#175, 16.4).
+  - Per-event `iff` guards (9.4.2.3).
+  - Procedural concurrent assertion clock inference (16.14.6).
+  - Mixed language standards (#177).
+  - Virtual `super.method()` across standards (#178).
+  - VHDL subtype `'left` and `'image` (#180).
+  - VHDL #191 (below).
+- **Memory:**
+  - VitalDelay wire-delay fields are boxed (#172).
+  - No run-long outcome log for concurrent assertions: events go through the hook and VPI only.
+
+**Behaviour changes against `bf5d40be`:**
+- `@(posedge a or negedge b iff g)` binds `g` to `negedge b` only (IEEE 1800-2023 9.4.2.3). It used to guard the whole control.
+- A deferred assertion action is null or a single subroutine call (16.4). System tasks count, so `assert #0 (e) else $display(...)` is accepted; a begin-end block is `FSIM-SV-SEM-250`. As a result, ivtest `sv_deferred_assert1` and `sv_deferred_assume1` now run their Icarus-diagnostic gold, which is out of scope. The owner accepted this on 11-08.
+- A procedural concurrent assertion needs a clocking event or an inferable clock (16.14.6, `FSIM-SV-SEM-470`, `-471`).
+- VHDL units mix only within {1987–2002} or within {2008, 2019} (`FSIM-ART-VHDEP-001`). INTEGER is 64 bits design-wide if any unit is VHDL-2019. SystemVerilog packages and units of different standards mix, and only a differing compatibility profile is refused (`FSIM-FE-STANDARD-003`).
+- `$list` is refused (`FSIM-ELAB-SVSCOPE-002`). `$showscopes`/`$showvars` output is fsim-defined, because Annex D gives no format.
+- The concurrent assertion outcome accessor is removed, and the log no longer appears in `app.assertions`.
+
+**Fixes for the ae3 sweep regressions against `sd1g`:**
+- `t_if_deep`, `t_opt_localize_deep`: `resolve_statement`'s 43 KB frame is split into noinline helpers.
+- `br_gh330`, `t_math_cond_huge`: `hir_contains_deferred_assertion` now visits each shared HIR subtree once.
+- `nvc/shift2`: compiled narrow `rol` rotated right.
+- `pr734`: inline wide ops built each value as one LLVM iN. At 69,120 bits they took 6–40 s to compile; they are now word loops above 8 chunks. 69,120-bit add, or and shift run in 0.02–0.03 s; sd1 takes 0.03 s.
+- `t_property_untyped`: an unclocked sampled read had no planned ring. A ring added mid-run moved the layout under the compiled kernel. The plan now keeps rings for unclocked reads. Adding or moving a ring after a compiled kernel binds the layout is an internal error (owner 11-08).
+- VHDL #191 (owner 11-08, test unchanged):
+  - A process-local constant array with non-literal elements folds when the evaluator gives an in-range value; the whitelist is dropped.
+  - The predefined BIT_VECTOR/BOOLEAN_VECTOR logical, shift and `&` operators give their result an index range (IEEE 1076-2008 9.2.2, 9.2.4, 9.2.5), also when STD_LOGIC_1164's operators are visible.
+- **Large-width differential tests** at 300, 640, 701, 1,400 and 69,120 bits are identical on the interpreter and v4. They cover a 1,400-bit SV↔VHDL resolved bus, a w=1400 part insert of narrow sources, and memory elements.
+
+**Gate (archive `ae4`):**
+- **ct4:** 1529/1530 in normal, strict, verify and mt4. The one failure was `fsim.run-state-classification`, on the two new ring-guard flags. Their rows were added, and the test passes in all four variants.
+- **Sweeps `ae4g` and `ae4ga`:** 0 losses against `sd1g` and `sd1ga`, except the two owner-accepted ivtest cases above.
+- **cocotb against `sd1`:** +0 −0 in all four configurations. `test_rising_edge_leak`'s ae3 loss was owner-accepted noise (mimalloc purge) and did not recur.
+- **Census:** 0 losses in both modes; host=0 for every admitted case. `kernel_deopts` is 2 cases / 11 (sd1 3 / 12).
+- **vgate:** rc 0.
+- **`collapse_fuzz` seeds 1–200:** 0 failures.
+
+| Suite | sd1g passed / in scope | ae4g passed / in scope | Excluded (ae4g) |
+|---|---:|---:|---:|
+| ivtest | 2635 / 2635 | 2633 / 2633 | 278 |
+| nvc | 1257 / 1257 | 1257 / 1257 | 225 |
+| sv-tests | 1495 / 1495 | 1495 / 1495 | 2 |
+| verilator | 2070 / 2070 | 2070 / 2070 | 345 |
+| vests | 3663 / 3663 | 3663 / 3663 | 2 |
+| vhdl-compliance | 65 / 65 | 65 / 65 | 7 |
+| cocotb 2.1 Verilog | 708 / 708 | 708 / 708 | 1 |
+| cocotb 2.1 VHDL | 646 / 646 | 646 / 646 | 1 |
+| cocotb master Verilog | 735 / 735 | 735 / 735 | 1 |
+| cocotb master VHDL | 666 / 666 | 666 / 666 | 1 |
+
+**D6 campaign `ae4-g5`** (`perf.sh`, 3 samples, CPU 9, ASLR off, xsim timed in the same session, after `compact.sh`):
+- Geomean e2e is 3.57× (`sd1-g5`: 3.59×). The minimum simulate speedup is 3.53× on original_codec (`sd1-g5`: 3.49×). Both floors hold.
+- original_throughput's simulate phase is 1.38 s against 1.28 s in `sd1-g5`. In an interleaved A/B (4 rounds, simulate only), sd1 takes 1.29–1.35 s and ae4 1.34–1.37 s. Instructions rise by 0.6%, from 18.486G to 18.600G.
+
+| Case | fsim e2e | xsim e2e | e2e × | fsim sim | xsim sim | sim × | sd1-g5 sim × | Peak RSS MB (sd1-g5 → ae4-g5) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| original_codec | 11.41 | 28.96 | 2.54 | 2.08 | 7.34 | 3.53 | 3.49 | 2256 → 2188 |
+| original_throughput | 5.39 | 16.42 | 3.05 | 1.38 | 7.50 | 5.44 | 5.90 | 1003 → 993 |
+| mixed_codec | 9.13 | 24.92 | 2.73 | 1.83 | 6.49 | 3.55 | 3.55 | 1377 → 1354 |
+| mixed_throughput | 4.46 | 13.04 | 2.92 | 1.38 | 6.09 | 4.42 | 4.30 | 551 → 561 |
+| codex_reference_mode0_frames1 | 2.26 | 9.43 | 4.18 | 0.13 | 3.84 | 30.67 | 30.59 | 309 → 312 |
+| codex_reference_mode0_frames2 | 2.26 | 9.43 | 4.17 | 0.12 | 3.84 | 30.69 | 30.69 | 303 → 312 |
+| codex_reference_mode1_frames1 | 2.31 | 10.03 | 4.35 | 0.13 | 3.84 | 30.67 | 30.42 | 311 → 312 |
+| codex_reference_mode1_frames2 | 2.26 | 9.93 | 4.40 | 0.12 | 3.84 | 30.75 | 30.53 | 305 → 312 |
+| codex_throughput_default | 2.41 | 10.08 | 4.19 | 0.27 | 3.94 | 14.32 | 14.25 | 311 → 310 |
+| codex_throughput_direct_syndrome | 2.26 | 8.78 | 3.89 | 0.28 | 3.94 | 14.28 | 13.90 | 296 → 306 |
+
+The campaign's peak RSS is the maximum over all phases, which is elaborate on these cases.
+
+**Memory (open; owner 11-08: backlog, investigate at the next gate).** On original_throughput with no library, simulate's peak RSS is 745 MB on sd1 and 799 MB on ae4 (+54 MB, +7%):
+- The growth happens at setup: a 1 ns run shows the same peaks.
+- mimalloc's statistics: the 1.2 KiB bin grows by 43 MiB (54.8k → 89.8k objects), the 3.5 KiB bin by 13 MiB and the 768 B bin by 6 MiB.
+- The 192 B and 320 B bins traded places back: that is #172's boxing of the VitalDelay wire-delay fields.
+- The types that grew are not identified. That needs a heap-profiling build without mimalloc, because heaptrack sees no allocations under the static override.
+- The sd1 step (665 → 728 MB against fc9b) is open in the same follow-up.
+
+**Assertion-heavy design and idle plug-in (#183, freeze: measure after #186 stage 2).** The design is `asrt` (64 asserts and 64 covers, 200k cycles). The runs are interleaved, 3 rounds on CPU 9, and every output is identical:
+
+| | No library | Idle VPI library | Idle cost | Peak RSS |
+|---|---:|---:|---:|---:|
+| sd1 | 53.9–56.6 s | 65.7–66.3 s | +11.7 s (1.21×) | 4.88 GB |
+| ae4 | 33.1–33.9 s | 45.1–45.8 s | +12.2 s (1.37×) | 153 MB |
+
+#186 stage 2 and the removal of the outcome log make the run 1.6× faster, and peak RSS drops from 4.88 GB to 153 MB. The idle library's absolute cost is unchanged, at about 12 s. It is above the 5% bar, so #183 goes to the backlog with these numbers.
+
+**Backlog (found in this gate, not regressions; sd1 behaves the same):**
+- A pure-VHDL std_logic signal with several VHDL driver processes is not kernel-owned. The planner owns a resolved VHDL signal only with one driver per element, and the #164 resolved slots cover sv_wire and SDF multi-source nets only. Follow-up: extend those slots to std_logic resolution over VHDL drivers.
+- A VHDL process that drives a 1,400-bit std_logic inout also driven by an SV net is not compiled (`tier:not_compiled:register_width`). As a result, the word-loop paths for queued VHDL resolved-net stores and nine-value net constants above 8 chunks cannot be reached from source in this gate.
+- The interpreter path of live DEVICE retiming and live net-delay splits was checked by hand only. ctest covers v4.
+
+### 2026-11-07: SDF net delays and SystemVerilog <-> VHDL ports gate, #149, #152, #164–#171 (commit `bf5d40be`, sweeps `sd1g`, `sd1ga`)
 
 This commit holds the two 11-06 entries below (twelve-transition SDF net delays in the kernel, per-source INTERCONNECT, the VITAL SDF map, two-sided buses, weak values and sources, the LRM port contract) and the 11-07 follow-ups: foreign and HDL writes of group-mode nets, #171 (released nets take their drivers' value), and the faster ctest checks. The owner approved one gate for all of it (11-06).
 
@@ -265,6 +388,25 @@ The owner decided on 2026-11-06 to drop xsim parity for mixed scheduling. No sta
     - **Weak sources (#168, closed 2026-11-06):** `fsim.application.vhdl-weak-sources` passes with std_logic_1164 TextIO for std_ulogic and std_ulogic_vector (IEEE 1076-2008 16.7: READ, OREAD, HREAD, the BREAD/BWRITE aliases, WRITE, OWRITE, HWRITE). A read is one string-source `FileScan` with a nine-value format (`scan_vhdl_logic9` follows the package body: leading whitespace, the `_` rules, the digit tables and the truncation check, the failing character consumed, the target 'U' on failure, and the body's error message without GOOD); OWRITE and HWRITE build the image and then `vhdl_logic9_ostring`/`vhdl_logic9_hstring` (TO_OSTRING/TO_HSTRING). Test `fsim.application.vhdl-std-logic-textio` (interpreter, v4, v4 with `FSIM_KERNEL_VERIFY`, scheduler). Limits: a slice target with run-time bounds and a record-member target stay FSIM-ELAB-VHTEXTIO-004, as for the other radix reads.
     - **Test:** `inout_bus` (a 72-bit net). It covers whole and slice constants with L/H/W/-, a constant at a computed index, computed values, an SV slice across the 64-bit word boundary, an SV bit against weak VHDL values, and VHDL readers.
   - **Owner 2026-11-06 (#165):** the VHDL side must resolve in generated code too (not in `commit_writes`), and helper calls are to be avoided except where absolutely necessary (the `wide_concat` helper included). In progress with worker packages x1 (two-phase next-block resolution) and x2 (inline wide ops). `KOp::wide_concat` is now inline in every mode: `emit_wide_concat` assembles a fourth plane, the weak mask (narrow operands' shadow `b`, wide operands' mask chunk `b` words), when the body carries weak masks, so a weak-mode concatenation no longer calls `call_wide`. The other `call_wide` sites (weak `wide_part_insert` and the generic wide arithmetic) are #166.
+  - **Wide arithmetic and logic inline (#166 part B, worker y6, 2026-11-07; built and gated on `ae4`, 2026-11-08).**
+    - New `KOp::wide_alu` (family in `offset`: `WideFamily`) covers Binary (every operator but `vhdl_match_equal`: add, subtract, multiply, power, divide, modulus, remainder, compares, bitwise, logical, case/wildcard equality), Shift (logical, arithmetic, rotate; narrow or wide, signed or unsigned amount), UnaryNot, Reduction, ConditionalSelect (IEEE 1800-2023 11.4.11 merge), LogicalNot, LogicalBinary and ConvertToTwoState on chunked wide registers. Generated code loads the chunks into `iN` integers of the register's width (`emit_wide_alu` in `static_kernel_codegen.cpp`), computes the Logic4 planes and the 'U' and weak masks, and stores the chunks; division and power are inline loops. No `KOp::generic` or `call_wide` for these.
+    - The bytecode tier (`execute_wide_alu`) runs the same instruction through the reference value functions, so `FSIM_KERNEL_VERIFY` (which compares every register, wide ones as values, with the reference evaluator) covers each new instruction.
+    - Chunked storage now includes behavioral threads (`chunked` no longer excludes them; `sync_behavioral_registers` and the boundary operand reader read the chunks). Only polymorphic VHDL registers stay in `body.wide_registers`.
+    - Tests: `fsim.application.systemverilog-wide-alu` and `fsim.application.vhdl-wide-alu` (widths 65, 128, 200, 256; interpreter, v4, v4 with `FSIM_KERNEL_VERIFY`; oracles written bit by bit).
+    - Not yet done in this part (Extract/Insert/DynamicInsert since done by z5, below): wide Concatenate outside the `wide_concat` constraints, wide family/proxy reads and writes, VHDL dynamic part slices, and the `wide_host_read` / `wide_logic9_slot` / `wide_constant` / `wide_storage` / `wide_slot` rejects.
+  - **Wide fields and narrow shapes inline (#166, worker z5, 2026-11-07; built and gated on `ae4`, 2026-11-08).**
+    - `WideFamily::extract`, `insert` and `dynamic_insert` on `KOp::wide_alu`: Extract between wide registers, Insert into a wide target (narrow or wide source, constant offset) and DynamicInsert on a wide target (narrow or wide source; an unknown or out-of-range index or a field past the target leaves the target, strict is error reason 9; IEEE 1800-2023 11.5.1). Generated code works on `iN` integers per plane (`emit_wide_extract`, `emit_wide_insert`, `emit_wide_dynamic_insert`); the bytecode tier (`execute_wide_alu`, which now returns the strict error message) uses `extract_bits`/`insert_bits`. Wide `Extract`/`Insert`/`DynamicInsert` no longer lower to `KOp::generic`.
+    - Narrow `dynamic_extract` and `dynamic_part_select` (sub 0) have no `fsim_sk_evaluate_*` slow path: an invalid index reads X (non-strict), is `fsim_sk_fail` reason 3/4 (strict), and a partial part-select is read bit by bit in an inline slow block. `load_slot9` in a design without weak sources decodes all nine codes inline (`store_nine`).
+    - Re-inventory at this commit: `fsim_sk_binary`, narrow shift (signed amount, `arithmetic_left`, rotate), `integer_unary`/`integer_binary` (the profile's 32 and 64 bit INTEGER; other widths are the reference's error) and the weak-mode wide sites of group 1 were already inline. Remaining `call_wide`: the queue-full slow blocks of `emit_wide_net_store` and `emit_wide_slot_store`. Remaining helpers on value paths: wide `vhdl_match_equal`, polymorphic-width registers, wide family/proxy reads and writes, projected writes and VHDL dynamic part slices (listed in the z5 report).
+    - Tests: `fsim.application.systemverilog-wide-fields` (widths 65, 128, 129, 200 and packed arrays of 16 bit elements of 80, 144, 208, 272 bits) and `fsim.application.vhdl-wide-fields` (65, 128, 129, 200; all nine std_logic values); both under `FSIM_KERNEL_VERIFY`.
+  - **Wide matching equality, wide part selects, element part writes (#166, worker aa2, 2026-11-07; built and gated on `ae4`, 2026-11-08).**
+    - `WideFamily::binary` now covers `vhdl_match_equal` (IEEE 1076-2019 9.2.3): `emit_wide_binary` computes the mismatch, 'U' and X facts over whole planes as `vhdl_match_parts` does per word, and a narrow result with a 'U' (a pair with 'U' and no deciding mismatch) goes to the result's shadow ('U' tracking: the analysis makes the destination of a wide `vhdl_match_equal` a tracked register, `unknown_after` stores `last_unknown_` for `wide_alu`, and the bytecode tier `execute_wide_alu` writes the shadow). Test `fsim.application.vhdl-wide-match` (65 to 256 elements, all nine values, oracle plus six hand-derived results; no `generic:Binary` in the kernel's report).
+    - New `WideFamily::dynamic_part_select`: `DynamicPartSelect` with a result of more than 64 bits from a wide chunked register (`emit_wide_dynamic_part_select`, integers of the larger width; the in-range interval of result bits is one field of the source, shifted into place, the rest X, 0 for two-state, an unknown base selects nothing; the case where the source bits run against the result bits uses the bit-reversed source). The bytecode tier calls `dynamic_part_select_value`. Test `fsim.application.inline-ops-part-select-wide` (no `generic:DynamicPartSelect`).
+    - `KOp::mem_write` with a dynamic part (`mem[i][8*lane +: 8] = ...`, blocking and nonblocking) of an element of up to 64 bits is inline (`emit_mem_write_part`: in-place field store for storages 1 to 3, a queue entry of the field for the nonblocking write; an unknown base writes nothing inline; an index outside the array and a field the element does not hold take the reference path, as the whole-element write does). `imm_a` carries the element width. Test `fsim.application.inline-ops-mem-part`.
+  - **Dynamic writes to resolved slots, Logic9 value written to a four-state slot (#166, worker ac3, 2026-11-07; built and gated on `ae4`, 2026-11-08).**
+    - `store_slot_dynamic` and `store_slot_part` on a resolved slot (SystemVerilog procedural dynamic-index and indexed part-select write to a variable port whose net a VHDL process also drives; IEEE 1800-2023 11.5.1) are inline: compile sets `sub` 2, `offset` the slot width and `imm_b` the source count and the member's source (as `net_store`); generated code (`emit_store_net_dynamic`) puts the field's codes into the member's source at the run-time offset (`net_field_counted`: a field of a run-time width), resolves the words it touches over every source, mirrors the write into a pending next block and notifies the bits that changed. A nonblocking write queues the field as the Logic4 form does. Test `fsim.application.inline-ops-net-dynamic-write` (mixed; hand-derived).
+    - Root cause of the mixed `concat_logic9` mismatch (`{i[7:0], 1'b1}` read as `01zx01zxx`): a SystemVerilog member with nine-valued registers is not compiled (`tier:not_compiled:register_kinds`) and runs on the operation tier, whose `StaticKernel::write_slot_value` stored the planes of a Logic9 `PackedLogic4` (code planes) into a four-state slot unchanged. It now collapses a Logic9 value written to an unresolved two-plane (four-state) slot (`collapse_to_logic4`: 'U', 'W', '-' read as x, 'L' as 0, 'H' as 1; IEEE 1800-2023 6.6 and 28). Test `fsim.application.inline-ops-concat-logic9-narrow`.
+    - Still open from the list: polymorphic VHDL registers by callee specialisation, wide family/proxy reads and writes, projected wide writes, VHDL dynamic part slices, wide container elements, the remaining rejected operand shapes, and compiling SystemVerilog members with nine-valued registers (`register_kinds`).
 - **SDF per-source INTERCONNECT delays (#149, IEEE 1364-2005 16.2.4; owner: dual write).**
   - `split_sdf_net_delays` groups the drivers of an annotated load's net by the source port each stands for. A group is either the processes of the port's instance that write the net (nearest instance first), or a parent's `port_result_`/`port_actual_` connection process that drives the net from that port's formal. The drivers no INTERCONNECT names form one more group, which takes the PORT delay.
   - When every group has the same delays, one copy of the net is delayed as a whole (as before).
@@ -2288,7 +2430,7 @@ original_codec has the thinnest D6 margin: its simulate phase was 3.12× xsim's 
   - A member's threads resume in its own region through the hosted region lists (`ready_thread_in`).
   - `WaitRegion` moves a thread to a later region of the time step: Observed, Reactive, Re-Inactive or Postponed. A deferred assertion's action uses Reactive or Postponed (16.4.2).
   - Sampled reads and SVA monitors run the reference's code through a storage interface (`AssertionStorage`). The interpreter's process and the kernel's member each implement it. The signals, clocks and gates that sampled reads use stay host signals.
-  - Members with assertion operations run on the operation tier.
+  - Members with assertion operations run on the operation tier (superseded by wave AC: they compile; see the note at the end of this file).
 - **Updates from a region member** are staged from its region (`write_host`), outside the kernel's activation flags.
   - The kernel's host process runs its stub in the Active region. When the member it replaces is a region process, `capture_signal_change_origin` keeps that member's region, so its nonblocking writes go to Re-NBA, as the reference's do.
   - Region members may fork, wait constant delays, and write reference-format registers and host containers. A `#0`, forces, disables and writes to kernel arrays keep them on the host.
@@ -5976,3 +6118,103 @@ Measured state (2026-10-07, `rep.py`, CPU 9, Verilog, before the D6 work):
    in-memory overrides would cut decode and encode time.
 5. **Kernel run**: notification and scheduling are about 35% of the run, generated code
    about 60%.
+
+## Wave AC: assertion evaluators compile natively
+
+- **`Member::assertion` no longer excludes a member from compilation** (IEEE 1800-2023 4.4.2, 16.14). An assertion evaluator or region member compiles like any behavioral member.
+  - `SvaOperation` (the monitor's state machine, 16.14) and a sampled `ReadSignal` ($past, $rose, $fell, $stable, $changed and the clocked or gated history reads, 16.5.1, 16.9.3) are `KOp::generic` effect calls of their kind; `operation_registers_of` names the registers the monitor reads (guards, start, disabled, bounds) and writes (its 32 bit result). A sampled read's result is one bit for the edge and stability forms and the signal's width otherwise (`sampled_read_width`), and a sampled read never fuses into an in-place field read.
+  - `WaitRegion` is a suspension (`behavioral_suspension`).
+  - A region member's nonblocking updates compile like any member's: its signals are host signals, so the stores are `store_host` effects through `write_host`, which stages them from the region (10.4.2).
+  - The attempt-start report (`Display::inert`) is a `KOp::generic` with `aux` 2: the bytecode tier and generated code test `Impl::assertion_starts_bound` (the frame's `assertion_starts`, set at each activation) and skip the call while it is clear, so binding works at any point in the run and an unbound run pays one test.
+
+
+## Wave AD: #186 stage 1 - shared attempt storage and sampled rings (design note for stage 2)
+
+Stage 1 was built and gated with stage 2 on `ae4` (2026-11-08; the six-suite table is in the gate entry in §4). Nothing in stage 1 changes the kernel image or a `KernelAccessPlan` identity.
+
+### What stage 1 changed
+
+- **`sva::AttemptStorage`** (`include/fsim/runtime/sva_storage.hpp`, `src/runtime/sva_storage.cpp`) holds the attempt state of one directive as one block of `std::int64_t` words. `sva::Monitor` has no other state than the compiled plan (derived) and this block, plus its plan text and bounds (to rebuild the plan on restore). The interpreter and the compiled kernel both reach it through `Impl::run_sva`; stage 2 reaches it by offset.
+- **Position independence.** Every region is named by an offset in the header, never by a pointer, so the block is saved as it is (`Monitor::run_state_io`: plan text, bounds, words), and growing it moves nothing but the base pointer. `AttemptStorage::relayout` is the only function that allocates; `AttemptStorage::adopt` validates a saved block (magic, total size, every region inside the block, ring capacities powers of two, every record inside the used heap).
+- **Sampled rings** replace `Impl::sampled_histories` (`SampledRing` in `src/runtime/simir_internal.hpp`, `simir_sampled_values.cpp`): one ring per distinct `SampledHistoryKey` inside `Impl::sampled_ring_words`, allocated once by `build_sampled_history_clock_index` (the deepest history of each key, every scheduling domain), with the key to start map `sampled_ring_offsets`. `run_sampled_read` keeps its sampling rules unchanged (the `signal_events` test, the scheduling stamp, the Preponed `sampled_values`); only the history container changed. A read the scan did not reach (a late process) allocates a ring at the end of the block; kernel members never do, because the scan covers every program.
+- **Step events** (IEEE 1800-2023 39.4.2, 39.5.2): the monitor produces `StepRecord`s only for an attempt whose row has `attempt_stepping`; `Interpreter::set_sva_step` / `set_sva_step_hook`, `Simulation::set_assertion_step` / `set_assertion_step_hook` and the VPI host carry them to `cbAssertionStepSuccess` / `cbAssertionStepFailure` (`fsim.foreign.vpi-assertions-steps`).
+- **Save and restart**: `sva_monitors` and `sampled_ring_*` are saved (`host.run`, `host.signals`); `FSIM-SAVE-0012` is retired.
+
+### Block layout (word index; `W` is `std::int64_t`; all offsets are word offsets from the block base)
+
+Header (`layout::Header`, 40 words, the rest zero):
+
+| Word | Name | Meaning |
+|---:|---|---|
+| 0 | `h_magic` | `0x5356'4131'0001` ("SVA1", layout 1); any layout change changes it |
+| 1 | `h_tick` | tick count of the leading clock, -1 before the first |
+| 2 | `h_last_start` | start time of the attempt of the outcome taken last |
+| 3 | `h_flags` | bit 0 cover sequence (`every_match`), bit 1 multiclocked |
+| 4 | `h_steps_active` | attempts with stepping plus pending step requests; step records are produced only while it is nonzero |
+| 5 | `h_next_serial` | serial of the next attempt |
+| 6 | `h_time` | time step of the last tick |
+| 7, 8 | `h_clocks_count`, `h_clocks_off` | clocks of a multiclocked plan (0 otherwise); region of `2 * count` words: tick count of each clock, then the time step of each clock's last tick |
+| 9, 10, 11 | `h_attempts_off`, `_count`, `_cap` | attempt table, stride 5 |
+| 12 .. 15 | `h_outcomes_off`, `_head`, `_count`, `_cap` | outcome ring, stride 4 |
+| 16 .. 19 | `h_started_off`, `_head`, `_count`, `_cap` | start-time ring, stride 1 |
+| 20 .. 23 | `h_events_off`, `_head`, `_count`, `_cap` | step-event ring, stride 8 |
+| 24, 25, 26 | `h_requests_off`, `_count`, `_cap` | pending step requests, stride 2 |
+| 27, 28 | `h_heap_off`, `h_heap_used` | current record heap |
+| 29, 30 | `h_heap_alt_off`, `h_heap_alt_used` | alternate record heap |
+| 31 | `h_heap_cap` | words in each heap |
+| 32 | `h_total_words` | words in the block |
+| 33, 34 | `h_last_fail_line`, `h_last_fail_column` | fail position of the outcome taken last (stage 2, layout 2) |
+| 35 | `h_pop_serial` | serial of the last outcome pop (stage 2, layout 2) |
+
+Rows (all `W`): an attempt is `{started, blob, length, serial, flags}` (`blob` is a word offset inside the current heap, bit 0 of `flags` is stepping); an outcome is `{outcome, started, fail_line, fail_column}` (stride 4) with `outcome` the `sva::Outcome` value (1 success, 2 failure, 3 vacuous, 4 disabled); a start time is `{started}`; a step event is `{failure, attempt_start, time, state_from, state_to, guard, sequence, tick, guard_line, guard_column}` (stride 10, layout 2); a request is `{start, mode}`. Region order after the header: clocks, attempts, outcomes, started, events, requests, heap, alternate heap. Ring capacities are powers of two (or 0), so a push is `slot = (head + count) & (cap - 1)`, a pop `head = (head + 1) & (cap - 1)`.
+
+### The attempt record (one per running attempt, in the heap)
+
+The encoder is `Instance::encode`, `Matcher::encode` and `encode_thread` in `src/runtime/sva_engine.cpp`; the decoder reads the same order. A record is a preorder tree of instances:
+
+- `instance = {node, start, flags, chosen, consequents, n_operands, n_started, n_until, [matcher], operands.., started.., until..}`; `flags` bits 0-1 verdict (0 pending, 1 holds, 2 fails), 2 vacuous, 3 matched_once, 4 antecedent_done, 5 satisfied, 6 until_stopped, 7 has matcher, 8 has chosen; an operand is `{position, instance}`, an until entry is `{left instance, right instance}`.
+- `matcher = {next_join, next_group, n_threads, thread.., n_joins, {id, kind, thread, n_ends0, ends0.., n_ends1, ends1..}..}`.
+- `thread = {pc, clock, flags(1 switching, 2 switch_inclusive), switch_time, due_lo, due_hi, n_counters, counters.., n_throughout, {guard, from}.., n_groups, groups.., n_joinrefs, {join, side}..}`.
+
+Counts are always followed by exactly that many elements, so a decoder (and generated code) skips a subtree by counting.
+
+### How a per-plan specialised tick advances the attempts (stage 2)
+
+The plan is known when the member is compiled (`SvaOperation::plan` is a literal), so stage 2 emits one function per plan, `sva_tick_<k>(block, guards, start, disabled, time)`, with the plan's properties and sequences unrolled:
+
+1. Header: `tick = ++block[1]` (single clock). A multiclocked plan first loads each clock's tick guard from `guards`, compares `time` with its time word, and increments its tick word, as `Monitor::tick` does; no clock ticked and not disabled returns.
+2. A new attempt (`start && leading`) pushes `time` onto the start ring.
+3. `disabled`: push `{4, started}` onto the outcome ring for every row, plus one for the new attempt; set `attempts_count = 0`; `heap_used = 0`.
+4. Otherwise one pass over the table: the code reads row `i`, interprets its record in place, and writes the survivor's new record at `heap_alt_off + alt_used` (`alt_used` is `block[30]`), then the row at `kept++`; `kept` never passes `i`, so the table compacts in place. After the pass: `attempts_count = kept`; swap words 27/29; `heap_used = alt_used`; `alt_used = 0`.
+5. Per sequence thread (the specialisation): the sequence program is fixed, so each `check` is a straight-line block: test `[due_lo, due_hi]` against the tick, copy a waiting thread when the window stays open, test guard bit `a` of the `guards` register word, then advance `pc`/`due`. Thread merging is a linear scan of the new thread list comparing the key words (`pc .. joins`, as `Thread::key`); joins and `first_match` groups are record words addressed by the same scheme.
+6. A decided attempt pushes `{1|2|3, started}` onto the outcome ring and writes no record.
+7. Step events: when `block[4] != 0` and the row has `attempt_stepping`, each `check` pushes `{failure, attempt_start, time, from, to, guard, sequence, tick}` onto the event ring. The `from` and `to` ids are `CompiledPlan::state_id` (0 origin, 1 accepting, `2 + base + pc` otherwise, delay and counter ops skipped), which stage 2 computes at compile time. With stepping off the test is the single load of `block[4]`.
+
+### Which operations are inline, and the one helper
+
+Every read, write, compare and pointer step above is inline code on `block[...]`. Only growth calls a helper: `fsim_sva_grow(block_slot, region)`, which runs `AttemptStorage::relayout` for region 0 attempts, 1 outcomes, 2 started, 3 events, 4 requests, 5 heap (called when a push finds `count == cap`, or the heap append finds `alt_used + n > cap`), then stores the new base pointer in the member's `block_slot`. A pass must reload its table, ring and heap bases from `block_slot` after any call.
+
+### KOp forms (stage 2) and how they map
+
+- `KOp::sva_tick` (`x` the member's assertion slot, `aux` the plan index, `y` the register base): the specialised tick above. It replaces the `KOp::generic` that runs `SvaOperation{tick}`; the result register is `outcomes_count`. The attempt-start report stays `KOp::generic` `aux` 2 (only a bound run pays), and the step hook is a host callback reached only when `block[22] != 0` after the tick (one load).
+- `KOp::sva_outcome` (same slot): inline ring pop: `if (block[14] == 0) result = 0; else {row = block[12] + 2 * block[13]; result = block[row]; block[2] = block[row + 1]; head/count updated}`. `Impl::sva_outcome_starts` (a host map written per outcome) is replaced by reading `h_last_start` through `Interpreter::sva_outcome_start`, with a serial stamp to order the monitors of one process.
+- `KOp::sampled_load` (`x` the ring's start in `sampled_ring_words`, `aux` the `SignalReadKind`, `d` destination): `cap = ring[0]`, `first = ring[1]`, `count = ring[2]`, `value(i)` is the words at `ring + 12 + ((first + i) % cap) * ring[3]`. `$sampled` is `value(count-1)`; `$past(n)` is `value(count - 1 - n)` (minus the current-slot sample, see 16.9.3); `$rose` and `$fell` compare bit 0 of `value(count-1)` and `value(count-2)`; `$stable` and `$changed` compare the two values word by word. An empty ring reads the default (`sampled_defaults`, a literal of the shape).
+- The append of a sample is a store to `ring[...]` plus the slot words 6 to 10. For the SystemVerilog domain it is already done at clock publication by `capture_sampled_history_clock`; the first task of stage 2 is to prove the read-time append of `run_sampled_read` redundant for a SystemVerilog member (unverified here: it needs the same-slot test to hold whenever the read-time `sample` is true), and if it is not, compile the same test over the kernel's own event stamps. Until then a kernel member's sampled read stays a host call.
+
+### Kernel image and schema bumps for stage 2
+
+The kernel image magic changes with `KOp::sva_tick`, `KOp::sva_outcome`, `KOp::sampled_load`; `KernelAccessPlan` gains a flag (assertion blocks live in the plan) and the frame gains the `block_slot` array. The layout constants above are a persisted format: changing one means changing `layout::magic` and the run-state `host_version`.
+
+
+## Wave AE: #186 stage 2 - the SVA operations of the compiled kernel
+
+Written by worker ae6; built and gated on `ae4` (2026-11-08; the six-suite table is in the gate entry in §4).
+
+- **Three kernel operations** (`KOp::sva_tick`, `KOp::sva_outcome`, `KOp::sva_sampled_load`; `src/runtime/simir_static_kernel_ir.hpp`) replace the `KOp::generic` calls of `SvaOperation` and of the sampled `ReadSignal`s in an assertion member. The profile of `tests/fixtures/vhdl/inline_ops/assertion_members.sv` must show no `reason=generic:SvaOperation`, no `reason=generic:ReadSignal` and no `tier:not_compiled:assertion` (`fsim.application.inline-ops-assertion-members` forbids them); only the directive's outcome reports (`Display`, a library operation) keep a helper.
+  - `sva_outcome` is the inline ring pop on the monitor's block, on the bytecode tier (`execute_sva_outcome`) and in generated code (`static_kernel_codegen.cpp`): `count == 0` gives 0, else the row at `h_outcomes_off + 4 * head`, whose start and fail position go to `h_last_start`, `h_last_fail_line` and `h_last_fail_column`, with `h_pop_serial := ++Impl::sva_pop_serial`. `Impl::sva_outcome_starts` and `sva_outcome_fails` are gone: `Interpreter::sva_outcome_start`/`sva_outcome_fail` read the block of the process's monitor with the greatest pop serial. The interpreter's `Monitor::next_outcome(serial)` does the same pop.
+  - `sva_sampled_load` loads a Logic4 signal of at most 64 bits: `$sampled` (aux bit 0) from `Impl::sampled_value_words`, a flat copy of `sampled_values` written at each time slot's start (`store_sampled_value_words`) and rebuilt after a restore; the clocked forms (`$rose`, `$fell`, `$stable`, `$changed`, `$past`, clocked `$sampled`) from the ring at the planned start (`Impl::sampled_ring_plan`, a function of the design, so the start is known before the rings exist), as `run_sampled_read` computes them. The read-time append of `run_sampled_read` is not replayed: the clock's publication (`capture_sampled_history_clock`) appends the sample first, and `$past` tests the ring's slot words (`slot_valid`, `slot_time == now`, SystemVerilog domain) for the current sample. Wide signals, Logic9 (VHDL) signals and the global-clocking future forms keep the host read (`KOp::generic`), as wide host reads do today.
+  - `sva_tick` calls the kernel's own tick entry (`fsim_sk_sva_tick`, `StaticKernel::execute_sva_tick`): it reads the guards, start and disabled registers from the register file (chunked guards included), binds the monitor to its block table entry at the first tick, runs `Impl::sva_tick_core` (the `$assertoff` filter, `sva::Monitor::tick`, the attempt-start and step hooks) and writes the pending outcome count. **Not done:** the per-plan specialisation of the automaton (the unrolled `sva_tick_<k>` of the stage-1 note); the automaton still runs in `sva::Monitor::tick` on the host, reached by this one call per clock tick. See the wave report.
+- **Block table.** `StaticKernelSvaTable` (`simir_static_kernel_native.hpp`, frame field `sva` at offset 120) holds the block bases (`blocks`, entry `member_base[member] + aux`, one per (member, directive site), laid out by `plan_sva_table` before the members compile), `pop_serial`, the ring and sampled word bases and the time step. A monitor publishes its base through `sva::BlockSlot` (a weak reference to the table) at every growth (`AttemptStorage::relayout`), so generated code never holds a stale base; a restored monitor is bound again at its next pop or tick (`fsim_sk_sva_bind`, `reset_sva_blocks` after the monitors load).
+- **Layout 2** of the attempt block (`sva::layout::magic` 0x5356'4131'0002): header words 33-35 (above), event stride 10 (the guard's source position, for `matched_exprs`). **Plan text `sva3`** adds one source span per guard (`semantic::sva::GuardSpan`).
+- **Strict stepping** (owner, 39.5.2): `Monitor::request_step` refuses a start time at or before the last tick's time step and a running attempt; `Interpreter::set_sva_step` and `Simulation::set_assertion_step` report it, `vpi_control` fails with a `vpi_chk_error` message.
+- **Kernel image and schemas** (the lead serializes): the kernel image magic changes with the three `KOp`s and the frame field; the run-state schema changes with `sva_pop_serial` replacing `sva_outcome_starts`, the block layout and the step record.

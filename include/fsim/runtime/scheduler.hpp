@@ -14,6 +14,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -215,6 +216,11 @@ struct SchedulerGenericKeyReceipt {
 
 class Scheduler;
 class CancellationSlots;
+// Run-state save/restart of pending events (#128); see scheduler_events.hpp.
+class SchedulerEventOwners;
+struct SchedulerSavedState;
+struct SchedulerSaveResult;
+struct SchedulerRestoreResult;
 namespace scheduler_detail {
 struct Entry;
 struct WorkQueue;
@@ -344,6 +350,20 @@ private:
   std::size_t slot_ { };
   std::uint64_t generation_ { };
 };
+
+/// Rebinds the handle of a restored cancelable event: `kind` is the event kind
+/// name and `key` the kind's cancel key (scheduler_events.hpp).
+using SchedulerCancelBinder = std::function<void(
+    std::string_view kind, std::uint64_t key, ScheduledTaskHandle handle)>;
+
+/// Where a requested save point is reached: after the time slot drained
+/// (IEEE 1800-2023 D.9) or at the end of a simulation cycle (IEEE 1076-2019
+/// 20.7).
+enum class SchedulerQuietPoint : std::uint8_t {
+  slot_end,
+  cycle_end,
+};
+using SchedulerQuietPointCallback = void (*)(void *context, Scheduler &);
 
 /// Raised before executing a delta cycle beyond max_delta_cycles.
 class DeltaCycleLimitError final : public std::runtime_error {
@@ -497,6 +517,13 @@ public:
       SchedulerPhase phase, StableOrder stable_order,
       SchedulerBatchTask& batch_task, std::uint64_t batch_payload,
       Task fallback_task);
+  /// As above with a compact fallback descriptor, so a run-state save can
+  /// record the pending batch member as the registered event it stands for
+  /// (#128); a restart re-creates it as that plain event.
+  void schedule_next_delta_batchable(
+      SchedulerPhase phase, StableOrder stable_order,
+      SchedulerBatchTask& batch_task, std::uint64_t batch_payload,
+      detail::SchedulerTaskDescriptor fallback_descriptor);
   /// Queue one Generic next-delta Active member behind a compact component
   /// ticket. The component count is an admission bound shared by all members;
   /// the scheduler reserves its full compact slab before the first member is
@@ -645,6 +672,35 @@ public:
   [[nodiscard]] RunResult
   run(std::optional<SimulationTick> until = std::nullopt);
 
+  /// Save/restart support (#128). All of it is off the scheduling path: the
+  /// registry is read only here, and a request costs one test per slot.
+  ///
+  /// True where the pending events can be saved: between time slots, at the
+  /// drained end of a time slot, or at the end of a simulation cycle.
+  [[nodiscard]] bool at_quiescent() const noexcept;
+  /// Runs `callback(context, scheduler)` once at the next `point`, with the
+  /// scheduler quiescent (the callback may call save_future and
+  /// request_stop, and must not schedule). A second request replaces the
+  /// first of the same point. IEEE 1800-2023 D.9, IEEE 1076-2019 20.7.
+  void request_quiet_point(SchedulerQuietPoint point, void *context,
+                           SchedulerQuietPointCallback callback);
+  /// Records every pending event as a registered kind. Refuses (ok == false,
+  /// reasons listed) when an event is an unregistered closure, a host-closure
+  /// kind, or the scheduler is not quiescent.
+  [[nodiscard]] SchedulerSaveResult
+  save_future(const SchedulerEventOwners &owners) const;
+  /// Replaces all pending events with the saved ones, keeping each event's
+  /// time, region, phase, order and sequence so their execution order is
+  /// exact, and restores now/cycles/callbacks/next_sequence. `bind` receives
+  /// the handle of each restored cancelable event. Events already pending are
+  /// discarded first, which runs the discard hooks (the interpreter frees its
+  /// update pools there): a restart calls discard_pending(), loads the host
+  /// sections, and only then restores the events, so the hooks find nothing.
+  [[nodiscard]] SchedulerRestoreResult
+  restore_future(const SchedulerSavedState &state,
+                 const SchedulerEventOwners &owners,
+                 const SchedulerCancelBinder &bind);
+
   void request_stop() noexcept;
   void clear_stop() noexcept;
   [[nodiscard]] bool stop_requested() const noexcept;
@@ -686,6 +742,9 @@ public:
   [[nodiscard]] bool generic_active_phase_open() const noexcept;
   [[nodiscard]] std::optional<SimulationTick>
   next_pending_time() const noexcept;
+  /// The times of the future time steps that hold work, in increasing order
+  /// (IEEE 1800-2023 37.81 vpiTimeQueue). Debug-interface use only.
+  [[nodiscard]] std::vector<SimulationTick> pending_times() const;
   /// Work other than Postponed is still queued at the current time: a
   /// later phase, another SystemVerilog round, or the next delta cycle.
   [[nodiscard]] bool has_pending_activity_now() const noexcept;

@@ -2739,7 +2739,8 @@ end architecture rtl;
     assert(has_diagnostic_message(
         incompatible_link_diagnostics,
         "FSIM-ART-VHDEP-001",
-        "incompatible compiler-supplied VHDL package environments"));
+        "units cannot be mixed: IEEE 1164/numeric_std changed type "
+        "relations between the 1987"));
 
     fsim::diagnostic::Engine entity_metadata_diagnostics;
     const auto entity_metadata = fsim::artifact::load_object_metadata(

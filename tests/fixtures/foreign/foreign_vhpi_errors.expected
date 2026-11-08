@@ -23,7 +23,7 @@
 #c simulation get_time(NULL,NULL): error=1
 #c simulation get_time(time): error=0
 #c simulation get_time(cycles): error=0
-#c simulation control reset: rc=1 error=1
+#c simulation control reset: rc=0 error=0
 #c simulation control unknown: rc=0 error=0
 #c simulation register: handle=0 error=1
 #c foreignfs iterator type=1
@@ -32,5 +32,6 @@
 #c foreignf lib beta kind=5 class=1
 #c location of a signal: severity=3 file=foreign_vhpi_errors.vhd line=9
 #c location of the tool: severity=3 file=- line=-1
+#c end of reset phase=9
 #c termination get_time(time): error=1
 #c termination control finish: rc=1 error=1

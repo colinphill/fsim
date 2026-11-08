@@ -6,6 +6,7 @@
 #include "fsim/semantic/compiled_design_linker.hpp"
 #include "fsim/support/design_library.hpp"
 #include "fsim/support/path.hpp"
+#include "fsim/support/vhdl_identifier.hpp"
 
 #include <algorithm>
 #include <array>
@@ -202,6 +203,15 @@ struct CompilerEnvironment {
     // it alone supplies the shared packages.
     std::optional<std::filesystem::path> provider;
     std::vector<library::VhdlPackageDependency> provided;
+    // VHDL objects of more than one standard of one package family share
+    // one package set (see plan_vhdl_mixed_environment): `newest` is the
+    // standard it is restamped with, `winner` names the object that
+    // supplies each package, and `contexts` the compiler contexts already
+    // supplied.
+    bool mixed { };
+    std::string newest;
+    std::map<std::string, std::filesystem::path> winner;
+    std::set<std::string> contexts;
 };
 
 std::optional<std::vector<std::string>> select_compiler_environment(
@@ -209,9 +219,12 @@ std::optional<std::vector<std::string>> select_compiler_environment(
     const artifact::ObjectMetadata& metadata,
     const semantic::CompiledDesign& design,
     CompilerEnvironment& environment,
+    std::vector<std::string>& omitted,
     diagnostic::Engine& diagnostics)
 {
-    if (metadata.language == "vhdl") {
+    // Objects of different standards were checked against each other (one
+    // package family, one copy per package) by plan_vhdl_mixed_environment.
+    if (metadata.language == "vhdl" && !environment.mixed) {
         if (environment.standard && *environment.standard != metadata.standard) {
             diagnostics.error("FSIM-ART-VHDEP-001",
                 "workspace objects select incompatible VHDL standards; "
@@ -230,6 +243,19 @@ std::optional<std::vector<std::string>> select_compiler_environment(
         }
     }
     if (metadata.vhdl_package_dependencies.empty()) {
+        return libraries;
+    }
+    if (environment.mixed) {
+        // Every object projects its compiler libraries, less the packages
+        // another object's (newer-standard) copy supplies.
+        for (const auto& dependency : metadata.vhdl_package_dependencies) {
+            const auto key = support::ascii_lower(dependency.package);
+            const auto winner = environment.winner.find(key);
+            if (winner != environment.winner.end()
+                && winner->second != metadata_path) {
+                omitted.push_back(key);
+            }
+        }
         return libraries;
     }
     // An object whose packages are a subset of the provider's uses the
@@ -432,6 +458,9 @@ std::optional<CompilationWorkspace> load_workspace_objects(
     {
         std::vector<std::pair<std::filesystem::path,
             std::vector<library::VhdlPackageDependency>>> sets;
+        std::vector<VhdlObjectEnvironment> environments;
+        std::vector<std::filesystem::path> environment_paths;
+        bool metadata_complete { true };
         for (const auto* entry : *ordered) {
             if (entry->active_units.empty()) {
                 continue;
@@ -440,10 +469,34 @@ std::optional<CompilationWorkspace> load_workspace_objects(
             const auto metadata = artifact::load_object_metadata(entry->path, quiet);
             if (!metadata) {
                 sets.clear();
+                metadata_complete = false;
                 break;
             }
             if (!metadata->vhdl_package_dependencies.empty()) {
                 sets.emplace_back(entry->path, metadata->vhdl_package_dependencies);
+            }
+            environments.push_back({
+                metadata->language == "vhdl" ? metadata->standard
+                                             : std::string { },
+                metadata->vhdl_package_dependencies,
+                metadata->compatibility_profile });
+            environment_paths.push_back(entry->path);
+        }
+        if (metadata_complete) {
+            // VHDL units of one package family mix; the families do not.
+            const auto plan = plan_vhdl_mixed_environment(
+                environments, diagnostics);
+            if (!plan) {
+                return std::nullopt;
+            }
+            if (plan->mixed) {
+                environment.mixed = true;
+                environment.newest = plan->newest;
+                for (const auto& [package, index] : plan->winner) {
+                    environment.winner.emplace(
+                        package, environment_paths[index]);
+                }
+                sets.clear();
             }
         }
         const auto largest = std::ranges::max_element(sets, { },
@@ -483,8 +536,10 @@ std::optional<CompilationWorkspace> load_workspace_objects(
         if (!selected) {
             return std::nullopt;
         }
+        std::vector<std::string> omitted;
         const auto libraries = select_compiler_environment(
-            selection.path, *metadata, *input, environment, diagnostics);
+            selection.path, *metadata, *input, environment, omitted,
+            diagnostics);
         if (!libraries) {
             return std::nullopt;
         }
@@ -494,6 +549,32 @@ std::optional<CompilationWorkspace> load_workspace_objects(
             diagnostics.error(std::string { workspace_object_diagnostic },
                 "cannot project managed object selection: " + projected.error);
             return std::nullopt;
+        }
+        if (environment.mixed) {
+            // A compiler context (IEEE_STD_CONTEXT) names no dependency:
+            // the first object to carry one supplies it.
+            for (const auto& unit : projected.design->vhdl_units()) {
+                if (unit.kind != semantic::vhdl::UnitKind::context
+                    || unit.standard_package_revision.empty()) {
+                    continue;
+                }
+                const auto key = support::ascii_lower(
+                    unit.library + "." + unit.name);
+                if (!environment.contexts.insert(key).second) {
+                    omitted.push_back(key);
+                }
+            }
+            if (!omitted.empty()) {
+                auto reduced = semantic::extract_compiled_without_vhdl_packages(
+                    *projected.design, omitted);
+                if (!reduced.ok()) {
+                    diagnostics.error(std::string { workspace_object_diagnostic },
+                        "cannot project managed compiler package environment: "
+                            + reduced.error);
+                    return std::nullopt;
+                }
+                projected = std::move(reduced);
+            }
         }
         if (!merge_trace_archive(result, *input, diagnostics)
             || !append_selected_sources(result, *input, *projected.design,
@@ -569,6 +650,14 @@ std::optional<CompilationWorkspace> load_workspace_objects(
         diagnostics.error(std::string { workspace_object_diagnostic },
             "managed objects produced an invalid semantic model");
         return std::nullopt;
+    }
+    if (environment.mixed) {
+        // One STD/IEEE environment, of the newest standard present, for the
+        // whole design; with a VHDL-2019 unit INTEGER is 64 bits for all
+        // (IEEE 1076-2019 5.2.3.1).
+        semantic::vhdl::unify_mixed_standards(
+            result.mutable_vhdl(), environment.newest);
+        result.refresh_lookup_indexes();
     }
     install_compiled_class_specializations(result);
     if (validate_uvm_surface && !validate_uvm_environment(result, diagnostics)) {

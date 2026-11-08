@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <map>
+#include <optional>
 #include <ranges>
 #include <set>
 #include <string>
@@ -204,6 +206,8 @@ SdfPathTimingResult apply_sdf_path_timing(
     }
     std::vector<SdfAppliedPathTiming> paths;
     std::set<elaboration::VerilogSpecifyPathId> path_ids;
+    std::map<elaboration::VerilogSpecifyPathId, frontend::SdfConstructKind>
+        construct_of_path;
     std::size_t identity_bytes { };
     for (const auto& annotation : plan->annotations()) {
         if (annotation.target_kind != SdfTimingTargetKind::SpecifyPath)
@@ -229,12 +233,32 @@ SdfPathTimingResult apply_sdf_path_timing(
                 annotation, *path, limits, effective, result.diagnostics)) {
             continue;
         }
+        // A DEVICE and an IOPATH of one path in one file apply in file order
+        // and the later one wins (owner decision 2026-11-07; IEEE 1497-2001
+        // 5.4.1): its timing replaces the earlier application. Any other
+        // repetition of a target stays an error.
+        std::optional<std::size_t> replaced;
         if (!path_ids.insert(path->id).second) {
-            diagnose(result.diagnostics, "FSIM-SDF-PATH-001",
-                "SDF path application repeats one elaborated specify target",
-                annotation.source);
-            continue;
+            const auto earlier = std::ranges::find(
+                paths, path->id, &SdfAppliedPathTiming::path_id);
+            const auto device_or_path = [](const frontend::SdfConstructKind kind) {
+                return kind == frontend::SdfConstructKind::Device
+                    || kind == frontend::SdfConstructKind::Iopath;
+            };
+            const auto earlier_kind = construct_of_path.find(path->id);
+            if (earlier == paths.end()
+                || earlier_kind == construct_of_path.end()
+                || !device_or_path(annotation.construct_kind)
+                || !device_or_path(earlier_kind->second)
+                || earlier_kind->second == annotation.construct_kind) {
+                diagnose(result.diagnostics, "FSIM-SDF-PATH-001",
+                    "SDF path application repeats one elaborated specify target",
+                    annotation.source);
+                continue;
+            }
+            replaced = static_cast<std::size_t>(earlier - paths.begin());
         }
+        construct_of_path.insert_or_assign(path->id, annotation.construct_kind);
         SdfAppliedPathTiming applied;
         applied.path_id = path->id;
         applied.mode = annotation.delay_mode;
@@ -255,7 +279,11 @@ SdfPathTimingResult apply_sdf_path_timing(
             continue;
         }
         identity_bytes += applied.canonical_identity.size();
-        paths.push_back(std::move(applied));
+        if (replaced) {
+            paths[*replaced] = std::move(applied);
+        } else {
+            paths.push_back(std::move(applied));
+        }
     }
     if (!result.diagnostics.empty())
         return result;

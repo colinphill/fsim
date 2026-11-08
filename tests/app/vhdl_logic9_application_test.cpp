@@ -2,6 +2,7 @@
 #include "fsim/app/application.hpp"
 
 #include "fsim/runtime/vcd_writer.hpp"
+#include "fsim/support/vhdl_identifier.hpp"
 
 #include "governed_process_limits.hpp"
 
@@ -1717,13 +1718,25 @@ end architecture;
                     && unit.primary_name.empty();
             });
         assert(package != hir.units().end());
+        // The intrinsic types stay intrinsic; only the resolved subtypes X01,
+        // X01Z, UX01 and UX01Z of STD_ULOGIC are declared (IEEE 1076-2019
+        // 16.7), so their objects start at their 'LEFT.
         assert(std::ranges::none_of(
             package->declarations, [&](const auto id) {
-                const auto form = hir.declarations()[id.value()].form;
-                return form == fsim::semantic::vhdl::DeclarationForm::type
-                    || form
-                        == fsim::semantic::vhdl::DeclarationForm::subtype;
+                const auto& declaration = hir.declarations()[id.value()];
+                const auto form = declaration.form;
+                if (form == fsim::semantic::vhdl::DeclarationForm::subtype) {
+                    const auto name = fsim::support::ascii_lower(
+                        declaration.name);
+                    return name != "x01" && name != "x01z" && name != "ux01"
+                        && name != "ux01z";
+                }
+                return form == fsim::semantic::vhdl::DeclarationForm::type;
             }));
+        assert(std::ranges::count_if(package->declarations, [&](const auto id) {
+            return hir.declarations()[id.value()].form
+                == fsim::semantic::vhdl::DeclarationForm::subtype;
+        }) == 4);
         assert(
             package->standard_package_revision
             == "ieee-p1076:1076-2019:16a012320947d378611cc7457f64ed76cb52bac4");

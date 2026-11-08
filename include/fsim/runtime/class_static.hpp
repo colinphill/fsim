@@ -16,6 +16,7 @@
 
 namespace fsim::runtime {
 
+class RunStateArchive;
 class SystemVerilogClassStaticStore;
 
 struct SystemVerilogClassStaticDescriptor {
@@ -82,6 +83,18 @@ class SystemVerilogClassStaticStore final {
   [[nodiscard]] std::size_t storage_bytes() const noexcept {
     return storage_bytes_;
   }
+  /// The values of every entry the run has touched (IEEE 1800-2023 D.9).
+  /// Descriptors and initializers come from the design and are not saved.
+  /// Loading registers each saved specialization through the
+  /// missing-specialization resolver, as the run did, then replaces its
+  /// values; it fails the archive when a saved specialization is unknown to
+  /// this design or its properties differ.
+  void run_state_io(RunStateArchive& archive);
+  /// Returns every entry to the state before its first use: the values and
+  /// the initialized flag are dropped, the descriptors stay, so the next use
+  /// initializes the specialization again (IEEE 1800-2023 D.8 $reset: all
+  /// variables contain their initial values).
+  void reset_values();
 
  private:
   struct Entry {

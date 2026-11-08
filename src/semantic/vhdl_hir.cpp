@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <limits>
 #include <map>
 #include <set>
 
@@ -29,6 +30,160 @@ bool operator_designator(std::string_view name)
             [&](const std::string_view word) {
                 return support::equal_ignoring_ascii_case(name, word);
             });
+}
+
+namespace {
+
+// The last component of a (possibly selected) type mark, as written.
+std::string_view last_name_component(const std::string_view spelling)
+{
+    const auto dot = spelling.rfind('.');
+    return dot == std::string_view::npos ? spelling
+                                         : spelling.substr(dot + 1U);
+}
+
+void widen_integer_subtype(SubtypeIndication& subtype)
+{
+    // Only INTEGER-family subtypes carry a 32-bit integer storage width.
+    if (subtype.integer_storage_width != 32U) {
+        return;
+    }
+    subtype.integer_storage_width = 64U;
+    if (subtype.executable_width && *subtype.executable_width == 32U) {
+        subtype.executable_width = 64U;
+    }
+    // INTEGER, NATURAL and POSITIVE carry their predefined range as a
+    // literal constraint; it follows the width. Any other bound is the
+    // user's and stays.
+    if (subtype.constraints.size() != 1U) {
+        return;
+    }
+    auto& range = subtype.constraints.front();
+    if (range.kind != RangeKind::integer || !range.left || !range.right
+        || range.left_expression || range.right_expression
+        || range.descending || range.null
+        || *range.right != std::numeric_limits<std::int32_t>::max()) {
+        return;
+    }
+    const auto mark = last_name_component(subtype.type_mark.spelling);
+    const auto low = support::equal_ignoring_ascii_case(mark, "integer")
+        ? std::optional<std::int64_t> {
+              std::numeric_limits<std::int32_t>::min() }
+        : support::equal_ignoring_ascii_case(mark, "natural")
+        ? std::optional<std::int64_t> { 0 }
+        : support::equal_ignoring_ascii_case(mark, "positive")
+        ? std::optional<std::int64_t> { 1 }
+        : std::nullopt;
+    if (!low || *range.left != *low) {
+        return;
+    }
+    if (support::equal_ignoring_ascii_case(mark, "integer")) {
+        range.left = std::numeric_limits<std::int64_t>::min();
+    }
+    range.right = std::numeric_limits<std::int64_t>::max();
+}
+
+void widen_integer_subtype(std::optional<SubtypeIndication>& subtype)
+{
+    if (subtype) {
+        widen_integer_subtype(*subtype);
+    }
+}
+
+void widen_mode_view_elements(std::vector<ModeViewElement>& elements)
+{
+    for (auto& element : elements) {
+        widen_integer_subtype(element.subtype);
+        widen_mode_view_elements(element.elements);
+    }
+}
+
+void widen_associations(std::vector<Association>& associations)
+{
+    for (auto& association : associations) {
+        widen_integer_subtype(association.type);
+    }
+}
+
+} // namespace
+
+void unify_mixed_standards(Hir& hir, const std::string_view newest_standard)
+{
+    // The predefined environment of the newest standard, from any unit
+    // analyzed under it.
+    const PredefinedEnvironment* newest_environment { };
+    for (const auto& unit : hir.units()) {
+        if (unit.standard == newest_standard
+            && unit.standard_package_revision.empty()
+            && !unit.predefined_environment.identity.empty()) {
+            newest_environment = &unit.predefined_environment;
+            break;
+        }
+    }
+    if (newest_environment == nullptr) {
+        for (const auto& unit : hir.units()) {
+            if (unit.standard == newest_standard
+                && !unit.predefined_environment.identity.empty()) {
+                newest_environment = &unit.predefined_environment;
+                break;
+            }
+        }
+    }
+    if (newest_environment != nullptr) {
+        const auto environment = *newest_environment;
+        for (auto& unit : hir.mutable_units()) {
+            if (unit.standard_package_revision.empty()
+                || unit.standard == newest_standard) {
+                continue;
+            }
+            const auto working_library
+                = unit.predefined_environment.working_library;
+            unit.standard = std::string { newest_standard };
+            unit.predefined_environment = environment;
+            unit.predefined_environment.working_library = working_library;
+        }
+    }
+    if (newest_standard != "2019") {
+        return;
+    }
+    for (auto& declaration : hir.mutable_declarations()) {
+        widen_integer_subtype(declaration.subtype);
+        widen_integer_subtype(declaration.default_type);
+        if (declaration.callable) {
+            widen_integer_subtype(declaration.callable->return_type);
+        }
+        if (declaration.attribute) {
+            widen_integer_subtype(declaration.attribute->subtype);
+        }
+        if (declaration.alias_signature) {
+            for (auto& parameter : declaration.alias_signature->parameters) {
+                widen_integer_subtype(parameter);
+            }
+            widen_integer_subtype(declaration.alias_signature->result);
+        }
+        if (declaration.package) {
+            widen_associations(declaration.package->generic_map);
+        }
+        if (declaration.mode_view) {
+            widen_integer_subtype(declaration.mode_view->record_subtype);
+            widen_mode_view_elements(declaration.mode_view->elements);
+        }
+        if (declaration.interface_view) {
+            widen_mode_view_elements(declaration.interface_view->elements);
+        }
+    }
+    for (auto& type : hir.mutable_types()) {
+        widen_integer_subtype(type.base);
+        widen_integer_subtype(type.element_subtype);
+        widen_integer_subtype(type.designated_subtype);
+        for (auto& element : type.record_elements) {
+            widen_integer_subtype(element.subtype);
+        }
+    }
+    for (auto& instance : hir.mutable_instances()) {
+        widen_associations(instance.generic_map);
+        widen_associations(instance.port_map);
+    }
 }
 
 std::optional<ForeignDirectBinding> foreign_direct_binding(

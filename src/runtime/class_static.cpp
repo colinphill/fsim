@@ -209,6 +209,16 @@ void SystemVerilogClassStaticStore::initialize(
   }
 }
 
+void SystemVerilogClassStaticStore::reset_values() {
+  for (auto& [identity, retained] : entries_) {
+    (void)identity;
+    retained.property_names.clear();
+    retained.values.clear();
+    retained.initialized = false;
+    retained.initializing = false;
+  }
+}
+
 void SystemVerilogClassStaticStore::initialize_all() {
   std::vector<std::string> identities;
   identities.reserve(entries_.size());

@@ -992,6 +992,62 @@ namespace {
         return identity;
     }
 
+    // A DEVICE delay is the delay of the module's output (IEEE 1497-2001
+    // 5.4.1): it applies IOPATH-style timing to every module path that ends
+    // at the named output, one mapping for each path (the mapping names the
+    // path, so the plan times it as a specify path), and falls back to the
+    // delays of the primitives that drive an output no path ends at, which is
+    // the one unpathed mapping (the session expands it to gate delays).
+    [[nodiscard]] bool push_device_mappings(ResolutionContext& context,
+        SdfResolvedNodeEndpoints&& resolved, const SdfResolvedInstance& target,
+        const SourceSpan& span)
+    {
+        std::vector<SdfResolvedNodeEndpoints> mappings;
+        std::vector<SdfResolvedEndpoint> unpathed;
+        for (const auto& endpoint : resolved.endpoints) {
+            if (endpoint.role == SdfEndpointRole::Condition)
+                continue;
+            bool pathed { };
+            for (const auto& path : context.elaborated.verilog_specify_paths()) {
+                if (!equal_under_case_policy(path.instance,
+                        target.instance_path, target.case_policy)) {
+                    continue;
+                }
+                const bool ends_here = std::ranges::any_of(path.destinations,
+                    [&](const auto& terminal) {
+                        return endpoint.select
+                            ? terminal_matches(
+                                endpoint, terminal, context.elaborated)
+                            : terminal.signal == endpoint.signal;
+                    });
+                if (!ends_here)
+                    continue;
+                auto mapping = resolved;
+                mapping.endpoints = { endpoint };
+                mapping.specify_path = path.id;
+                mappings.push_back(std::move(mapping));
+                pathed = true;
+            }
+            if (!pathed)
+                unpathed.push_back(endpoint);
+        }
+        if (!unpathed.empty()) {
+            auto mapping = resolved;
+            mapping.endpoints = std::move(unpathed);
+            mappings.push_back(std::move(mapping));
+        }
+        for (auto& mapping : mappings) {
+            if (context.nodes.size() >= context.limits.max_nodes) {
+                diagnose(context.diagnostics, "FSIM-SDF-ENDPOINT-005",
+                    "SDF endpoint resolution exceeds the configured mapping limit",
+                    span);
+                return false;
+            }
+            context.nodes.push_back(std::move(mapping));
+        }
+        return true;
+    }
+
     [[nodiscard]] bool resolve_node(ResolutionContext& context,
         const SdfIrNode& node, const SdfResolvedInstance& target)
     {
@@ -1044,6 +1100,9 @@ namespace {
                 context.diagnostics, node.span)) {
             return false;
         }
+        if (resolved.construct_kind == SdfConstructKind::Device)
+            return push_device_mappings(
+                context, std::move(resolved), target, node.span);
         context.nodes.push_back(std::move(resolved));
         return true;
     }

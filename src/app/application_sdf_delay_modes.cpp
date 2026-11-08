@@ -141,7 +141,14 @@ namespace {
             before = current->second;
         else if (declared_before)
             before = *declared_before;
+        // An absolute value replaces whatever an earlier construct of the
+        // file gave the target, so its own before-values need not match: a
+        // DEVICE and an IOPATH of one path apply in file order and the later
+        // one wins (owner decision 2026-11-07; IEEE 1497-2001 5.4.1, IEEE
+        // 1364-2005 16.3). An increment adds to the value in effect, so its
+        // before-values must be that value.
         if (declared_before && current != state.current_profiles.end()
+            && annotation.delay_mode != SdfDelayApplicationMode::Absolute
             && *declared_before != current->second) {
             diagnose(state.diagnostics, "FSIM-SDF-DELAY-MODE-003",
                 "Ordered SDF delay application found stale before-values for a repeated target",

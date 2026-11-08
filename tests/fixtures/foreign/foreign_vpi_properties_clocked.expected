@@ -1,0 +1,43 @@
+#c property p_case
+#c   case
+#c     condition
+#c       name c
+#c     item exprs=1
+#c       value
+#c         const 0
+#c       property
+#c         name a
+#c     item exprs=2
+#c       value
+#c         const 1
+#c       value
+#c         const x
+#c       property
+#c         name b
+#c     item exprs=0
+#c       property
+#c         op vpiNotOp
+#c           name a
+#c property p_nested
+#c   op vpiOverlapImplyOp
+#c     name a
+#c     clocked-prop
+#c       clock
+#c         op vpiPosedgeOp
+#c           name clk2
+#c       property
+#c         name b
+#c sequence s_multi
+#c   multiclock
+#c     clocked-seq
+#c       clock
+#c         op vpiPosedgeOp
+#c           name clk
+#c       sequence
+#c         name a
+#c     clocked-seq
+#c       clock
+#c         op vpiPosedgeOp
+#c           name clk2
+#c       sequence
+#c         name b

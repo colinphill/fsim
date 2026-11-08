@@ -9,6 +9,7 @@
 #include "fsim/support/path.hpp"
 #include "fsim/support/payload_checksum.hpp"
 #include "fsim/support/sha256.hpp"
+#include "fsim/support/vhdl_identifier.hpp"
 
 #include <algorithm>
 #include <map>
@@ -110,9 +111,41 @@ application_detail::load_object_workspace(
   std::optional<std::size_t> vhdl_dependency_source;
   std::optional<std::string> vhdl_dependency_bundle_bytes;
   std::optional<std::string> vhdl_object_standard;
+  // VHDL objects of several standards of one package family share one
+  // package set (the newest standard's); objects of different families are
+  // refused here.
+  std::optional<application_detail::VhdlMixedEnvironmentPlan> mixed_plan;
+  std::set<std::string> mixed_contexts;
+  if (objects.size() > 1U) {
+    std::vector<application_detail::VhdlObjectEnvironment> environments;
+    bool metadata_complete { true };
+    for (const auto& object : objects) {
+      diagnostic::Engine quiet;
+      const auto metadata = artifact::load_object_metadata(object, quiet);
+      if (!metadata.has_value()) {
+        metadata_complete = false;
+        break;
+      }
+      environments.push_back({
+          metadata->language == "vhdl" ? metadata->standard : std::string { },
+          metadata->vhdl_package_dependencies,
+          metadata->compatibility_profile });
+    }
+    if (metadata_complete) {
+      auto plan = application_detail::plan_vhdl_mixed_environment(
+          environments, diagnostics);
+      if (!plan) {
+        return std::nullopt;
+      }
+      if (plan->mixed) {
+        mixed_plan = std::move(*plan);
+      }
+    }
+  }
   std::size_t decoded_bundle_count { };
   uvm_identity.add("uvm-provenance-schema", "fsim-uvm-object-v1");
   for (const auto& object : objects) {
+    const auto object_index = static_cast<std::size_t>(&object - objects.data());
     const auto root = source_root(object, base_directory);
     const auto& recorded_root = root.path;
     bool warned_root = root.workspace;
@@ -205,7 +238,7 @@ application_detail::load_object_workspace(
         return std::nullopt;
       }
       provenance.source_settings.vhdl_compatibility = *source_profile;
-      if (vhdl_object_standard
+      if (!mixed_plan && vhdl_object_standard
           && *vhdl_object_standard != metadata->standard) {
         diagnostics.error(
             "FSIM-ART-VHDEP-001",
@@ -412,6 +445,7 @@ application_detail::load_object_workspace(
       }
     }
     std::vector<std::string> selected_libraries { metadata->library };
+    std::vector<std::string> omitted_packages;
     bool first_vhdl_dependency_environment { false };
     if (!metadata->vhdl_package_dependencies.empty()) {
       if (!application_detail::validate_vhdl_package_dependencies(
@@ -433,6 +467,20 @@ application_detail::load_object_workspace(
           dependency_libraries.push_back(library);
         }
       }
+      if (mixed_plan) {
+        // Every object carries its compiler libraries, less the packages
+        // another object's copy supplies.
+        selected_libraries.insert(selected_libraries.end(),
+            dependency_libraries.begin(), dependency_libraries.end());
+        for (const auto& dependency : metadata->vhdl_package_dependencies) {
+          const auto key = support::ascii_lower(dependency.package);
+          const auto winner = mixed_plan->winner.find(key);
+          if (winner != mixed_plan->winner.end()
+              && winner->second != object_index) {
+            omitted_packages.push_back(key);
+          }
+        }
+      } else {
       first_vhdl_dependency_environment
           = vhdl_dependency_identity.empty();
       if (!first_vhdl_dependency_environment
@@ -492,6 +540,7 @@ application_detail::load_object_workspace(
           return std::nullopt;
         }
       }
+      }
     }
     auto selected_bundle = semantic::extract_compiled_libraries(
         std::move(*compiled_bundle), selected_libraries);
@@ -501,6 +550,32 @@ application_detail::load_object_workspace(
           "cannot project .fsimobj primary library HIR: "
               + selected_bundle.error);
       return std::nullopt;
+    }
+    if (mixed_plan) {
+      // A compiler context names no dependency: the first object to carry
+      // one supplies it.
+      for (const auto& unit : selected_bundle.design->vhdl_units()) {
+        if (unit.kind != semantic::vhdl::UnitKind::context
+            || unit.standard_package_revision.empty()) {
+          continue;
+        }
+        const auto key = support::ascii_lower(unit.library + "." + unit.name);
+        if (!mixed_contexts.insert(key).second) {
+          omitted_packages.push_back(key);
+        }
+      }
+      if (!omitted_packages.empty()) {
+        auto reduced = semantic::extract_compiled_without_vhdl_packages(
+            *selected_bundle.design, omitted_packages);
+        if (!reduced.ok()) {
+          diagnostics.error(
+              "FSIM-ART-0005",
+              "cannot project .fsimobj compiler dependency HIR: "
+                  + reduced.error);
+          return std::nullopt;
+        }
+        selected_bundle = std::move(reduced);
+      }
     }
     const auto [bundle, inserted] = compiled_bundle_indexes.try_emplace(
         metadata->compiled_hir_checksum, compiled_bundles.size());
@@ -535,6 +610,14 @@ application_detail::load_object_workspace(
         "FSIM-ART-0005",
         "loaded objects produced an invalid owning semantic projection");
     return std::nullopt;
+  }
+  if (mixed_plan) {
+    // One STD/IEEE environment, of the newest standard present, for the
+    // whole design; with a VHDL-2019 unit INTEGER is 64 bits for all (IEEE
+    // 1076-2019 5.2.3.1).
+    semantic::vhdl::unify_mixed_standards(
+        checked.mutable_vhdl(), mixed_plan->newest);
+    checked.refresh_lookup_indexes();
   }
   application_detail::install_compiled_class_specializations(checked);
   if (selected_release != project::SystemVerilogUvmRelease::none) {

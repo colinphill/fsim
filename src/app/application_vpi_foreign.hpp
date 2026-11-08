@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include "application_foreign_run_state.hpp"
+
 #include "fsim/elaboration/elaborator.hpp"
 
 #include <cstdint>
@@ -87,6 +89,37 @@ public:
     virtual void restore_data(std::map<std::int32_t, std::string> data)
     {
         (void)data;
+    }
+    /// The save/restart data sets, the highest id issued and the
+    /// registrations of the restart callbacks, for the "foreign.vpi" section
+    /// of a run-state file (application_foreign_run_state.hpp).
+    [[nodiscard]] virtual ForeignRunState save_run_state() const
+    {
+        return { };
+    }
+    /// Takes them back at a restart, before cbStartOfRestart is delivered:
+    /// restores the data sets and registers the saved restart callbacks that
+    /// are not registered already (IEEE 1800-2023 38.36.3).
+    virtual void restore_run_state(ForeignRunState state)
+    {
+        (void)state;
+    }
+    /// The delay edits made through VPI (vpi_put_delays and the ACC routines
+    /// behind it), the second part of the "foreign.vpi" section (version 2):
+    /// the delay tables a put queued for the next safe point and the rows
+    /// that vpi_get_delays reads back (IEEE 1800-2023 38.10, 38.32). One
+    /// function writes and reads, as every section does (RunStateArchive).
+    virtual void io_delay_edits(runtime::RunStateArchive& archive)
+    {
+        (void)archive;
+    }
+    /// Appends an FSIM-SAVE-0011 line for each class S member of the service
+    /// (docs/run-state-classification.tsv) that is not at rest at the save
+    /// point: a routine in flight, a delivery under way, a request that a safe
+    /// point should have drained (#128).
+    virtual void audit_rest_state(std::vector<std::string>& messages) const
+    {
+        (void)messages;
     }
     /// Bracket a call of the other interface's callbacks, during which this
     /// service answers calls too.

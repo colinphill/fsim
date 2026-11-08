@@ -1832,9 +1832,16 @@ Expression VerilogParser::parse_primary_impl()
         }
         if (canonical == "$urandom" || canonical == "$random"
             || canonical == "$time" || canonical == "$stime"
-            || canonical == "$realtime" || canonical == "$simtime") {
+            || canonical == "$realtime" || canonical == "$simtime"
+            || canonical == "$reset_count" || canonical == "$reset_value") {
             expression.kind = ExpressionKind::Call;
-            if (canonical == "$simtime") {
+            if (canonical == "$reset_count" || canonical == "$reset_value") {
+                // Integer system functions of the tool (IEEE 1800-2023
+                // D.8); they take no argument.
+                expression.call_result_width = 32;
+                expression.call_result_domain = ValueDomain::Integer;
+                expression.call_result_signed = true;
+            } else if (canonical == "$simtime") {
                 expression.call_result_width = 64;
                 expression.call_result_domain = ValueDomain::Bit2;
                 expression.call_result_signed = false;

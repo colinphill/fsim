@@ -1643,6 +1643,10 @@ struct Sensitivity {
     Expression expression;
     // One-based parser-token ordinal for a direct identifier sensitivity.
     std::uint64_t systemverilog_source_order { };
+    // The `iff` guard of one event among several in an event control (IEEE
+    // 1800-2023 9.4.2.3): the event triggers only while it holds. A control
+    // with one event keeps its guard on the statement or process instead.
+    std::optional<Expression> guard { };
 };
 
 struct CaseAlternative;
@@ -1838,6 +1842,9 @@ struct Statement {
     ImmediateDirective immediate_directive { ImmediateDirective::None };
     bool immediate_deferred { };
     bool immediate_final { };
+    // The label of a labelled immediate assertion (`a: assert (c);`), which
+    // names it (IEEE 1800-2023 16.3, 37.49 vpiName).
+    std::string immediate_label;
     // A foreach statement desugared to nested loops (IEEE 1800-2023 12.7.3)
     // keeps its collection, its loop variables left to right (an invalid
     // expression for a skipped one) and the span of its body's first token
@@ -1881,6 +1888,10 @@ struct Statement {
     // 37.62): [0] the task name as written ($displayh keeps its radix),
     // [1] the leading format string literal, when the call had one.
     support::RareVector<std::string> output_source;
+    // VPI-only: every argument of a Display task in source order, format
+    // literals included, before the frontend folds literals into text
+    // (IEEE 1800-2023 37.62 vpiArgument).
+    support::RareVector<Expression> output_arguments;
     GeneratedTextKind output_generated_text { GeneratedTextKind::none };
 
     // Block contents or the true branch/delayed statement.
@@ -1938,6 +1949,20 @@ enum class ProcessKind {
     Final,
 };
 
+/// One event expression of the event control of a procedure that holds
+/// concurrent assertions, kept for the inferred clock (IEEE 1800-2023
+/// 16.14.6): `edge_identifier expression1 [iff expression2]`, or a lone
+/// event variable or clocking block identifier.
+struct SystemVerilogProcedureClockCandidate {
+    std::vector<Token> tokens;
+    bool edge { };
+    // The identifier of an expression without an edge identifier.
+    std::string name;
+    // A term of expression1 (or the identifier) appears in the body of the
+    // procedure outside its assertion statements (16.14.6 c) 2).
+    bool used_in_body { };
+};
+
 struct Process {
     ProcessKind kind { ProcessKind::VhdlProcess };
     bool vhdl_postponed { };
@@ -1955,6 +1980,13 @@ struct Process {
     std::vector<Sensitivity> sensitivities;
     std::vector<Statement> statements;
     SourceSpan span;
+    // Clock inference of a procedure with concurrent assertion statements
+    // (16.14.6): the event expressions of its one event control, and why no
+    // clock can be inferred when there is a blocking timing control or not
+    // exactly one event control (a, b).
+    std::vector<SystemVerilogProcedureClockCandidate>
+        systemverilog_clock_candidates;
+    std::string systemverilog_clock_blocker;
     std::vector<VhdlAttributeDeclaration> vhdl_attributes;
     std::vector<VhdlGroupDeclaration> vhdl_groups;
     // Implicit instances of generic subprograms named by a call's generic
@@ -1988,6 +2020,8 @@ struct FunctionDeclaration {
     std::vector<Statement> statements;
     bool automatic { };
     bool lifetime_explicit { };
+    // `extern function` prototype of an interface (IEEE 1800-2023 25.7.3).
+    bool extern_prototype { };
     Language language { Language::SystemVerilog2017 };
     bool pure { };
     bool defined { true };
@@ -2049,6 +2083,10 @@ struct TaskDeclaration {
     std::vector<Statement> statements;
     bool automatic { };
     bool lifetime_explicit { };
+    // `extern task` prototype of an interface (IEEE 1800-2023 25.7.3) and
+    // its `forkjoin` form, which several modules may export.
+    bool extern_prototype { };
+    bool extern_forkjoin { };
     SourceSpan span;
 };
 

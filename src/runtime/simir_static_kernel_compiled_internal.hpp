@@ -46,7 +46,10 @@ inline constexpr bool behavioral_suspension = std::is_same_v<T, WaitFor>
     || std::is_same_v<T, MailboxCreate> || std::is_same_v<T, MailboxPut>
     || std::is_same_v<T, MailboxGet> || std::is_same_v<T, MailboxNum>
     || std::is_same_v<T, SemaphoreCreate> || std::is_same_v<T, SemaphoreGet>
-    || std::is_same_v<T, SemaphorePut> || std::is_same_v<T, DynamicEvent>;
+    || std::is_same_v<T, SemaphorePut> || std::is_same_v<T, DynamicEvent>
+    // A move to a later scheduler region (IEEE 1800-2023 4.4.2, 16.4): other
+    // processes run in the regions between.
+    || std::is_same_v<T, WaitRegion>;
 
 [[nodiscard]] inline bool comparison(const BinaryOperator operation) noexcept
 {
@@ -69,6 +72,37 @@ inline constexpr bool behavioral_suspension = std::is_same_v<T, WaitFor>
         return true;
     default:
         return false;
+    }
+}
+
+/// A ReadSignal of the assertion services (IEEE 1800-2023 16.5.1, 16.9.3):
+/// a sampled value, a sampled-value function ($past, $rose, ...) or a
+/// clocked or gated history read. Its value is the host's sampled history,
+/// not the signal's current value.
+[[nodiscard]] inline bool sampled_read(const ReadSignal& read) noexcept
+{
+    return read.kind != SignalReadKind::current || read.ticks != 1U
+        || read.clock || read.gate;
+}
+
+/// The width of a ReadSignal's result: $rose, $fell, $stable, $changed and
+/// their future forms are one bit (run_sampled_read); every other read has
+/// the signal's width.
+[[nodiscard]] inline std::uint32_t sampled_read_width(const ReadSignal& read,
+    const std::uint32_t signal_width) noexcept
+{
+    switch (read.kind) {
+    case SignalReadKind::rose:
+    case SignalReadKind::fell:
+    case SignalReadKind::stable:
+    case SignalReadKind::changed:
+    case SignalReadKind::rising:
+    case SignalReadKind::falling:
+    case SignalReadKind::steady:
+    case SignalReadKind::changing:
+        return 1U;
+    default:
+        return signal_width;
     }
 }
 
@@ -141,6 +175,20 @@ inline void operation_registers_of(const T& op, std::vector<RegisterId>& reads,
             reads.push_back(op.condition);
         } else if constexpr (std::is_same_v<T, FormatDisplay>) {
             reads.push_back(op.source);
+        } else if constexpr (std::is_same_v<T, SvaOperation>) {
+            // A concurrent assertion's monitor (IEEE 1800-2023 16.14): a tick
+            // reads the packed guards, the start and disable flags and (at
+            // its first tick) the delay and repetition bounds; an outcome
+            // query reads nothing. Both write the 32 bit result.
+            if (op.kind == SvaKind::tick) {
+                if (op.guard_count != 0U) {
+                    reads.push_back(op.guards);
+                }
+                reads.push_back(op.start);
+                reads.push_back(op.disabled);
+                reads.insert(reads.end(), op.bounds.begin(), op.bounds.end());
+            }
+            write = op.result;
         } else if constexpr (std::is_same_v<T, PlusArgSelect>) {
             write = op.destination;
         } else if constexpr (std::is_same_v<T, SystemVerilogMath>) {
@@ -384,9 +432,17 @@ inline void kinst_flow(const KInst& inst, const std::uint32_t at,
         }
         fall();
         break;
+    case KOp::store_host:
+        use.push_back(inst.x);
+        if (inst.aux != 0U) {
+            // A write through a dynamic index (offset 0) or part base
+            // (offset 1) in register y.
+            use.push_back(inst.y);
+        }
+        fall();
+        break;
     case KOp::store_slot:
     case KOp::store_slot_nba:
-    case KOp::store_host:
     case KOp::integer_check:
     case KOp::assert_check:
         use.push_back(inst.x);
@@ -420,6 +476,22 @@ inline void kinst_flow(const KInst& inst, const std::uint32_t at,
         use.push_back(named(inst.x));
         fall();
         break;
+    case KOp::sva_tick: {
+        // The tick reads the monitor's operands (guards, start, disabled,
+        // bounds) from the register file and defines its result.
+        operation_registers(operations[inst.x], reads, write);
+        for (const auto reg : reads) {
+            use.push_back(named(inst.y + reg));
+        }
+        def = inst.d;
+        fall();
+        break;
+    }
+    case KOp::sva_outcome:
+    case KOp::sva_sampled_load:
+        def = inst.d;
+        fall();
+        break;
     case KOp::wide_load:
     case KOp::wide_const:
         def = inst.d;
@@ -439,12 +511,43 @@ inline void kinst_flow(const KInst& inst, const std::uint32_t at,
         break;
     case KOp::wide_store:
         use.push_back(inst.x);
+        if (inst.sub == 3U && inst.imm_a != 0U) {
+            // A host signal's write through a dynamic index (or part base).
+            use.push_back(inst.y);
+        }
         fall();
         break;
     case KOp::wide_part_insert:
         use.push_back(inst.x);
         use.push_back(inst.y);
         use.push_back(inst.z);
+        def = inst.d;
+        fall();
+        break;
+    case KOp::wide_alu:
+        // The operands of the family; the destination (a chunked register's
+        // first storage index, or a narrow register) is the definition.
+        use.push_back(inst.x);
+        switch (static_cast<WideFamily>(inst.offset)) {
+        case WideFamily::binary:
+        case WideFamily::shift:
+        case WideFamily::logical_binary:
+        case WideFamily::insert:
+        case WideFamily::dynamic_part_select:
+            use.push_back(inst.y);
+            break;
+        case WideFamily::conditional:
+        case WideFamily::dynamic_insert:
+            use.push_back(inst.y);
+            use.push_back(inst.z);
+            break;
+        case WideFamily::unary_not:
+        case WideFamily::reduce:
+        case WideFamily::logical_not:
+        case WideFamily::two_state:
+        case WideFamily::extract:
+            break;
+        }
         def = inst.d;
         fall();
         break;

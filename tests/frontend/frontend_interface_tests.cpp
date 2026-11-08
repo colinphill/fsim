@@ -1796,6 +1796,154 @@ endmodule
             == 0,
         "a property clock may be any event expression (16.5)");
 
+    // The clock inferred for a procedure's context (IEEE 1800-2023 16.14.6).
+    const auto count_code = [](const auto& result, const std::string_view code) {
+        return std::ranges::count_if(
+            result.diagnostics, [&](const Diagnostic& diagnostic) {
+                return diagnostic.code == code;
+            });
+    };
+    const auto inferred_clock_text = [](const auto& result,
+                                         const std::size_t index) {
+        std::string text;
+        const auto& units = result.design.units;
+        if (units.empty()
+            || index >= units.front().systemverilog_concurrent_assertions.size()) {
+            return std::string { "<none>" };
+        }
+        for (const auto& token : units.front()
+                 .systemverilog_concurrent_assertions[index]
+                 .procedural_clock) {
+            text += text.empty() ? "" : " ";
+            text += token.text;
+        }
+        return text;
+    };
+    // posedge reset is used in the body, so posedge clock is the one event
+    // expression that qualifies; the `iff` guard belongs to the clock.
+    const auto guarded_clock = parse_text(
+        "inferred-clock-guard.sv",
+        R"(module inferred_guard(input logic clock, reset, d1, d, output logic q);
+  property r2; q != d; endproperty
+  always @(posedge clock iff reset == 0 or posedge reset) begin
+    q <= reset ? 0 : d1;
+    r2_p: assert property (r2);
+  end
+endmodule
+)",
+        Language::SystemVerilog2017);
+    // A guard on one of several events is that event's own (9.4.2.3).
+    require(guarded_clock.diagnostics.empty(),
+        "a guard on one of several events parses and infers the clock");
+    // Each event keeps the guard written after it; a control of one event
+    // keeps its guard on the process instead.
+    const auto per_event_guards = parse_text(
+        "event-guards.sv",
+        R"(module event_guards(input logic a, b, c, d);
+  int n;
+  always @(posedge a iff c or negedge b iff d or a) n++;
+  always @(posedge a iff c) n++;
+endmodule
+)",
+        Language::SystemVerilog2017);
+    require(per_event_guards.diagnostics.empty()
+            && per_event_guards.design.units.front().processes.size() == 2U,
+        "per-event iff guards parse");
+    {
+        const auto& processes = per_event_guards.design.units.front().processes;
+        require(processes[0].sensitivities.size() == 3U
+                && processes[0].sensitivities[0].guard
+                && processes[0].sensitivities[1].guard
+                && !processes[0].sensitivities[2].guard,
+            "each event of a multi-event control keeps its own guard");
+        require(processes[1].sensitivities.size() == 1U
+                && !processes[1].sensitivities[0].guard,
+            "a one-event control keeps its guard on the process");
+    }
+    const auto edge_clock = parse_text(
+        "inferred-clock-edge.sv",
+        R"(module inferred_edge(input logic clock, reset, d1, d, output logic q);
+  property r1; q != d; endproperty
+  always @(posedge clock or negedge reset) begin
+    if (!reset) q <= 0; else q <= d1;
+    r1_p1: assert property (r1);
+  end
+endmodule
+)",
+        Language::SystemVerilog2017);
+    require(edge_clock.ok() && inferred_clock_text(edge_clock, 0U) == "posedge clock",
+        "the edge expression whose terms the body leaves unused is the inferred clock");
+    const auto initial_clock = parse_text(
+        "inferred-clock-initial.sv",
+        R"(module inferred_initial(input logic clock, d1, d, output logic q);
+  property r1; q != d; endproperty
+  initial begin
+    @(posedge clock);
+    q <= d1;
+    r1_p1: assert property (r1);
+  end
+endmodule
+)",
+        Language::SystemVerilog2017);
+    require(initial_clock.ok()
+            && inferred_clock_text(initial_clock, 0U) == "posedge clock",
+        "an initial procedure with one event control infers its clock");
+    const auto delayed_clock = parse_text(
+        "inferred-clock-delay.sv",
+        R"(module inferred_delay(input logic mclk, d1, d, output logic q, q1);
+  property r4; q != d; endproperty
+  always @(posedge mclk) begin
+    #10 q <= d1;
+    @(negedge mclk) q1 <= !d1;
+    r4_p: assert property (r4);
+  end
+endmodule
+)",
+        Language::SystemVerilog2017);
+    require(count_code(delayed_clock, "FSIM-SV-SEM-470") == 1,
+        "a delay and a second event control give no inferred clock and no default clocking is an error");
+    const auto used_clock = parse_text(
+        "inferred-clock-used.sv",
+        R"(module inferred_used(input logic clock, reset, d1, d, output logic q);
+  property r1; q != d; endproperty
+  always @(posedge clock) begin
+    q <= clock ? d1 : 1'b0;
+    r1_p: assert property (r1);
+  end
+endmodule
+)",
+        Language::SystemVerilog2017);
+    require(count_code(used_clock, "FSIM-SV-SEM-470") == 1,
+        "a clock term that the procedure uses cannot be inferred");
+    const auto default_clocking_clock = parse_text(
+        "inferred-clock-default.sv",
+        R"(module inferred_default(input logic clock, other, d1, d, output logic q);
+  default clocking cb @(posedge other); endclocking
+  property r1; q != d; endproperty
+  always @(posedge clock) begin
+    #1 q <= d1;
+    r1_p: assert property (r1);
+  end
+endmodule
+)",
+        Language::SystemVerilog2017);
+    require(count_code(default_clocking_clock, "FSIM-SV-SEM-470") == 0
+            && default_clocking_clock.ok(),
+        "the default clocking clocks an assertion when no clock is inferred");
+    const auto automatic_clock = parse_text(
+        "inferred-clock-automatic.sv",
+        R"(module inferred_automatic(input logic clock, d1, d, output logic q);
+  property r1; q != d; endproperty
+  initial begin
+    automatic logic c = 1'b0;
+    r1_p: assert property (@(posedge c) r1);
+  end
+endmodule
+)",
+        Language::SystemVerilog2017);
+    require(count_code(automatic_clock, "FSIM-SV-SEM-471") == 1,
+        "an automatic variable in a clocking event is illegal");
+
     std::string resource_source {
         "module assertion_resource(input logic request);\n"
     };

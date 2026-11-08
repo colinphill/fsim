@@ -483,15 +483,25 @@ endmodule
                "vhdl:1993:profiles:revision_consumer")
         != revision_profiles.unit_profiles.end());
 
+    // Standards of one package family mix (1993 package, 2002 consumer);
+    // the 1987-2002 and 2008-2019 families do not.
+    auto family_consumer = revision_consumer;
+    family_consumer.standard = "2002";
+    const auto family_mixed = check(
+        directory.path, "family-package-dependency",
+        { revision_package, family_consumer });
+    assert(family_mixed.accepted);
+    assert(family_mixed.codes.empty());
+
     auto incompatible_consumer = revision_consumer;
-    incompatible_consumer.standard = "2002";
+    incompatible_consumer.standard = "2008";
     expect_code(
         directory.path, "incompatible-package-dependency",
         { revision_package, incompatible_consumer },
         "FSIM-FE-VHORDER-011");
 
     auto incompatible_reanalysis = revision_package;
-    incompatible_reanalysis.standard = "1987";
+    incompatible_reanalysis.standard = "2008";
     expect_code(
         directory.path, "incompatible-reanalysis",
         { revision_package, incompatible_reanalysis },

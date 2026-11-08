@@ -14,20 +14,47 @@
 #include <vector>
 
 namespace fsim::frontend {
-namespace {
 
-    [[nodiscard]] bool valid_deferred_action(
-        const Statement& action,
-        const bool final)
-    {
-        if (action.kind == StatementKind::Null
-            || action.kind == StatementKind::Report) {
-            return true;
-        }
-        return !final
-            && action.kind == StatementKind::TaskCall
-            && !action.task_name.starts_with("$");
+// IEEE 1800-2023 16.4: the pass and fail statements of a deferred
+// assertion are each a single subroutine call (task, task method, void
+// function, void function method or system task); a begin-end block or
+// any other statement is not.  A final deferred action runs in the
+// Postponed region (4.4.2.9), so only system tasks that print or
+// report there are legal; $display and the other output tasks parse
+// to their own statement kinds, not to a task call.  A user task, task
+// method, void function or void function method is accepted in a final
+// action too: whether it "may be legally called in the Postponed
+// region" depends on what it does (no write to a net or variable, no
+// event scheduled in an earlier region, 4.4.2.9), which the parser
+// cannot see; elaboration decides it (FSIM-ELAB-SVASSERT-004).  A
+// built-in container method writes its container, so it stays illegal.
+bool valid_deferred_action(
+    const Statement& action,
+    const bool final)
+{
+    switch (action.kind) {
+    case StatementKind::Null:
+    case StatementKind::Report:
+    case StatementKind::Display:
+    case StatementKind::FileDisplay:
+    case StatementKind::FileFlush:
+    case StatementKind::MonitorControl:
+        return true;
+    case StatementKind::FileClose:
+    case StatementKind::MemoryLoad:
+    case StatementKind::Pause:
+    case StatementKind::Finish:
+    case StatementKind::Exit:
+        return !final;
+    case StatementKind::TaskCall:
+    case StatementKind::ContainerMethod:
+        return !final || action.kind == StatementKind::TaskCall;
+    default:
+        return false;
     }
+}
+
+namespace {
 
     [[nodiscard]] std::string_view assertion_kind_name(
         const SystemVerilogAssertionDeclarationKind kind)
@@ -369,7 +396,7 @@ Statement VerilogParser::parse_immediate_assertion(const Token& start)
                 start,
                 "FSIM-SV-SEM-250",
                 statement.output_postponed
-                    ? "a final deferred assertion action must be null or a severity-system-task call"
+                    ? "a final deferred assertion action must be null or a single subroutine call that may be called in the Postponed region"
                     : "an observed deferred assertion action must be null or a single subroutine call");
         }
     };
@@ -403,6 +430,7 @@ void VerilogParser::structure_assertion_clock_and_disable(
                     body.begin() + static_cast<std::ptrdiff_t>(position + 1U),
                     body.begin() + static_cast<std::ptrdiff_t>(*right));
                 clock.span = span_from(body[at], body[*right]);
+                clock.events = assertion_clock_events(clock.event_tokens);
                 declaration.clock = std::move(clock);
                 position = *right + 1U;
             }
@@ -410,6 +438,7 @@ void VerilogParser::structure_assertion_clock_and_disable(
             && body[position].kind == TokenKind::Identifier) {
             clock.event_tokens.push_back(body[position]);
             clock.span = span_from(body[at], body[position]);
+            clock.events = assertion_clock_events(clock.event_tokens);
             declaration.clock = std::move(clock);
             ++position;
         } else {
@@ -444,6 +473,8 @@ void VerilogParser::structure_assertion_clock_and_disable(
                     body.begin() + static_cast<std::ptrdiff_t>(left + 1U),
                     body.begin() + static_cast<std::ptrdiff_t>(*right));
                 disable.span = span_from(body[disable_start], body[*right]);
+                disable.condition
+                    = assertion_expression(disable.condition_tokens);
                 declaration.disable = std::move(disable);
                 position = *right + 1U;
             }
@@ -1501,6 +1532,46 @@ VerilogParser::parse_assertion_declaration(
     }
     declaration.span = span_from(start, previous());
     return declaration;
+}
+
+// The event list of a clocking event written `@(e)` or `@id`: the tokens
+// between the parentheses parse as an event control's sensitivities (IEEE
+// 1800-2023 16.16, 9.4.2). Empty when they do not parse completely.
+std::vector<Sensitivity> VerilogParser::assertion_clock_events(
+    const std::span<const Token> tokens)
+{
+    if (tokens.empty()) {
+        return { };
+    }
+    auto saved_tokens = std::move(tokens_);
+    const auto saved_index = index_;
+    const auto saved_diagnostics = diagnostics_.size();
+    auto saved_guard = std::move(event_guard_);
+    tokens_.clear();
+    Token open = tokens.front();
+    open.kind = TokenKind::LeftParen;
+    open.text = "(";
+    Token close = tokens.back();
+    close.kind = TokenKind::RightParen;
+    close.text = ")";
+    Token end = tokens.back();
+    end.kind = TokenKind::EndOfFile;
+    end.text.clear();
+    tokens_.push_back(std::move(open));
+    tokens_.insert(tokens_.end(), tokens.begin(), tokens.end());
+    tokens_.push_back(std::move(close));
+    tokens_.push_back(std::move(end));
+    index_ = 0;
+    auto events = parse_sensitivity();
+    const bool complete = at_end() && diagnostics_.size() == saved_diagnostics;
+    diagnostics_.resize(saved_diagnostics);
+    tokens_ = std::move(saved_tokens);
+    index_ = saved_index;
+    event_guard_ = std::move(saved_guard);
+    if (!complete) {
+        events.clear();
+    }
+    return events;
 }
 
 std::optional<Expression> VerilogParser::assertion_expression(

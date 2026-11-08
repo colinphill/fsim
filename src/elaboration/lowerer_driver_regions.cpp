@@ -71,15 +71,15 @@ collect_driver_regions(
           } else if constexpr (std::is_same_v<OperationType, VitalDelay>) {
               // A call on one element of a bus drives that element.
               const auto drive = [&](const SignalId signal) {
-                  if (value.output_offset) {
+                  if (value.wire->output_offset) {
                       result.push_back(Process::DriverRegion{
-                          signal, *value.output_offset, 1, false});
+                          signal, *value.wire->output_offset, 1, false});
                   } else {
                       whole(signal);
                   }
               };
               drive(value.output);
-              for (const auto mirror : value.mirrors) {
+              for (const auto mirror : value.wire->mirrors) {
                   drive(mirror);
               }
           } else if constexpr (std::is_same_v<OperationType, WriteNetDelay>) {

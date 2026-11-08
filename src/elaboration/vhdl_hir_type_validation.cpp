@@ -7853,7 +7853,7 @@ private:
             if (left && right) {
                 const auto low = std::min(*left, *right);
                 const auto high = std::max(*left, *right);
-                if (architecture_.standard < std::string_view { "2019" }
+                if (!specialization_.design().vhdl_wide_integer()
                     && type.root == "integer"
                     && (low < std::numeric_limits<std::int32_t>::min()
                         || high > std::numeric_limits<std::int32_t>::max())) {
@@ -7992,7 +7992,9 @@ private:
                     range = std::pair {
                         std::int64_t { positive ? 1 : 0 },
                         elaboration_detail::vhdl_integer_maximum(
-                            architecture_.standard == "2019" ? 64U : 32U)
+                            specialization_.design().vhdl_wide_integer()
+                                ? 64U
+                                : 32U)
                     };
                     break;
                 }

@@ -1327,6 +1327,18 @@ struct ForeignArchitectureBinding {
     std::string execution;
 };
 
+/// Make the VHDL units of a design that mixes standards of one package
+/// family share one STD/IEEE environment. The compiler-supplied packages
+/// (units with a standard package revision) are restamped with
+/// `newest_standard` and the predefined environment of the units analyzed
+/// as that standard; they come from one source text, so only the stamp
+/// differs. When `newest_standard` is "2019" every 32-bit INTEGER-family
+/// subtype of the design becomes 64 bits wide, so the design has the one
+/// INTEGER of IEEE 1076-2019 5.2.3.1; a user subtype that spells exactly
+/// the 32-bit range of INTEGER, NATURAL or POSITIVE as its base is widened
+/// with it. User units keep their own standard stamp.
+void unify_mixed_standards(Hir& hir, std::string_view newest_standard);
+
 /// The 'FOREIGN binding of an architecture in one of the forms 20.2.4
 /// allows, or nullopt when the architecture is not decorated with it.
 [[nodiscard]] std::optional<ForeignArchitectureBinding>

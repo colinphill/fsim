@@ -1337,6 +1337,46 @@ endmodule
               }),
       "deferred qualifiers and action restrictions need stable diagnostics");
 
+  // 16.4: the action is a single subroutine call, never a begin-end block;
+  // a final action may call a user task or void function (whether the
+  // Postponed region allows it is decided at elaboration).
+  const auto deferred_block_action = parse_verilog(
+      SourceText { "deferred_block_action.sv", R"(
+module deferred_block_action;
+  logic value;
+  task automatic note; endtask
+  initial begin
+    assert #0 (value) begin note(); end
+    assert final (value) begin note(); end
+  end
+endmodule
+)" },
+      StandardRevision::SystemVerilog2023);
+  require(
+      !deferred_block_action.ok()
+          && std::ranges::count_if(
+                 deferred_block_action.diagnostics,
+                 [](const Diagnostic& diagnostic) {
+                   return diagnostic.code == "FSIM-SV-SEM-250";
+                 })
+              >= 2,
+      "a begin-end block is not a deferred assertion action");
+  const auto final_user_task_action = parse_verilog(
+      SourceText { "final_user_task_action.sv", R"(
+module final_user_task_action;
+  logic value;
+  task automatic note; endtask
+  initial begin
+    assert final (value) note(); else note();
+    cover final (value) note();
+  end
+endmodule
+)" },
+      StandardRevision::SystemVerilog2023);
+  require(
+      final_user_task_action.ok(),
+      "a final deferred assertion action may call a user task");
+
   const auto contextual_vhdl_severity = parse_text(
       "bad_assertion.vhd",
       R"(

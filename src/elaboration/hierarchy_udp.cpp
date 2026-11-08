@@ -1363,11 +1363,11 @@ bool HierarchyBuilder::instantiate_compiled_udp(
         }
         info.terminals.push_back({
             frontend::VerilogPrimitiveTerminalDirection::Output,
-            *output, 0U, 1U, { } });
+            *output, 0U, 1U, { }, std::nullopt });
         for (const auto input : inputs) {
             info.terminals.push_back({
                 frontend::VerilogPrimitiveTerminalDirection::Input,
-                input, 0U, 1U, { } });
+                input, 0U, 1U, { }, std::nullopt });
         }
         if (instance.udp_delay) {
             info.delays = primitive_delay_info(
@@ -1407,6 +1407,7 @@ void HierarchyBuilder::record_verilog_primitives(
             return result;
         }
         result.expression = view->systemverilog->text;
+        result.hir_expression = expression.value();
         // A bit or part select of a net names the net first.
         auto base = view;
         while (base && base->systemverilog != nullptr
@@ -1442,6 +1443,7 @@ void HierarchyBuilder::record_verilog_primitives(
             result.offset = selection->offset;
             result.width = selection->width;
             result.expression.clear();
+            result.hir_expression.reset();
         }
         return result;
     };
@@ -1528,7 +1530,10 @@ void HierarchyBuilder::record_verilog_primitives(
             }
             // One process per output terminal (`$outputN`), and a bufif or
             // notif without a delay splits into `$one`.
-            for (const auto& suffix : { std::string {}, std::string { "$one" } }) {
+            // A tranif's turn-on and turn-off delays are on its control's
+            // driver (`$control`).
+            for (const auto& suffix : { std::string {}, std::string { "$one" },
+                     std::string { "$control" } }) {
                 const auto found = delayed_drivers.find(info.full_name + suffix);
                 if (found != delayed_drivers.end()) {
                     info.drivers.insert(info.drivers.end(),

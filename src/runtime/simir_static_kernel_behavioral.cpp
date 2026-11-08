@@ -5,6 +5,7 @@
 // thread runs until it suspends on a delay, a dynamic or static wait, a fork
 // join, a halt or $finish; waits on kernel-owned slots and on host inputs, and
 // delays on a kernel timer queue, make it ready again.
+#include "fsim/runtime/scheduler_events.hpp"
 #include "fsim/runtime/file_scanning.hpp"
 #include "fsim/runtime/foreign_call_process.hpp"
 #include "simir_container_ops.hpp"
@@ -77,6 +78,7 @@ std::uint32_t Interpreter::Impl::StaticKernel::spawn_thread(
     thread.parent = parent;
     thread.group = group;
     thread.fork_site = fork_site;
+    thread.fork_depth = parent == no_slot ? 0U : running_call_depth(members_[member]);
     thread.epoch = epoch;
     thread.alive = true;
     thread.order = members_[member].process;
@@ -160,7 +162,9 @@ void Interpreter::Impl::StaticKernel::notify_thread(
         if (point == nullptr || !debug_point_executable(point->kind)
             || point->kind == DebugPointKind::frame_entry
             || point->kind == DebugPointKind::frame_exit
-            || point->kind == DebugPointKind::class_constructed) {
+            || point->kind == DebugPointKind::class_constructed
+            || point->kind == DebugPointKind::assertion_pass
+            || point->kind == DebugPointKind::assertion_fail) {
             return false;
         }
         source = point->source;
@@ -408,6 +412,11 @@ void Interpreter::Impl::StaticKernel::queue_late_start(const ProcessId order)
                 scheduled.owner->queue_next_delta(scheduled.host);
             }
         }>(KernelLateStartTask { &impl_, host_process_ });
+    // The kernel re-arms this event when it is restored (#128), so a save
+    // leaves it out; the first scheduling registers the kind.
+    static const bool registered_kind = (register_derived_scheduler_event_kind(
+        "kernel.late_start", task.invoke), true);
+    static_cast<void>(registered_kind);
     impl_.scheduler.schedule_internal_next_delta(
         SchedulerPhase::active, StableOrder { order }, task);
 }
@@ -1585,11 +1594,17 @@ void Interpreter::Impl::StaticKernel::disable_thread_interval(
     const std::uint32_t owner, const std::uint32_t begin, const std::uint32_t end,
     std::optional<std::uint32_t>& running_redirect, const bool include_end)
 {
-    // Fork children spawned inside the block end with their descendants.
+    // A task the block called is inside it too (IEEE 1800-2023 9.6.2): the
+    // outermost call the block made ends with every activation it started.
+    const auto depth = threads_[owner].alive ? call_inside(owner, begin, end)
+                                             : std::nullopt;
+    // Fork children spawned inside the block, or inside a task it called,
+    // end with their descendants.
     std::vector<std::uint32_t> scoped;
     for (const auto child : live_children(owner)) {
         const auto site = threads_[child].fork_site;
-        if (site != no_slot && site >= begin && site < end) {
+        if ((site != no_slot && site >= begin && site < end)
+            || (depth && threads_[child].fork_depth > *depth)) {
             scoped.push_back(child);
         }
     }
@@ -1599,8 +1614,12 @@ void Interpreter::Impl::StaticKernel::disable_thread_interval(
     }
     auto& thread = threads_[owner];
     const auto at = owner == running ? running_pc : thread.pc;
-    if (!thread.alive || at < begin || at > end || (at == end && !include_end)) {
+    if (!thread.alive
+        || (!depth && (at < begin || at > end || (at == end && !include_end)))) {
         return;
+    }
+    if (depth) {
+        unwind_thread_calls(owner, *depth);
     }
     if (owner == running) {
         running_redirect = end;
@@ -1608,12 +1627,125 @@ void Interpreter::Impl::StaticKernel::disable_thread_interval(
     }
     // A suspended owner resumes at the block's end now, not when its wait
     // ends; one already ready (or resuming in the Inactive region) resumes
-    // there when it runs.
-    DpiCallProcess::disabled(thread.order, begin, end);
+    // there when it runs. A DPI import it is inside ends with it, however
+    // deep in the calls.
+    if (depth) {
+        DpiCallProcess::disabled(thread.order);
+    } else {
+        DpiCallProcess::disabled(thread.order, begin, end);
+    }
     thread.pc = end;
     if (!thread.queued
         && std::ranges::find(inactive_threads_, owner) == inactive_threads_.end()) {
         ready_thread(owner);
+    }
+}
+
+std::uint32_t Interpreter::Impl::StaticKernel::running_call_depth(
+    const Member& member) const
+{
+    // Compiled code keeps the running thread's return targets in its
+    // register file (flushed at every helper call); the reference keeps
+    // them in the member's call stack.
+    if (member.compiled && !member.generic_mode && member.compiled->call_stack_base != 0U) {
+        return static_cast<std::uint32_t>(
+            member.compiled->registers[member.compiled->call_stack_base].a);
+    }
+    return static_cast<std::uint32_t>(member.call_stack.size());
+}
+
+std::optional<std::uint32_t> Interpreter::Impl::StaticKernel::call_inside(
+    const std::uint32_t thread, const std::uint32_t begin, const std::uint32_t end) const
+{
+    // A call made inside [begin, end) returns to a target in (begin, end].
+    const auto inside = [&](const std::uint64_t target) {
+        return target > begin && target <= end;
+    };
+    const auto& state = threads_[thread];
+    const auto& member = members_[state.member];
+    if (member.compiled && !member.generic_mode) {
+        // Compiled return targets, saved at every boundary.
+        const auto depth = state.stack.empty() ? 0U : state.stack.front().a;
+        for (std::uint64_t entry = 0U; entry < depth && 1U + entry < state.stack.size();
+             ++entry) {
+            if (inside(state.stack[1U + entry].a)) {
+                return static_cast<std::uint32_t>(entry);
+            }
+        }
+        return std::nullopt;
+    }
+    const auto& stack = thread == running_thread_ ? member.call_stack : state.call_stack;
+    for (std::size_t entry = 0U; entry < stack.size(); ++entry) {
+        if (inside(stack[entry])) {
+            return static_cast<std::uint32_t>(entry);
+        }
+    }
+    return std::nullopt;
+}
+
+void Interpreter::Impl::StaticKernel::unwind_thread_calls(
+    const std::uint32_t thread, const std::uint32_t depth)
+{
+    // The calls from `depth` on end as their returns would end them: the
+    // automatic frames and private arrays they saved are restored, innermost
+    // first, and the return targets go.
+    auto& state = threads_[thread];
+    auto& member = members_[state.member];
+    const bool running = thread == running_thread_;
+    const auto swap_state = [&] {
+        std::swap(member.call_stack, state.call_stack);
+        std::swap(member.frames, state.frames);
+        std::swap(member.frame_bytes, state.frame_bytes);
+        std::swap(member.saved_arrays, state.saved_arrays);
+        std::swap(member.saved_array_marks, state.saved_array_marks);
+    };
+    if (!running) {
+        swap_state();
+    }
+    while (!member.saved_array_marks.empty()
+        && member.saved_array_marks.back().depth >= depth) {
+        const auto mark = member.saved_array_marks.back().mark;
+        member.saved_array_marks.pop_back();
+        for (auto entry = member.saved_arrays.size(); entry > mark; --entry) {
+            const auto& saved = member.saved_arrays[entry - 1U];
+            std::ranges::copy(saved.words, arena_.begin()
+                + containers_[saved.container].element_offset);
+        }
+        member.saved_arrays.resize(mark);
+    }
+    while (!member.frames.empty() && member.frames.back().depth >= depth) {
+        auto frame = std::move(member.frames.back());
+        member.frames.pop_back();
+        for (std::size_t entry = 0U; entry < frame.ids.size(); ++entry) {
+            member.registers[frame.ids[entry]] = std::move(frame.values[entry]);
+        }
+        for (std::size_t entry = 0U; entry < frame.string_ids.size(); ++entry) {
+            member.strings[frame.string_ids[entry]] = std::move(frame.strings[entry]);
+        }
+        for (std::size_t entry = 0U; entry < frame.container_ids.size(); ++entry) {
+            member.container_registers[frame.container_ids[entry]]
+                = frame.containers[entry];
+            if (entry < frame.dynamic.size() && frame.dynamic[entry]) {
+                member.dynamic_containers[frame.container_ids[entry]]
+                    = std::move(frame.dynamic[entry]);
+            }
+        }
+        member.frame_bytes -= frame.bytes;
+        if (member.thread_contexts && !state.contexts.empty()
+            && state.contexts.back()->identity == frame.identity) {
+            state.contexts.pop_back();
+        }
+    }
+    if (member.call_stack.size() > depth) {
+        member.call_stack.resize(depth);
+    }
+    if (member.compiled && !member.generic_mode && !state.stack.empty()
+        && state.stack.front().a > depth) {
+        state.stack.resize(1U + depth);
+        state.stack.front().a = depth;
+    }
+    if (!running) {
+        swap_state();
     }
 }
 
@@ -2058,6 +2190,115 @@ struct Interpreter::Impl::StaticKernel::MemberAssertionStorage final
     std::uint32_t pc;
 };
 
+void Interpreter::Impl::StaticKernel::execute_sva_tick(const CompiledBody& body,
+    Word* registers, const KInst& inst, const std::uint32_t member_index)
+{
+    // KOp::sva_tick (task #186): the monitor's clock tick with the guards,
+    // start and disabled read straight from the register file (IEEE
+    // 1800-2023 16.14). The first tick creates the monitor from the plan and
+    // the bound registers and binds it to its block table entry.
+    auto& member = members_[member_index];
+    const auto& op = operation_get<SvaOperation>(member.operations()[inst.x]);
+    MemberAssertionStorage storage { *this, member_index, inst.x };
+    auto* found = impl_.sva_monitor_find(storage.process(), op.site);
+    if (found == nullptr) {
+        // The bounds (per-instance constants) are read once, at creation.
+        for (const auto bound : op.bounds) {
+            member.registers[bound]
+                = register_operand(body, registers, member_index, inst.y, bound);
+        }
+        found = &impl_.sva_monitor_bind(storage, op);
+    }
+    if (sva_blocks_ && member_index < sva_member_base_.size()
+        && !found->slot_bound()) {
+        found->bind_slot(
+            sva::BlockSlot { sva_blocks_, sva_member_base_[member_index] + inst.aux });
+    }
+    const auto known_one = [](const Word word, const std::uint32_t bit) {
+        return ((word.a >> bit) & 1U) != 0U && ((word.b >> bit) & 1U) == 0U;
+    };
+    std::vector<bool> guards(op.guard_count);
+    if (op.guard_count != 0U) {
+        const auto index = inst.y + op.guards;
+        if (body.register_widths[index] <= 64U) {
+            for (std::uint32_t guard = 0U; guard < op.guard_count; ++guard) {
+                guards[guard] = known_one(registers[index], guard);
+            }
+        } else {
+            // A chunked wide register: chunk j is storage word base + j.
+            const auto base = body.wide_base[index] & ~wide_unknown_flag;
+            for (std::uint32_t guard = 0U; guard < op.guard_count; ++guard) {
+                guards[guard] = known_one(registers[base + guard / 64U], guard % 64U);
+            }
+        }
+    }
+    const bool start = known_one(registers[inst.y + op.start], 0U);
+    const bool disabled = known_one(registers[inst.y + op.disabled], 0U);
+    const auto pending = impl_.sva_tick_core(storage, *found, guards, start, disabled);
+    registers[inst.d] = { static_cast<std::uint64_t>(pending), 0U };
+}
+
+std::int64_t* Interpreter::Impl::StaticKernel::sva_block(const KInst& inst,
+    const std::uint32_t member_index)
+{
+    if (!sva_blocks_ || member_index >= sva_member_base_.size()) {
+        return nullptr;
+    }
+    const auto index = sva_member_base_[member_index] + inst.aux;
+    if (index >= sva_blocks_->size()) {
+        return nullptr;
+    }
+    if (auto* const base = (*sva_blocks_)[index]; base != nullptr) {
+        return base;
+    }
+    // Unbound: the monitor was restored (or created on the operation tier)
+    // after the table was laid out, or does not exist yet.
+    const auto& op = operation_get<SvaOperation>(
+        members_[member_index].operations()[inst.x]);
+    MemberAssertionStorage storage { *this, member_index, inst.x };
+    auto* const found = impl_.sva_monitor_find(storage.process(), op.site);
+    if (found == nullptr) {
+        return nullptr;
+    }
+    found->bind_slot(sva::BlockSlot { sva_blocks_, index });
+    return (*sva_blocks_)[index];
+}
+
+void Interpreter::Impl::StaticKernel::native_sva_tick(
+    StaticKernelNativeFrame* frame, Word* registers, const std::uint32_t at)
+{
+    auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
+    if (kernel.profile_) {
+        ++kernel.profile_native_calls_[3];
+    }
+    try {
+        const auto& program = *static_cast<const CompiledBody*>(frame->program);
+        kernel.scratch().running_position = frame->position;
+        kernel.execute_sva_tick(*static_cast<CompiledBody*>(frame->instance),
+            registers, program.code[at], frame->member);
+    } catch (const KernelDeopt& deopt) {
+        kernel.scratch().pending_deopt = deopt;
+        frame->status = 2U;
+    } catch (...) {
+        kernel.scratch().native_exception = std::current_exception();
+        frame->status = 1U;
+    }
+}
+
+std::int64_t* Interpreter::Impl::StaticKernel::native_sva_bind(
+    StaticKernelNativeFrame* frame, const std::uint32_t at)
+{
+    auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
+    try {
+        const auto& program = *static_cast<const CompiledBody*>(frame->program);
+        return kernel.sva_block(program.code[at], frame->member);
+    } catch (...) {
+        kernel.scratch().native_exception = std::current_exception();
+        frame->status = 1U;
+        return nullptr;
+    }
+}
+
 // The member's registers for the reference's container operations
 // (simir_container_ops): packed and string registers as the reference's
 // frame holds them, and the reference-format container registers
@@ -2469,7 +2710,11 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             }
         }
         if constexpr (std::is_same_v<T, Display>) {
-            behavioral_output(member_index, op.text, op.newline);
+            // An attempt-start report (Display::inert) runs once a library
+            // has bound cbAssertionStart (Impl::assertion_starts_bound).
+            if (!op.inert || impl_.assertion_starts_bound) {
+                behavioral_output(member_index, op.text, op.newline);
+            }
         } else if constexpr (std::is_same_v<T, FormatDisplay>) {
             if (auto* const lane = worker_lane_;
                 lane != nullptr && op.format == OutputFormat::time) {
@@ -3295,6 +3540,15 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                 fail(member_index, pc, error.what());
             }
         } else if constexpr (std::is_same_v<T, PlusArgSelect>) {
+            if (op.host_value != 0U) {
+                // $reset_count and $reset_value (IEEE 1800-2023 D.8).
+                packed_register(op.destination) = PackedLogic4::from_aval_bval(
+                    32, static_cast<std::uint32_t>(op.host_value == 1U
+                            ? impl_.reset_count_result
+                            : impl_.reset_value_result),
+                    0);
+                return;
+            }
             const auto selected = select_plusarg(
                 impl_.plusargs, string_register(op.query), op.format_query);
             if (op.selected) {
@@ -3323,7 +3577,8 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                       maximum, minimum);
         } else if constexpr (std::is_same_v<T, CallableFramePush>) {
             if (member.private_frame(op.identity)) {
-                member.saved_array_marks.push_back(member.saved_arrays.size());
+                member.saved_array_marks.push_back(
+                    { member.saved_arrays.size(), running_call_depth(member) });
                 for (const auto id : op.containers) {
                     if (id >= member.container_registers.size()
                         || member.container_registers[id] == no_container) {
@@ -3348,6 +3603,7 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             }
             Member::Frame frame;
             frame.identity = op.identity;
+            frame.depth = running_call_depth(member);
             frame.ids.assign(op.packed.begin(), op.packed.end());
             frame.values.reserve(frame.ids.size());
             for (const auto id : frame.ids) {
@@ -3419,7 +3675,7 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                 if (member.saved_array_marks.empty()) {
                     fail(member_index, pc, "automatic callable frame stack mismatch");
                 }
-                const auto mark = member.saved_array_marks.back();
+                const auto mark = member.saved_array_marks.back().mark;
                 member.saved_array_marks.pop_back();
                 for (auto entry = mark; entry < member.saved_arrays.size(); ++entry) {
                     const auto& saved = member.saved_arrays[entry];
@@ -3672,6 +3928,9 @@ Interpreter::Impl::StaticKernel::behavioral_boundary_op(const std::uint32_t inde
                 fail(member_index, pc, "invalid register ID");
             }
             const auto width = body.register_widths[reg];
+            if (width > 64U && reg < body.wide_base.size() && body.wide_base[reg] != 0U) {
+                return wide_value(body, body.registers.data(), reg, ValueKind::logic4);
+            }
             if (width > 64U) {
                 return body.wide_registers.at(reg);
             }
@@ -3933,7 +4192,33 @@ Interpreter::Impl::StaticKernel::behavioral_boundary_op(const std::uint32_t inde
             // disable fork (9.6.3), as the reference's DisableFork: every
             // descendant, the process then requeued in the current region;
             // or the children of one named fork, the process continuing.
-            if (!op.site) {
+            if (op.deferred_reports && !op.site) {
+                // A deferred assertion flush point (16.4.2): the live
+                // children of this thread's deferred Forks are its pending
+                // reports; they end with their descendants and the thread
+                // goes on.
+                const auto& operations = members_[member_index].operations();
+                for (const auto child : live_children(index)) {
+                    const auto site = threads_[child].fork_site;
+                    if (site == static_kernel_detail::no_slot
+                        || site >= operations.size()) {
+                        continue;
+                    }
+                    const auto* const fork
+                        = fsim::runtime::simir::operation_get_if<Fork>(
+                            &operations[site]);
+                    if (fork != nullptr && fork->deferred_report
+                        && threads_[child].alive
+                        && deferred_report_pending(operations, *fork,
+                            threads_[child].pc,
+                            impl_.scheduler.current_phase().value_or(
+                                SchedulerPhase::active))) {
+                        cancel_thread_descendants(child);
+                        kill_thread(child);
+                    }
+                }
+                outcome = Boundary::advance;
+            } else if (!op.site) {
                 suspend_point = true;
                 // A pending clocking drive is not a subprocess: with one
                 // live, only the other children end, with their descendants.
@@ -4100,7 +4385,9 @@ bool Interpreter::Impl::StaticKernel::debug_point(
     const bool probe_only = probe_point != nullptr
         && (probe_point->kind == DebugPointKind::frame_entry
             || probe_point->kind == DebugPointKind::frame_exit
-            || probe_point->kind == DebugPointKind::class_constructed);
+            || probe_point->kind == DebugPointKind::class_constructed
+            || probe_point->kind == DebugPointKind::assertion_pass
+            || probe_point->kind == DebugPointKind::assertion_fail);
     if (!probe_only) {
         thread.last_point = pc;
         member.debug_pc = pc;
@@ -4149,6 +4436,12 @@ bool Interpreter::Impl::StaticKernel::debug_point(
         break;
     case DebugPointKind::class_constructed:
         kind = ExecutionPointKind::object_created;
+        break;
+    case DebugPointKind::assertion_pass:
+        kind = ExecutionPointKind::assertion_pass;
+        break;
+    case DebugPointKind::assertion_fail:
+        kind = ExecutionPointKind::assertion_fail;
         break;
     case DebugPointKind::block_entry:
     case DebugPointKind::block_exit:
@@ -4694,7 +4987,10 @@ void Interpreter::Impl::StaticKernel::sync_behavioral_registers(
             continue;
         }
         if (width > 64U) {
-            if (reg < body.wide_registers.size()) {
+            if (reg < body.wide_base.size() && body.wide_base[reg] != 0U) {
+                member.registers[reg] = wide_value(body, body.registers.data(),
+                    static_cast<std::uint32_t>(reg), ValueKind::logic4);
+            } else if (reg < body.wide_registers.size()) {
                 member.registers[reg] = body.wide_registers[reg];
             }
             continue;
@@ -4772,6 +5068,11 @@ void Interpreter::Impl::StaticKernel::arm_vhdl_timer()
                 scheduled.owner->static_kernel->vhdl_timer_due(scheduled.time);
             }
         }>(KernelVhdlTimerTask { &impl_, time });
+    // The kernel re-arms this event when it is restored (#128), so a save
+    // leaves it out; the first scheduling registers the kind.
+    static const bool registered_kind = (register_derived_scheduler_event_kind(
+        "kernel.vhdl_timer", task.invoke), true);
+    static_cast<void>(registered_kind);
     // IEEE 1076-2019 14.7.5.3: the signals update first; the processes whose
     // timeout expired run in the next delta with those the updates wake.
     impl_.scheduler.schedule_internal_at(
@@ -4806,6 +5107,11 @@ void Interpreter::Impl::StaticKernel::arm_timer()
                 KernelWarpEndTask,
                 +[](Scheduler&, const KernelWarpEndTask&) { }>(
                 KernelWarpEndTask { });
+            // The kernel re-arms this event when it is restored (#128), so a save
+            // leaves it out; the first scheduling registers the kind.
+            static const bool registered_kind = (register_derived_scheduler_event_kind(
+                "kernel.warp_end", task.invoke), true);
+            static_cast<void>(registered_kind);
             impl_.scheduler.schedule_internal_systemverilog_at(
                 *warp_time_, SchedulerPhase::active, host_process_, task);
         }
@@ -4831,6 +5137,11 @@ void Interpreter::Impl::StaticKernel::arm_timer()
                 scheduled.owner->static_kernel->timer_due(scheduled.time);
             }
         }>(KernelTimerTask { &impl_, time });
+    // The kernel re-arms this event when it is restored (#128), so a save
+    // leaves it out; the first scheduling registers the kind.
+    static const bool registered_kind = (register_derived_scheduler_event_kind(
+        "kernel.timer", task.invoke), true);
+    static_cast<void>(registered_kind);
     impl_.scheduler.schedule_internal_systemverilog_at(
         time, SchedulerPhase::active, host_process_, task);
 }
@@ -4844,6 +5155,32 @@ std::optional<SimulationTick> Interpreter::Impl::StaticKernel::next_timer()
         return std::nullopt;
     }
     return timers_.top().time;
+}
+
+void Interpreter::Impl::StaticKernel::append_timer_times(
+    std::vector<SimulationTick>& times) const
+{
+    // Copies: a priority queue cannot be walked in place.
+    for (auto queue = timers_; !queue.empty(); queue.pop()) {
+        const auto& timer = queue.top();
+        const bool live = timer.net_delay
+            ? net_delay_timer_live(timer)
+            : (timer.thread < threads_.size() && threads_[timer.thread].alive
+                && threads_[timer.thread].epoch == timer.epoch);
+        if (live) {
+            times.push_back(timer.time);
+        }
+    }
+    for (auto queue = vhdl_timers_; !queue.empty(); queue.pop()) {
+        const auto& timer = queue.top();
+        if (timer.thread < threads_.size() && threads_[timer.thread].alive
+            && threads_[timer.thread].epoch == timer.epoch) {
+            times.push_back(timer.time);
+        }
+    }
+    for (auto queue = hosted_timers_; !queue.empty(); queue.pop()) {
+        times.push_back(queue.top().time);
+    }
 }
 
 bool Interpreter::Impl::StaticKernel::net_delay_timer_live(const Timer& timer) const
@@ -4888,55 +5225,110 @@ void Interpreter::Impl::StaticKernel::net_delay_write(
     const WriteNetDelay& operation, const PackedLogic4& source)
 {
     const auto signal = operation.signal;
-    if (signal >= slot_of_signal_.size() || slot_of_signal_[signal] == no_slot) {
+    if (signal >= slot_of_signal_.size()) {
         fail(member_index, pc,
-            "static kernel interconnect delay target is not kernel-owned");
+            "static kernel interconnect delay target is not a signal");
     }
-    const auto slot_index = slot_of_signal_[signal];
-    const auto& slot = slots_[slot_index];
     const std::uint32_t offset = operation.offset.value_or(0U);
     const auto width = static_cast<std::uint32_t>(source.width());
-    if (width == 0U || offset > slot.width || width > slot.width - offset
-        || (!operation.offset && width != slot.width)) {
-        fail(member_index, pc,
-            "interconnect delay write range is outside its target signal");
+    // The part of the run that one slot holds: its slot, its first bit in
+    // the slot, its first bit in the run and its width.
+    struct Part {
+        std::uint32_t slot { };
+        std::uint32_t offset { };
+        std::uint32_t source_offset { };
+        std::uint32_t width { };
+    };
+    std::vector<Part> parts;
+    const auto family = family_of_signal_[signal];
+    const bool in_leaf = family != no_slot;
+    if (in_leaf) {
+        // A run of a proxy (an alias of several nets) is stored in the
+        // leaves it covers, the way a delay-free write of it stores them;
+        // a run over several leaves writes each leaf's part, and each part
+        // has a site of its own.
+        const std::uint64_t end = std::uint64_t { offset } + width;
+        for (const auto& leaf : families_[family].leaves) {
+            const std::uint64_t low = std::max<std::uint64_t>(offset, leaf.offset);
+            const std::uint64_t high
+                = std::min<std::uint64_t>(end, std::uint64_t { leaf.offset } + leaf.width);
+            if (low >= high) {
+                continue;
+            }
+            parts.push_back({ leaf.slot, static_cast<std::uint32_t>(low - leaf.offset),
+                static_cast<std::uint32_t>(low - offset),
+                static_cast<std::uint32_t>(high - low) });
+        }
+        std::uint64_t covered = 0U;
+        for (const auto& part : parts) {
+            covered += part.width;
+        }
+        if (parts.empty() || covered != width) {
+            fail(member_index, pc,
+                "interconnect delay write is outside the leaves of its target");
+        }
+    } else if (slot_of_signal_[signal] == no_slot) {
+        // A signal the host owns (a mirrored input of the kernel, a signal
+        // other processes write): the delayed write is the reference
+        // algorithm's, and its commit reaches the kernel's mirror as any
+        // host commit does (IEEE 1364-2005 16.2.4).
+        impl_.schedule_net_delay(member_process_[member_index], operation,
+            source);
+        return;
+    } else {
+        parts.push_back({ slot_of_signal_[signal], offset, 0U, width });
     }
     const auto value = Impl::coerce_value_kind(source, ValueKind::logic4);
     const auto process = member_process_[member_index];
-    const auto current = net_delay_driver_value(slot_index, process);
-    const auto key = (std::uint64_t { member_index } << 32U) | pc;
-    auto found = net_delay_site_of_.find(key);
-    if (found == net_delay_site_of_.end()) {
-        // Nothing pending and nothing to change: the usual case.
-        if (current.extract_bits(offset, width) == value) {
-            return;
-        }
-        found = net_delay_site_of_.emplace(key,
-            static_cast<std::uint32_t>(net_delay_sites_.size())).first;
-        auto& made = net_delay_sites_.emplace_back();
-        made.member = member_index;
-        made.pc = pc;
-        made.slot = slot_index;
-        made.offset = offset;
-        made.width = width;
-        made.pending.bits.resize(width);
-    } else if (net_delay_sites_[found->second].pending.wakes.empty()
-        && current.extract_bits(offset, width) == value) {
-        return;
-    }
-    const auto site_index = found->second;
-    auto& site = net_delay_sites_[site_index];
     const auto limits = impl_.net_delay_limits(process, operation);
     const auto now = kernel_now();
-    for (std::uint32_t bit = 0U; bit < width; ++bit) {
-        site.pending.change(bit, current.get(offset + bit), value.get(bit), now,
-            limits.delays, limits.rejects, limits.errors,
-            [&](const SimulationTick, const SimulationTick time,
-                PendingNetDelayWrites::Wake&) {
-                timers_.push({ time, process, timer_sequence_++, site_index, 0U,
-                    true });
-            },
-            [](PendingNetDelayWrites::Wake&) { });
+    for (std::uint32_t part_index = 0U; part_index < parts.size(); ++part_index) {
+        const auto& part = parts[part_index];
+        const auto slot_index = part.slot;
+        const auto& slot = slots_[slot_index];
+        if (part.width == 0U || part.offset > slot.width
+            || part.width > slot.width - part.offset
+            || (!operation.offset && !in_leaf && part.width != slot.width)) {
+            fail(member_index, pc,
+                "interconnect delay write range is outside its target signal");
+        }
+        const auto piece = parts.size() == 1U
+            ? value : value.extract_bits(part.source_offset, part.width);
+        const auto current = net_delay_driver_value(slot_index, process);
+        // Site by part, member and operation (net_delay_site_key).
+        const auto key = net_delay_site_key(member_index, pc, part_index);
+        auto found = net_delay_site_of_.find(key);
+        if (found == net_delay_site_of_.end()) {
+            // Nothing pending and nothing to change: the usual case.
+            if (current.extract_bits(part.offset, part.width) == piece) {
+                continue;
+            }
+            found = net_delay_site_of_.emplace(key,
+                static_cast<std::uint32_t>(net_delay_sites_.size())).first;
+            auto& made = net_delay_sites_.emplace_back();
+            made.member = member_index;
+            made.pc = pc;
+            made.part = part_index;
+            made.slot = slot_index;
+            made.offset = part.offset;
+            made.width = part.width;
+            made.pending.bits.resize(part.width);
+        } else if (net_delay_sites_[found->second].pending.wakes.empty()
+            && current.extract_bits(part.offset, part.width) == piece) {
+            continue;
+        }
+        const auto site_index = found->second;
+        auto& site = net_delay_sites_[site_index];
+        for (std::uint32_t bit = 0U; bit < part.width; ++bit) {
+            site.pending.change(bit, current.get(part.offset + bit), piece.get(bit),
+                now, limits.delays, limits.rejects, limits.errors,
+                [&](const SimulationTick, const SimulationTick time,
+                    PendingNetDelayWrites::Wake&) {
+                    timers_.push({ time, process, timer_sequence_++, site_index, 0U,
+                        true });
+                },
+                [](PendingNetDelayWrites::Wake&) { });
+        }
     }
 }
 
@@ -4956,6 +5348,12 @@ void Interpreter::Impl::StaticKernel::net_delay_mature(
     for (const auto& [bit, value] : matured) {
         slice.set(bit - low, value);
     }
+    // A nine-valued slot stores the strong value over its four planes.
+    if (slots_[site.slot].planes == 4U) {
+        write_slot_immediate(site.slot, std::move(slice), site.offset + low,
+            site.member, site.pc);
+        return;
+    }
     write_slot_value(site.slot, slice, site.offset + low, site.member, site.pc);
 }
 
@@ -4969,6 +5367,11 @@ void Interpreter::Impl::StaticKernel::schedule_stop_at(const SimulationTick time
         +[](Scheduler&, const KernelStopTask& scheduled) {
             scheduled.owner->scheduler.request_stop();
         }>(KernelStopTask { &impl_ });
+    // The kernel re-arms this event when it is restored (#128), so a save
+    // leaves it out; the first scheduling registers the kind.
+    static const bool registered_kind = (register_derived_scheduler_event_kind(
+        "kernel.stop", task.invoke), true);
+    static_cast<void>(registered_kind);
     impl_.scheduler.schedule_internal_systemverilog_at(
         time, SchedulerPhase::active, host_process_, task);
 }

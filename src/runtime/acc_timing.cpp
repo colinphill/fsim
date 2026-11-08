@@ -96,7 +96,8 @@ using fsim::runtime::acc_detail::publish_error;
     const fsim_acc_read_result_v3& metadata,
     const std::uint32_t capability) noexcept {
   return (metadata.timing_capabilities & capability) != 0 &&
-         (is_path_type(metadata.type) || is_path_type(metadata.full_type));
+         (is_path_type(metadata.type) || is_path_type(metadata.full_type) ||
+          input_port_target(metadata));
 }
 
 [[nodiscard]] std::optional<std::uint32_t> path_delay_count() noexcept {

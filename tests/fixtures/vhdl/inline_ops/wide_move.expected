@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+inl move explicit=100011223344556677
+inl move explicit_a=fedcba987654321000
+inl move explicit_nr=fedcba987654321000
+inl move whole=1
+inl move checks=27 mismatches=0

@@ -30,6 +30,8 @@ static const char* type_name(PLI_INT32 type)
         return "vpiDelayControl";
     case vpiTaskCall:
         return "vpiTaskCall";
+    case vpiSysTaskCall:
+        return "vpiSysTaskCall";
     case vpiEventControl:
         return "vpiEventControl";
     default:
@@ -53,6 +55,16 @@ static PLI_INT32 disabled(p_cb_data data)
     vpi_printf("#c cbDisable %s %s t=%u\n",
         type_name(vpi_get(vpiType, data->obj)),
         vpi_get_str(vpiFullName, data->obj),
+        data->time != NULL ? (unsigned)data->time->low : 0U);
+    return 0;
+}
+
+// A system task call hears of the disabling of the named block that contains
+// it (38.36.1): obj stays the call.
+static PLI_INT32 disabled_call(p_cb_data data)
+{
+    vpi_printf("#c cbDisable call %s t=%u\n",
+        type_name(vpi_get(vpiType, data->obj)),
         data->time != NULL ? (unsigned)data->time->low : 0U);
     return 0;
 }
@@ -123,6 +135,29 @@ static PLI_INT32 start(p_cb_data data)
         disable.time = &time;
         vpi_printf("#c cbDisable idle accepted=%d\n",
             vpi_register_cb(&disable) != NULL);
+    }
+    // A system task call in the block `worker`, disabled at time 2 while the
+    // block waits at its second delay (38.36.1, Table 38-3).
+    {
+        static s_vpi_time time = { vpiSimTime, 0, 0, 0.0 };
+        s_cb_data disable;
+        vpiHandle call = NULL;
+        vpiHandle worker = vpi_handle_by_name("top.worker", NULL);
+        vpiHandle statements = vpi_iterate(vpiStmt, worker);
+        while (statements != NULL && (item = vpi_scan(statements)) != NULL) {
+            if (vpi_get(vpiType, item) == vpiSysTaskCall) {
+                call = item;
+                vpi_free_object(statements);
+                break;
+            }
+        }
+        memset(&disable, 0, sizeof disable);
+        disable.reason = cbDisable;
+        disable.cb_rtn = disabled_call;
+        disable.obj = call;
+        disable.time = &time;
+        vpi_printf("#c cbDisable call accepted=%d\n",
+            call != NULL && vpi_register_cb(&disable) != NULL);
     }
     // The statements of a process of a generate block.
     {

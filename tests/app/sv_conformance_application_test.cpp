@@ -259,9 +259,15 @@ void test_standard_identity(const std::filesystem::path& directory)
         identity_source_set(
             fsim::project::Language::system_verilog, "2012", consumer),
     };
+    // Different standards mix (package 2009, consumer 2012); only differing
+    // compatibility profiles are refused with FSIM-FE-STANDARD-003.
     fsim::diagnostic::Engine import_diagnostics;
-    assert(!fsim::app::check_project(import_mismatch, import_diagnostics));
-    assert(has_diagnostic(import_diagnostics, "FSIM-FE-STANDARD-003"));
+    assert(fsim::app::check_project(import_mismatch, import_diagnostics));
+    assert(!has_diagnostic(import_diagnostics, "FSIM-FE-STANDARD-003"));
+    import_mismatch.source_sets[1].compatibility_switches = { "sizing" };
+    fsim::diagnostic::Engine profile_diagnostics;
+    assert(!fsim::app::check_project(import_mismatch, profile_diagnostics));
+    assert(has_diagnostic(profile_diagnostics, "FSIM-FE-STANDARD-003"));
 
     fsim::project::Config reanalysis;
     reanalysis.base_directory = identity;

@@ -1,0 +1,6 @@
+#c type kind=vhpiprotectedtypedeclk name=counter_t
+#c body kind=vhpiprotectedtypebodyk name=counter_t
+#c body back=same
+#c method bump kind=vhpiprocdeclk
+#c inst kind=vhpiprotectedtypeinstk name=ctr full=:top:ctr
+#c signal inst=none

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "fsim/runtime/scheduler_events.hpp"
 #include "fsim/runtime/vpi_time.hpp"
 
 #include <atomic>
@@ -247,7 +248,7 @@ SystemVerilogVpiTimeService::schedule(
             converted.ticks,
             SchedulerPhase::active,
             stable_order,
-            [weak, id](Scheduler&) {
+            foreign_callback_task([weak, id](Scheduler&) {
                 const auto state = weak.lock();
                 if (!state) {
                     return;
@@ -289,7 +290,7 @@ SystemVerilogVpiTimeService::schedule(
                 found->second.status = failed
                     ? SystemVerilogVpiTimedStatus::CallbackFailed
                     : SystemVerilogVpiTimedStatus::Fired;
-            });
+            }));
     } catch (...) {
         impl_->records.erase(position);
         return schedule_failure(

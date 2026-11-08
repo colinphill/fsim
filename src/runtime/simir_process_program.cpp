@@ -63,6 +63,7 @@ ProcessProgramTemplate::ProcessProgramTemplate(
     , string_register_count { process.string_register_count() }
     , container_register_count { process.container_register_count() }
     , debug_locals { process.debug_locals() }
+    , call_results { process.call_results() }
     , debug_string_locals { process.debug_string_locals() }
     , debug_container_locals { process.debug_container_locals() }
     , container_register_types { process.container_register_types() }
@@ -88,6 +89,8 @@ bool ProcessProgramTemplate::matches(
         && container_register_count == process.container_register_count()
         && ranges_equal(
             debug_locals, process.debug_locals(), same_debug_local)
+        && ranges_equal(
+            call_results, process.call_results(), same_debug_local)
         && ranges_equal(debug_string_locals,
             process.debug_string_locals(), same_debug_string_local)
         && ranges_equal(debug_container_locals,
@@ -479,6 +482,11 @@ const std::vector<DebugLocal>& ProcessProgramView::debug_locals() const noexcept
     return facade_ != nullptr ? facade_->debug_locals : common_->debug_locals;
 }
 
+const std::vector<DebugLocal>& ProcessProgramView::call_results() const noexcept
+{
+    return facade_ != nullptr ? facade_->call_results : common_->call_results;
+}
+
 const std::vector<DebugStringLocal>&
 ProcessProgramView::debug_string_locals() const noexcept
 {
@@ -720,6 +728,7 @@ Process ProcessProgramView::materialize_impl(
     process.string_register_count = string_register_count();
     process.container_register_count = container_register_count();
     process.debug_locals = debug_locals();
+    process.call_results = call_results();
     process.debug_string_locals = debug_string_locals();
     process.debug_container_locals = debug_container_locals();
     process.container_register_types = container_register_types();

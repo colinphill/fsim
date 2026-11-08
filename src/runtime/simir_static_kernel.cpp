@@ -19,6 +19,7 @@
 // Members whose registers have statically known widths of at most 64 bits run
 // in the compiled narrow tier (simir_static_kernel_compiled.cpp); the others
 // use the generic evaluator below, built on the reference value functions.
+#include "fsim/runtime/scheduler_events.hpp"
 #include "simir_static_kernel_state.hpp"
 #include "simir_container_helpers.hpp"
 #include "fsim/runtime/simir_coverage.hpp"
@@ -355,6 +356,7 @@ Interpreter::Impl::StaticKernel::StaticKernel(
     mixed_ = spec.mixed;
     debug_points_ = spec.debug_points;
     weak_sources_ = spec.weak_sources || spec.debug_points;
+    time_resolution_ = spec.time_resolution_femtoseconds;
     if (debug_points_
         && std::ranges::any_of(spec.members, [&](const auto& member) {
                return member.process == spec.host;
@@ -379,6 +381,12 @@ Interpreter::Impl::StaticKernel::StaticKernel(
     };
     // A kernel image restores what build_fresh would make.
     if (restore_image(spec)) {
+        // The image holds the compiled bodies, not the SVA block table or
+        // the flag their lowering set (compile_members).
+        plan_sva_table();
+        for (std::size_t index = 0U; index < members_.size(); ++index) {
+            note_sva_code(index);
+        }
         stage("image");
     } else {
         build_fresh(spec, stage);
@@ -3180,11 +3188,21 @@ void Interpreter::Impl::StaticKernel::write_slot_word(
 }
 
 void Interpreter::Impl::StaticKernel::write_slot_value(
-    const std::uint32_t slot_index, const PackedLogic4& value,
+    const std::uint32_t slot_index, const PackedLogic4& written,
     const std::optional<std::uint32_t> offset, const std::uint32_t member,
     const InstructionIndex instruction)
 {
     auto& slot = slots_[slot_index];
+    // A nine-valued register (a concatenation or selection of a VHDL-driven
+    // net) stored to a four-state slot takes the VHDL-to-SystemVerilog value
+    // mapping (IEEE 1800-2023 6.6 / 1076-2019 std_logic: 'U', 'W' and '-'
+    // read as x, 'L' as 0, 'H' as 1), as the reference's normalize_signal_value
+    // does. The planes of a Logic9 value are code planes, not value planes.
+    std::optional<PackedLogic4> collapsed;
+    if (written.is_logic9() && slot.planes != 4U && !slot.resolved) {
+        collapsed.emplace(collapse_to_logic4(written));
+    }
+    const PackedLogic4& value = collapsed ? *collapsed : written;
     const auto width = static_cast<std::uint32_t>(value.width());
     if (offset) {
         if (*offset > slot.width || width > slot.width - *offset) {
@@ -5927,7 +5945,12 @@ void Interpreter::Impl::StaticKernel::run_generic(const std::uint32_t member_ind
     if (const auto stopped = run_operation_tier(member_index, pc, false)) {
         pc = *stopped;
     }
-    while (pc >= member.body_begin && pc < member.body_end) {
+    // A family expansion's appended operations (family_expansion_begin) are
+    // part of the body.
+    while (pc >= member.body_begin
+        && (pc < member.body_end
+            || (member.family_expansion_begin != 0U
+                && pc >= member.family_expansion_begin))) {
         if (++steps > run_step_limit) {
             fail(member_index, pc, "static kernel member did not terminate");
         }
@@ -7029,9 +7052,10 @@ void Interpreter::Impl::StaticKernel::commit_pending()
     // output that another update of this region already changed hands that
     // value to the host before the next one lands, so its observers see
     // every change.
-    // (A wide assignment arrives as word writes: a write of the same member
-    // and slot starting at the word boundary where the one before it ended
-    // continues that update.)
+    // (A wide assignment arrives as word writes; every word after the first is
+    // marked write_continues and continues the update of the word before it.
+    // Separate nonblocking assignments, even adjacent ones, are update events
+    // of their own: IEEE 1800-2023 4.4.2.2, 10.4.2.)
     const auto publish_earlier = [&](const std::uint32_t slot_index) {
         if (slot_index != no_slot && slots_[slot_index].output
             && slots_[slot_index].output_pending) {
@@ -7044,8 +7068,8 @@ void Interpreter::Impl::StaticKernel::commit_pending()
         case 0U:
             if (const auto* const before = index != 0U ? &writes_.data[index - 1U] : nullptr;
                 before == nullptr || before->kind != 0U || before->slot != item.slot
-                || before->member != item.member || item.offset % 64U != 0U
-                || before->offset + before->width != item.offset) {
+                || before->member != item.member
+                || (item.instruction & write_continues) == 0U) {
                 publish_earlier(item.slot);
             }
             write_slot_word(item.slot, { item.a, item.b }, item.offset,
@@ -8019,6 +8043,11 @@ bool Interpreter::Impl::StaticKernel::defer_nonblocking()
                 scheduled.owner->queue_next_delta(scheduled.host);
             }
         }>(KernelNonblockingTask { &impl_, host_process_ });
+    // The kernel re-arms this event when it is restored (#128), so a save
+    // leaves it out; the first scheduling registers the kind.
+    static const bool registered_kind = (register_derived_scheduler_event_kind(
+        "kernel.nonblocking", task.invoke), true);
+    static_cast<void>(registered_kind);
     impl_.scheduler.schedule_internal_systemverilog_at(impl_.scheduler.now(),
         SchedulerPhase::update,
         nonblocking_after_host_ ? std::numeric_limits<StableOrder>::max()
@@ -8071,6 +8100,11 @@ void Interpreter::Impl::StaticKernel::defer_vhdl_round()
                 scheduled.owner->queue_next_delta(scheduled.host);
             }
         }>(KernelVhdlRoundTask { &impl_, host_process_ });
+    // The kernel re-arms this event when it is restored (#128), so a save
+    // leaves it out; the first scheduling registers the kind.
+    static const bool registered_kind = (register_derived_scheduler_event_kind(
+        "kernel.vhdl_round", task.invoke), true);
+    static_cast<void>(registered_kind);
     impl_.scheduler.schedule_internal(
         SchedulerPhase::active, host_process_, task);
 }
@@ -8868,6 +8902,15 @@ bool Interpreter::Impl::StaticKernel::dissolved_member_due(
         }
         seen = std::move(now);
     }
+    if (!dissolved.retired.empty() && dissolved.retired[position] != 0U) {
+        // split_gate_delay moved the member out of the pass: when its inputs
+        // change it runs as a member of its own, at the level after the
+        // partition's.
+        if (due) {
+            schedule(partitions_[partition].members[position]);
+        }
+        return false;
+    }
     return due;
 }
 
@@ -9191,6 +9234,9 @@ public:
     {
     }
 
+    // The host stub has no registers: the kernel's sections hold its state.
+    [[nodiscard]] bool run_state_free() const noexcept override { return true; }
+
     ProcessResumeResult resume(
         ProcessExecutionContext&, InstructionIndex) override
     {
@@ -9234,12 +9280,40 @@ void Interpreter::watch_signal_changes(const std::span<const SignalId> signals)
         (void)impl_->get_signal(signal);
     }
     impl_->watch_static_kernel_signals(signals);
+    // Kept for a reset's twin (replay_plan_onto): only the signals not
+    // watched before, since a watch lasts for the rest of the run.
+    if (!impl_->replaying_plan) {
+        Impl::PlanStep step;
+        step.kind = Impl::PlanStep::Kind::watch_changes;
+        step.after_start = impl_->started;
+        for (const auto signal : signals) {
+            if (impl_->plan_watched.insert(signal).second) {
+                step.signals.push_back(signal);
+            }
+        }
+        if (!step.signals.empty()) {
+            impl_->plan_journal.push_back(std::move(step));
+        }
+    }
 }
 
 void Interpreter::watch_signal_transactions(
     const std::span<const SignalId> signals)
 {
     watch_signal_changes(signals);
+    if (!impl_->replaying_plan) {
+        Impl::PlanStep step;
+        step.kind = Impl::PlanStep::Kind::watch_transactions;
+        step.after_start = impl_->started;
+        for (const auto signal : signals) {
+            if (impl_->plan_transactions.insert(signal).second) {
+                step.signals.push_back(signal);
+            }
+        }
+        if (!step.signals.empty()) {
+            impl_->plan_journal.push_back(std::move(step));
+        }
+    }
     if (impl_->static_kernel) {
         impl_->static_kernel->watch_transactions(signals);
     }
@@ -9251,10 +9325,28 @@ bool Interpreter::signal_kernel_owned(const SignalId signal) const noexcept
         && impl_->static_kernel_owned_signal[signal] != 0U;
 }
 
+std::vector<SimulationTick> Interpreter::pending_times() const
+{
+    auto times = scheduler().pending_times();
+    if (impl_->static_kernel) {
+        impl_->static_kernel->append_timer_times(times);
+    }
+    std::ranges::sort(times);
+    times.erase(std::ranges::unique(times).begin(), times.end());
+    return times;
+}
+
 void Interpreter::open_external_observation()
 {
     if (impl_->static_kernel) {
         impl_->static_kernel->open_boundary();
+    }
+    if (!impl_->replaying_plan && !impl_->plan_boundary_open) {
+        impl_->plan_boundary_open = true;
+        Impl::PlanStep step;
+        step.kind = Impl::PlanStep::Kind::open_boundary;
+        step.after_start = impl_->started;
+        impl_->plan_journal.push_back(std::move(step));
     }
 }
 
@@ -9302,6 +9394,15 @@ void Interpreter::note_external_signal_write(const SignalId signal)
     (void)impl_->get_signal(signal);
     if (impl_->static_kernel) {
         impl_->static_kernel->note_external_write(signal);
+    }
+    // The first foreign write of a signal revives and dissolves what writes
+    // it; a twin needs that plan to have the values of the run it replaces.
+    if (!impl_->replaying_plan && impl_->plan_written.insert(signal).second) {
+        Impl::PlanStep step;
+        step.kind = Impl::PlanStep::Kind::external_write;
+        step.after_start = impl_->started;
+        step.signals.push_back(signal);
+        impl_->plan_journal.push_back(std::move(step));
     }
 }
 
@@ -9463,6 +9564,9 @@ ReplanResult Interpreter::Impl::StaticKernel::replan_at_safe_point(
     switch (request.kind) {
     case ReplanRequest::Kind::graft_net_delay:
         return graft_net_delay(request.graft);
+    case ReplanRequest::Kind::split_gate_delay:
+        return split_gate_delay(request.gate_process, request.gate_program,
+            request.gate_dry_run);
     }
     return { false, "unknown kernel re-plan" };
 }
@@ -9634,7 +9738,9 @@ void Interpreter::Impl::StaticKernel::graft_move_loads(const GraftCopy& copy,
         }
         const auto& reader = partition_readers_[index];
         const auto& reading = members_[reader.member];
-        auto& entry = reach[reading.partition];
+        const auto owner = reading.partition != no_slot ? reading.partition
+                                                         : reading.retired_partition;
+        auto& entry = reach[owner];
         const bool moving = moved(reader.member);
         if (moving) {
             partition_reader_slots_[index] = to;
@@ -9776,7 +9882,7 @@ void Interpreter::Impl::StaticKernel::graft_move_loads(const GraftCopy& copy,
         }
         for (const auto load : copy.loads) {
             const auto& member = members_[load];
-            if (member.partition != partition) {
+            if (member.partition != partition && member.retired_partition != partition) {
                 continue;
             }
             for (auto index = dissolved->begin[member.position];
@@ -9825,8 +9931,10 @@ ReplanResult Interpreter::Impl::StaticKernel::graft_net_delay(const NetDelayGraf
     if (vhdl_ && !mixed_) {
         return refuse("a VHDL kernel keeps the kernel's plan");
     }
-    if (activating_ || worker_lane_ != nullptr || queued_count_ != 0U
-        || !triggered_.empty() || !pending_dissolves_.empty() || committing_round_) {
+    if (activating_ || worker_lane_ != nullptr
+        || (!impl_.replaying_plan && !impl_.restoring_plan
+            && (queued_count_ != 0U || !triggered_.empty()))
+        || !pending_dissolves_.empty() || committing_round_) {
         return refuse("the kernel is not at a safe point");
     }
     const auto first_signal = static_cast<SignalId>(impl_.signals.size());
@@ -9937,6 +10045,13 @@ ReplanResult Interpreter::Impl::StaticKernel::graft_net_delay(const NetDelayGraf
             return refuse("the net is not a plain slot of the kernel");
         }
         copy.net_slot = slot_of_signal_[copy.net_signal];
+        // Dead logic writing the net ends the way a foreign write ends it
+        // (apply_watches, as split_gate_delay does): its writers run on
+        // their inputs from now on, so the copy follows the net.
+        if (!slots_[copy.net_slot].lazy_writers.empty()) {
+            pending_revivals_.push_back(copy.net_slot);
+            open_boundary();
+        }
         const auto& net = slots_[copy.net_slot];
         if (net.planes != 2U || net.mirror || !net.lazy_writers.empty()
             || static_cast<std::uint32_t>(graft.signals[each].initial_value.width())
@@ -9958,6 +10073,17 @@ ReplanResult Interpreter::Impl::StaticKernel::graft_net_delay(const NetDelayGraf
         if (found == no_slot || is_host(process_id)
             || std::ranges::find(loaded, found) != loaded.end()) {
             return refuse("a load process is not a member of the kernel");
+        }
+        if (members_[found].lazy) {
+            // A dead load runs on its inputs from now on, as the net's
+            // writers above.
+            for (std::uint32_t slot = 0U; slot < slots_.size(); ++slot) {
+                if (std::ranges::find(slots_[slot].lazy_writers, found)
+                    != slots_[slot].lazy_writers.end()) {
+                    pending_revivals_.push_back(slot);
+                }
+            }
+            open_boundary();
         }
         const auto& member = members_[found];
         if (member.vhdl || member.lazy || member.collapse || member.conversion
@@ -10238,6 +10364,220 @@ ReplanResult Interpreter::Impl::StaticKernel::graft_net_delay(const NetDelayGraf
     }
     // A multithreaded kernel plans its batches and domains again over the
     // new units.
+    if (parallel_planned_ && pool_ != nullptr) {
+        parallel_planned_ = false;
+        build_parallel_plan();
+    }
+    return { true, { } };
+}
+
+void Interpreter::Impl::StaticKernel::note_late_signals()
+{
+    const auto total = impl_.signals.size();
+    slot_of_signal_.resize(total, no_slot);
+    family_of_signal_.resize(total, no_slot);
+    input_of_signal_.resize(total, no_slot);
+    mirror_of_signal_.resize(total, no_slot);
+}
+
+ReplanResult Interpreter::Impl::StaticKernel::split_gate_delay(
+    const ProcessId process, const Process& rewritten, const bool dry_run)
+{
+    const auto refuse = [](std::string reason) {
+        return ReplanResult { false, std::move(reason) };
+    };
+    // A gate is a SystemVerilog member: a VHDL-only kernel has none. A
+    // debugger plan keeps the debug points at their positions, so the
+    // operation positions the split keeps are the member's own.
+    if (vhdl_ && !mixed_) {
+        return refuse("the design has no SystemVerilog gate driver");
+    }
+    // A reset's twin has its members queued for time zero and has run none
+    // (Interpreter::replay_plan_onto): the body is rewritten before it runs.
+    if (!dry_run && (activating_ || worker_lane_ != nullptr
+            || (!impl_.replaying_plan && !impl_.restoring_plan
+                && (queued_count_ != 0U || !triggered_.empty()))
+            || !pending_dissolves_.empty() || committing_round_)) {
+        return refuse("the kernel is not at a safe point");
+    }
+    std::uint32_t found = no_slot;
+    for (std::uint32_t index = 0U; index < members_.size(); ++index) {
+        if (members_[index].process == process) {
+            found = index;
+            break;
+        }
+    }
+    // The host process may itself be the gate's member (the kernel's
+    // activation runs on it); its member program is the original, so the
+    // body is rewritten as any member's.
+    if (found == no_slot) {
+        return refuse("the gate's driver is not a member of the kernel");
+    }
+    auto& member = members_[found];
+    // The kinds of member that are no gate's continuous driver: VHDL
+    // processes, a VHDL port conversion or update-commit program (IEEE
+    // 1076-2008 14.7.3.3), a final procedure, a package initializer and the
+    // processes of a program. A gate driver is an ordinary combinational
+    // SystemVerilog member; dead logic (lazy) and delta collapsing are
+    // reversed below, as a foreign write reverses them (apply_watches).
+    if (member.kind != StaticKernelMemberKind::combinational || member.vhdl
+        || member.conversion || member.resolver || member.final_block
+        || member.package_startup || member.program_owner) {
+        return refuse("the gate's driver is not an ordinary combinational "
+                      "SystemVerilog member");
+    }
+    if (rewritten.operations.size() != member.operations().size()) {
+        return refuse("the rewritten driver differs in shape from the running one");
+    }
+    // The changes: a delay-free write of the gate's output becomes a
+    // WriteNetDelay at the same position, with the same signal, source and
+    // select, so the registers and jump targets of the body stay valid.
+    struct Change {
+        std::uint32_t pc { };
+        Operation operation;
+    };
+    std::vector<Change> changes;
+    // The slots the output runs live in: a plain slot, the leaves of a
+    // family proxy (a bit run of a vector alias lies in one leaf), none for
+    // a signal the host owns (its delayed write is the host's, and a
+    // mirror of it follows the host's commit).
+    std::vector<std::uint32_t> slots;
+    for (std::uint32_t pc = 0U; pc < member.operations().size(); ++pc) {
+        Operation scratch;
+        const auto& next = rewritten.operations.expanded_ref(pc, scratch);
+        const auto* const delayed = operation_get_if<WriteNetDelay>(&next);
+        if (delayed == nullptr) {
+            continue;
+        }
+        const auto& old = member.operations()[pc];
+        const auto* const update = operation_get_if<WriteUpdate>(&old);
+        const auto* const slice = operation_get_if<WriteUpdateSlice>(&old);
+        const bool same = update != nullptr
+            ? update->signal == delayed->signal && update->source == delayed->source
+                && !delayed->offset
+            : slice != nullptr && slice->signal == delayed->signal
+                && slice->source == delayed->source && delayed->offset
+                && *delayed->offset == slice->offset;
+        if (!same || delayed->table.size() != 36U) {
+            return refuse("the rewritten driver changes more than the gate's output write");
+        }
+        const auto signal = delayed->signal;
+        if (signal >= slot_of_signal_.size()) {
+            return refuse("the gate's output is not a signal of the design");
+        }
+        const auto check_slot = [&](const std::uint32_t slot) {
+            // A resolved net keeps the writer's own source
+            // (net_delay_driver_value). A nine-valued slot (planes == 4: a
+            // net with VHDL or weak drivers) takes the delayed gate value as
+            // a strong one, stored over its four planes
+            // (net_delay_mature, write_slot_immediate).
+            return slots_[slot].planes == 2U || slots_[slot].planes == 4U;
+        };
+        if (const auto family = family_of_signal_[signal]; family != no_slot) {
+            for (const auto& leaf : families_[family].leaves) {
+                if (!check_slot(leaf.slot)) {
+                    return refuse("the gate's output slot does not take a delayed write");
+                }
+                slots.push_back(leaf.slot);
+            }
+        } else if (const auto slot = slot_of_signal_[signal]; slot != no_slot) {
+            if (!check_slot(slot)) {
+                return refuse("the gate's output slot does not take a delayed write");
+            }
+            slots.push_back(slot);
+        }
+        changes.push_back({ pc, next });
+    }
+    if (changes.empty()) {
+        return refuse("the driver writes its output in no way the split rewrites");
+    }
+    if (dry_run) {
+        return { true, { } };
+    }
+    // Dead logic and delta collapsing end the way a foreign write ends
+    // them (apply_watches): the slots the gate writes are revived, so that
+    // the gate and the dead members writing its inputs run on their inputs
+    // from now on, and a boundary closes the collapse of the rounds.
+    if (member.lazy || collapse_enabled_) {
+        for (const auto slot : slots) {
+            pending_revivals_.push_back(slot);
+        }
+        open_boundary();
+        if (member.lazy) {
+            return refuse("the gate's driver is dead logic that could not be made live");
+        }
+    }
+    // Try the body with its delayed writes first: a refusal leaves it as it
+    // was.
+    std::vector<Operation> saved = member.operations();
+    const auto* const saved_identity = member.body_identity;
+    for (const auto& change : changes) {
+        member.operations()[change.pc] = change.operation;
+    }
+    member.body_identity = nullptr;
+    std::optional<CompiledBody> compiled;
+    try {
+        compiled = compile(found);
+    } catch (...) {
+        member.operations() = std::move(saved);
+        member.body_identity = saved_identity;
+        return refuse("the gate's driver does not compile with a delayed write");
+    }
+    // A bit run of a family proxy over several leaves writes each leaf's
+    // part (net_delay_write), as a delay-free write does.
+    sensitive_programs_.clear();
+    // A member a partition fused leaves its pass: gated since this moment
+    // as a foreign write gates it, and run on its own (a level after the
+    // partition's, so that a partition pass that finds it due can queue it).
+    if (member.partition != no_slot) {
+        const auto partition = member.partition;
+        const auto position = member.position;
+        dissolve_member(found);
+        auto& dissolved = *dissolved_[partition];
+        if (dissolved.retired.size() < dissolved.gated.size()) {
+            dissolved.retired.resize(dissolved.gated.size(), 0U);
+        }
+        dissolved.retired[position] = 1U;
+        dissolved.due[position] = 0U;
+        const auto level = partition_level_[partition] + 1U;
+        member_schedule_[found].partition = no_slot;
+        member_schedule_[found].level = level;
+        member.level = level;
+        member.retired_partition = partition;
+        member.partition = no_slot;
+        build_level_queues();
+    }
+    if (member.compiled && !compiled) {
+        --compiled_members_;
+    } else if (!member.compiled && compiled) {
+        ++compiled_members_;
+    }
+    member.compiled = std::move(compiled);
+    // The member's own native unit over the new body.
+    detach_native_unit(member.native);
+    member.native = NativeUnit { };
+    if (member.compiled) {
+        std::unordered_map<std::uint32_t, std::uint32_t> slot_of_offset;
+        slot_of_offset.reserve(slots_.size());
+        for (std::uint32_t slot = 0U; slot < slots_.size(); ++slot) {
+            slot_of_offset.emplace(slots_[slot].offset, slot);
+        }
+        std::unique_ptr<CompiledBody> canonical;
+        std::vector<std::uint32_t> bindings;
+        std::unordered_map<std::uint64_t, std::uint32_t> binding_of;
+        canonicalize_unit(*member.compiled, slot_of_offset, canonical, bindings,
+            binding_of);
+        bind_native_unit(member.native, std::move(canonical), std::move(bindings),
+            false);
+    }
+    // The output is written by the kernel's timers from now on, so the
+    // members that read it have to hear its changes.
+    std::ranges::sort(slots);
+    slots.erase(std::unique(slots.begin(), slots.end()), slots.end());
+    unsilence_slots(slots);
+    build_level_queues();
+    rebuild_notify_tables();
+    refresh_fast_run(found);
     if (parallel_planned_ && pool_ != nullptr) {
         parallel_planned_ = false;
         build_parallel_plan();

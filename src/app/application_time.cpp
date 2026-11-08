@@ -1270,7 +1270,8 @@ void select_delay_alternatives(
 namespace {
 
 template<typename Delay>
-void select_hir_delay(Delay& delay, const project::DelayMode mode)
+void select_hir_delay(Delay& delay, const project::DelayMode mode,
+    const bool keep_alternatives = false)
 {
     const auto* selected = [&]() -> const decltype(delay.minimum)* {
         switch (mode) {
@@ -1286,11 +1287,13 @@ void select_hir_delay(Delay& delay, const project::DelayMode mode)
     if (selected != nullptr && *selected) {
         delay.primary = **selected;
     }
-    delay.minimum.reset();
-    delay.typical.reset();
-    delay.maximum.reset();
+    if (!keep_alternatives) {
+        delay.minimum.reset();
+        delay.typical.reset();
+        delay.maximum.reset();
+    }
     for (auto& additional : delay.additional) {
-        select_hir_delay(additional, mode);
+        select_hir_delay(additional, mode, keep_alternatives);
     }
 }
 
@@ -1329,11 +1332,6 @@ void visit_systemverilog_hir_delays(
                         *specparam.path_pulse_error_delay, unit.scope);
                 }
             }
-            for (auto& path : timing.module_paths) {
-                for (auto& delay : path.delays) {
-                    function(delay, unit.scope);
-                }
-            }
             for (auto& check : timing.timing_checks) {
                 for (auto& limit : check.normalized_limits) {
                     function(limit, unit.scope);
@@ -1359,9 +1357,28 @@ void visit_systemverilog_hir_delays(
     }
 }
 
-// The delays of primitive instances normalize like any other, but they keep
-// their minimum, typical and maximum values: the VPI reports all three
-// (IEEE 1800-2023 37.35), so delay-mode selection skips them.
+// The delays of module paths normalize like any other, and selection gives
+// them the delay-mode value while keeping their minimum, typical and maximum
+// values: the VPI reports all three (IEEE 1800-2023 37.39, 37.80).
+template<typename Function>
+void visit_systemverilog_hir_path_delays(
+    semantic::sv::Hir& hir,
+    Function&& function)
+{
+    for (auto& unit : hir.mutable_units()) {
+        for (auto& timing : unit.timing) {
+            for (auto& path : timing.module_paths) {
+                for (auto& delay : path.delays) {
+                    function(delay, unit.scope);
+                }
+            }
+        }
+    }
+}
+
+// The delays of primitive instances normalize like any other, and selection
+// gives them the delay-mode value while keeping their minimum, typical and
+// maximum values: the VPI reports all three (IEEE 1800-2023 37.35).
 template<typename Function>
 void visit_systemverilog_primitive_delays(
     std::vector<semantic::sv::PrimitiveInstance>& primitives,
@@ -1552,6 +1569,11 @@ public:
     {
         normalize_vhdl_expressions();
         visit_systemverilog_hir_delays(
+            compiled_.systemverilog_hir,
+            [&](auto& delay, const semantic::ScopeId scope) {
+                normalize_systemverilog(delay, scope);
+            });
+        visit_systemverilog_hir_path_delays(
             compiled_.systemverilog_hir,
             [&](auto& delay, const semantic::ScopeId scope) {
                 normalize_systemverilog(delay, scope);
@@ -2192,15 +2214,62 @@ private:
 
 } // namespace
 
+// A specparam written as a minimum:typical:maximum triple stands for the value
+// the delay mode selects (IEEE 1800-2023 6.20.5 and 30.4.1: a specparam's
+// value is a constant mintypmax expression; 1364-2005 14.3.3 and 16.2
+// delay selection): its `value`, the local parameter the front end exposes
+// for it, and so every delay, limit or expression that names it, take the
+// selected alternative. The three alternatives stay on the declaration, which
+// the path and limit elaboration reads for the minimum:typical:maximum
+// values the VPI reports (vpi_get_delays with mtm_flag, 38.10).
+static void select_specparam_alternatives(
+    semantic::CompiledDesign& compiled, const project::DelayMode mode)
+{
+    if (mode == project::DelayMode::typical) {
+        return;
+    }
+    auto& hir = compiled.systemverilog_hir;
+    for (auto& unit : hir.mutable_units()) {
+        for (auto& timing : unit.timing) {
+            for (auto& specparam : timing.specparams) {
+                const auto& chosen = mode == project::DelayMode::minimum
+                    ? specparam.minimum : specparam.maximum;
+                if (specparam.path_pulse || !chosen) {
+                    continue;
+                }
+                specparam.value = *chosen;
+                for (auto& declaration : hir.mutable_declarations()) {
+                    if (declaration.scope == unit.scope
+                        && declaration.form
+                            == semantic::sv::DeclarationForm::local_parameter
+                        && declaration.name == specparam.name
+                        && declaration.initializer) {
+                        declaration.initializer = *chosen;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
 void select_delay_alternatives(
     semantic::CompiledDesign& compiled,
     const project::DelayMode mode)
 {
+    select_specparam_alternatives(compiled, mode);
     visit_systemverilog_hir_delays(
         compiled.systemverilog_hir,
         [&](auto& delay, const semantic::ScopeId) {
             select_hir_delay(delay, mode);
         });
+    const auto keep_alternatives = [&](auto& delay, const semantic::ScopeId) {
+        select_hir_delay(delay, mode, true);
+    };
+    visit_systemverilog_hir_path_delays(
+        compiled.systemverilog_hir, keep_alternatives);
+    visit_systemverilog_hir_primitive_delays(
+        compiled.systemverilog_hir, keep_alternatives);
     visit_vhdl_hir_delays(
         compiled.vhdl_hir,
         [&](auto& delay, const semantic::ScopeId) {

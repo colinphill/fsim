@@ -5,6 +5,7 @@
 #include "fsim/app/sdf_control.hpp"
 #include "fsim/app/sdf_mapping_validation.hpp"
 #include "fsim/artifact/design.hpp"
+#include "fsim/elaboration/sdf_net_delay_split.hpp"
 #include "fsim/library/artifact.hpp"
 
 #include <string>
@@ -24,6 +25,11 @@ struct SdfSessionPlan {
     elaboration::ElaboratedDesign design;
     std::vector<std::shared_ptr<const SdfSessionPublication>> publications;
     std::shared_ptr<const SdfControlApplication> control;
+    /// The DEVICE delays of outputs that no module path ends at (IEEE
+    /// 1497-2001 5.4.1): the gates that drive them take the delays. A design
+    /// that still has its processes has them in `design`; a running
+    /// simulation puts them on its gates (Simulation::commit_sdf_reannotation).
+    std::vector<elaboration::SdfDeviceGateDelay> device_gates;
 };
 
 [[nodiscard]] SdfControlRequest make_cli_sdf_request(

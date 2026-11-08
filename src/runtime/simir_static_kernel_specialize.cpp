@@ -17,6 +17,8 @@
 // (operation 0, through the process prologue) still runs the original body.
 #include "simir_static_kernel_compiled_internal.hpp"
 
+#include <algorithm>
+#include <bit>
 #include <cstdlib>
 #include <string>
 #include <iostream>
@@ -304,6 +306,983 @@ constexpr std::size_t specialize_size_budget = 16'384U;
 constexpr std::size_t specialize_call_depth = 32U;
 
 } // namespace
+
+namespace {
+
+/// Applies f to the register operand operation_registers reports as written.
+template <typename F>
+void map_write(Operation& operation, F&& f)
+{
+    visit_operation([&](auto& op) {
+        using T = std::decay_t<decltype(op)>;
+        if constexpr (std::is_same_v<T, LoadConstant> || std::is_same_v<T, ReadSignal>
+            || std::is_same_v<T, CopyRegister> || std::is_same_v<T, UnaryNot>
+            || std::is_same_v<T, ConvertToTwoState> || std::is_same_v<T, LogicalNot>
+            || std::is_same_v<T, Reduction> || std::is_same_v<T, CountOnes>
+            || std::is_same_v<T, CountBits> || std::is_same_v<T, Extract>
+            || std::is_same_v<T, Binary> || std::is_same_v<T, LogicalBinary>
+            || std::is_same_v<T, Shift> || std::is_same_v<T, DynamicExtract>
+            || std::is_same_v<T, DynamicPartSelect> || std::is_same_v<T, Insert>
+            || std::is_same_v<T, DynamicInsert> || std::is_same_v<T, DynamicPartInsert>
+            || std::is_same_v<T, Concatenate> || std::is_same_v<T, ConditionalSelect>
+            || std::is_same_v<T, PlusArgSelect> || std::is_same_v<T, SystemVerilogMath>
+            || std::is_same_v<T, SystemVerilogScalarBinary>
+            || std::is_same_v<T, RandomValue> || std::is_same_v<T, IntegerBinary>
+            || std::is_same_v<T, IntegerUnary> || std::is_same_v<T, ContainerRead>) {
+            op.destination = f(op.destination);
+        }
+    }, operation);
+}
+
+/// Union-find over the definitions of one register.
+struct Webs {
+    std::vector<std::uint32_t> parent;
+    explicit Webs(const std::size_t count) : parent(count)
+    {
+        for (std::size_t index = 0U; index < count; ++index) {
+            parent[index] = static_cast<std::uint32_t>(index);
+        }
+    }
+    [[nodiscard]] std::uint32_t find(std::uint32_t node)
+    {
+        while (parent[node] != node) {
+            parent[node] = parent[parent[node]];
+            node = parent[node];
+        }
+        return node;
+    }
+    void join(const std::uint32_t left, const std::uint32_t right)
+    {
+        parent[find(left)] = find(right);
+    }
+};
+
+} // namespace
+
+// Width specialization of VHDL callees. A register that several call sites
+// give values of different widths (the formals and result of a subprogram
+// called with differently constrained arguments) has no static width, which
+// the compiled tier needs. Each site gets its own copy of the callee's code
+// (a clone appended to the member's operations; the calls inside it are
+// cloned in turn, a recursive call stays as it is and keeps the member
+// uncompiled), then every register with several clones touching it is split
+// into its webs: the maximal sets of definitions and uses connected through
+// reaching definitions. The copy at one site is reached by the setup
+// operations of that site only, so its webs take that site's widths; the
+// result reads after the return join the same web as the clone's definition.
+// The process state that lives across activations is one web with the
+// registers' initial values: the exit of the body flows to its entry, and the
+// entry holds a definition for every register.
+bool Interpreter::Impl::StaticKernel::split_polymorphic_calls(
+    const std::uint32_t member_index)
+{
+    auto& member = members_[member_index];
+    if (!member.vhdl || !member.dpi_site_at.empty()
+        || member.kind == StaticKernelMemberKind::behavioral) {
+        return false;
+    }
+    const auto old_size = static_cast<std::uint32_t>(member.operations().size());
+    const auto entry = member.body_begin;
+    const auto exit_pc = member.body_end;
+    if (entry >= old_size || exit_pc >= old_size
+        || !operation_holds<WaitSensitivity>(member.operations()[exit_pc])) {
+        return false;
+    }
+    constexpr std::size_t growth_limit = 20'000U;
+    constexpr std::uint32_t none = std::numeric_limits<std::uint32_t>::max();
+    std::vector<Operation> ops = member.operations();
+    // Per operation: the clone it belongs to (0: the member's own), and the
+    // operation of the original code it was copied from.
+    std::vector<std::uint32_t> clone_of(old_size, 0U);
+    std::vector<std::uint32_t> source_of(old_size);
+    for (std::uint32_t pc = 0U; pc < old_size; ++pc) {
+        source_of[pc] = pc;
+    }
+    // Per clone (index - 1): the operation its Return continues at.
+    std::vector<std::uint32_t> return_to;
+    std::vector<std::uint32_t> active;
+    bool refused = false;
+    // What an entry reaches without entering calls, up to its returns.
+    const auto region_of = [&](const std::uint32_t from)
+        -> std::optional<std::vector<std::uint32_t>> {
+        std::vector<std::uint8_t> seen(old_size, 0U);
+        std::vector<std::uint32_t> work { from };
+        std::vector<std::uint32_t> region;
+        while (!work.empty()) {
+            const auto pc = work.back();
+            work.pop_back();
+            if (pc >= old_size || pc == exit_pc) {
+                return std::nullopt;
+            }
+            if (seen[pc] != 0U) {
+                continue;
+            }
+            seen[pc] = 1U;
+            region.push_back(pc);
+            bool bad = false;
+            visit_operation([&](const auto& op) {
+                using T = std::decay_t<decltype(op)>;
+                if constexpr (std::is_same_v<T, Jump>) {
+                    work.push_back(op.target);
+                } else if constexpr (std::is_same_v<T, Branch>) {
+                    work.push_back(op.when_true);
+                    work.push_back(op.when_false);
+                } else if constexpr (std::is_same_v<T, Call>) {
+                    work.push_back(op.return_target);
+                } else if constexpr (std::is_same_v<T, Return>) {
+                } else if constexpr (std::is_same_v<T, Halt>
+                    || std::is_same_v<T, WaitSensitivity>
+                    || std::is_same_v<T, CallableFramePush>
+                    || std::is_same_v<T, CallableFramePop>
+                    || behavioral_suspension<T>) {
+                    bad = true;
+                } else {
+                    work.push_back(pc + 1U);
+                }
+            }, ops[pc]);
+            if (bad) {
+                return std::nullopt;
+            }
+        }
+        std::ranges::sort(region);
+        return region;
+    };
+    // Appends a copy of the code of `from`, whose Return continues at
+    // `continue_at`; the copy's own calls are cloned too.
+    const auto clone = [&](const auto& self, const std::uint32_t from,
+                           const std::uint32_t continue_at) -> std::uint32_t {
+        const auto region = region_of(from);
+        if (!region || std::ranges::find(active, from) != active.end()
+            || ops.size() + region->size() > old_size + growth_limit) {
+            refused = true;
+            return from;
+        }
+        const auto id = static_cast<std::uint32_t>(return_to.size() + 1U);
+        return_to.push_back(continue_at);
+        const auto base = static_cast<std::uint32_t>(ops.size());
+        std::unordered_map<std::uint32_t, std::uint32_t> position;
+        for (std::size_t at = 0U; at < region->size(); ++at) {
+            position.emplace((*region)[at], base + static_cast<std::uint32_t>(at));
+        }
+        for (const auto pc : *region) {
+            ops.push_back(ops[pc]);
+            clone_of.push_back(id);
+            source_of.push_back(source_of[pc]);
+        }
+        const auto mapped = [&](const std::uint32_t target) {
+            const auto found = position.find(target);
+            if (found == position.end()) {
+                refused = true;
+                return base;
+            }
+            return found->second;
+        };
+        active.push_back(from);
+        for (std::size_t at = 0U; at < region->size() && !refused; ++at) {
+            const auto index = base + static_cast<std::uint32_t>(at);
+            if (auto* jump = operation_get_if<Jump>(&ops[index])) {
+                jump->target = mapped(jump->target);
+            } else if (auto* branch = operation_get_if<Branch>(&ops[index])) {
+                branch->when_true = mapped(branch->when_true);
+                branch->when_false = mapped(branch->when_false);
+            } else if (const auto* call = operation_get_if<Call>(&ops[index])) {
+                const auto callee = call->target;
+                const auto resume = mapped(call->return_target);
+                const auto entered = self(self, callee, resume);
+                auto* patched = operation_get_if<Call>(&ops[index]);
+                patched->target = entered;
+                patched->return_target = resume;
+            }
+        }
+        active.pop_back();
+        return position.at(from);
+    };
+    // The member's own code from its entry: patch each call to a clone.
+    {
+        std::vector<std::uint8_t> seen(old_size, 0U);
+        std::vector<std::uint32_t> work { entry };
+        while (!work.empty() && !refused) {
+            const auto pc = work.back();
+            work.pop_back();
+            if (pc == exit_pc) {
+                continue;
+            }
+            if (pc >= old_size) {
+                return false;
+            }
+            if (seen[pc] != 0U) {
+                continue;
+            }
+            seen[pc] = 1U;
+            bool bad = false;
+            if (const auto* call = operation_get_if<Call>(&ops[pc])) {
+                const auto callee = call->target;
+                const auto resume = call->return_target;
+                work.push_back(resume);
+                const auto entered = clone(clone, callee, resume);
+                if (auto* patched = operation_get_if<Call>(&ops[pc])) {
+                    patched->target = entered;
+                }
+                continue;
+            }
+            visit_operation([&](const auto& op) {
+                using T = std::decay_t<decltype(op)>;
+                if constexpr (std::is_same_v<T, Jump>) {
+                    work.push_back(op.target);
+                } else if constexpr (std::is_same_v<T, Branch>) {
+                    work.push_back(op.when_true);
+                    work.push_back(op.when_false);
+                } else if constexpr (std::is_same_v<T, Return>
+                    || std::is_same_v<T, Halt>) {
+                } else if constexpr (std::is_same_v<T, WaitSensitivity>
+                    || std::is_same_v<T, CallableFramePush>
+                    || std::is_same_v<T, CallableFramePop>
+                    || behavioral_suspension<T>) {
+                    bad = true;
+                } else {
+                    work.push_back(pc + 1U);
+                }
+            }, ops[pc]);
+            if (bad) {
+                return false;
+            }
+        }
+    }
+    if (refused || return_to.empty()) {
+        return false;
+    }
+    // Control flow of the new code, from the entry. An edge to the exit
+    // continues at the entry (the next activation).
+    const auto size = static_cast<std::uint32_t>(ops.size());
+    std::vector<std::vector<std::uint32_t>> succ(size);
+    std::vector<std::uint8_t> reached(size, 0U);
+    {
+        const auto edge = [&](const std::uint32_t target) {
+            return target == exit_pc ? entry : target;
+        };
+        std::vector<std::uint32_t> work { entry };
+        while (!work.empty()) {
+            const auto pc = work.back();
+            work.pop_back();
+            if (pc >= size) {
+                return false;
+            }
+            if (reached[pc] != 0U) {
+                continue;
+            }
+            reached[pc] = 1U;
+            auto& next = succ[pc];
+            visit_operation([&](const auto& op) {
+                using T = std::decay_t<decltype(op)>;
+                if constexpr (std::is_same_v<T, Jump>) {
+                    next.push_back(edge(op.target));
+                } else if constexpr (std::is_same_v<T, Branch>) {
+                    next.push_back(edge(op.when_true));
+                    next.push_back(edge(op.when_false));
+                } else if constexpr (std::is_same_v<T, Call>) {
+                    next.push_back(op.target);
+                } else if constexpr (std::is_same_v<T, Return>) {
+                    if (clone_of[pc] != 0U) {
+                        next.push_back(return_to[clone_of[pc] - 1U]);
+                    }
+                } else if constexpr (std::is_same_v<T, Halt>) {
+                } else if constexpr (std::is_same_v<T, WaitSensitivity>) {
+                    next.push_back(entry);
+                } else {
+                    next.push_back(edge(pc + 1U));
+                }
+            }, ops[pc]);
+            for (const auto target : next) {
+                work.push_back(target);
+            }
+        }
+    }
+    // Registers touched by several clones are the split candidates.
+    const auto register_count = static_cast<std::uint32_t>(member.registers.size());
+    std::vector<std::uint32_t> first_clone(register_count, none);
+    std::vector<std::uint8_t> candidate(register_count, 0U);
+    std::vector<RegisterId> reads;
+    std::optional<RegisterId> write;
+    for (std::uint32_t pc = 0U; pc < size; ++pc) {
+        if (reached[pc] == 0U || clone_of[pc] == 0U) {
+            continue;
+        }
+        operation_registers(ops[pc], reads, write);
+        if (write) {
+            reads.push_back(*write);
+        }
+        for (const auto reg : reads) {
+            if (reg >= register_count) {
+                return false;
+            }
+            if (first_clone[reg] == none) {
+                first_clone[reg] = clone_of[pc];
+            } else if (first_clone[reg] != clone_of[pc]) {
+                candidate[reg] = 1U;
+            }
+        }
+    }
+    std::vector<std::vector<std::uint32_t>> preds(size);
+    for (std::uint32_t pc = 0U; pc < size; ++pc) {
+        for (const auto target : succ[pc]) {
+            preds[target].push_back(pc);
+        }
+    }
+    std::vector<std::uint32_t> order;
+    for (std::uint32_t pc = 0U; pc < size; ++pc) {
+        if (reached[pc] != 0U) {
+            order.push_back(pc);
+        }
+    }
+    std::uint32_t next_register = register_count;
+    std::vector<ValueKind> new_kinds;
+    bool any = false;
+    for (RegisterId target = 0U; target < register_count; ++target) {
+        if (candidate[target] == 0U) {
+            continue;
+        }
+        std::vector<std::uint32_t> defs;
+        std::vector<std::uint32_t> def_index(size, none);
+        std::vector<std::uint32_t> users;
+        for (const auto pc : order) {
+            operation_registers(ops[pc], reads, write);
+            if (write && *write == target) {
+                def_index[pc] = static_cast<std::uint32_t>(defs.size());
+                defs.push_back(pc);
+            }
+            if (std::ranges::find(reads, target) != reads.end()) {
+                users.push_back(pc);
+            }
+        }
+        // One bit per definition, then one for the entry state.
+        const auto bits = defs.size() + 1U;
+        const auto words = (bits + 63U) / 64U;
+        if (defs.size() < 2U || words * size > 40'000'000U) {
+            continue;
+        }
+        std::vector<std::uint64_t> in(static_cast<std::size_t>(size) * words, 0U);
+        const auto at = [&](const std::uint32_t pc) {
+            return in.data() + static_cast<std::size_t>(pc) * words;
+        };
+        at(entry)[defs.size() / 64U] |= std::uint64_t { 1 } << (defs.size() % 64U);
+        std::vector<std::uint64_t> scratch(words);
+        for (bool changed = true; changed;) {
+            changed = false;
+            for (const auto pc : order) {
+                std::ranges::fill(scratch, 0U);
+                if (pc == entry) {
+                    scratch[defs.size() / 64U]
+                        |= std::uint64_t { 1 } << (defs.size() % 64U);
+                }
+                for (const auto before : preds[pc]) {
+                    if (def_index[before] != none) {
+                        const auto bit = def_index[before];
+                        scratch[bit / 64U] |= std::uint64_t { 1 } << (bit % 64U);
+                    } else {
+                        const auto* previous = at(before);
+                        for (std::size_t word = 0U; word < words; ++word) {
+                            scratch[word] |= previous[word];
+                        }
+                    }
+                }
+                auto* current = at(pc);
+                for (std::size_t word = 0U; word < words; ++word) {
+                    if ((current[word] | scratch[word]) != current[word]) {
+                        current[word] |= scratch[word];
+                        changed = true;
+                    }
+                }
+            }
+        }
+        Webs webs(bits);
+        const auto first_of = [&](const std::uint32_t pc) -> std::uint32_t {
+            const auto* row = at(pc);
+            for (std::size_t word = 0U; word < words; ++word) {
+                if (row[word] != 0U) {
+                    return static_cast<std::uint32_t>(word * 64U
+                        + static_cast<std::size_t>(std::countr_zero(row[word])));
+                }
+            }
+            return none;
+        };
+        for (const auto pc : users) {
+            const auto first = first_of(pc);
+            if (first == none) {
+                continue;
+            }
+            const auto* row = at(pc);
+            for (std::size_t word = 0U; word < words; ++word) {
+                for (auto bits_left = row[word]; bits_left != 0U;
+                     bits_left &= bits_left - 1U) {
+                    webs.join(first, static_cast<std::uint32_t>(word * 64U
+                        + static_cast<std::size_t>(std::countr_zero(bits_left))));
+                }
+            }
+        }
+        // The web of the entry state keeps the register; others get new ones.
+        std::unordered_map<std::uint32_t, RegisterId> named;
+        const auto home = webs.find(static_cast<std::uint32_t>(defs.size()));
+        named.emplace(home, target);
+        const auto name_of = [&](const std::uint32_t node) {
+            const auto root = webs.find(node);
+            const auto [found, inserted] = named.try_emplace(root, next_register);
+            if (inserted) {
+                new_kinds.push_back(target < member.register_kinds.size()
+                        ? member.register_kinds[target] : ValueKind::logic4);
+                ++next_register;
+            }
+            return found->second;
+        };
+        const auto rename = [&](const std::uint32_t pc, const RegisterId read_as,
+                                const std::optional<RegisterId> write_as) {
+            std::vector<RegisterId> before_reads;
+            std::optional<RegisterId> before_write;
+            operation_registers(ops[pc], before_reads, before_write);
+            map_reads(ops[pc], [&](const RegisterId reg) {
+                return reg == target ? read_as : reg;
+            });
+            if (write_as) {
+                map_write(ops[pc], [&](const RegisterId reg) {
+                    return reg == target ? *write_as : reg;
+                });
+            }
+            // Every operand must be one operation_registers reports.
+            std::vector<RegisterId> after_reads;
+            std::optional<RegisterId> after_write;
+            operation_registers(ops[pc], after_reads, after_write);
+            bool same = after_reads.size() == before_reads.size()
+                && after_write.has_value() == before_write.has_value();
+            for (std::size_t index = 0U; same && index < after_reads.size();
+                 ++index) {
+                same = after_reads[index]
+                    == (before_reads[index] == target ? read_as : before_reads[index]);
+            }
+            if (same && before_write) {
+                same = *after_write
+                    == (*before_write == target && write_as ? *write_as : *before_write);
+            }
+            return same;
+        };
+        // Reads first (an operation can read and write the register).
+        for (const auto pc : users) {
+            const auto first = first_of(pc);
+            if (first == none) {
+                continue;
+            }
+            const auto name = name_of(first);
+            if (name != target && !rename(pc, name, std::nullopt)) {
+                return false;
+            }
+        }
+        for (std::uint32_t index = 0U; index < defs.size(); ++index) {
+            const auto name = name_of(index);
+            if (name != target) {
+                if (!rename(defs[index], target, name)) {
+                    return false;
+                }
+                any = true;
+            }
+        }
+        any = any || next_register != register_count;
+    }
+    if (!any) {
+        return false;
+    }
+    // Commit.
+    if (!member.origin.empty() && member.origin.size() == old_size) {
+        const auto original = member.origin;
+        member.origin.resize(size);
+        for (std::uint32_t pc = old_size; pc < size; ++pc) {
+            member.origin[pc] = original[source_of[pc]];
+        }
+    }
+    if (!member.stripped_origin.empty() && member.stripped_origin.size() == old_size) {
+        const auto original = member.stripped_origin;
+        member.stripped_origin.resize(size);
+        for (std::uint32_t pc = old_size; pc < size; ++pc) {
+            member.stripped_origin[pc] = original[source_of[pc]];
+        }
+    }
+    member.operations() = std::move(ops);
+    member.registers.resize(next_register, PackedLogic4 { });
+    if (!member.register_kinds.empty()) {
+        member.register_kinds.resize(register_count, ValueKind::logic4);
+        member.register_kinds.insert(member.register_kinds.end(), new_kinds.begin(),
+            new_kinds.end());
+    }
+    member.body_identity = nullptr;
+    return true;
+}
+
+// Accesses through a family proxy (a net that several kernel-owned leaf
+// nets make up, Family) as accesses of its leaves: a whole read of the proxy
+// reads each leaf and concatenates the values, a write of the proxy or of a
+// slice of it extracts the part of the value that lies in each leaf and
+// writes it to the leaf (a whole leaf as a whole write, a part as a slice).
+// The proxy has no storage of its own, so this is what an access means
+// (IEEE 1800-2023 6.5, 10.10: a net made of nets is the nets). Each access
+// is replaced by a jump to the expansion appended after the code, which
+// jumps back, so no position of the member changes. family_widths_ are the
+// register widths of the last compilation, and a read it serves in place
+// (family_in_place_: only narrow selections use it) stays.
+bool Interpreter::Impl::StaticKernel::expand_family_accesses(
+    const std::uint32_t member_index)
+{
+    const auto& widths = family_widths_;
+    auto& member = members_[member_index];
+    if (!member.dpi_site_at.empty()) {
+        return false;
+    }
+    // A VHDL or behavioral member compiles its whole stream, so the appended
+    // operations need no exit between them and the body.
+    const bool whole = member.vhdl
+        || member.kind == StaticKernelMemberKind::behavioral;
+    const auto old_size = static_cast<std::uint32_t>(member.operations().size());
+    const auto register_count = static_cast<std::uint32_t>(member.registers.size());
+    constexpr std::size_t growth_limit = 20'000U;
+    // The leaves of a proxy from the most significant, when they tile it.
+    const auto tiling = [&](const SignalId signal)
+        -> std::optional<std::vector<FamilyLeaf>> {
+        if (signal >= family_of_signal_.size()
+            || family_of_signal_[signal] == no_slot) {
+            return std::nullopt;
+        }
+        const auto& family = families_[family_of_signal_[signal]];
+        auto leaves = family.leaves;
+        std::ranges::sort(leaves, [](const FamilyLeaf& left, const FamilyLeaf& right) {
+            return left.offset > right.offset;
+        });
+        std::uint32_t end = family.width;
+        for (const auto& leaf : leaves) {
+            if (leaf.width == 0U || leaf.offset + leaf.width != end
+                || leaf.slot >= slots_.size()) {
+                return std::nullopt;
+            }
+            end = leaf.offset;
+        }
+        if (end != 0U || leaves.empty() || leaves.size() > 512U) {
+            return std::nullopt;
+        }
+        return leaves;
+    };
+    std::vector<Operation> ops = member.operations();
+    std::vector<std::uint32_t> source_of(old_size);
+    for (std::uint32_t pc = 0U; pc < old_size; ++pc) {
+        source_of[pc] = pc;
+    }
+    // A member that is not compiled whole (a SystemVerilog one) compiles the
+    // operations up to its exit (body_end) and then those appended after
+    // old_size (compile_once, family_expansion_begin); the exit operation
+    // between them ends the body, so one exists even where the member's
+    // stream stops at body_end.
+    if (!whole && member.family_expansion_begin == 0U
+        && member.body_end >= old_size) {
+        ops.emplace_back(Halt { });
+        source_of.push_back(old_size - 1U);
+    }
+    std::vector<ValueKind> new_kinds;
+    std::uint32_t next_register = register_count;
+    const auto fresh = [&] {
+        new_kinds.push_back(ValueKind::logic4);
+        return next_register++;
+    };
+    bool any = false;
+    std::vector<std::uint32_t> new_continuations;
+    for (std::uint32_t pc = 0U; pc < old_size; ++pc) {
+        if (ops.size() > old_size + growth_limit) {
+            break;
+        }
+        std::vector<Operation> block;
+        // Positions in `block` of the stores that continue a wide write.
+        std::vector<std::uint32_t> block_continues;
+        const auto read_wide = [&](const std::uint32_t source) {
+            return source < widths.size() ? widths[source] : 0U;
+        };
+        const auto write_pieces = [&](const SignalId signal,
+                                      const RegisterId source,
+                                      const std::uint32_t offset,
+                                      const std::uint32_t count,
+                                      const auto& emit_whole, const auto& emit_part) {
+            const auto leaves = tiling(signal);
+            if (!leaves || count == 0U) {
+                return false;
+            }
+            const auto& family = families_[family_of_signal_[signal]];
+            if (offset > family.width || count > family.width - offset) {
+                return false;
+            }
+            for (const auto& leaf : *leaves) {
+                const auto low = std::max(leaf.offset, offset);
+                const auto high = std::min(leaf.offset + leaf.width, offset + count);
+                if (low >= high) {
+                    continue;
+                }
+                const auto piece = fresh();
+                block.emplace_back(Extract { piece, source, low - offset, high - low });
+                const auto leaf_signal = slots_[leaf.slot].signal;
+                if (low == leaf.offset && high - low == leaf.width) {
+                    block.push_back(emit_whole(leaf_signal, piece));
+                } else {
+                    block.push_back(emit_part(leaf_signal, piece, low - leaf.offset));
+                }
+            }
+            return !block.empty();
+        };
+        // Writes through a dynamic index or part select (IEEE 1800-2023
+        // 11.5.1) whose value is wider than 64 bits, or whose target is a
+        // family proxy. A wide value is written in pieces of 64 bits, each a
+        // narrow write whose offset is that of the piece (base_offset + 64 j;
+        // a part select's base register adds the same distance). A proxy's
+        // write goes to the leaves, each with the selection restricted to
+        // the indices whose bits lie in the leaf and counted from the leaf's
+        // first bit (index(q) = right + s (q - q_r): the offset of an index
+        // is base_offset + |index - right|, linear in the index over the
+        // declared range, so a leaf takes the sub-range whose offsets are in
+        // [0, width - element] with its nearest end as `right`).
+        const auto index_of = [](const DynamicIndex& selection, const std::int64_t q,
+                                 const std::int64_t q_right) {
+            const std::int64_t direction = selection.left >= selection.right ? 1 : -1;
+            return selection.right + direction * (q - q_right);
+        };
+        // Calls emit(leaf signal, selection) for each leaf the write reaches;
+        // false when an element could straddle two leaves (or there are too
+        // many positions to check), which no per-leaf selection expresses.
+        const auto leaf_pieces = [&](const std::vector<FamilyLeaf>& leaves,
+                                     const DynamicIndex& selection,
+                                     const std::int64_t element, const bool check_straddle,
+                                     const auto& emit) {
+            const auto lower = std::min(selection.left, selection.right);
+            const auto upper = std::max(selection.left, selection.right);
+            const std::int64_t span = upper - lower;
+            if (span > 65'536) {
+                return false;
+            }
+            if (check_straddle) {
+                for (std::int64_t k = 0; k <= span; ++k) {
+                    const std::int64_t position = selection.base_offset + k;
+                    const bool inside = std::ranges::any_of(leaves, [&](const FamilyLeaf& leaf) {
+                        return position >= leaf.offset
+                            && position + element <= static_cast<std::int64_t>(leaf.offset)
+                                + leaf.width;
+                    });
+                    if (!inside) {
+                        return false;
+                    }
+                }
+            }
+            for (const auto& leaf : leaves) {
+                const std::int64_t q_right = static_cast<std::int64_t>(selection.base_offset)
+                    - leaf.offset;
+                const std::int64_t q_left = q_right + span;
+                const auto q_a = std::max<std::int64_t>(0, q_right);
+                const auto q_b = std::min<std::int64_t>(
+                    static_cast<std::int64_t>(leaf.width) - element, q_left);
+                if (q_a > q_b) {
+                    continue;
+                }
+                auto leaf_selection = selection;
+                leaf_selection.right = index_of(selection, q_a, q_right);
+                leaf_selection.left = index_of(selection, q_b, q_right);
+                leaf_selection.base_offset = static_cast<std::uint32_t>(q_a);
+                leaf_selection.strict = false;
+                emit(slots_[leaf.slot].signal, leaf_selection);
+            }
+            return true;
+        };
+        // A host signal takes a wide write whole: the host applies it as one
+        // update event (IEEE 1800-2023 4.4), where pieces would be one event
+        // and one reported change each.
+        const auto kernel_owned = [&](const SignalId signal) {
+            return signal < slot_of_signal_.size() && slot_of_signal_[signal] != no_slot;
+        };
+        const auto index_write = [&](const SignalId signal, const RegisterId source,
+                                     const DynamicIndex& selection, const auto& make) {
+            const auto bits = read_wide(source);
+            const bool proxy = signal < family_of_signal_.size()
+                && family_of_signal_[signal] != no_slot;
+            if (bits == 0U || (!proxy && (bits <= 64U || !kernel_owned(signal)))) {
+                return false;
+            }
+            std::optional<std::vector<FamilyLeaf>> leaves;
+            if (proxy) {
+                leaves = tiling(signal);
+                if (!leaves || selection.strict) {
+                    return false;
+                }
+            }
+            std::vector<Operation> pieces;
+            std::vector<std::uint32_t> continues;
+            const auto kinds_before = new_kinds;
+            const auto registers_before = next_register;
+            for (std::uint32_t done = 0U; done < bits; done += 64U) {
+                const auto count = std::min(64U, bits - done);
+                auto piece_selection = selection;
+                piece_selection.base_offset = selection.base_offset + done;
+                RegisterId piece = source;
+                if (bits > 64U) {
+                    piece = fresh();
+                    pieces.emplace_back(Extract { piece, source, done, count });
+                }
+                if (!proxy) {
+                    if (done != 0U) {
+                        continues.push_back(static_cast<std::uint32_t>(pieces.size()));
+                    }
+                    pieces.push_back(make(signal, piece, piece_selection));
+                    continue;
+                }
+                if (!leaf_pieces(*leaves, piece_selection, count, true,
+                        [&](const SignalId leaf_signal, const DynamicIndex& leaf_selection) {
+                            pieces.push_back(make(leaf_signal, piece, leaf_selection));
+                        })) {
+                    new_kinds = kinds_before;
+                    next_register = registers_before;
+                    return false;
+                }
+            }
+            block = std::move(pieces);
+            block_continues = std::move(continues);
+            return true;
+        };
+        // A part select's first bit lies at base_offset + |... - right| from
+        // selected_right = base + off(width - 1) (kernel_word::
+        // dynamic_part_write), so the piece of width w at bit 64 j has the
+        // base register `base + off(W - 1) - off(w - 1) +- 64 j`.
+        const auto part_offset = [](const DynamicPartIndex& selection, const std::int64_t edge) {
+            return selection.increasing
+                ? (selection.source_descending ? std::int64_t { 0 } : edge)
+                : (selection.source_descending ? -edge : std::int64_t { 0 });
+        };
+        const auto part_write = [&](const SignalId signal, const RegisterId source,
+                                    const DynamicPartIndex& selection, const auto& make) {
+            const auto bits = read_wide(source);
+            const bool proxy = signal < family_of_signal_.size()
+                && family_of_signal_[signal] != no_slot;
+            if (bits == 0U || bits != selection.width
+                || (!proxy && (bits <= 64U || !kernel_owned(signal)))) {
+                return false;
+            }
+            std::optional<std::vector<FamilyLeaf>> leaves;
+            if (proxy) {
+                leaves = tiling(signal);
+                if (!leaves) {
+                    return false;
+                }
+            }
+            std::vector<Operation> pieces;
+            std::vector<std::uint32_t> continues;
+            const auto kinds_before = new_kinds;
+            const auto registers_before = next_register;
+            for (std::uint32_t done = 0U; done < bits; done += 64U) {
+                const auto count = std::min(64U, bits - done);
+                auto piece_selection = selection;
+                piece_selection.width = count;
+                RegisterId piece = source;
+                if (bits > 64U) {
+                    piece = fresh();
+                    pieces.emplace_back(Extract { piece, source, done, count });
+                    // The distance from the whole part's first bit to the piece's.
+                    const std::int64_t delta = part_offset(selection, bits - 1U)
+                        - part_offset(selection, count - 1U)
+                        + (selection.source_descending ? static_cast<std::int64_t>(done)
+                                                       : -static_cast<std::int64_t>(done));
+                    const auto distance = fresh();
+                    pieces.emplace_back(LoadConstant { distance,
+                        PackedLogic4::from_aval_bval(32U,
+                            static_cast<std::uint32_t>(static_cast<std::int32_t>(delta)), 0U) });
+                    piece_selection.base = fresh();
+                    if (member.vhdl) {
+                        pieces.emplace_back(IntegerBinary { IntegerBinaryOperator::add,
+                            piece_selection.base, selection.base, distance });
+                    } else {
+                        pieces.emplace_back(Binary { BinaryOperator::add_unsigned,
+                            piece_selection.base, selection.base, distance });
+                    }
+                }
+                if (!proxy) {
+                    if (done != 0U) {
+                        continues.push_back(static_cast<std::uint32_t>(pieces.size()));
+                    }
+                    pieces.push_back(make(signal, piece, piece_selection));
+                    continue;
+                }
+                // Each selected bit lies in one leaf: a leaf takes the indices
+                // whose offsets are in [0, width) (element width 1).
+                DynamicIndex indices;
+                indices.left = piece_selection.left;
+                indices.right = piece_selection.right;
+                indices.base_offset = piece_selection.base_offset;
+                if (!leaf_pieces(*leaves, indices, 1, false,
+                        [&](const SignalId leaf_signal, const DynamicIndex& leaf_indices) {
+                            auto leaf_selection = piece_selection;
+                            leaf_selection.left = leaf_indices.left;
+                            leaf_selection.right = leaf_indices.right;
+                            leaf_selection.base_offset = leaf_indices.base_offset;
+                            pieces.push_back(make(leaf_signal, piece, leaf_selection));
+                        })) {
+                    new_kinds = kinds_before;
+                    next_register = registers_before;
+                    return false;
+                }
+            }
+            block = std::move(pieces);
+            block_continues = std::move(continues);
+            return true;
+        };
+        bool expanded = false;
+        if (const auto* read = operation_get_if<ReadSignal>(&ops[pc])) {
+            if (read->kind == SignalReadKind::current && read->ticks == 1U
+                && !read->clock && !read->gate
+                && !(read->destination < family_in_place_.size()
+                    && family_in_place_[read->destination] != 0U)) {
+                if (const auto leaves = tiling(read->signal)) {
+                    ReadSignal leaf_read;
+                    Concatenate join;
+                    join.destination = read->destination;
+                    join.width = families_[family_of_signal_[read->signal]].width;
+                    for (const auto& leaf : *leaves) {
+                        leaf_read.destination = fresh();
+                        leaf_read.signal = slots_[leaf.slot].signal;
+                        block.emplace_back(leaf_read);
+                        join.operands.push_back(leaf_read.destination);
+                    }
+                    block.emplace_back(std::move(join));
+                    expanded = true;
+                }
+            }
+        } else if (const auto* w1 = operation_get_if<WriteBlocking>(&ops[pc])) {
+            const auto count = read_wide(w1->source);
+            expanded = family_of_signal_[w1->signal] != no_slot
+                && write_pieces(w1->signal, w1->source, 0U, count,
+                    [](const SignalId signal, const RegisterId piece) {
+                        return Operation { WriteBlocking { signal, piece } };
+                    },
+                    [](const SignalId signal, const RegisterId piece,
+                        const std::uint32_t at) {
+                        return Operation { WriteBlockingSlice { signal, piece, at } };
+                    });
+        } else if (const auto* w2 = operation_get_if<WriteBlockingSlice>(&ops[pc])) {
+            const auto count = read_wide(w2->source);
+            expanded = family_of_signal_[w2->signal] != no_slot
+                && write_pieces(w2->signal, w2->source, w2->offset, count,
+                    [](const SignalId signal, const RegisterId piece) {
+                        return Operation { WriteBlocking { signal, piece } };
+                    },
+                    [](const SignalId signal, const RegisterId piece,
+                        const std::uint32_t at) {
+                        return Operation { WriteBlockingSlice { signal, piece, at } };
+                    });
+        } else if (const auto* w3 = operation_get_if<WriteUpdate>(&ops[pc])) {
+            const auto domain = w3->domain;
+            const auto count = read_wide(w3->source);
+            expanded = family_of_signal_[w3->signal] != no_slot
+                && write_pieces(w3->signal, w3->source, 0U, count,
+                    [domain](const SignalId signal, const RegisterId piece) {
+                        return Operation { WriteUpdate { signal, piece, domain } };
+                    },
+                    [domain](const SignalId signal, const RegisterId piece,
+                        const std::uint32_t at) {
+                        return Operation { WriteUpdateSlice { signal, piece, at, domain } };
+                    });
+        } else if (const auto* w4 = operation_get_if<WriteUpdateSlice>(&ops[pc])) {
+            const auto domain = w4->domain;
+            const auto count = read_wide(w4->source);
+            expanded = family_of_signal_[w4->signal] != no_slot
+                && write_pieces(w4->signal, w4->source, w4->offset, count,
+                    [domain](const SignalId signal, const RegisterId piece) {
+                        return Operation { WriteUpdate { signal, piece, domain } };
+                    },
+                    [domain](const SignalId signal, const RegisterId piece,
+                        const std::uint32_t at) {
+                        return Operation { WriteUpdateSlice { signal, piece, at, domain } };
+                    });
+        } else if (const auto* d1 = operation_get_if<WriteBlockingDynamicSlice>(&ops[pc])) {
+            expanded = index_write(d1->signal, d1->source, d1->selection,
+                [](const SignalId signal, const RegisterId piece, const DynamicIndex& selection) {
+                    return Operation { WriteBlockingDynamicSlice { signal, piece, selection } };
+                });
+        } else if (const auto* d2 = operation_get_if<WriteUpdateDynamicSlice>(&ops[pc])) {
+            const auto domain = d2->domain;
+            expanded = index_write(d2->signal, d2->source, d2->selection,
+                [domain](const SignalId signal, const RegisterId piece,
+                    const DynamicIndex& selection) {
+                    return Operation { WriteUpdateDynamicSlice { signal, piece, selection,
+                        domain } };
+                });
+        } else if (const auto* d3 = operation_get_if<WriteBlockingDynamicPartSlice>(&ops[pc])) {
+            expanded = part_write(d3->signal, d3->source, d3->selection,
+                [](const SignalId signal, const RegisterId piece,
+                    const DynamicPartIndex& selection) {
+                    return Operation { WriteBlockingDynamicPartSlice { signal, piece,
+                        selection } };
+                });
+        } else if (const auto* d4 = operation_get_if<WriteUpdateDynamicPartSlice>(&ops[pc])) {
+            const auto domain = d4->domain;
+            expanded = part_write(d4->signal, d4->source, d4->selection,
+                [domain](const SignalId signal, const RegisterId piece,
+                    const DynamicPartIndex& selection) {
+                    return Operation { WriteUpdateDynamicPartSlice { signal, piece,
+                        selection, domain } };
+                });
+        } else if (const auto* d5 = operation_get_if<WriteProjectedDynamicSlice>(&ops[pc])) {
+            const auto delay = d5->delay;
+            const auto rejection = d5->rejection;
+            const auto mode = d5->mode;
+            expanded = index_write(d5->signal, d5->source, d5->selection,
+                [=](const SignalId signal, const RegisterId piece,
+                    const DynamicIndex& selection) {
+                    return Operation { WriteProjectedDynamicSlice { signal, piece, selection,
+                        delay, rejection, mode } };
+                });
+        }
+        if (!expanded) {
+            continue;
+        }
+        const auto base = static_cast<std::uint32_t>(ops.size());
+        for (const auto at : block_continues) {
+            new_continuations.push_back(base + at);
+        }
+        block.emplace_back(Jump { pc + 1U });
+        ops[pc] = Jump { base };
+        for (auto& added : block) {
+            ops.push_back(std::move(added));
+            source_of.push_back(pc);
+        }
+        any = true;
+    }
+    if (!any) {
+        return false;
+    }
+    const auto size = static_cast<std::uint32_t>(ops.size());
+    if (!member.origin.empty() && member.origin.size() == old_size) {
+        const auto original = member.origin;
+        member.origin.resize(size);
+        for (std::uint32_t pc = old_size; pc < size; ++pc) {
+            member.origin[pc] = original[source_of[pc]];
+        }
+    }
+    if (!member.stripped_origin.empty() && member.stripped_origin.size() == old_size) {
+        const auto original = member.stripped_origin;
+        member.stripped_origin.resize(size);
+        for (std::uint32_t pc = old_size; pc < size; ++pc) {
+            member.stripped_origin[pc] = original[source_of[pc]];
+        }
+    }
+    member.operations() = std::move(ops);
+    member.piece_continuations.insert(member.piece_continuations.end(),
+        new_continuations.begin(), new_continuations.end());
+    std::ranges::sort(member.piece_continuations);
+    member.registers.resize(next_register, PackedLogic4 { });
+    if (!member.register_kinds.empty()) {
+        member.register_kinds.resize(register_count, ValueKind::logic4);
+        member.register_kinds.insert(member.register_kinds.end(), new_kinds.begin(),
+            new_kinds.end());
+    }
+    member.body_identity = nullptr;
+    if (!whole && member.family_expansion_begin == 0U) {
+        member.family_expansion_begin = std::max(old_size, member.body_end + 1U);
+    }
+    return true;
+}
 
 bool Interpreter::Impl::StaticKernel::specialize_member(
     const std::uint32_t member_index)

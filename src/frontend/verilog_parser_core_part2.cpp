@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <functional>
 #include "fsim/frontend/systemverilog_standard_package.hpp"
 
 namespace fsim::frontend {
@@ -671,6 +672,32 @@ void VerilogParser::resolve_implicit_nets(DesignUnit& unit) {
   for (const auto& covergroup : unit.systemverilog_covergroups) {
     known.insert(covergroup.name);
   }
+  // A generate block name is declared in the enclosing module scope (IEEE
+  // 1800-2023 27.6): a scope-task argument such as `$dumpvars(0, g)` names
+  // it and must not declare an implicit net beside it. A branch without a
+  // label of its own passes its nested regions' labels up to that scope.
+  std::unordered_set<std::string> generate_labels;
+  const std::function<void(const GenerateRegion&)> remember_generate_labels
+      = [&](const GenerateRegion& region) {
+          const auto remember_branch = [&](const std::string& label,
+                                           const GenerateBody& body) {
+            if (!label.empty() && !label.starts_with('@')) {
+              generate_labels.insert(label);
+            } else if (label.empty()) {
+              for (const auto& nested : body.generate_regions) {
+                remember_generate_labels(nested);
+              }
+            }
+          };
+          remember_branch(region.then_scope, region.then_body);
+          remember_branch(region.else_scope, region.else_body);
+          for (const auto& alternative : region.alternatives) {
+            remember_branch(alternative.scope, alternative.body);
+          }
+        };
+  for (const auto& region : unit.generate_regions) {
+    remember_generate_labels(region);
+  }
   for (const auto& declared : unit.systemverilog_classes) {
     known.insert(declared.name);
   }
@@ -733,6 +760,11 @@ void VerilogParser::resolve_implicit_nets(DesignUnit& unit) {
     }
     if (known.contains(reference.name)
         || rejected.contains(reference.name)) {
+      continue;
+    }
+    // Only a scope-name context (`declares`) may name a generate block; a
+    // value operand still reports it undeclared below.
+    if (reference.declares && generate_labels.contains(reference.name)) {
       continue;
     }
     if (const auto ancestor = enclosing_declaration(
@@ -1528,20 +1560,27 @@ DesignUnit VerilogParser::parse_module(
                     previous(), SystemVerilogClassMethodKind::Function));
         } else if (language_ == Language::SystemVerilog2017
             && unit_kind == "interface" && keyword("extern")
-            && (keyword("function", 1) || keyword("task", 1))) {
+            && (keyword("function", 1) || keyword("task", 1)
+                || (keyword("forkjoin", 1) && keyword("task", 2)))) {
             // An interface subroutine prototype whose body a module
             // connected through an exporting modport defines (IEEE
-            // 1800-2017 25.7.3).
+            // 1800-2017 25.7.3). `extern forkjoin task` lets several
+            // modules export the task; a call runs every body as the
+            // branches of a fork...join.
             module_has_non_time_item_ = true;
             advance();
+            const bool forkjoin = match_keyword("forkjoin");
             const auto keyword_token = advance();
             if (keyword_token.text == "function") {
                 auto function = parse_function(keyword_token, true);
+                function.extern_prototype = true;
                 declare_member_enumerations(unit);
                 declare_interface_prototype(unit, start, std::move(function));
             } else {
-                declare_interface_prototype(
-                    unit, start, parse_task(keyword_token, true));
+                auto task = parse_task(keyword_token, true);
+                task.extern_prototype = true;
+                task.extern_forkjoin = forkjoin;
+                declare_interface_prototype(unit, start, std::move(task));
             }
         } else if (previous().text == "function" || match_keyword("function")) {
             module_has_non_time_item_ = true;

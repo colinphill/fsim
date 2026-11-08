@@ -264,6 +264,31 @@ static void foreach_statement(char* name)
         body != NULL ? (int)vpi_get(vpiLineNo, body) : 0);
 }
 
+// The foreach statement over a string (IEEE 1800-2023 12.7.3, 37.51).
+static void foreach_string(char* name)
+{
+    vpiHandle const task = vpi_handle_by_name(name, NULL);
+    vpiHandle const each = task != NULL ? vpi_handle(vpiStmt, task) : NULL;
+    vpiHandle loop_vars;
+    vpiHandle body;
+    int count = 0;
+    if (each == NULL) {
+        vpi_printf("#c foreach-string %s: missing\n", name);
+        return;
+    }
+    loop_vars = vpi_iterate(vpiLoopVars, each);
+    while (loop_vars != NULL && vpi_scan(loop_vars) != NULL) {
+        ++count;
+    }
+    body = vpi_handle(vpiStmt, each);
+    vpi_printf("#c foreach-string %s line=%d collection=%s loopvars=%d "
+               "body=%s line=%d\n",
+        text(vpiType, each), (int)vpi_get(vpiLineNo, each),
+        vpi_handle(vpiVariables, each) != NULL ? "set" : "none", count,
+        body != NULL ? text(vpiType, body) : "none",
+        body != NULL ? (int)vpi_get(vpiLineNo, body) : 0);
+}
+
 // Whether each continuous assignment of the module is a net declaration
 // assignment (37.46).
 static void assignments(vpiHandle top)
@@ -273,6 +298,52 @@ static void assignments(vpiHandle top)
     while (items != NULL && (item = vpi_scan(items)) != NULL) {
         vpi_printf("#c contassign line=%d netdeclassign=%d\n",
             (int)vpi_get(vpiLineNo, item), (int)vpi_get(vpiNetDeclAssign, item));
+    }
+}
+
+// The value of each assignment's right-hand side in a task (37.78, 38.15).
+static void operation_values(char* name)
+{
+    vpiHandle const task = vpi_handle_by_name(name, NULL);
+    vpiHandle const body = task != NULL ? vpi_handle(vpiStmt, task) : NULL;
+    vpiHandle const items = body != NULL ? vpi_iterate(vpiStmt, body) : NULL;
+    vpiHandle item;
+    while (items != NULL && (item = vpi_scan(items)) != NULL) {
+        vpiHandle const rhs = vpi_handle(vpiRhs, item);
+        s_vpi_value value;
+        memset(&value, 0, sizeof value);
+        value.format = vpiBinStrVal;
+        if (rhs != NULL) {
+            vpi_get_value(rhs, &value);
+        }
+        vpi_printf("#c operation line=%d value=%s\n",
+            (int)vpi_get(vpiLineNo, item),
+            value.format != vpiSuppressVal && value.value.str != NULL
+                ? value.value.str
+                : "none");
+    }
+}
+
+// The arguments of each output task call in a task, as written (37.62).
+static void display_arguments(char* name)
+{
+    vpiHandle const task = vpi_handle_by_name(name, NULL);
+    vpiHandle const body = task != NULL ? vpi_handle(vpiStmt, task) : NULL;
+    vpiHandle const items = body != NULL ? vpi_iterate(vpiStmt, body) : NULL;
+    vpiHandle item;
+    while (items != NULL && (item = vpi_scan(items)) != NULL) {
+        vpiHandle const arguments = vpi_iterate(vpiArgument, item);
+        vpiHandle argument;
+        char line[200];
+        snprintf(line, sizeof line, "#c display line=%d %s:",
+            (int)vpi_get(vpiLineNo, item), text(vpiName, item));
+        while (arguments != NULL && (argument = vpi_scan(arguments)) != NULL) {
+            const char* const shown = vpi_get(vpiType, argument) == vpiConstant
+                ? text(vpiDecompile, argument)
+                : text(vpiFullName, argument);
+            snprintf(line + strlen(line), sizeof line - strlen(line), " %s", shown);
+        }
+        vpi_printf("%s\n", line);
     }
 }
 
@@ -296,6 +367,9 @@ static PLI_INT32 start(p_cb_data data)
     extras(top);
     immediates("top.chk");
     foreach_statement("top.each");
+    foreach_string("top.each_str");
+    operation_values("top.ops");
+    display_arguments("top.shown");
     return 0;
 }
 

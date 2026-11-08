@@ -596,6 +596,12 @@ SdfTargetPlanResult build_sdf_annotation_plan(
         annotation.cell_id = mapping.cell_id;
         annotation.construct_kind = mapping.construct_kind;
         annotation.target_kind = target_kind(mapping.construct_kind);
+        // A DEVICE mapped to a module path that ends at its output times
+        // that path like an IOPATH (IEEE 1497-2001 5.4.1).
+        if (mapping.construct_kind == SdfConstructKind::Device
+            && mapping.specify_path) {
+            annotation.target_kind = SdfTimingTargetKind::SpecifyPath;
+        }
         annotation.delay_mode = annotation_mode(ir, mapping.node_id);
         annotation.target_instance_path = mapping.target_instance_path;
         annotation.condition_identity = mapping.condition_identity;

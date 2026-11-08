@@ -46,6 +46,8 @@ module top;
   // A combinational and a sequential UDP instance.
   udp_and2 u_comb_i (u_comb, d1, d2);
   udp_dff u_seq_i (u_seq, d1, clk);
+  // A gate with a constant terminal (the terminal's vpiExpr is a constant).
+  wire w_const; and g_const (w_const, d1, 1'b1);
 
   generate
     if (1) begin : gen

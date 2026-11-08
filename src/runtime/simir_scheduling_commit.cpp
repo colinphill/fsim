@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+#include "simir_events.hpp"
 #include "simir_internal.hpp"
 #include "simir_static_kernel_state.hpp"
 
@@ -1921,15 +1922,18 @@ void Interpreter::Impl::schedule_vhdl_disconnect(
         }
         transactions.erase(first, transactions.end());
     }
-    scheduler.schedule_after(delay, SchedulerPhase::update, process,
-        [this, process, signal](Scheduler&) {
-            if (!vhdl_disconnected_drivers.insert({ signal, process }).second) {
-                return;
-            }
-            auto value = run_vhdl_resolver(signal);
-            vhdl_resolved_values.insert_or_assign(signal, value);
-            commit(signal, apply_force(signal, std::move(value)));
-        });
+    if (delay > std::numeric_limits<SimulationTick>::max() - scheduler.now()) {
+        throw std::overflow_error(
+            "simulation time overflow while scheduling event");
+    }
+    // The null transaction deletes the driver's later null transactions too.
+    auto& nulls = vhdl_pending_disconnects[std::pair { signal, process }];
+    std::erase_if(nulls, [&](const SimulationTick pending) { return pending >= time; });
+    nulls.push_back(time);
+    scheduler.schedule_internal_at(scheduler.now() + delay,
+        SchedulerPhase::update, process,
+        events::make<events::DriverDisconnect>(
+            events::DriverDisconnect::Payload { this, process, signal }));
 }
 
 bool Interpreter::Impl::run_vhdl_conversion_drivers(
@@ -2130,17 +2134,10 @@ void Interpreter::Impl::schedule_next_cycle_vhdl_resolutions()
     if (vhdl_next_cycle_resolutions.empty()) {
         return;
     }
-    scheduler.schedule_next_delta(SchedulerPhase::update,
-        std::numeric_limits<StableOrder>::max(), [this](Scheduler&) {
-            auto targets = std::move(vhdl_next_cycle_resolutions);
-            vhdl_next_cycle_resolutions.clear();
-            for (const auto target : targets) {
-                if (pending_vhdl_resolution_set.insert(target).second) {
-                    pending_vhdl_resolutions.push_back(target);
-                }
-            }
-            drain_vhdl_resolutions();
-        });
+    scheduler.schedule_internal_next_delta(SchedulerPhase::update,
+        std::numeric_limits<StableOrder>::max(),
+        events::make<events::VhdlNextCycleResolutions>(
+            events::VhdlNextCycleResolutions::Payload { this }));
 }
 
 void Interpreter::Impl::initialize_vhdl_resolutions()
@@ -3372,52 +3369,17 @@ void Interpreter::Impl::commit_resolved(
     if (!cold.charge_decay) {
         return;
     }
-    auto decay = [this, signal_id, origin](Scheduler&) {
-            charge_decay_handles.at(signal_id).reset();
-            auto& decaying_charge = *charge_values.at(signal_id);
-            const auto active = [&](const std::size_t bit) {
-                bool active_driver { };
-                driver_values.at(signal_id).for_each_in_process_order(
-                    [&](const DriverRecord& record) {
-                        if (active_driver) {
-                            return;
-                        }
-                        const auto logic = driver_force_logic4_at(
-                            signal_id, record.process, record.value, bit);
-                        const auto strength = record.strength;
-                        active_driver
-                            = (logic == Logic4::zero
-                                  && strength.zero != StrengthRank::highz)
-                            || (logic == Logic4::one
-                                  && strength.one != StrengthRank::highz)
-                            || (logic == Logic4::x
-                                  && (strength.zero
-                                          != StrengthRank::highz
-                                      || strength.one
-                                          != StrengthRank::highz));
-                    });
-                if (active_driver) {
-                    return true;
-                }
-                return external_driver_values.at(signal_id)
-                    && external_driver_values.at(signal_id)->get(bit)
-                    != Logic4::z;
-            };
-            for (std::size_t bit = 0; bit < decaying_charge.width(); ++bit) {
-                if (!active(bit))
-                    decaying_charge.set(bit, Logic4::z);
-            }
-            commit(signal_id, resolved_driver_value(signal_id), origin);
-        };
+    // A registered event (#128): one pending decay per net.
+    const Scheduler::Task decay { events::make<events::ChargeDecay>(
+        events::ChargeDecay::Payload { this, signal_id,
+            origin.process_domain, origin.phase }) };
     if (origin.process_domain
         == ProcessSchedulingDomain::systemverilog) {
         handle = scheduler.schedule_systemverilog_after_cancelable(
-            *cold.charge_decay, SchedulerPhase::active, signal_id,
-            std::move(decay));
+            *cold.charge_decay, SchedulerPhase::active, signal_id, decay);
     } else {
         handle = scheduler.schedule_after_cancelable(
-            *cold.charge_decay, SchedulerPhase::update, signal_id,
-            std::move(decay));
+            *cold.charge_decay, SchedulerPhase::update, signal_id, decay);
     }
 }
 

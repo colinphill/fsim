@@ -106,6 +106,7 @@ int main(const int argc, const char* const* argv)
         test_systemverilog_vpi_time_service();
         test_systemverilog_vpi_callbacks();
         test_systemverilog_vpi_callback_lifecycle();
+        test_systemverilog_vpi_callback_rest_state();
         test_systemverilog_vpi_checkpoint_restart_and_artifact();
         test_systemverilog_vpi_reference_plugins();
         test_systemverilog_vpi_control();
@@ -230,6 +231,8 @@ int main(const int argc, const char* const* argv)
         test_systemverilog_uvm_register_callback_coverage_limits();
         test_systemverilog_uvm_checkpoint();
         test_run_state_image();
+        test_run_state();
+        test_reset_executors();
         test_systemverilog_uvm_registry();
         test_systemverilog_uvm_factory();
         test_systemverilog_uvm_resource_pool();

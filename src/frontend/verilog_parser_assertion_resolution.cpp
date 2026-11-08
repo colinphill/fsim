@@ -19,7 +19,23 @@ void VerilogParser::resolve_generate_assertion_references(DesignUnit& unit)
     const auto resolve_body = [&](GenerateBody& body) {
         extract_procedural_assertions(body.processes, body.variables,
             body.systemverilog_concurrent_assertions,
-            body.systemverilog_assertion_declarations);
+            body.systemverilog_assertion_declarations,
+            [&](const std::string_view name) {
+                const auto event_variable
+                    = [&](const std::vector<SignalDeclaration>& signals) {
+                          return std::ranges::any_of(signals,
+                              [&](const SignalDeclaration& signal) {
+                                  return signal.name == name
+                                      && signal.type.spelling == "event";
+                              });
+                      };
+                return event_variable(body.signals)
+                    || event_variable(unit.signals)
+                    || std::ranges::any_of(unit.systemverilog_clocking_blocks,
+                        [&](const SystemVerilogClockingBlock& block) {
+                            return block.name == name;
+                        });
+            });
         resolve_expect_statements(unit, body.processes, body.tasks);
         if (body.systemverilog_concurrent_assertions.empty()) {
             return;
@@ -91,6 +107,10 @@ void VerilogParser::resolve_generate_assertion_references(DesignUnit& unit)
                 position += 2U;
             }
         }
+        publish_assertion_trees(scratch, body.systemverilog_assertion_declarations,
+            body.systemverilog_concurrent_assertions);
+        body.published_concurrent_assertions
+            = body.systemverilog_concurrent_assertions;
         scratch.systemverilog_concurrent_assertions
             = std::move(body.systemverilog_concurrent_assertions);
         body.systemverilog_concurrent_assertions.clear();
@@ -141,10 +161,23 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
 {
     extract_procedural_assertions(unit.processes, unit.variables,
         unit.systemverilog_concurrent_assertions,
-        unit.systemverilog_assertion_declarations);
+        unit.systemverilog_assertion_declarations,
+        [&](const std::string_view name) {
+            return std::ranges::any_of(unit.signals,
+                       [&](const SignalDeclaration& signal) {
+                           return signal.name == name
+                               && signal.type.spelling == "event";
+                       })
+                || std::ranges::any_of(unit.systemverilog_clocking_blocks,
+                    [&](const SystemVerilogClockingBlock& block) {
+                        return block.name == name;
+                    });
+        });
     resolve_expect_statements(unit, unit.processes, unit.tasks);
     const auto design_names = assertion_design_unit_names(unit);
     resolve_assertion_declaration_references(unit);
+    publish_assertion_trees(unit, unit.systemverilog_assertion_declarations,
+        unit.systemverilog_concurrent_assertions);
     using namespace assertion_resolution_detail;
 
     for (std::size_t index = 0;
@@ -159,10 +192,29 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             location.kind = TokenKind::Identifier;
             location.text = "assert";
             location.span = directive.span;
-            error(directive.property_tokens.empty()
-                    ? location
-                    : directive.property_tokens.front(),
-                "FSIM-SV-SEM-200",
+            const auto& anchor = directive.property_tokens.empty()
+                ? location
+                : directive.property_tokens.front();
+            // The two errors IEEE 1800-2023 16.14.6 names: no clock can be
+            // inferred from the procedure and the scope has no default
+            // clocking, and an automatic variable in a clocking event.
+            if (sva_reject_reason_ == "no clocking event"
+                && !directive.procedural_clock_failure.empty()) {
+                error(anchor, "FSIM-SV-SEM-470",
+                    "the procedural concurrent assertion has no clocking "
+                    "event: no clock is inferred from its procedure ("
+                        + directive.procedural_clock_failure
+                        + ") and there is no default clocking");
+                continue;
+            }
+            if (sva_reject_reason_.starts_with("automatic variable ")) {
+                error(anchor, "FSIM-SV-SEM-471",
+                    "the clocking event of a procedural concurrent assertion "
+                    "uses " + sva_reject_reason_.substr(
+                        std::string_view { "automatic variable " }.size()));
+                continue;
+            }
+            error(anchor, "FSIM-SV-SEM-200",
                 "the procedural concurrent assertion cannot be evaluated");
             continue;
         }
@@ -1749,6 +1801,10 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
         }
         const auto append_evaluation =
             [&](Statement evaluation) {
+                // Every clock tick starts an attempt (cbAssertionStart,
+                // IEEE 1800-2023 39.4.2); the runtime drops the report
+                // while the assertion is disabled.
+                process.statements.push_back(coverage_marker("start"));
                 Statement attempt;
                 attempt.kind = StatementKind::Fork;
                 attempt.span = directive.span;
@@ -1815,6 +1871,7 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                     assertion_local_initializers.begin(),
                     assertion_local_initializers.end());
             }
+            process.statements.push_back(coverage_marker("start"));
             process.statements.push_back(std::move(*evaluation));
         } else if (property_abort) {
             Statement aborted;

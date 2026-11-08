@@ -1,0 +1,51 @@
+#c property p_imp full=top.p_imp type=vpiPropertyDecl
+#c formal top.p_imp.x type=vpiPropFormalDecl dir=5 default=none
+#c formal top.p_imp.y type=vpiPropFormalDecl dir=5 default=none
+#c disable r
+#c spec type=vpiPropertySpec
+#c clock
+#c   op vpiPosedgeOp
+#c     name clk
+#c expr
+#c   op vpiNonOverlapImplyOp strong=0
+#c     inst vpiSequenceInst s_ab decl=top.s_ab
+#c       name x
+#c       name y
+#c     op vpiNotOp strong=0
+#c       name y
+#c property p_until full=top.p_until type=vpiPropertyDecl
+#c formal top.p_until.x type=vpiPropFormalDecl dir=5 default=none
+#c formal top.p_until.y type=vpiPropFormalDecl dir=5 default=b
+#c disable none
+#c spec type=vpiPropertySpec
+#c clock
+#c   op vpiPosedgeOp
+#c     name clk
+#c expr
+#c   op vpiUntilOp strong=0
+#c     name x
+#c     name y
+#c sequence s_ab full=top.s_ab type=vpiSequenceDecl
+#c formal top.s_ab.x type=vpiSeqFormalDecl dir=5 default=none
+#c formal top.s_ab.y type=vpiSeqFormalDecl dir=5 default=none
+#c expr
+#c   op vpiCycleDelayOp strong=0
+#c     name x
+#c     name y
+#c     const 1
+#c by name top.p_imp
+#c top.a1 property type=vpiPropertyInst
+#c   inst vpiPropertyInst p_imp decl=top.p_imp
+#c     name a
+#c     name b
+#c top.a2 property type=vpiPropertyInst
+#c   inst vpiPropertyInst p_until decl=top.p_until
+#c     name a
+#c     name b
+#c top.a3 property type=vpiPropertySpec
+#c   op vpiOverlapImplyOp strong=0
+#c     name a
+#c     op vpiUnaryCycleDelayOp strong=0
+#c       name b
+#c       const 1
+#c       const 2

@@ -8,6 +8,7 @@
 // (deposit_kernel_owned, deposit_signal, force_signal, release_signal and the
 // slice forms), which hand a kernel-owned copy to its slot.
 
+#include "simir_events.hpp"
 #include "simir_internal.hpp"
 
 #include <algorithm>
@@ -201,20 +202,11 @@ void Interpreter::foreign_net_delay_settle(const SignalId signal,
             later.bits = std::move(bits);
             const auto serial = later.serial;
             load.pending.push_back(std::move(later));
-            impl.scheduler.schedule_at(now + delay, SchedulerPhase::active, 0U,
-                [this, signal, index, serial](Scheduler&) {
-                    auto& pending = impl_->foreign_net_delay_loads.at(signal)
-                                        .at(index).pending;
-                    const auto found = std::ranges::find(
-                        pending, serial, &Pending::serial);
-                    if (found == pending.end()) {
-                        return;
-                    }
-                    auto matured = std::move(*found);
-                    pending.erase(found);
-                    foreign_net_delay_mature(
-                        signal, index, matured.kind, matured.bits);
-                });
+            impl.scheduler.schedule_internal_at(
+                now + delay, SchedulerPhase::active, 0U,
+                events::make<events::ForeignNetDelayMature>(
+                    events::ForeignNetDelayMature::Payload {
+                        this, signal, index, serial }));
         }
     }
 }

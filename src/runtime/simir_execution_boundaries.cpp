@@ -12,6 +12,7 @@
 #include "simir_container_ops.hpp"
 #include "simir_execution_context.hpp"
 #include "simir_execution_shared.hpp"
+#include "simir_events.hpp"
 #include "simir_internal.hpp"
 #include "simir_static_kernel_state.hpp"
 #include "simir_signal_attributes.hpp"
@@ -1934,6 +1935,16 @@ void Interpreter::Impl::handle_boundary(
             process.pc = instruction;
             fail(process, "plusarg boundary requires an executor");
         }
+        if (query->host_value != 0U) {
+            // $reset_count and $reset_value (IEEE 1800-2023 D.8).
+            write_process_register(process, query->destination,
+                PackedLogic4::from_aval_bval(32,
+                    static_cast<std::uint32_t>(query->host_value == 1U
+                            ? reset_count_result
+                            : reset_value_result),
+                    0));
+            return;
+        }
         const auto selected = select_plusarg(plusargs,
             process.executor->read_string_register(query->query),
             query->format_query);
@@ -2084,7 +2095,9 @@ void Interpreter::Impl::handle_boundary(
         // the process stays at its last statement, as in the kernel.
         const bool probe_only = actual_point.kind == DebugPointKind::frame_entry
             || actual_point.kind == DebugPointKind::frame_exit
-            || actual_point.kind == DebugPointKind::class_constructed;
+            || actual_point.kind == DebugPointKind::class_constructed
+            || actual_point.kind == DebugPointKind::assertion_pass
+            || actual_point.kind == DebugPointKind::assertion_fail;
         if (!probe_only) {
             cold.current_source = actual_point.source;
             cold.current_scope = process.program().operations().debug_scope(
@@ -2118,6 +2131,12 @@ void Interpreter::Impl::handle_boundary(
             break;
         case DebugPointKind::class_constructed:
             kind = ExecutionPointKind::object_created;
+            break;
+        case DebugPointKind::assertion_pass:
+            kind = ExecutionPointKind::assertion_pass;
+            break;
+        case DebugPointKind::assertion_fail:
+            kind = ExecutionPointKind::assertion_fail;
             break;
         case DebugPointKind::block_entry:
         case DebugPointKind::block_exit:
@@ -2160,19 +2179,8 @@ void Interpreter::Impl::handle_boundary(
             return;
         }
         process.queued = true;
-        struct ProcessResumeTask {
-            Interpreter::Impl* owner { };
-            ProcessId process { };
-        };
-        const auto task =
-            fsim::runtime::detail::make_scheduler_task_descriptor<
-                ProcessResumeTask,
-                +[](Scheduler&, const ProcessResumeTask& scheduled) {
-                    auto& state = scheduled.owner->get_process(
-                        scheduled.process);
-                    state.queued = false;
-                    scheduled.owner->execute(scheduled.process);
-                }>(ProcessResumeTask { this, process.id });
+        const auto task = events::make<events::ProcessRegionResume>(
+            events::ProcessRegionResume::Payload { this, process.id });
         if (process.program().scheduling_domain()
             == ProcessSchedulingDomain::systemverilog) {
             scheduler.schedule_internal_systemverilog(
@@ -2952,7 +2960,9 @@ void Interpreter::Impl::handle_boundary(
             : std::string_view { method->method_identity };
         if (dpi) {
             DpiCallProcess::set_current(process.id);
-            DpiCallProcess::set_position(DpiCallProcess::unknown_position);
+            // The call's position names it for the disable protocol (IEEE
+            // 1800-2023 35.9), as the compiled kernel's does.
+            DpiCallProcess::set_position(instruction);
         }
         write_process_register(
             process,

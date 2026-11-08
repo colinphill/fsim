@@ -1,0 +1,3 @@
+# SPDX-License-Identifier: Apache-2.0
+inl psel explicit=100011223344556677
+inl psel checks=27 mismatches=0

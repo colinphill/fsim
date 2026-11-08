@@ -8,6 +8,7 @@
 #c stmt probe vhpiVarAssignStmtK line 19 t=0
 #c   outer level=0 n=3 depth=31 up:
 #c   inner level=2 n=1 depth=10 up: 1 0
+#c   put depth=55 readback=55
 #c stmt leaf.return vhpiReturnStmtK line 14 t=0
 #c   leaf level=3 up: 2 1 0
 #c endcall inner vhpiSeqProcCallStmtK line 21 t=0
@@ -19,3 +20,5 @@
 #c stmt drive vhpiSeqSigAssignStmtK line 28 t=0
 #c   a basics=1 contributors: vhpiDriverK(main=0)
 #c   o basics=1 contributors: vhpiDriverK(main=1)
+#c stmt fsig vhpiReturnStmtK line 41 t=1000000
+#c   s basics=1 contributors: vhpiDriverK(main=0)

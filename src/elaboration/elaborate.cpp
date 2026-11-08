@@ -154,7 +154,35 @@ ElaborationResult elaborate_impl(
         return result;
     }
 
-    std::vector<Root> normalized_roots{roots.begin(), roots.end()};
+    std::vector<Root> normalized_roots;
+    normalized_roots.reserve(roots.size());
+    for (const auto& root : roots) {
+        // A SystemVerilog configuration names no instance: its design
+        // statement lists the cells that are the top-level modules, and each
+        // one is a root instance named after its cell (IEEE 1800-2023
+        // 33.4.1.1, 33.2). One root per design cell, each aliased by the cell
+        // unless the caller gave a distinct alias (the default alias is the
+        // configuration's own name, which names no instance).
+        std::optional<semantic::CompiledUnitView> selected;
+        if ((root.alias.empty() || root.alias == simple_top_name(root.target))
+            && !root.target.empty()) {
+            selected = choose_top_unit(compiled, root.target);
+        }
+        if (selected && selected->systemverilog != nullptr
+            && selected->systemverilog->kind
+                == semantic::sv::UnitKind::configuration
+            && selected->systemverilog->configuration
+            && !selected->systemverilog->configuration->designs.empty()) {
+            for (const auto& design :
+                selected->systemverilog->configuration->designs) {
+                auto expanded = root;
+                expanded.alias = design.cell;
+                normalized_roots.push_back(std::move(expanded));
+            }
+            continue;
+        }
+        normalized_roots.push_back(root);
+    }
     std::unordered_set<std::string> aliases;
     for (auto& root : normalized_roots) {
         if (root.target.empty()) {

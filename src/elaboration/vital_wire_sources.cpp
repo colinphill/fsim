@@ -82,9 +82,9 @@ VitalWireSourcesResult apply_vital_wire_sources(ElaboratedDesignState& state,
                 auto operation = process.operations.expanded(position);
                 const auto* const delay = operation_get_if<VitalDelay>(&operation);
                 if (delay == nullptr || delay->kind != VitalDelayKind::wire
-                    || delay->wire_generic != location.generic
+                    || delay->wire->wire_generic != location.generic
                     || delay->output >= state.signal_info.size()
-                    || delay->wire_index.has_value() != location.vector_form) {
+                    || delay->wire->wire_index.has_value() != location.vector_form) {
                     continue;
                 }
                 const auto name = lower(state.signal_info[delay->output].name);
@@ -93,9 +93,9 @@ VitalWireSourcesResult apply_vital_wire_sources(ElaboratedDesignState& state,
                         == std::string::npos) {
                     const auto element = location.vector_form
                         ? static_cast<std::int64_t>(
-                              *delay->wire_index < location.left
-                                  ? location.left - *delay->wire_index
-                                  : *delay->wire_index - location.left)
+                              *delay->wire->wire_index < location.left
+                                  ? location.left - *delay->wire->wire_index
+                                  : *delay->wire->wire_index - location.left)
                         : std::int64_t { };
                     sites.push_back({ index, position,
                         static_cast<std::size_t>(element) });
@@ -142,7 +142,7 @@ VitalWireSourcesResult apply_vital_wire_sources(ElaboratedDesignState& state,
             // A call on one element extracts it from the register that reads
             // the bus.
             auto wanted = delay->source;
-            if (delay->input_offset) {
+            if (delay->wire->input_offset) {
                 for (std::size_t position = 0U; position < site.index;
                     ++position) {
                     auto operation = process.operations.expanded(position);
@@ -361,7 +361,7 @@ VitalWireSourcesResult apply_vital_wire_sources(ElaboratedDesignState& state,
                 for (const auto position : positions.at(writer)) {
                     auto operation = process.operations.expanded(position);
                     if (auto* const vital = operation_get_if<VitalDelay>(&operation)) {
-                        vital->mirrors.push_back(shadow);
+                        vital->wire.edit().mirrors.push_back(shadow);
                         process.operations.replace(position, std::move(operation));
                         continue;
                     }
@@ -410,7 +410,7 @@ VitalWireSourcesResult apply_vital_wire_sources(ElaboratedDesignState& state,
             }
             auto call = state.processes[site.process].operations.expanded(
                 site.index);
-            operation_get_if<VitalDelay>(&call)->wire_sources
+            operation_get_if<VitalDelay>(&call)->wire.edit().wire_sources
                 = std::move(sources);
             state.processes[site.process].operations.replace(
                 site.index, std::move(call));

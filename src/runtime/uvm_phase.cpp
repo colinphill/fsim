@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/uvm_phase.hpp"
+#include "fsim/runtime/scheduler_events.hpp"
 #include "fsim/runtime/uvm_objection.hpp"
 #include "fsim/runtime/uvm_tlm1.hpp"
 #include "uvm_phase_internal.hpp"
@@ -1504,6 +1505,9 @@ SystemVerilogUvmPhaseService::schedule_child_process(
       delay,
       SchedulerPhase::reactive,
       next_process_registration_order_,
+      // The callback is the embedder's, so a save refuses while it is pending
+      // (FSIM-SAVE-0004).
+      host_closure_task("UVM scheduled phase process",
       [this, handle, callback = std::move(callback)](Scheduler&) {
         if (!contains(handle)) return;
         auto& scheduled = process(handle);
@@ -1534,7 +1538,7 @@ SystemVerilogUvmPhaseService::schedule_child_process(
           }
           cancel_process_tree(handle.slot_);
         }
-      });
+      }));
   try {
     const auto [inserted, did_insert] = processes_.emplace(
         slot,

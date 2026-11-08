@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+inl ncat c0=xx01zx011
+inl ncat c1=0x01zx01x
+inl ncat c2=zx01xx01
+inl ncat c3=xx01zx0100000000000000000000000000000000000000000000000000000000
+inl ncat r0=xx01zx011

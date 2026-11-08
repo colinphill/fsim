@@ -738,8 +738,21 @@ void qualified_profile_mismatch(const std::filesystem::path& directory)
     const auto source = directory / "profile.sv";
     write_file(source, "module consumer; logic [6:0] result; "
         "initial result = values::N; endmodule\n");
+    // A different standard revision mixes with the compiled package; only a
+    // different compatibility profile is refused (FSIM-FE-STANDARD-003).
+    for (const char* standard : { "2009", "2012", "2023" }) {
+        auto mixed_config = config(source);
+        mixed_config.source_sets.front().standard = standard;
+        diagnostic::Engine mixed_diagnostics;
+        assert(app::application_detail::check_project_for_object(
+            mixed_config, mixed_diagnostics, &provider));
+        assert(!std::ranges::any_of(mixed_diagnostics.diagnostics(),
+            [](const auto& diagnostic) {
+                return diagnostic.code == "FSIM-FE-STANDARD-003";
+            }));
+    }
     auto consumer_config = config(source);
-    consumer_config.source_sets.front().standard = "2012";
+    consumer_config.source_sets.front().compatibility_switches = { "sizing" };
     diagnostic::Engine diagnostics;
     assert(!app::application_detail::check_project_for_object(
         consumer_config, diagnostics, &provider));

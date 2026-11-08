@@ -1,0 +1,6 @@
+#c deref kind=vhpiDerefObjK
+#c deref type=integer
+#c deref prefix=ptr
+#c deref name=error
+#c deref value=error
+#c count deref=none

@@ -135,6 +135,66 @@ static int prim_terms_of(PLI_INT32 relation, vpiHandle object)
     return count;
 }
 
+// The delay object of a primitive (37.35 vpiDelay): a constant, the
+// vpiListOp operation of several delays, or the vpiMinTypMaxOp operation
+// over a minimum:typical:maximum triple.
+static void delay_object(const char* label, vpiHandle object, int depth)
+{
+    const PLI_INT32 type = vpi_get(vpiType, object);
+    vpiHandle iterator;
+    vpiHandle operand;
+    if (type == vpiConstant) {
+        vpi_printf("#c %s delay %*s%s %d\n", label, depth * 2, "",
+            text(vpi_get_str(vpiType, object)), int_of(object));
+        return;
+    }
+    vpi_printf("#c %s delay %*s%s op=%s\n", label, depth * 2, "",
+        text(vpi_get_str(vpiType, object)),
+        vpi_get(vpiOpType, object) == vpiListOp         ? "list"
+            : vpi_get(vpiOpType, object) == vpiMinTypMaxOp ? "mintypmax"
+                                                           : "?");
+    iterator = vpi_iterate(vpiOperand, object);
+    while (iterator != NULL && (operand = vpi_scan(iterator)) != NULL) {
+        delay_object(label, operand, depth + 1);
+    }
+}
+
+static void delay_of(const char* label, vpiHandle primitive)
+{
+    vpiHandle delay = vpi_handle(vpiDelay, primitive);
+    if (delay == NULL) {
+        vpi_printf("#c %s delay NULL\n", label);
+        return;
+    }
+    delay_object(label, delay, 0);
+}
+
+// A terminal that is a constant has the expression as its vpiExpr and its
+// value (37.35).
+static void expr_term(const char* label, vpiHandle primitive, int position)
+{
+    vpiHandle iterator = vpi_iterate(vpiPrimTerm, primitive);
+    vpiHandle term = NULL;
+    vpiHandle expr;
+    s_vpi_value value = { vpiBinStrVal, { 0 } };
+    int index;
+    for (index = 0; iterator != NULL && index <= position; ++index) {
+        term = vpi_scan(iterator);
+    }
+    if (term == NULL) {
+        vpi_printf("#c %s term[%d] missing\n", label, position);
+        return;
+    }
+    expr = vpi_handle(vpiExpr, term);
+    vpi_get_value(term, &value);
+    vpi_printf("#c %s term[%d] expr=%s decompile=%s value=%s\n", label, position,
+        expr != NULL ? text(vpi_get_str(vpiType, expr)) : "NULL",
+        expr != NULL ? text(vpi_get_str(vpiDecompile, expr)) : "-",
+        value.format == vpiBinStrVal && value.value.str != NULL
+            ? value.value.str
+            : "none");
+}
+
 static void table_entries(const char* label, vpiHandle definition)
 {
     vpiHandle iterator = vpi_iterate(vpiTableEntry, definition);
@@ -176,10 +236,46 @@ static void definition(const char* label, vpiHandle udp)
         text(vpi_get_str(vpiDefName, defn)), (int)vpi_get(vpiSize, defn),
         (int)vpi_get(vpiPrimType, defn), (int)vpi_get(vpiProtected, defn));
     table_entries(label, defn);
+    // The port declarations: the output, then the inputs (37.36 io decl).
+    {
+        vpiHandle ios = vpi_iterate(vpiIODecl, defn);
+        vpiHandle io;
+        int position = 0;
+        while (ios != NULL && (io = vpi_scan(ios)) != NULL) {
+            vpiHandle owner = vpi_handle(vpiParent, io);
+            vpi_printf("#c %s io[%d] type=%s name=%s dir=%d size=%d parent=%s\n",
+                label, position++, text(vpi_get_str(vpiType, io)),
+                text(vpi_get_str(vpiName, io)), (int)vpi_get(vpiDirection, io),
+                (int)vpi_get(vpiSize, io),
+                owner != NULL ? text(vpi_get_str(vpiDefName, owner)) : "-");
+        }
+    }
     initial = vpi_handle(vpiInitial, defn);
     vpi_printf("#c %s initial=%s count=%d\n", label,
         initial != NULL ? text(vpi_get_str(vpiType, initial)) : "-",
         count_of(vpiInitial, defn));
+    // The initial statement is the blocking assignment of the output
+    // (37.36, 37.47): its left side is the output declaration, its right
+    // side the initial value.
+    if (initial != NULL) {
+        vpiHandle stmt = vpi_handle(vpiStmt, initial);
+        vpiHandle lhs = stmt != NULL ? vpi_handle(vpiLhs, stmt) : NULL;
+        vpiHandle rhs = stmt != NULL ? vpi_handle(vpiRhs, stmt) : NULL;
+        s_vpi_value value = { vpiBinStrVal, { 0 } };
+        if (rhs != NULL) {
+            vpi_get_value(rhs, &value);
+        }
+        vpi_printf("#c %s initial stmt=%s blocking=%d lhs=%s rhs=%s rhs_value=%s "
+                   "parent_ok=%d\n",
+            label, stmt != NULL ? text(vpi_get_str(vpiType, stmt)) : "-",
+            stmt != NULL ? (int)vpi_get(vpiBlocking, stmt) : -1,
+            lhs != NULL ? text(vpi_get_str(vpiName, lhs)) : "-",
+            rhs != NULL ? text(vpi_get_str(vpiType, rhs)) : "-",
+            value.format == vpiBinStrVal && value.value.str != NULL
+                ? value.value.str
+                : "none",
+            stmt != NULL && vpi_handle(vpiParent, stmt) == initial);
+    }
 }
 
 // A rejected vpi_put_value leaves an error behind (IEEE 1800-2023 38.34).
@@ -260,6 +356,13 @@ static PLI_INT32 check(p_cb_data data)
     show("g_buf", gate);
     sized("g_buf", gate);
     value_of("g_buf", gate);
+    // The delay object, and a terminal that is a constant.
+    delay_of("g_buf", named("top.g_buf"));
+    delay_of("g_and", named("top.g_and"));
+    gate = named("top.g_const");
+    show("g_const", gate);
+    value_of("g_const", gate);
+    expr_term("g_const", gate, 2);
     gate = named("top.g_pu");
     show("g_pu", gate);
     sized("g_pu", gate);

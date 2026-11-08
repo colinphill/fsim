@@ -1,0 +1,8 @@
+#c 5 failure p_seq start=5 expr=top.a
+#c 7 failure p_not start=7 expr=top.c
+#c 15 failure p_imp start=15 expr=top.b
+#c 17 failure p_not start=17 expr=top.c
+#c 25 failure p_seq start=25 expr=top.a
+#c 27 failure p_not start=27 expr=top.c
+#c 35 failure p_seq start=35 expr=top.a
+#c 37 failure p_not start=37 expr=top.c

@@ -335,7 +335,7 @@ Lowerer::hir_vhdl_float_function_profile(
     }
     return HirVhdlIntrinsicProfile {
         static_cast<std::size_t>(
-            frontend::vhdl_predefined_integer_storage_width(vhdl_standard_)),
+            frontend::vhdl_predefined_integer_storage_width(vhdl_integer_standard())),
         frontend::ValueDomain::Integer,
         true,
     };
@@ -748,7 +748,7 @@ Lowerer::HirVhdlIntrinsicAttempt Lowerer::lower_hir_vhdl_float_function(
         }
         const auto value = std::bit_cast<float>(*bits);
         const auto integer_width = static_cast<std::size_t>(
-            frontend::vhdl_predefined_integer_storage_width(vhdl_standard_));
+            frontend::vhdl_predefined_integer_storage_width(vhdl_integer_standard()));
         const auto rounded = std::nearbyint(static_cast<double>(value));
         const auto minimum = integer_width == 64U
             ? -9223372036854775808.0

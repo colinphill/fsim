@@ -1,0 +1,5 @@
+#c vpi: t=10 after put rise 2,3,4 fall 4,5,6
+#c life=0 t=22 y=0
+#c life=0 t=23 y=1
+#c life=1 t=22 y=0
+#c life=1 t=23 y=1

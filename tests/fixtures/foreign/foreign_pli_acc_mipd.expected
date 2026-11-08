@@ -37,3 +37,28 @@
 #c bit1 delays 0.000 0.000
 #c vec port fetch ok=1 error=0
 #c vec port delays 0.000 0.000
+#c ic0 pulsere ok=1 error=0
+#c ic0 pulsere 6.000 6.000 7.000 7.000
+#c ic0 replace pulsere ok=1 error=0
+#c ic0 pulsere ok=1 error=0
+#c ic0 pulsere 1.000 2.000 3.000 4.000
+#c ic0 set pulsere ok=1 error=0
+#c ic0 pulsere ok=1 error=0
+#c ic0 pulsere 3.000 6.000 3.500 7.000
+#c ic0 fetch ok=1 error=0
+#c ic0 delays 6.000 7.000
+#c mipd pulsere ok=1 error=0
+#c mipd pulsere 9.000 9.000 10.000 10.000
+#c mipd replace pulsere ok=1 error=0
+#c mipd pulsere ok=1 error=0
+#c mipd pulsere 2.000 3.000 4.000 5.000
+#c mipd fetch ok=1 error=0
+#c mipd delays 9.000 10.000
+#c bit0 pulsere ok=1 error=0
+#c bit0 pulsere 7.000 7.000 8.000 8.000
+#c bit0 replace pulsere ok=1 error=0
+#c bit0 pulsere ok=1 error=0
+#c bit0 pulsere 1.000 2.000 3.000 4.000
+#c vec port pulsere ok=1 error=0
+#c vec port pulsere 0.000 0.000 0.000 0.000
+#c mipd bad pulsere ok=0 error=1

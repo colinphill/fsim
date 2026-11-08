@@ -8,6 +8,8 @@
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/artifact/coverage_database_codec.hpp"
 #include "fsim/artifact/coverage_database_merge.hpp"
+#include "fsim/runtime/run_state_sections.hpp"
+#include "fsim/runtime/scheduler_events.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
 
@@ -224,6 +226,33 @@ struct Simulation::Impl {
         const SimulationTick time);
 
     void schedule_uvm_report_settings();
+
+    /// Scheduler event of a UVM report setting with a time (#128): kind
+    /// "sim.uvm_report_setting", plain data (this simulation and the time
+    /// offset, which is also the cancel key). The settings are rebuilt from
+    /// the command line, so a restart re-creates their events from the saved
+    /// ones and `bind_restored_event_handle` gives each handle back.
+    struct UvmReportSettingEvent {
+        struct Payload {
+            Impl* owner { };
+            SimulationTick offset { };
+        };
+        struct Domain {
+            static constexpr std::string_view name { "simulation" };
+        };
+        struct Codec : runtime::OwnedFieldsSchedulerEventCodec<Payload, Impl,
+                           Domain, &Payload::owner, &Payload::offset> {
+            static std::uint64_t cancel_key(const Payload& payload)
+            {
+                return payload.offset;
+            }
+        };
+        static void dispatch(runtime::Scheduler&, const Payload&);
+    };
+    /// Registers this simulation's event kinds (idempotent).
+    static void register_event_kinds();
+    [[nodiscard]] bool bind_restored_event_handle(std::string_view kind,
+        std::uint64_t key, const runtime::ScheduledTaskHandle& handle);
 
     void validate_external_value(
         const SignalId signal,
@@ -465,7 +494,9 @@ struct Simulation::Impl {
     void publish_vpi_stored_signal(const SignalId signal);
 
 
-    void start_interpreter();
+    /// `restoring` builds the engine's tables without running user code, for
+    /// a restore to fill in (Interpreter::start_for_restore).
+    void start_interpreter(bool restoring = false);
 
     void publish_vpi_driver(
         const runtime::simir::ProcessId process,
@@ -476,6 +507,22 @@ struct Simulation::Impl {
     void materialize_vpi_children(fsim_vpi_handle_v1 parent);
     [[nodiscard]] std::optional<runtime::SystemVerilogVpiStoredValue>
     vpi_live_value(fsim_vpi_handle_v1 handle, bool stored) const;
+    // $scope, $showscopes and $showvars (IEEE 1800-2023 D.11-D.13): the
+    // task `name` with its payload, run by the process that called it.
+    void run_scope_task(runtime::simir::ProcessId process,
+        std::string_view payload, SimulationTick time, std::uint64_t delta);
+    // The design objects the scope tasks list: the VPI registry when the
+    // run publishes one, else one built on the first scope task.
+    struct ScopeCatalog {
+        runtime::SystemVerilogVpiObjectRegistry* registry { };
+        const std::map<fsim_vpi_handle_v1, SignalId>* signals { };
+        const std::map<SignalId, runtime::SystemVerilogScalarKind>*
+            scalar_kinds { };
+        const std::map<fsim_vpi_handle_v1, runtime::simir::StringObjectId>*
+            strings { };
+    };
+    [[nodiscard]] ScopeCatalog scope_catalog();
+    [[nodiscard]] std::string current_interactive_scope() const;
     [[nodiscard]] bool vpi_signal_watched(SignalId signal) const noexcept;
     [[nodiscard]] bool vpi_any_signal_watched() const noexcept
     {
@@ -521,8 +568,10 @@ struct Simulation::Impl {
 
     void publish_assertion_attempt_start(
         runtime::simir::ProcessId design_process, std::int64_t start);
+    void publish_assertion_step(runtime::simir::ProcessId design_process,
+        const runtime::sva::StepRecord& step);
 
-    void start_vpi();
+    void start_vpi(bool restoring = false);
 
     void end_vpi();
 
@@ -530,6 +579,16 @@ struct Simulation::Impl {
 
     void end_systemc(
         const std::optional<runtime::SimulationTick> current_time = std::nullopt);
+
+    /// Why the run cannot reset (empty when it can): Simulation::reset_refusal.
+    [[nodiscard]] std::string reset_refusal() const;
+
+    /// The design has a SystemC part (a native hierarchy registry).
+    [[nodiscard]] bool has_systemc() const noexcept
+    {
+        return built.systemc_hierarchy != nullptr
+            || !built.systemc_hierarchies.empty();
+    }
 
     template <typename Callback>
     void for_each_systemc_registry(Callback&& callback)
@@ -573,6 +632,13 @@ struct Simulation::Impl {
         class_instance_parameter_cache;
 
     bool vpi_runtime_updates_enabled { true };
+
+    // The interactive scope's hierarchical name, empty until the first
+    // change (it is then the first top-level module). Kept by a lifecycle
+    // hook, so vpi_control, the debugger and $scope all move it.
+    std::string interactive_scope;
+    // The VPI design built for the scope tasks of a run that publishes none.
+    std::optional<SystemVerilogVpiPublishedDesign> scope_design;
 
     runtime::SystemVerilogClassHeap class_heap;
     // The types class constraints give the properties they name, by
@@ -684,6 +750,10 @@ struct Simulation::Impl {
     /// The elaborated design's process count, taken before the interpreter
     /// takes its processes (a run-time split plans over them).
     std::size_t design_process_count {};
+    /// A process runs $save, $incsave, $restart or $reset (ElaboratedDesign::
+    /// uses_simulation_control, read before the interpreter takes the
+    /// processes).
+    bool simulation_control_tasks {};
     std::unique_ptr<runtime::simir::Interpreter> interpreter;
 
     std::unique_ptr<runtime::SystemVerilogVpiObjectRegistry> vpi_registry;
@@ -817,6 +887,11 @@ struct Simulation::Impl {
     /// resets requested but not yet performed (IEEE 1800-2023 D.8).
     std::vector<Simulation::LifecycleHook> lifecycle_hooks;
     std::vector<Simulation::ResetRequest> reset_requests;
+    /// What the first foreign-created structure of the run is (a driver, a
+    /// driver owner or a process a library made): a reset rebuilds the design
+    /// from the artifact and cannot recreate it, so it is refused while this
+    /// is set (FSIM-SAVE-0018). Saved in app.control.
+    std::string foreign_structure;
     std::uint32_t reset_count { };
     std::int32_t reset_value { };
     /// Run the oldest requested reset: start-of-reset before time changes,
@@ -824,6 +899,60 @@ struct Simulation::Impl {
     /// statements run. False when the request enters interactive mode
     /// afterwards.
     [[nodiscard]] bool perform_reset();
+    /// The application's share of a reset (class objects and static members,
+    /// delayed VPI writes), after the engine's.
+    void reset_application_state();
+    /// UVM component, phase, objection and sequence state lives in the
+    /// host services above; the run-state file does not carry it yet, so a
+    /// run that holds any refuses to save and to reset.
+    [[nodiscard]] bool uvm_state_live() const;
+
+    // ---- Run-state files (application_simulation_impl_save.cpp) ----
+    /// The application's sections of a run-state image; the engine's are
+    /// written by Interpreter::record_run_state.
+    runtime::RunStateSectionRegistry section_registry;
+    /// True while read_state_file() sets the run up for a restore: the
+    /// foreign interfaces hear no start-of-simulation phase then (IEEE
+    /// 1800-2023 D.9, IEEE 1076-2019 20.8; owner decision 2026-11-07).
+    bool restoring_state { };
+    /// "foreign.vpi" / "foreign.vhpi" (set_foreign_run_state_sections): saved
+    /// after the end-of-save callbacks, restored before start-of-restart.
+    runtime::RunStateSectionRegistry foreign_section_registry;
+    /// The command line and libraries a restart must repeat.
+    std::string state_file_identity;
+    /// The arguments $reset has sent for the calling process, by position,
+    /// until its request marker arrives.
+    std::map<runtime::simir::ProcessId, std::array<std::int32_t, 3>>
+        reset_arguments;
+    struct SaveRequest {
+        std::filesystem::path file;
+        bool incremental { };
+    };
+    /// Saves waiting for the end of the time slot, oldest first.
+    std::deque<SaveRequest> save_requests;
+    /// A $restart waiting for the safe point after the call.
+    std::optional<std::filesystem::path> restart_request;
+    /// The last full save of this run: the base of a following $incsave.
+    std::optional<runtime::RunStateImage> last_full_save;
+    std::filesystem::path last_full_save_file;
+    /// A save that failed at the quiet point, reported when run() returns.
+    std::optional<std::string> save_failure;
+    /// Called for the output text of a `simulation_control_marker` message.
+    void run_simulation_control(runtime::simir::ProcessId process,
+        std::string_view payload);
+    void register_save_sections();
+    [[nodiscard]] std::string state_identity() const;
+    [[nodiscard]] Simulation::StateFileResult write_state_file(
+        const std::filesystem::path& file, bool incremental);
+    [[nodiscard]] Simulation::StateFileResult read_state_file(
+        const std::filesystem::path& file);
+    /// Queue a save for the end of the current time slot (the scheduler's
+    /// slot-end quiet point).
+    void queue_save(SaveRequest request);
+    static void save_quiet_point(void* context, runtime::Scheduler& scheduler);
+    /// Run the queued $restart at a safe point of run(); false when it
+    /// failed (the error is in save_failure).
+    [[nodiscard]] bool perform_restart();
 
     mutable std::unique_ptr<runtime::VhdlVhpiObjectRegistry>
         vhdl_vhpi_registry;
@@ -888,6 +1017,9 @@ struct Simulation::Impl {
     /// and the ports refused, which later puts do not ask for again.
     std::vector<elaboration::SdfNetDelayInfo> net_delay_split_requests;
     std::uint64_t net_delay_split_observer { 0U };
+    /// Bumped by each live SDF reannotation that replaces the net delay
+    /// records (Simulation::sdf_net_delay_epoch).
+    std::uint64_t sdf_net_delay_epoch { 0U };
     std::vector<std::string> net_delay_split_refusals;
     /// The interpreter ids of the copy drivers a run-time split added, by
     /// their ids in `built.design` (the run's fork children and foreign
@@ -901,13 +1033,89 @@ struct Simulation::Impl {
         return found == grafted_process_ids.end() ? design_process
                                                   : found->second;
     }
+    /// Gate drivers asked to take a delay slot (Simulation::
+    /// put_gate_driver_delays) with the delays of the latest put, the
+    /// safe-point observer that splits them, the ones split, and why a split
+    /// was refused.
+    std::map<runtime::simir::ProcessId, runtime::simir::TransitionDelays>
+        gate_delay_requests;
+    std::uint64_t gate_delay_observer { 0U };
+    std::set<runtime::simir::ProcessId> gate_delay_split;
+    std::set<runtime::simir::ProcessId> gate_delay_refused;
+    std::vector<std::string> gate_delay_split_refusals;
+    /// The deferred splits (gate, switch control, load port) that failed at
+    /// their safe point after the put had returned success, as FSIM-VPI-SPLIT-001
+    /// messages, and how many vpi_chk_error has handed out.
+    std::vector<std::string> deferred_split_errors;
+    std::size_t deferred_split_errors_taken { };
+    void report_deferred_split_failure(
+        const std::string& what, const std::string& reason);
+    void commit_gate_delay_splits();
+    /// The run-time splits that vpi_put_delays made, in order: the plan
+    /// journal of the application (the engine journals the programs for a
+    /// reset; a restart rebuilds them from these requests, since a fresh
+    /// process has not made the puts). A gate split keeps its driver and
+    /// delays, a switch-control split its switch name, table and the ids the
+    /// run gave the copy drivers. Saved in "app.late_splits" and replayed by
+    /// replay_late_splits before the engine restores its state.
+    struct LateSplit {
+        // 0 gate delay slot, 1 tranif control copy, 2 port net-delay copy
+        // (an SDF or vpi_put_delays split of a load port)
+        std::uint8_t kind { };
+        runtime::simir::ProcessId driver { };
+        std::string name;
+        runtime::simir::TransitionDelays delays { };
+        runtime::simir::NetDelayTable table { };
+        std::vector<runtime::simir::ProcessId> run_ids;
+        elaboration::SdfNetDelayInfo net_delay;
+    };
+    std::vector<LateSplit> late_splits;
+    /// The splits of a restart's file, applied to the restoring run; false,
+    /// with `reason`, when one cannot be rebuilt as it was.
+    [[nodiscard]] bool replay_late_splits(
+        const std::vector<LateSplit>& splits, std::string& reason);
+    /// The gate split of one driver now (commit_gate_delay_splits'
+    /// per-driver work); false, with `reason`, when the engine refuses.
+    [[nodiscard]] bool split_gate_now(runtime::simir::ProcessId driver,
+        runtime::simir::TransitionDelays delays, std::string& reason);
+    /// The control copy of one switch now (commit_tranif_control_splits'
+    /// per-switch work); `expected_ids` are the ids a replay requires.
+    [[nodiscard]] bool split_net_delay_now(elaboration::SdfNetDelayInfo record,
+        std::string& reason,
+        const std::vector<runtime::simir::ProcessId>* expected_ids);
+    [[nodiscard]] bool split_tranif_now(const std::string& name,
+        const runtime::simir::NetDelayTable& table, std::string& reason,
+        const std::vector<runtime::simir::ProcessId>* expected_ids);
+    /// Switches declared without a delay whose control a put asked to delay
+    /// (Simulation::put_tranif_control_delays), the observer that grafts the
+    /// control's delayed copy, and the copy drivers made (by switch name).
+    std::map<std::string, runtime::simir::NetDelayTable> tranif_requests;
+    std::uint64_t tranif_observer { 0U };
+    std::map<std::string, runtime::simir::ProcessId> tranif_controls;
+    void commit_tranif_control_splits();
+    /// The driver's program with its delay-free output writes replaced by
+    /// delayed ones (WriteNetDelay) for `delays`; nullopt, with `reason`,
+    /// when it writes its output in no way the split rewrites.
+    [[nodiscard]] std::optional<runtime::simir::Process> gate_delay_program(
+        runtime::simir::ProcessId driver, runtime::simir::TransitionDelays delays,
+        std::string& reason);
+    std::string gate_delay_error;
     std::set<std::string> net_delay_split_refused;
-    void commit_net_delay_splits();
+    /// `failures`, when given, receives each split that failed (what and
+    /// why) besides the run's deferred split errors.
+    void commit_net_delay_splits(std::vector<std::string>* failures = nullptr);
     /// Declares the group-mode SDF load copies of the design to the
     /// interpreter (Interpreter::add_foreign_net_delay_load), from the copy
     /// drivers the split built: a foreign write of the net reaches such a
     /// copy after the smallest delay of its groups.
-    void register_foreign_net_delays();
+    /// Declares the delayed-load groups of the SDF net delays on `target`
+    /// (the running interpreter, or the twin a reset builds).
+    void register_foreign_net_delays(runtime::simir::Interpreter& target);
+    /// The fresh interpreter a reset takes the time-zero state from (IEEE
+    /// 1800-2023 D.8): `fresh` is the design reloaded from its artifact,
+    /// planned and configured as the running one was before start.
+    [[nodiscard]] std::unique_ptr<runtime::simir::Interpreter> make_reset_twin(
+        BuiltProject fresh, std::uint64_t max_deltas, SimulationEngine engine);
 
     std::uint64_t next_safe_point_observer { 1 };
 
@@ -943,9 +1151,6 @@ struct Simulation::Impl {
     std::vector<ConcurrentAssertionCoverage>
         concurrent_assertion_coverage;
 
-    std::vector<ConcurrentAssertionEvent>
-        concurrent_assertion_events;
-
     frontend::SystemVerilogCoverageExecutionState coverage_execution_state;
 
     frontend::SystemVerilogCoverageExecutionMode coverage_execution_mode {
@@ -967,6 +1172,7 @@ struct Simulation::Impl {
     ConcurrentAssertionHook concurrent_assertion_hook;
 
     AssertionAttemptHook assertion_attempt_hook;
+    AssertionStepHook assertion_step_hook;
 
     // The VPI assertion object of each design process that owns one.
     std::map<runtime::simir::ProcessId, fsim_vpi_handle_v1>

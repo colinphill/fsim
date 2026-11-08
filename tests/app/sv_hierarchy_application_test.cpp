@@ -77,15 +77,15 @@ Capture run(
     const fsim::app::SimulationEngine engine)
 {
     const std::array paths {
-        "configured.left.value",
-        "configured.right.value",
-        "configured.lanes[0].generated.value",
-        "configured.lanes[1].generated.value",
-        "configured.left.all_leaf_monitor.hit",
-        "configured.right.all_leaf_monitor.hit",
-        "configured.lanes[0].generated.all_leaf_monitor.hit",
-        "configured.lanes[1].generated.all_leaf_monitor.hit",
-        "configured.lanes[1].generated.selected_monitor.hit"
+        "configured_top.left.value",
+        "configured_top.right.value",
+        "configured_top.lanes[0].generated.value",
+        "configured_top.lanes[1].generated.value",
+        "configured_top.left.all_leaf_monitor.hit",
+        "configured_top.right.all_leaf_monitor.hit",
+        "configured_top.lanes[0].generated.all_leaf_monitor.hit",
+        "configured_top.lanes[1].generated.all_leaf_monitor.hit",
+        "configured_top.lanes[1].generated.selected_monitor.hit"
     };
     std::array<fsim::runtime::simir::SignalId, paths.size()> signals { };
     for (std::size_t index = 0; index < paths.size(); ++index) {
@@ -99,12 +99,12 @@ Capture run(
 
     Capture capture;
     for (const auto& specialization : project.design.specializations()) {
-        if (specialization.instance == "configured.left"
-            || specialization.instance == "configured.right"
+        if (specialization.instance == "configured_top.left"
+            || specialization.instance == "configured_top.right"
             || specialization.instance
-                == "configured.lanes[0].generated"
+                == "configured_top.lanes[0].generated"
             || specialization.instance
-                == "configured.lanes[1].generated") {
+                == "configured_top.lanes[1].generated") {
             capture.libraries.emplace_back(
                 specialization.instance, specialization.library);
         }
@@ -316,10 +316,10 @@ endmodule
     assert(reference.libraries == compiled.libraries);
     assert((reference.libraries
         == std::vector<std::pair<std::string, std::string>> {
-            { "configured.lanes[0].generated", "slow" },
-            { "configured.lanes[1].generated", "fast" },
-            { "configured.left", "fast" },
-            { "configured.right", "slow" } }));
+            { "configured_top.lanes[0].generated", "slow" },
+            { "configured_top.lanes[1].generated", "fast" },
+            { "configured_top.left", "fast" },
+            { "configured_top.right", "slow" } }));
     assert(reference.values.size() == 9U);
     assert(reference.values[0].size() == 137U);
     assert(reference.values[0].ends_with("10001"));
@@ -630,13 +630,13 @@ endconfig
     const auto execute = [&](fsim::app::BuiltProject project,
                              const fsim::app::SimulationEngine engine) {
         assert(!project.design.find_signal(
-            "selected.fast.bound_probe.selected"));
+            "top.fast.bound_probe.selected"));
         const auto selected = project.design.find_signal(
-            "selected.slow.bound_probe.selected");
+            "top.slow.bound_probe.selected");
         assert(selected);
         const auto specialization = std::ranges::find_if(
             project.design.specializations(), [](const auto& candidate) {
-                return candidate.instance == "selected.slow.bound_probe";
+                return candidate.instance == "top.slow.bound_probe";
             });
         assert(specialization != project.design.specializations().end());
         assert(specialization->library == "mapped");
@@ -701,16 +701,16 @@ endconfig
     }
     assert(retained_project && !retained_diagnostics.has_error());
     assert(retained_project->design.find_signal(
-        "selected.fast.bound_probe.selected"));
+        "top.fast.bound_probe.selected"));
     assert(retained_project->design.find_signal(
-        "selected.slow.bound_probe.selected"));
+        "top.slow.bound_probe.selected"));
     const auto retained_fast = std::ranges::find_if(
         retained_project->design.specializations(), [](const auto& candidate) {
-            return candidate.instance == "selected.fast.bound_probe";
+            return candidate.instance == "top.fast.bound_probe";
         });
     const auto retained_slow = std::ranges::find_if(
         retained_project->design.specializations(), [](const auto& candidate) {
-            return candidate.instance == "selected.slow.bound_probe";
+            return candidate.instance == "top.slow.bound_probe";
         });
     assert(
         retained_fast != retained_project->design.specializations().end()
@@ -771,15 +771,15 @@ endconfig
     const auto execute = [](fsim::app::BuiltProject project,
                             const fsim::app::SimulationEngine engine) {
         const auto value = project.design.find_signal(
-            "selected.selected.payload.value");
+            "top.selected.payload.value");
         assert(value);
         const auto wrapper = std::ranges::find_if(
             project.design.specializations(), [](const auto& candidate) {
-                return candidate.instance == "selected.selected";
+                return candidate.instance == "top.selected";
             });
         const auto leaf = std::ranges::find_if(
             project.design.specializations(), [](const auto& candidate) {
-                return candidate.instance == "selected.selected.payload";
+                return candidate.instance == "top.selected.payload";
             });
         assert(wrapper != project.design.specializations().end());
         assert(leaf != project.design.specializations().end());
@@ -835,7 +835,7 @@ endconfig
     assert(std::ranges::any_of(
         missing_diagnostics.diagnostics(), [](const auto& diagnostic) {
             return diagnostic.code == "FSIM-ELAB-SVCONFIG-003"
-                && diagnostic.message.find("missing.selected")
+                && diagnostic.message.find("top.selected")
                     != std::string::npos;
         }));
 }

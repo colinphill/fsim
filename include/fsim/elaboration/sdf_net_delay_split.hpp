@@ -72,6 +72,28 @@ SdfNetDelaySplitResult split_sdf_net_delays(ElaboratedDesignState& state);
 sdf_net_delay_retiming(
     const ElaboratedDesign& running, const ElaboratedDesign& annotated);
 
+/// One DEVICE delay (IEEE 1497-2001 5.4.1) of an output port that no module
+/// path ends at: the delays of the primitives that drive the output
+/// (IEEE 1364-2005 16.2.2.1, 1800-2023 28.16). `delays` are the rise, fall and
+/// turn-off delays of the DEVICE's twelve transitions.
+struct SdfDeviceGateDelay {
+    /// The SDF cell instance that holds the output port.
+    std::string instance;
+    /// The hierarchical path of the output port.
+    std::string object;
+    runtime::simir::SignalId signal { };
+    runtime::simir::TransitionDelays delays;
+};
+
+/// Gives the gates of `state` that drive the output of each of `devices` the
+/// delays of the DEVICE: a delay-free write becomes a delayed one, a delayed
+/// write takes the new delays (the same rewrite a foreign vpi_put_delays does
+/// to a running gate, Simulation::put_gate_driver_delays). The number of
+/// driver processes rewritten; a design that handed its processes to the
+/// interpreter has none, and the running simulation puts the delays instead.
+std::size_t apply_sdf_device_gate_delays(
+    ElaboratedDesignState& state, std::span<const SdfDeviceGateDelay> devices);
+
 /// One more load port split in a running design: `grown` is the running
 /// design with the port's net split like split_sdf_net_delays does at
 /// elaboration, and `graft` what the running simulation adds to take it.
@@ -98,6 +120,20 @@ struct SdfNetDelayGraft {
 [[nodiscard]] std::optional<SdfNetDelayGraft> plan_sdf_net_delay_graft(
     const ElaboratedDesign& running, SdfNetDelayInfo record,
     std::size_t process_count,
+    const std::function<const runtime::simir::Process&(
+        runtime::simir::ProcessId)>& running_program,
+    std::string& reason);
+
+/// Plans a delayed copy of the control of the tranif named `switch_name` (the
+/// full hierarchical name of the primitive), read by its two conducting
+/// processes, for a switch declared without a delay that a foreign
+/// vpi_put_delays gave turn-on and turn-off delays (IEEE 1800-2023 28.16,
+/// 38.32). `table` holds the control's delays (a tranif0's swapped). The copy
+/// driver is `driver` of the result. Nothing, with `reason`, when the switch
+/// has no such processes.
+[[nodiscard]] std::optional<SdfNetDelayGraft> plan_tranif_control_graft(
+    const ElaboratedDesign& running, std::string_view switch_name,
+    const runtime::simir::NetDelayTable& table, std::size_t process_count,
     const std::function<const runtime::simir::Process&(
         runtime::simir::ProcessId)>& running_program,
     std::string& reason);

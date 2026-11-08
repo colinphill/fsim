@@ -1,4 +1,4 @@
-#c counts primitive=10 gate=6 switch=2 udp=2
+#c counts primitive=11 gate=7 switch=2 udp=2
 #c counts array=1 gate_array=1 switch_array=0 udp_array=0
 #c unnamed type=vpiGate def=and size=2 value=1
 #c unnamed count=1
@@ -17,6 +17,14 @@
 #c g_buf type=vpiGate name=g_buf full=top.g_buf def=bufif1 prim=10 s0=64 s1=64 member=0
 #c g_buf size=2 line=39
 #c g_buf value=1
+#c g_buf delay vpiOperation op=mintypmax
+#c g_buf delay   vpiConstant 1
+#c g_buf delay   vpiConstant 2
+#c g_buf delay   vpiConstant 3
+#c g_and delay NULL
+#c g_const type=vpiGate name=g_const full=top.g_const def=and prim=1 s0=64 s1=64 member=0
+#c g_const value=1
+#c g_const term[2] expr=vpiConstant decompile=1'b1 value=1
 #c g_pu type=vpiGate name=g_pu full=top.g_pu def=pullup prim=25 s0=-1 s1=32 member=0
 #c g_pu size=0 line=43
 #c g_pu value=1
@@ -54,6 +62,9 @@
 #c u_comb_i entry[1] type=vpiTableEntry size=3 text=?0:0
 #c u_comb_i entry[2] type=vpiTableEntry size=3 text=11:1
 #c u_comb_i entries=3
+#c u_comb_i io[0] type=vpiIODecl name=y dir=2 size=1 parent=udp_and2
+#c u_comb_i io[1] type=vpiIODecl name=a dir=1 size=1 parent=udp_and2
+#c u_comb_i io[2] type=vpiIODecl name=b dir=1 size=1 parent=udp_and2
 #c u_comb_i initial=- count=0
 #c u_seq_i type=vpiUdp name=u_seq_i full=top.u_seq_i def=udp_dff prim=27 s0=64 s1=64 member=0
 #c u_seq_i size=2 line=48
@@ -70,7 +81,11 @@
 #c u_seq_i entry[2] type=vpiTableEntry size=4 text=?f:?:-
 #c u_seq_i entry[3] type=vpiTableEntry size=4 text=*?:?:-
 #c u_seq_i entries=4
+#c u_seq_i io[0] type=vpiIODecl name=q dir=2 size=1 parent=udp_dff
+#c u_seq_i io[1] type=vpiIODecl name=d dir=1 size=1 parent=udp_dff
+#c u_seq_i io[2] type=vpiIODecl name=clk dir=1 size=1 parent=udp_dff
 #c u_seq_i initial=vpiInitial count=1
+#c u_seq_i initial stmt=vpiAssignment blocking=1 lhs=q rhs=vpiConstant rhs_value=0 parent_ok=1
 #c udp defns=2
 #c w_and net logic=0 s0=64 s1=1
 #c w_pull net logic=1 s0=1 s1=32

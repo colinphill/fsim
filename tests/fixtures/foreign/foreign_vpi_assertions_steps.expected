@@ -1,0 +1,5 @@
+#c 5 step-failure p_step start=5 from=0 to=4 matched=1 top.a
+#c 15 step-success p_step start=15 from=0 to=4 matched=1 top.a
+#c 20 disable 15 refused: vpi_control: the stepping mode of an assertion attempt cannot change after the attempt has started
+#c 25 step-success p_step start=15 from=4 to=1 matched=1 top.b
+#c 35 step-failure p_step start=35 from=0 to=4 matched=1 top.a

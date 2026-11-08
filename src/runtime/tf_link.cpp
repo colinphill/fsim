@@ -1779,7 +1779,22 @@ PLI_INT32 tf_putrealp(const PLI_INT32 parameter, const double value) {
   argument_value->assigned = 1;
   return 0;
 }
-FSIM_TF_INT(tf_read_restart, (PLI_BYTE8*, PLI_INT32))
+// Reads back a block that tf_write_save saved (IEEE 1364-2001 25.41): legal
+// only from misctf with reason_restart; exactly as many bytes as were
+// written must be read in all. Nonzero when the block was filled.
+PLI_INT32 tf_read_restart(PLI_BYTE8* const blockptr, const PLI_INT32 blocklen) {
+  if (blockptr == nullptr || blocklen <= 0 ||
+      fsim::runtime::validate_tf_native_pointer(
+          blockptr, static_cast<std::size_t>(blocklen),
+          fsim::runtime::TfNativePointerAccess::Write) !=
+          fsim::runtime::TfContainmentError::None) {
+    return 0;
+  }
+  return emit_control(FSIM_TF_CONTROL_RESTART_READ, 0, 0, nullptr, nullptr,
+                      blockptr, static_cast<uint32_t>(blocklen)) == 0
+             ? 1
+             : 0;
+}
 // Rounds to the nearest integer, halves away from zero, saturating (IEEE
 // 1364-2001 25.42 and the Verilog rounding rule of 25.21).
 void tf_real_to_long(const double value, PLI_INT32* const low,
@@ -2009,7 +2024,21 @@ PLI_INT32 tf_warning(PLI_BYTE8* const format, ...) {
   va_end(arguments);
   return result;
 }
-FSIM_TF_INT(tf_write_save, (PLI_BYTE8*, PLI_INT32))
+// Appends a block to the save file (IEEE 1364-2001 25.65): legal only from
+// misctf with reason_save. Nonzero when the block was written.
+PLI_INT32 tf_write_save(PLI_BYTE8* const blockptr, const PLI_INT32 blocklen) {
+  if (blockptr == nullptr || blocklen <= 0 ||
+      fsim::runtime::validate_tf_native_pointer(
+          blockptr, static_cast<std::size_t>(blocklen),
+          fsim::runtime::TfNativePointerAccess::Read) !=
+          fsim::runtime::TfContainmentError::None) {
+    return 0;
+  }
+  return emit_control(FSIM_TF_CONTROL_SAVE_WRITE, 0, 0, nullptr, nullptr,
+                      blockptr, static_cast<uint32_t>(blocklen)) == 0
+             ? 1
+             : 0;
+}
 
 #undef FSIM_TF_INT
 #undef FSIM_TF_DOUBLE

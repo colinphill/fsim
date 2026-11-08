@@ -358,6 +358,12 @@ fsim_status_t start_design(Session& value, fsim::app::BuiltProject built)
             built, *planned->control);
         value.sdf_control = std::move(planned->control);
     }
+    // A session may reannotate SDF at any safe point, so its delayed
+    // primitives take their delays from slots that a later DEVICE delay
+    // replaces (IEEE 1497-2001 5.4.1).
+    if (built.design.bind_primitive_delay_slots() != 0U) {
+        built.kernel_access.delay_slots = true;
+    }
     value.simulation = std::make_unique<fsim::app::Simulation>(
         std::move(built), value.max_deltas);
     if (value.config->run.trace_file && value.config->run.trace_enabled) {
@@ -561,7 +567,8 @@ fsim_status_t fsim_session_configure_sdf(
             if (!planned)
                 return FSIM_STATUS_INVALID_ARGUMENT;
             auto committed = value.simulation->commit_sdf_reannotation(
-                *planned->control->effective(), &planned->design);
+                *planned->control->effective(), &planned->design,
+                    planned->device_gates);
             if (!committed.ok()) {
                 for (const auto& entry : committed.diagnostics)
                     value.diagnostics.error(entry.code, entry.message);

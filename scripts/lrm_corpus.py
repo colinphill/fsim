@@ -2474,10 +2474,12 @@ NVC_NONSTANDARD = {
         "(IEEE 1076-2019 19.11, Figure 38)",
     "protected13": "asserts a 'PATH_NAME of a protected-type variable "
         "that the test notes the LRM does not specify",
-    # Owner decision (Batch 81): VHDL integer types stay 32-bit; an
-    # implementation may restrict integer type ranges (IEEE 1076-2019
-    # 5.2.3.1).
-    "integer1": "declares a 64-bit integer type",
+    # INTEGER is 64-bit under VHDL-2019 (IEEE 1076-2019 5.2.3.1). Earlier
+    # revisions keep the owner's 32-bit range, which IEEE 1076-2008 5.2.3.1
+    # allows, and the testlist runs this case under an earlier revision.
+    "integer1": "declares a 64-bit integer type under a revision before "
+        "VHDL-2019, where fsim's integer range is 32-bit (IEEE 1076-2008 "
+        "5.2.3.1)",
     "issue352": "uses Synopsys std_logic_arith, which is not an IEEE "
         "package",
     # The `nvc` library (random, sim_pkg, cover_pkg) is nvc's own.
@@ -2531,9 +2533,11 @@ NVC_NONSTANDARD = {
     "vhpi17": "expects the tool to claim vhpiProvidesPostAnalysis; fsim "
         "does not yet provide the IEEE 1076-2019 17.3 post-analysis "
         "capability set, and claiming it would contradict 17.3",
-    # Owner decision (Batch 81): VHDL integer types stay 32-bit (IEEE
-    # 1076-2019 5.2.3.1).
-    **{name: "reads 64-bit integer and physical values through VHPI"
+    # As integer1: 64-bit integer and physical ranges need VHDL-2019, and
+    # the testlist runs these cases under an earlier revision.
+    **{name: "reads 64-bit integer and physical values through VHPI under "
+       "a revision before VHDL-2019, where fsim's integer range is 32-bit "
+       "(IEEE 1076-2008 5.2.3.1)"
        for name in ("issue978", "vhpi18")},
     # A conversion to a constrained array subtype takes the subtype's
     # bounds and matches elements left to left (IEEE 1076-2019 9.3.6), so

@@ -34,7 +34,8 @@ namespace {
         || view.driver_regions().size() != 1U
         || view.string_register_count() != 0U
         || view.container_register_count() != 0U
-        || !view.debug_locals().empty() || !view.debug_string_locals().empty()
+        || !view.debug_locals().empty() || !view.call_results().empty()
+        || !view.debug_string_locals().empty()
         || !view.debug_container_locals().empty()
         || !view.static_trigger_regions().empty()
         || view.switch_source() || view.switch_target()
@@ -1000,6 +1001,96 @@ bool HierarchyBuilder::lower_deferred_systemverilog_processes(
             specialization, process_id, program_owner);
         append_generated_systemverilog_processes(
             lowerer, unit, specialization, program_owner);
+    }
+    return true;
+}
+
+bool HierarchyBuilder::systemverilog_defers_process_lowering()
+{
+    if (!systemverilog_defers_lowering_) {
+        // The hooks the parser generates for a module's, the compilation
+        // unit's or a generate block's DPI exports, and the `extern
+        // forkjoin task` prototypes of interfaces, whose calls run the body
+        // of every module that exports the task (IEEE 1800-2023 25.7.4).
+        systemverilog_defers_lowering_ = compiled_ != nullptr
+            && std::ranges::any_of(
+                compiled_->systemverilog_hir.declarations(),
+                [](const semantic::sv::Declaration& declaration) {
+                    return declaration.callable
+                        && (declaration.callable->extern_forkjoin
+                            || declaration.name.starts_with(
+                                "__fsim_dpi_export_step_hook")
+                            || declaration.name.starts_with(
+                                "__fsim_dpi_export_block_hook"));
+                });
+    }
+    return *systemverilog_defers_lowering_;
+}
+
+bool HierarchyBuilder::lower_deferred_unit_lowerings()
+{
+    auto pending = std::move(deferred_unit_lowerings_);
+    deferred_unit_lowerings_.clear();
+    // Hierarchy order: an instance before the instances it creates, siblings
+    // in elaboration order; each instance lowers its own processes in the
+    // unit's order.
+    std::ranges::stable_sort(pending, {},
+        [](const ForwardDeferredSystemVerilogLowering& entry) {
+            return entry.unit_lowering->sequence;
+        });
+    for (auto& entry : pending) {
+        auto& payload = *entry.unit_lowering;
+        auto& materialization = *entry.materialization;
+        Lowerer lowerer {
+            design_,
+            materialization.signals,
+            materialization.read_only_signals,
+            materialization.string_objects,
+            materialization.read_only_strings,
+            materialization.container_objects,
+            materialization.read_only_containers,
+            diagnostics_,
+        };
+        lowerer.set_vhdl_lowering_index(&vhdl_lowering_index_);
+        lowerer.set_specialized_hir_unit(materialization.specialization);
+        lowerer.set_ancestor_systemverilog_specializations(
+            &materialization.type_owner_contexts);
+        lowerer.set_systemverilog_interface_handles(
+            &systemverilog_interface_handles_, &systemverilog_interface_types_,
+            &systemverilog_instance_specializations_,
+            &systemverilog_interface_exports_,
+            &systemverilog_design_element_instances_);
+        lowerer.set_hir_container_declaration_bindings(
+            &materialization.container_declaration_bindings);
+        {
+            const auto& disable_labels = systemverilog_disable_labels();
+            lowerer.set_disable_labels(
+                &disable_labels.targets, &disable_labels.declared);
+        }
+        lowerer.set_systemverilog_program_owner(entry.program_owner);
+        lowerer.set_package_constant_signal(entry.package_signal);
+        lowerer.set_package_container_object(entry.package_container);
+        lowerer.set_package_string_object(entry.package_string);
+        lowerer.set_hir_code_coverage_context(coverage_,
+            covered_systemverilog_unit(entry.unit->kind)
+                && entry.source_language
+                    == frontend::Language::SystemVerilog2017,
+            &coverage_fsm_drafts_);
+        auto& specialization
+            = design_.specializations_[entry.specialization_index];
+        if (!lower_compiled_systemverilog_processes(*entry.unit,
+                *materialization.specialization, entry.path,
+                entry.source_language, payload.concurrent_statements,
+                payload.processes, *payload.occurrences, *payload.generated,
+                lowerer, payload.clocking_processes, specialization,
+                entry.program_owner, payload.concurrent_order)) {
+            return false;
+        }
+        attach_verilog_specify_drivers(
+            payload.specify_path_begin, specialization.processes);
+        // Every lowerer that records under this instance's path is done.
+        vhdl_lowering_index_.callable_bodies->release_instance_bodies(
+            entry.path);
     }
     return true;
 }

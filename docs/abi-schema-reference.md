@@ -208,9 +208,12 @@ model `none`; enabled foundation coverage uses
 rejected directly.
 
 The compiled-HIR bundle is schema 3 and embeds semantic schema 5,
-SystemVerilog HIR schema 16, and VHDL HIR schema 11. The standalone design's
-other current state schemas are runtime 102, DesignIR 5, coverage 7, UVM 3, and
-class specializations (`FSIMSVCS`) 1. Runtime schema 101 stores packed values as
+SystemVerilog HIR schema 22, and VHDL HIR schema 11. Schema 22 adds the label of an immediate assertion (`Statement::immediate_label`, its `vpiName`, IEEE 1800-2023 37.49) and the clock events and default item of the property tree's case, clocked and multiclock nodes (37.52-37.54). Schema 21 adds the published operator tree of a property or sequence (`AssertionOperator` nodes and their operands, the VPI property and sequence expression model of IEEE 1800-2023 37.50-37.54). Schema 20 adds the `iff` guard of one event of a multi-event control (`Sensitivity::guard`, IEEE 1800-2023 9.4.2.3). The standalone design's
+other current state schemas are runtime 107, DesignIR 6, coverage 7, UVM 3, and
+class specializations (`FSIMSVCS`) 1. DesignIR 6 adds the call-result table of a process (`Process::call_results`: the slot that holds each function call's returned value, which `vpi_get_value` of a `vpiFuncCall` reads). Schema 107 replaces the outcome-start table of the interpreter's assertion host by a pop serial (`sva_pop_serial`; the start is `h_last_start` of the attempt block) and moves the attempt block to layout 2 (fail position and pop serial in the header, step records of ten words with the guard's source position). Schema 106 adds the pass and failure branches of an immediate or deferred assertion that a probe run reports (`assertion_pass`, `assertion_fail`; IEEE 1800-2023 39.4.1) and stores the attempt state of concurrent assertions in one flat block per monitor (`sva::AttemptStorage`). Schema 104 stores the HIR expression of a primitive terminal and the `inert` flag of an output operation that holds a concurrent assertion's attempt-start report, which a run binds when a library first registers `cbAssertionStart` (no persisted state depends on it). Schema 103 keeps the wire-delay parts of a
+VITAL delay call (`VitalWireCall`: the interconnect generic, the sources of
+the multiple source mode, the mirrors, and the element offsets) behind a
+presence flag, so a call without them stores one byte. Runtime schema 101 stores packed values as
 their width and raw bit planes. Schema 102 adds the interconnect-delay write
 `WriteNetDelay` (twelve transition delays with a pulse reject and error limit
 each, IEEE 1364-2005 16.2.4) after the signal operations, the pulse limits
@@ -226,7 +229,7 @@ interface typespec. A debug point carries the callee it belongs to (schema 99), 
 `frame_entry`, `frame_exit` and `class_constructed` mark the frame of a
 SystemVerilog callable and a completed constructor for the execution probes.
 The standalone `FSIMSVCH` constraint-HIR state
-is schema 16; schema 15 marks an `interconnect` net's type reference (IEEE 1800-2023 6.6.8) for the VPI model, and schema 16 adds a statement's immediate assertion kind and deferral (16.4) and the `foreach` record of a desugared loop (12.7.3) for the VPI statement model. The runtime schema carries opaque design-local package owner IDs on package
+is schema 17; schema 15 marks an `interconnect` net's type reference (IEEE 1800-2023 6.6.8) for the VPI model, and schema 16 adds a statement's immediate assertion kind and deferral (16.4) and the `foreach` record of a desugared loop (12.7.3) for the VPI statement model. Schema 17 adds the events of an assertion clock, the condition of a `disable iff`, and the pass and fail action statements of a concurrent assertion, for the VPI assertion model (IEEE 1800-2023 37.50). The runtime schema carries opaque design-local package owner IDs on package
 string/container objects and initializer process rows. Elaboration derives the
 same token as `UnitId.value() + 1` for both sides, reserving zero for unowned
 objects and ordinary processes. A startup process row also lists, as a

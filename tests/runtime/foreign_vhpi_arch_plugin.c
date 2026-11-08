@@ -350,6 +350,72 @@ static void many_p(const vhpiCbDataT* data)
     fflush(stdout);
 }
 
+// The user-resolved record rr: lo as a number, then the two bits of hi.
+static void show_rr(const vhpiCbDataT* data)
+{
+    vhpiValueT value;
+    vhpiHandleT iterator
+        = vhpi_iterator(vhpiBasicSignals, vhpi_handle_by_name("top.u1.rr", NULL));
+    vhpiHandleT basic = iterator != NULL ? vhpi_scan(iterator) : NULL;
+    int lo = -1;
+    int bits[2] = { -1, -1 };
+    (void)data;
+    memset(&value, 0, sizeof value);
+    value.format = vhpiIntVal;
+    if (basic != NULL && vhpi_get_value(basic, &value) == 0) {
+        lo = (int)value.value.intg;
+    }
+    for (int bit = 0; bit < 2; ++bit) {
+        basic = iterator != NULL ? vhpi_scan(iterator) : NULL;
+        memset(&value, 0, sizeof value);
+        value.format = vhpiEnumVal;
+        if (basic != NULL && vhpi_get_value(basic, &value) == 0) {
+            bits[bit] = (int)value.value.enumv;
+        }
+    }
+    printf("#c %llu ns rr=%d,%d%d\n", now() / NS, lo, bits[0], bits[1]);
+    fflush(stdout);
+}
+
+// Ten more sources of rr in the simulation phase, each a created process that
+// drives the three basic signals of the record: with the declared one, eleven
+// sources, more than the resolver programs built for a fixed driver count
+// serve (IEEE 1076-2019 23.6, 14.7.3.2). Each holds the default (1, "01")
+// until its transaction; source k then drives lo = k, and source 3 also
+// drives hi(1) = '1'.
+static void many_rr(const vhpiCbDataT* data)
+{
+    int created = 0;
+    int failed = 0;
+    (void)data;
+    for (int index = 1; index <= 10; ++index) {
+        vhpiHandleT process
+            = vhpi_create(vhpiProcessStmtK, foreign_architecture, NULL);
+        vhpiHandleT iterator = vhpi_iterator(
+            vhpiBasicSignals, vhpi_handle_by_name("top.u1.rr", NULL));
+        vhpiHandleT lo = NULL;
+        vhpiHandleT high = NULL;
+        vhpiHandleT low = NULL;
+        if (process == NULL || iterator == NULL) {
+            continue;
+        }
+        lo = vhpi_create(vhpiDriverK, vhpi_scan(iterator), process);
+        high = vhpi_create(vhpiDriverK, vhpi_scan(iterator), process);
+        low = vhpi_create(vhpiDriverK, vhpi_scan(iterator), process);
+        if (lo == NULL || high == NULL || low == NULL) {
+            continue;
+        }
+        ++created;
+        failed |= schedule_int(lo, index, 2U * NS);
+        if (index == 3) {
+            failed |= schedule_bit(high, 1, 2U * NS);
+        }
+    }
+    printf("#c %llu ns many rr sources=%d schedule=%d\n", now() / NS, created,
+        failed);
+    fflush(stdout);
+}
+
 // The execution function runs at step g) of the initialization phase
 // (IEEE 1076-2019 14.7.5.2, 20.5).
 static void exec(const vhpiCbDataT* data)
@@ -416,6 +482,12 @@ static void exec(const vhpiCbDataT* data)
     (void)register_cb(vhpiCbAfterDelay, NULL, show_p, 33U * NS, name);
     (void)register_cb(vhpiCbAfterDelay, NULL, show_p, 34U * NS, name);
     printf("#c exec schedule p=%d\n", p);
+    // rr: ten created sources follow at 36 ns (many_rr); their transactions
+    // take effect at 38 ns.
+    (void)register_cb(vhpiCbAfterDelay, NULL, show_rr, 35U * NS, name);
+    (void)register_cb(vhpiCbAfterDelay, NULL, many_rr, 36U * NS, name);
+    (void)register_cb(vhpiCbAfterDelay, NULL, show_rr, 37U * NS, name);
+    (void)register_cb(vhpiCbAfterDelay, NULL, show_rr, 39U * NS, name);
     fflush(stdout);
 }
 

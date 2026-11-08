@@ -32,6 +32,9 @@ module dut (
     $hold(posedge clk, d, 3, ntf_hold);
     $setuphold(posedge clk, d, 2, 1, ntf_sh);
     $width(posedge clk, 5, 0, ntf_width);
+    (en => q_par) = (1:2:3);  // delay object: a min:typ:max triple
+    (b => q_par) = (2, 3);  // a rise/fall pair: a vpiListOp
+    $hold(posedge clk &&& en, d &&& a, 2);  // &&& conditions of both terms
   endspecify
 endmodule
 

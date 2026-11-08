@@ -29,6 +29,13 @@ public:
                 && generation_ != 0U;
         }
 
+        /// Run-state save/restart (#128): the token is two integers.
+        template <typename Archive> void run_state_io(Archive& archive)
+        {
+            archive.io(slot_);
+            archive.io(generation_);
+        }
+
     private:
         friend class CohortSnapshotPool;
 
@@ -115,6 +122,41 @@ public:
             return;
         }
         retire(token.slot_);
+    }
+
+    /// Run-state save/restart (#128): every slot with its generation, free
+    /// list link and state, so a restored token still names its snapshot. A
+    /// save point has no snapshot in flight (state consuming).
+    template <typename Archive> void run_state_io(Archive& archive)
+    {
+        const auto size = archive.count(slots_.size());
+        if (archive.loading()) {
+            slots_.clear();
+            slots_.resize(static_cast<std::size_t>(size));
+        }
+        for (auto& slot : slots_) {
+            if (!archive.ok()) {
+                return;
+            }
+            auto state = static_cast<std::uint8_t>(slot.state);
+            if (archive.saving() && slot.state == State::consuming) {
+                archive.fail("a cohort snapshot is being consumed");
+                return;
+            }
+            archive.io(slot.members);
+            archive.io(slot.generation);
+            archive.io(slot.next_free);
+            archive.io(state);
+            if (archive.loading()) {
+                if (state > static_cast<std::uint8_t>(State::retired)
+                    || state == static_cast<std::uint8_t>(State::consuming)) {
+                    archive.fail("bad cohort snapshot state");
+                    return;
+                }
+                slot.state = static_cast<State>(state);
+            }
+        }
+        archive.io(free_head_);
     }
 
     /// Invalidate every pending token. An in-flight consume span remains valid

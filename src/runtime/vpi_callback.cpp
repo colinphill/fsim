@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "fsim/runtime/scheduler_events.hpp"
 #include "fsim/runtime/vpi_callback.hpp"
+
+#include "fsim/runtime/run_state_sections.hpp"
 
 #include <algorithm>
 #include <array>
@@ -143,6 +146,8 @@ struct SystemVerilogVpiCallbackManager::Impl {
         /// The last change dispatch_pending delivered to it ahead of the
         /// change's own dispatch.
         std::uint64_t delivered_through { };
+        /// SystemVerilogVpiCallbackRegistration::host_service.
+        bool host_service { };
     };
 
     std::uint64_t owner { };
@@ -681,6 +686,7 @@ SystemVerilogVpiCallbackManager::register_callback(
             registration.kind == SystemVerilogVpiCallbackKind::ValueChange
                 && registration.keeps_pending_values,
             { },
+            registration.host_service,
         });
     if (!inserted) {
         return registration_failure(
@@ -727,7 +733,7 @@ SystemVerilogVpiCallbackManager::register_callback(
                 position->second.scheduler_handle
                     = impl_->scheduler->schedule_after_cancelable(
                         scheduled_delay, SchedulerPhase::active, stable_order,
-                        [](Scheduler&) { });
+                        foreign_callback_task([](Scheduler&) { }));
             }
         } else if (registration.kind
             == SystemVerilogVpiCallbackKind::AfterDelay) {
@@ -755,24 +761,25 @@ SystemVerilogVpiCallbackManager::register_callback(
             position->second.scheduler_handle
                 = impl_->scheduler->schedule_systemverilog_after_cancelable(
                     scheduled_delay, SchedulerPhase::update, StableOrder { },
-                    [weak, id](Scheduler&) {
+                    foreign_callback_task([weak, id](Scheduler&) {
                         if (const auto state = weak.lock()) {
                             dispatch_callback(state, id, std::nullopt);
                         }
-                    });
+                    }));
         } else if (registration.kind
             == SystemVerilogVpiCallbackKind::EndOfTimeSlot) {
             position->second.scheduler_handle
                 = impl_->scheduler->schedule_after_cancelable(
                     scheduled_delay, SchedulerPhase::active, stable_order,
-                    [weak, id, stable_order](Scheduler& scheduler) {
+                    foreign_callback_task([weak, id, stable_order](
+                                              Scheduler& scheduler) {
                         scheduler.schedule_end_of_time_slot(stable_order,
-                            [weak, id](Scheduler&) {
+                            foreign_callback_task([weak, id](Scheduler&) {
                                 if (const auto state = weak.lock()) {
                                     dispatch_callback(state, id, std::nullopt);
                                 }
-                            });
-                    });
+                            }));
+                    }));
         } else if (registration.kind
                 != SystemVerilogVpiCallbackKind::ValueChange
             && !is_assertion(registration.kind)
@@ -781,11 +788,11 @@ SystemVerilogVpiCallbackManager::register_callback(
                 scheduled_delay,
                 callback_phase(registration.kind),
                 stable_order,
-                [weak, id](Scheduler&) {
+                foreign_callback_task([weak, id](Scheduler&) {
                     if (const auto state = weak.lock()) {
                         dispatch_callback(state, id, std::nullopt);
                     }
-                });
+                }));
         }
     } catch (...) {
         impl_->records.erase(position);
@@ -923,7 +930,7 @@ SystemVerilogVpiCallbackManager::dispatch_lifecycle(
 
 SystemVerilogVpiCallbackError
 SystemVerilogVpiCallbackManager::dispatch_lifecycle_now(
-    const SystemVerilogVpiCallbackKind kind)
+    const SystemVerilogVpiCallbackKind kind, const bool host_services_only)
 {
     if (!valid()) {
         return SystemVerilogVpiCallbackError::InvalidManager;
@@ -937,7 +944,8 @@ SystemVerilogVpiCallbackManager::dispatch_lifecycle_now(
         std::scoped_lock lock { impl_->mutex };
         for (const auto& [id, record] : impl_->records) {
             if (record.status == SystemVerilogVpiCallbackStatus::Active
-                && record.kind == kind) {
+                && record.kind == kind
+                && (!host_services_only || record.host_service)) {
                 callbacks.push_back(id);
             }
         }
@@ -1030,6 +1038,26 @@ std::size_t SystemVerilogVpiCallbackManager::registrations() const
     }
     std::scoped_lock lock { impl_->mutex };
     return impl_->records.size() + impl_->retired;
+}
+
+void SystemVerilogVpiCallbackManager::audit_rest_state(
+    std::vector<std::string>& messages) const
+{
+    if (!impl_) {
+        return;
+    }
+    // A callback is delivered synchronously inside dispatch_callbacks, which
+    // sets the kind's guard around it; the save point is outside every
+    // delivery, so a guard still set names a delivery the file would lose.
+    FSIM_RS_IDLE("foreign.vpi_callbacks", dispatching);
+    std::scoped_lock lock { impl_->mutex };
+    for (std::size_t kind = 0U; kind < impl_->dispatching.size(); ++kind) {
+        if (impl_->dispatching[kind]) {
+            messages.push_back("FSIM-SAVE-0011: VPI callbacks of kind "
+                + std::to_string(kind)
+                + " are being delivered at the save point");
+        }
+    }
 }
 
 bool SystemVerilogVpiCallbackManager::has_registrations() const noexcept

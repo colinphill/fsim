@@ -193,6 +193,33 @@ endmodule
   }
 }
 
+// A specparam written as a minimum:typical:maximum triple takes the delay
+// mode's alternative wherever it is named (IEEE 1800-2023 6.20.5, 30.4.1): a
+// gate delay `#(d)` and a module path delay `(i => o) = dp`. Hand derivation
+// (timeunit 1ns / 1ps, so 1 ns = 1000 ticks): the gate's input rises at 10 ns
+// and the path's at 20 ns; the marker's bit 0 sets when the gate output
+// rises (10 ns + d) and bit 1 when the path output rises (20 ns + dp), with
+// d = 1:2:3 ns and dp = 2:4:6 ns.
+//   min: 11000 and 22000   typ: 12000 and 24000   max: 13000 and 26000
+void verify_specparam_mode(
+    const std::filesystem::path& directory,
+    const std::filesystem::path& source,
+    const fsim::project::DelayMode mode,
+    const fsim::runtime::SimulationTick gate_rise,
+    const fsim::runtime::SimulationTick path_rise) {
+  const auto config = config_for(
+      directory, source, fsim::project::Optimization::o2, mode);
+  for (const auto engine : {fsim::app::SimulationEngine::interpreter,
+                            fsim::app::SimulationEngine::compiled}) {
+    const auto capture = run_once(config, engine);
+    assert(capture.changes.size() == 3);
+    assert(std::get<1>(capture.changes[0]) == 0);
+    assert(std::get<1>(capture.changes[1]) == gate_rise);
+    assert(std::get<1>(capture.changes[2]) == path_rise);
+    assert(capture.final_value == "11");
+  }
+}
+
 void verify_cli_override() {
   bool invoked = false;
   fsim::cli::Services services;
@@ -289,6 +316,50 @@ endmodule
         optimization,
         fsim::project::DelayMode::maximum,
         Expected{2, 3302, 4302});
+  }
+
+  {
+    const auto specparam_source = directory.path / "specparam_modes.sv";
+    std::ofstream output(specparam_source, std::ios::binary);
+    output << R"(timeunit 1ns / 1ps;
+module leaf(input i, output o);
+  assign o = i;
+  specify
+    specparam dp = 2:4:6;
+    (i => o) = dp;
+  endspecify
+endmodule
+
+module delay_modes;
+  logic [1:0] marker;
+  specparam d = 1:2:3;
+  reg a, b;
+  wire w, p;
+  buf #(d) g(w, a);
+  leaf u(b, p);
+  always @(w) if (w === 1'b1) marker[0] = 1'b1;
+  always @(p) if (p === 1'b1) marker[1] = 1'b1;
+  initial begin
+    marker = 0;
+    a = 0;
+    b = 0;
+    #10ns a = 1;
+    #10ns b = 1;
+    #20ns $finish;
+  end
+endmodule
+)";
+    assert(output.good());
+    output.close();
+    verify_specparam_mode(
+        directory.path, specparam_source,
+        fsim::project::DelayMode::minimum, 11000, 22000);
+    verify_specparam_mode(
+        directory.path, specparam_source,
+        fsim::project::DelayMode::typical, 12000, 24000);
+    verify_specparam_mode(
+        directory.path, specparam_source,
+        fsim::project::DelayMode::maximum, 13000, 26000);
   }
 
   verify_auto_resolution_selects_first(directory.path, source);

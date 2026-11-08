@@ -9,6 +9,8 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string>
+#include <vector>
 
 namespace fsim::runtime {
 
@@ -69,6 +71,10 @@ struct SystemVerilogVpiAssertionEvent {
     bool action_suppressed { };
     // The tick the attempt started at (IEEE 1800-2023 39.4.2).
     std::uint64_t attempt_start { };
+    // The source position of the expression that rejected a failed attempt
+    // (failExpr, 39.4.2); line 0 when unknown.
+    std::uint32_t fail_line { };
+    std::uint32_t fail_column { };
 };
 
 enum class SystemVerilogVpiCallbackError {
@@ -142,6 +148,12 @@ struct SystemVerilogVpiCallbackRegistration {
     /// until dispatched, for dispatch_pending. Only ACC links ask for it, so
     /// other registrations pay nothing for it.
     bool keeps_pending_values { };
+    /// A callback of the host's own machinery (the VHPI service's phase
+    /// driver), not of a foreign library. A restart is not a start of
+    /// simulation, so a restore dispatches none of the start callbacks, these
+    /// included (IEEE 1800-2023 D.9, 38.36.3); each service sets its phase
+    /// from the restart events.
+    bool host_service { };
 };
 
 struct SystemVerilogVpiCallbackRegistrationResult {
@@ -225,8 +237,9 @@ public:
     /// Invoke active lifecycle callbacks immediately at the scheduler's current
     /// time and delta. Integrated kernels use this at lifecycle boundaries that
     /// must precede or follow all HDL process execution.
+    /// `host_services_only` invokes only registrations marked host_service.
     [[nodiscard]] SystemVerilogVpiCallbackError dispatch_lifecycle_now(
-        SystemVerilogVpiCallbackKind kind);
+        SystemVerilogVpiCallbackKind kind, bool host_services_only = false);
     /// Notify ValueChange registrations that a named event was delivered. The
     /// callback event intentionally has no stored value payload.
     [[nodiscard]] SystemVerilogVpiCallbackError dispatch_named_event(
@@ -237,6 +250,9 @@ public:
         fsim_vpi_handle_v1 object,
         SystemVerilogVpiAssertionEvent event);
     [[nodiscard]] std::size_t registrations() const;
+    /// Appends an FSIM-SAVE-0011 line for each callback kind whose delivery is
+    /// in progress: a save point is outside every delivery (#128).
+    void audit_rest_state(std::vector<std::string>& messages) const;
     /// Lock-free conservative activity bit for signal publication hot paths.
     /// Once any registration succeeds it remains true for the manager's
     /// lifetime, including after a one-shot callback fires or is removed.

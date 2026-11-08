@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "fsim/runtime/scheduler_events.hpp"
 #include "application_vhpi_foreign.hpp"
+#include "fsim/runtime/run_state_sections.hpp"
 
 #include "application_foreign_signal.hpp"
 #include "application_internal.hpp"
@@ -307,6 +309,14 @@ enum class ListKind : std::uint8_t {
     members,
     // The implicit signals attached to a signal (IEEE 1076-2019 19.4.3).
     sig_attrs,
+    // Groups (IEEE 1076-2019 19.4, Figure 12).
+    entity_designators,
+    entity_class_entries,
+    // Specifications and attribute declarations (Figures 30, 31, 33).
+    attr_specs,
+    attr_decls,
+    specs,
+    use_clauses,
 };
 
 struct Object final : Handle {
@@ -386,6 +396,12 @@ struct Object final : Handle {
     // reached from a component instantiation, `instance` is that statement,
     // which gives the actuals the component they name ports of.
     const vhdl::ComponentConfiguration* component_config { };
+    // A block configuration (class blockConfig, 19.5): the HIR node of a
+    // configuration declaration's block configuration or of a nested one.
+    const vhdl::BlockConfiguration* block_configuration { };
+    // A disconnection specification (class disconnectSpec, IEEE 1076-2019
+    // 7.4, Figure 32): the HIR node; the region it is in is `parent`.
+    const vhdl::DisconnectionSpecification* disconnection { };
     // A foreign architecture (IEEE 1076-2019 20.4): for the process and
     // the drivers vhpi_create made, the index of the instance in
     // foreign_instances_; an architecture body is reached from its
@@ -433,6 +449,24 @@ struct Object final : Handle {
     // design process whose call stack it is in, its level there (0 for a call
     // made by the process) and the call and subprogram it elaborates.
     bool stack_frame { };
+    // An entity designator (class entityDesignator, which Annex B gives no
+    // class kind, so its objects have none) or an entity class entry
+    // (class entityClassEntry): the spelling of its entity class, and for an
+    // entry whether it has a box (IEEE 1076-2019 6.9, 7.2, 19.4, Figure 12).
+    // An indexed or slice name whose operands are no literals, and a range
+    // made from the bounds of such a slice: the region the operand
+    // expressions are looked up in, and the bound expressions of the range
+    // (IEEE 1076-2019 19.8, Figure 25).
+    Object* dynamic_scope { };
+    std::optional<semantic::ExpressionId> bound_left;
+    std::optional<semantic::ExpressionId> bound_right;
+    bool entity_designator { };
+    // The function declaration of the resolution function RESOLVED that
+    // STD_LOGIC carries (IEEE 1076-2019 16.7, Figure 14): it has no
+    // declaration in the compiled HIR.
+    bool intrinsic_resolved { };
+    std::string entity_class_text;
+    bool entry_unconstrained { };
     runtime::simir::ProcessId frame_process { };
     std::size_t frame_level { };
     Object* frame_call { };
@@ -440,6 +474,16 @@ struct Object final : Handle {
     // A declaration dynamically elaborated for a call (14.6 b): the frame of
     // that call.
     Object* activation { };
+    // A transaction of a driver's projected output waveform (class
+    // transaction, IEEE 1076-2019 19.12.1, Figure 48): the absolute time it
+    // is projected to occur at, in simulation ticks, and whether it is a
+    // null transaction. Its value component is `constant`.
+    std::uint64_t transaction_ticks { };
+    bool transaction_null { };
+    // A protected type declaration or body (classes protectedTypeDecl and
+    // protectedTypeBody, IEEE 1076-2019 19.4.3, Figures 5 and 21): its HIR
+    // definition, whose members are `region_declarations`.
+    const vhdl::TypeDefinition* protected_definition { };
 
     // Type declarations.
     std::unique_ptr<TypeData> type_data;
@@ -520,6 +564,9 @@ struct Iterator final : Handle {
     std::size_t next { };
     // The association it iterates (IEEE 1076-2019 19.16 vhpiIteratorTypeP).
     vhpiOneToManyT relation { };
+    // The object it iterates from (the +Use association of the iterator class,
+    // Figure 55); none for the associations of a NULL reference.
+    Handle* from { };
 };
 
 // A registered foreign subprogram model (IEEE 1076-2019 23.29
@@ -1153,6 +1200,7 @@ public:
                                    auto dispatch) {
             runtime::SystemVerilogVpiCallbackRegistration registration;
             registration.kind = kind;
+            registration.host_service = true;
             registration.callback
                 = [this, dispatch](const runtime::SystemVerilogVpiCallbackEvent&) {
                       (this->*dispatch)();
@@ -1228,9 +1276,11 @@ public:
         };
     }
 
-    void set_libraries(VhpiLibraryDirectories libraries)
+    void set_libraries(
+        VhpiLibraryDirectories libraries, VhpiLibraryUnits units = {})
     {
         library_source_ = std::move(libraries);
+        catalog_source_ = std::move(units);
     }
 
     void set_companion(ForeignCompanion companion) override
@@ -2287,16 +2337,32 @@ private:
             phase_ = resumed_phase_;
             save_location_.clear();
             break;
+        // Only the restart callbacks exist after a restart (owner decision
+        // 2026-11-07, as VPI 38.36.3 states for cbStartOfRestart and
+        // cbEndOfRestart): every other registration is dropped, and a fresh
+        // process runs no elaboration or initialization callbacks, since the
+        // restart restores the model past them (20.8).
         case Simulation::LifecycleEvent::start_of_restart:
+            remove_callbacks_for_restart();
+            if (!initialized_) {
+                // The foreign architectures' own elaboration functions still
+                // run: their instances must exist for the restored state.
+                elaborate_foreign_architectures();
+            }
             phase_ = vhpiRestartPhase;
             save_location_ = std::string { location };
             dispatch(vhpiCbStartOfRestart);
             break;
         // The simulation phase follows, with no vhpiCbStartOfSimulation
-        // callbacks (20.8).
+        // callbacks (20.8 NOTE 2): the initialization phase is over.
         case Simulation::LifecycleEvent::end_of_restart:
             dispatch(vhpiCbEndOfRestart);
             phase_ = vhpiSimulationPhase;
+            // The restored run is past its initialization phase: a fresh
+            // process that restarts does not end initialization, and so does
+            // not fire vhpiCbStartOfSimulation, afterwards.
+            initialized_ = true;
+            cycled_ = true;
             save_location_.clear();
             save_data_.clear();
             break;
@@ -2320,6 +2386,170 @@ private:
             break;
         case Simulation::LifecycleEvent::scope_change:
             break;
+        }
+    }
+
+    // The restart phase keeps vhpiCbStartOfRestart and vhpiCbEndOfRestart
+    // only; the others' handles become invalid.
+    void remove_callbacks_for_restart()
+    {
+        const auto all = callbacks_;
+        for (auto* const callback : all) {
+            if (callback->data.reason != vhpiCbStartOfRestart
+                && callback->data.reason != vhpiCbEndOfRestart) {
+                free_callback(*callback);
+            }
+        }
+    }
+
+    // The "foreign.vhpi" section (IEEE 1076-2019 20.7: the tool saves the
+    // registration of the restart callbacks and restores it; 23.27, 23.12 the
+    // data).
+    [[nodiscard]] ForeignRunState save_run_state() const override
+    {
+        ForeignRunState state;
+        for (const auto& [id, saved] : save_data_) {
+            state.data.emplace(id, saved.bytes);
+        }
+        state.last_id = last_id_;
+        for (const auto* const callback : callbacks_) {
+            const auto reason = callback->data.reason;
+            if (reason != vhpiCbStartOfRestart && reason != vhpiCbEndOfRestart) {
+                continue;
+            }
+            const auto where = encode_callback_routine(
+                reinterpret_cast<const void*>(callback->data.cb_rtn));
+            if (!where) {
+                continue;
+            }
+            state.callbacks.push_back({ reason, where->first, where->second,
+                static_cast<std::uint64_t>(
+                    reinterpret_cast<std::uintptr_t>(callback->data.user_data)),
+                static_cast<std::int32_t>(callback->state) });
+        }
+        std::ranges::sort(state.callbacks, [](const auto& left, const auto& right) {
+            return std::tie(left.reason, left.module, left.offset, left.user_data)
+                < std::tie(right.reason, right.module, right.offset,
+                    right.user_data);
+        });
+        return state;
+    }
+
+    // The class S members of the service (docs/run-state-classification.tsv):
+    // flags and tables that are set and cleared inside one routine, callback
+    // delivery or safe-point hook. A save point is outside all of them: it is
+    // the end of a time slot or of a simulation cycle.
+    void audit_rest_state(std::vector<std::string>& messages) const override
+    {
+        const auto busy = [&](const bool condition, const char* what) {
+            if (condition) {
+                messages.push_back(std::string { "FSIM-SAVE-0011: VHPI " }
+                    + what + " is not at rest at the save point");
+            }
+        };
+        // vhpi_put_value with a propagating mode: the entry is applied by the
+        // update task schedule_update queued, within the same cycle.
+        FSIM_RS_IDLE("foreign.vhpi_live", pending_updates_);
+        busy(!pending_updates_.empty(), "a vhpi_put_value update");
+        // Collected by the signal change hook and drained by flush_changes at
+        // every safe point; flushing_ is the drain's own working set.
+        FSIM_RS_IDLE("foreign.vhpi_live", changed_);
+        busy(!changed_.empty(), "the value changes waiting for their callbacks");
+        FSIM_RS_IDLE("foreign.vhpi_live", flushing_);
+        busy(!flushing_.empty(), "the delivery of value changes");
+        FSIM_RS_IDLE("foreign.vhpi_live", flushing_registered_);
+        busy(!flushing_registered_.empty(),
+            "the callbacks registered during a delivery");
+        // Set around the callback routine (run, call_foreign) and restored.
+        FSIM_RS_IDLE("foreign.vhpi_live", dispatching_);
+        busy(dispatching_ != nullptr, "a callback routine");
+        // Set around a foreign function call (the execution function).
+        FSIM_RS_IDLE("foreign.vhpi_live", active_call_);
+        busy(active_call_ != nullptr, "a foreign subprogram call");
+        // Set by deliver_call for the callbacks of one call point.
+        FSIM_RS_IDLE("foreign.vhpi_live", call_process_);
+        busy(call_process_.has_value(), "the delivery of a subprogram call");
+        // Set around the vhpiCbPLIError callbacks only.
+        FSIM_RS_IDLE("foreign.vhpi_live", in_pli_error_);
+        busy(in_pli_error_, "a vhpiCbPLIError delivery");
+        // Set around dispatch(vhpiCbEndOfSimulation) and
+        // dispatch(vhpiCbEndOfTimeStep) only.
+        FSIM_RS_IDLE("foreign.vhpi_live", simulation_ending_);
+        busy(simulation_ending_, "the end-of-simulation callbacks");
+        FSIM_RS_IDLE("foreign.vhpi_live", time_step_ended_);
+        busy(time_step_ended_, "the end-of-time-step callbacks");
+    }
+
+    // A restore starts the model past its initialization phase (IEEE
+    // 1076-2019 20.8): the cycle bookkeeping that follows the scheduler's
+    // events starts afresh, because those events (the end-of-time-step
+    // closure, the next-time callback) are foreign callbacks that a restore
+    // drops (owner decision 5), and the tool status flags of the saving
+    // process do not carry over to the restarted one.
+    void reset_cycle_state()
+    {
+        if (next_time_) {
+            (void)simulation_.systemverilog_vpi_callbacks().remove_callback(
+                *next_time_);
+            next_time_.reset();
+        }
+        pending_updates_.clear();
+        changed_.clear();
+        flushing_.clear();
+        flushing_registered_.clear();
+        running_.clear();
+        frames_.clear();
+        call_process_.reset();
+        postponed_ = false;
+        end_of_time_step_pending_ = false;
+        time_step_ended_ = false;
+        cycle_started_ = false;
+        awaiting_update_ = false;
+        due_timeouts_.clear();
+        stepped_at_.reset();
+        stopping_ = false;
+        finishing_ = false;
+        failed_ = false;
+        clear_error();
+    }
+
+    void restore_run_state(ForeignRunState state) override
+    {
+        reset_cycle_state();
+        save_data_.clear();
+        for (auto& [id, bytes] : state.data) {
+            save_data_[id].bytes = std::move(bytes);
+        }
+        last_id_ = std::max(last_id_, state.last_id);
+        for (const auto& record : state.callbacks) {
+            auto* const routine
+                = decode_callback_routine(record.module, record.offset);
+            if (routine == nullptr) {
+                throw std::runtime_error { "FSIM-SAVE-0016: the library "
+                    "that registered a restart callback ('" + record.module
+                    + "') is not loaded, so its registration cannot be "
+                      "restored (IEEE 1076-2019 20.7, IEEE 1800-2023 38.36.3)" };
+            }
+            vhpiCbDataT data { };
+            data.reason = record.reason;
+            data.cb_rtn = reinterpret_cast<decltype(data.cb_rtn)>(routine);
+            data.user_data = reinterpret_cast<decltype(data.user_data)>(
+                static_cast<std::uintptr_t>(record.user_data));
+            const bool present = std::ranges::any_of(
+                callbacks_, [&](const auto* existing) {
+                    return existing->data.reason == data.reason
+                        && existing->data.cb_rtn == data.cb_rtn
+                        && existing->data.user_data == data.user_data;
+                });
+            if (present) {
+                continue;
+            }
+            // vhpiCbStartOfRestart is registered in the save phase (21.3.8.3);
+            // the restored registration stands for that one.
+            const auto phase = std::exchange(phase_, vhpiSavePhase);
+            (void)register_cb(&data,
+                record.state == vhpiDisable ? vhpiDisableCb : 0);
+            phase_ = phase;
         }
     }
 
@@ -2362,6 +2592,13 @@ private:
     // after the processes have run.
     void start_of_simulation()
     {
+        // A fresh-process restart restores the model past the elaboration and
+        // initialization phases and fires none of their callbacks; the
+        // start-of-restart event elaborates the foreign architectures (owner
+        // decision 2026-11-07; IEEE 1076-2019 20.8).
+        if (simulation_.restoring_state()) {
+            return;
+        }
         elaborate_foreign_architectures();
         phase_ = vhpiInitializationPhase;
         dispatch(vhpiCbStartOfInitialization);
@@ -2578,7 +2815,9 @@ private:
             end_of_time_step_pending_ = true;
             scheduler.schedule_end_of_time_slot(
                 std::numeric_limits<runtime::StableOrder>::max(),
-                [this](runtime::Scheduler& slot) { end_of_time_step(&slot); });
+                runtime::foreign_callback_task([this](runtime::Scheduler& slot) {
+                    end_of_time_step(&slot);
+                }));
         }
     }
 
@@ -2868,11 +3107,11 @@ private:
         if (callee == nullptr) {
             return nullptr;
         }
-        for (auto* const body : all_bodies()) {
-            if (body->declaration == callee) {
-                const auto& statements = sequential_statements(*body);
-                return statements.empty() ? nullptr : statements.front();
-            }
+        // A procedure whose body is declared apart (4.8: in the package body)
+        // has its body under the specification's declaration or its own.
+        if (auto* const body = body_of(*callee)) {
+            const auto& statements = sequential_statements(*body);
+            return statements.empty() ? nullptr : statements.front();
         }
         return nullptr;
     }
@@ -3523,6 +3762,60 @@ private:
         return nullptr;
     }
 
+    // The process (or the concurrent statement equivalent to one) a call
+    // object is made by.
+    [[nodiscard]] static Object* calling_process(Object& call) noexcept
+    {
+        for (auto* current = &call; current != nullptr;
+             current = current->parent) {
+            if (current->kind == vhpiProcessStmtK
+                || (current->is_stmt && !current->sequential)) {
+                return current;
+            }
+        }
+        return nullptr;
+    }
+
+    // The full name and full case name of the frame as the prefix of the
+    // declarations it elaborates: the full name of the process that started
+    // the chain of calls, then the name of each call of the chain down to the
+    // frame (IEEE 1076-2019 19.4.3, dynamically elaborated named entities;
+    // the owner reads the embedded full names as the names of the calls, so
+    // the chain is not a sequence of strings that each begin with a colon).
+    // Without a process to start at, the frame's call names it alone.
+    [[nodiscard]] std::pair<std::string, std::string> frame_prefix(
+        const Object& frame)
+    {
+        const auto* const call = frame.frame_call;
+        std::pair<std::string, std::string> fallback {
+            call->full_name, call->full_case_name
+        };
+        const auto stack = frames_.find(frame.frame_process);
+        if (stack == frames_.end() || stack->second.empty()
+            || frame.frame_level >= stack->second.size()
+            || stack->second.front().call == nullptr) {
+            return fallback;
+        }
+        const auto* const process = calling_process(*stack->second.front().call);
+        if (process == nullptr) {
+            return fallback;
+        }
+        auto result = std::pair { process->full_name, process->full_case_name };
+        for (std::size_t level = 0U; level <= frame.frame_level; ++level) {
+            const auto* const entry = stack->second[level].call;
+            if (entry == nullptr) {
+                return fallback;
+            }
+            // A concurrent procedure call is its own equivalent process.
+            if (entry == process) {
+                continue;
+            }
+            result.first += ":" + entry->name;
+            result.second += ":" + entry->case_name;
+        }
+        return result;
+    }
+
     // The declaration a frame elaborates for a static declaration of its
     // subprogram: an object of the same class, with the value the frame
     // holds (IEEE 1076-2019 14.6 b, 19.4.6).
@@ -3542,8 +3835,13 @@ private:
         object->type = declaration.type;
         object->position = declaration.position;
         object->source = declaration.source;
-        object->full_name = call->full_name + ":" + object->name;
-        object->full_case_name = call->full_case_name + ":" + object->case_name;
+        // A dynamically elaborated declaration is named from the equivalent
+        // process the chain of calls starts at, through every call of the
+        // chain (IEEE 1076-2019 19.4.3): `:top:p:f:g:v` for the variable v
+        // of g, which f called, which the process p called.
+        const auto [chain, case_chain] = frame_prefix(frame);
+        object->full_name = chain + ":" + object->name;
+        object->full_case_name = case_chain + ":" + object->case_name;
         object->activation = &frame;
         // A formal signal parameter denotes its actual signal for the call
         // and takes its constraint (IEEE 1076-2019 4.2.2.3, 6.5.6.3), so it
@@ -3596,24 +3894,17 @@ private:
         return result;
     }
 
-    // The value a frame holds for a declaration it elaborated: the debug
-    // local the subprogram's lowering named `<subprogram>.<declaration>`,
-    // of this activation when the subprogram runs again deeper in the stack
-    // (IEEE 1076-2019 22.5.2). Only what the lowering keeps a local for is
-    // readable; a function's transient locals and formals are not.
-    [[nodiscard]] std::optional<PackedLogic4> activation_value(
-        const Object& object) const
+    // Which frame of the lowering an activation ran in and how many newer
+    // activations of the same subprogram are on its process's stack. A call
+    // of a subprogram from its own body runs in the second frame the
+    // lowering made for it (the caller's unspecialized frame); the first call
+    // of the chain runs in the first. Each frame keeps its own locals, so an
+    // activation reads the frame it ran in, as the newer activations of that
+    // frame left it.
+    [[nodiscard]] std::pair<bool, std::size_t> activation_depth(
+        const Object& frame) const
     {
-        const auto& frame = *object.activation;
-        if (!frame_alive(frame) || frame.frame_callee == nullptr) {
-            return std::nullopt;
-        }
         const auto& stack = frames_.at(frame.frame_process);
-        // A call of a subprogram from its own body runs in the second frame
-        // the lowering made for it (the caller's unspecialized frame); the
-        // first call of the chain runs in the first. Each frame keeps its
-        // own locals, so an activation reads the frame it ran in, as the
-        // newer activations of that frame left it.
         const auto recursive = [&](const std::size_t level) {
             return level != 0U
                 && stack[level - 1U].callee->id == stack[level].callee->id;
@@ -3626,6 +3917,22 @@ private:
                 ++newer;
             }
         }
+        return { deep, newer };
+    }
+
+    // The value a frame holds for a declaration it elaborated: the debug
+    // local the subprogram's lowering named `<subprogram>.<declaration>`,
+    // of this activation when the subprogram runs again deeper in the stack
+    // (IEEE 1076-2019 22.5.2). Only what the lowering keeps a local for is
+    // readable; a function's transient locals and formals are not.
+    [[nodiscard]] std::optional<PackedLogic4> activation_value(
+        const Object& object) const
+    {
+        const auto& frame = *object.activation;
+        if (!frame_alive(frame) || frame.frame_callee == nullptr) {
+            return std::nullopt;
+        }
+        const auto [deep, newer] = activation_depth(frame);
         try {
             const auto& locals
                 = simulation_.process_program(frame.frame_process).debug_locals;
@@ -3986,9 +4293,10 @@ private:
         // implement is an error.
         if (command == vhpiReset) {
             if (!simulation_.request_reset(Simulation::ResetRequest { })) {
-                error(vhpiError, "vhpiReset is not implemented: the engine "
-                                 "cannot restore the time-zero state of the "
-                                 "run");
+                // 20.9: a tool may allow a reset; the control action is an
+                // error where the tool does not implement it (23.5).
+                error(vhpiError, "vhpiReset is not implemented: "
+                    + simulation_.reset_refusal());
                 return 1;
             }
             return 0;
@@ -4115,7 +4423,18 @@ private:
                 && same_name(c.library, unit.library)
                 && same_name(c.name, unit.primary_name);
         });
-        return found == hir_.units().end() ? nullptr : &*found;
+        if (found != hir_.units().end()) {
+            return &*found;
+        }
+        // An entity declaration only the library catalog lists.
+        for (const auto& candidate : catalog_units_) {
+            if (candidate.kind == vhdl::UnitKind::entity
+                && same_name(candidate.library, unit.library)
+                && same_name(candidate.name, unit.primary_name)) {
+                return &candidate;
+            }
+        }
+        return nullptr;
     }
 
     // The declarations of an instance: the entity's generics and ports,
@@ -5367,6 +5686,46 @@ private:
     [[nodiscard]] Object* signal_parameter_actual(
         Object& call, const vhdl::Declaration& formal)
     {
+        // A function's signal parameters are associated the same way, with
+        // the operands of the call (IEEE 1076-2019 4.2.2.3, 9.3.4: the
+        // formal parameters of a function are of mode in).
+        if (call.kind == vhpiFuncCallK && call.expression != nullptr) {
+            const auto* const callee = callee_of(*call.expression);
+            if (callee == nullptr || !callee->callable) {
+                return nullptr;
+            }
+            auto* scope = call.parent;
+            while (scope != nullptr && !is_declarative(*scope)) {
+                scope = scope->parent;
+            }
+            if (scope == nullptr) {
+                return nullptr;
+            }
+            const auto& names = call.expression->argument_names;
+            const auto& formals = callee->callable->formals;
+            const auto& operands = call.expression->operands;
+            for (std::size_t index = 0U; index < operands.size(); ++index) {
+                const vhdl::Declaration* candidate = nullptr;
+                if (index < names.size() && !names[index].empty()) {
+                    for (const auto id : formals) {
+                        const auto* const named = hir_.find_declaration(id);
+                        if (named != nullptr
+                            && same_name(named->name, names[index])) {
+                            candidate = named;
+                            break;
+                        }
+                    }
+                } else if (index < formals.size()) {
+                    candidate = hir_.find_declaration(formals[index]);
+                }
+                if (candidate == nullptr || candidate->id != formal.id) {
+                    continue;
+                }
+                auto* const actual = target_object(*scope, operands[index], 0U);
+                return actual != nullptr && actual->signal ? actual : nullptr;
+            }
+            return nullptr;
+        }
         if (call.statement == nullptr
             || call.statement->kind != vhdl::StatementKind::procedure_call) {
             return nullptr;
@@ -6520,6 +6879,40 @@ private:
         return design_process_of(*driver.parent);
     }
 
+    // The transactions of a driver's projected output waveform that are still
+    // to be applied, in time order (vhpiTransactions, IEEE 1076-2019 14.7.2,
+    // 19.12.1 Figure 48). They are a snapshot: an object keeps the time and
+    // the value component it had when the iteration made it, and the list
+    // is made again by each iteration. The transaction that determines the
+    // driver's current value is the driver's own value (vhpi_get_value of
+    // the driver), so it is not listed.
+    [[nodiscard]] std::vector<Object*> driver_transactions(Object& driver)
+    {
+        std::vector<Object*> result;
+        const auto process = driver_process(driver);
+        if (!process || !driver.signal || driver.type == nullptr) {
+            return result;
+        }
+        std::vector<runtime::simir::DriverTransaction> pending;
+        try {
+            pending = simulation_.foreign_driver_transactions(
+                *process, *driver.signal, driver.offset, width_of(*driver.type));
+        } catch (const std::exception&) {
+            return result;
+        }
+        for (auto& transaction : pending) {
+            auto* const object = make_object(vhpiTransactionK, "", &driver);
+            object->type = driver.type;
+            object->transaction_ticks = transaction.time;
+            object->transaction_null = transaction.null;
+            if (!transaction.null) {
+                object->constant = std::move(transaction.value);
+            }
+            result.push_back(object);
+        }
+        return result;
+    }
+
     // The value a driver contributes now (IEEE 1076-2019 14.7.2), as the
     // bits of its basic signal.
     [[nodiscard]] std::optional<PackedLogic4> driver_bits(const Object& driver)
@@ -6928,6 +7321,7 @@ private:
         auto* const object = make_object(
             slice ? vhpiSliceNameK : vhpiIndexedNameK, text, &prefix);
         object->expression = &expression;
+        object->dynamic_scope = &scope;
         object->source = expression.source;
         object->full_name = text;
         object->full_case_name = text;
@@ -6937,6 +7331,225 @@ private:
         }
         scope.children.emplace(key, object);
         return object;
+    }
+
+    // The value of an integer expression that is locally static (9.4.2):
+    // a literal, a constant of known value, and the predefined arithmetic
+    // operators over those.
+    [[nodiscard]] std::optional<std::int64_t> static_integer(Object& scope,
+        const semantic::ExpressionId id, const std::size_t depth = 0U)
+    {
+        if (const auto literal = integer_literal(id)) {
+            return literal;
+        }
+        const auto* const expression = hir_expression(id);
+        if (expression == nullptr || depth > 16U) {
+            return std::nullopt;
+        }
+        const auto op = lower(expression->text);
+        if (expression->kind == vhdl::ExpressionKind::binary
+            && expression->operands.size() == 2U) {
+            const auto left = static_integer(scope, expression->operands[0], depth + 1U);
+            const auto right = static_integer(scope, expression->operands[1], depth + 1U);
+            if (!left || !right) {
+                return std::nullopt;
+            }
+            if (op == "+") {
+                return *left + *right;
+            }
+            if (op == "-") {
+                return *left - *right;
+            }
+            if (op == "*") {
+                return *left * *right;
+            }
+            if (*right == 0) {
+                return std::nullopt;
+            }
+            if (op == "/") {
+                return *left / *right;
+            }
+            if (op == "rem") {
+                return *left % *right;
+            }
+            if (op == "mod") {
+                const auto remainder = *left % *right;
+                return remainder != 0 && ((remainder < 0) != (*right < 0))
+                    ? remainder + *right
+                    : remainder;
+            }
+            return std::nullopt;
+        }
+        if (expression->kind == vhdl::ExpressionKind::unary
+            && expression->operands.size() == 1U) {
+            const auto operand
+                = static_integer(scope, expression->operands[0], depth + 1U);
+            if (!operand) {
+                return std::nullopt;
+            }
+            if (op == "-") {
+                return -*operand;
+            }
+            if (op == "+") {
+                return *operand;
+            }
+            if (op == "abs") {
+                return *operand < 0 ? -*operand : *operand;
+            }
+            return std::nullopt;
+        }
+        auto* const object = expression_object(scope, id);
+        if (object == nullptr
+            || primary_staticness(*object) != std::optional<vhpiIntT> { vhpiLocallyStatic }) {
+            // A block configuration's names are not resolved against the
+            // configured architecture (the elaborator reads them the same
+            // way): a constant of the design with that unique name and a
+            // static initializer (IEEE 1076-2019 9.4.2, 3.4.2).
+            if (scope.kind == vhpiBlockConfigK
+                && expression->kind == vhdl::ExpressionKind::name) {
+                const vhdl::Declaration* found = nullptr;
+                for (const auto& declaration : hir_.declarations()) {
+                    if ((declaration.form != vhdl::DeclarationForm::constant
+                            && declaration.form
+                                != vhdl::DeclarationForm::generic_constant)
+                        || !declaration.initializer
+                        || !same_name(declaration.name, expression->text)) {
+                        continue;
+                    }
+                    if (found != nullptr) {
+                        return std::nullopt;
+                    }
+                    found = &declaration;
+                }
+                if (found != nullptr) {
+                    return static_integer(
+                        scope, *found->initializer, depth + 1U);
+                }
+            }
+            return std::nullopt;
+        }
+        vhpiValueT value { };
+        value.format = vhpiLongIntVal;
+        if (read_value(*object, value) != 0) {
+            return std::nullopt;
+        }
+        return value.value.longintg;
+    }
+
+    // The indexed or slice name with literal operands that a name with
+    // locally static operands denotes (22.3: only a locally static name has
+    // a value); none when an operand is not locally static.
+    [[nodiscard]] Object* resolve_dynamic_name(Object& name)
+    {
+        if (name.dynamic_scope == nullptr || name.expression == nullptr
+            || name.parent == nullptr) {
+            return &name;
+        }
+        Object* prefix = name.parent;
+        if (prefix->dynamic_scope != nullptr) {
+            prefix = resolve_dynamic_name(*prefix);
+            if (prefix == nullptr) {
+                return nullptr;
+            }
+        }
+        const auto& expression = *name.expression;
+        auto& scope = *name.dynamic_scope;
+        if (name.kind == vhpiIndexedNameK) {
+            std::vector<std::int64_t> indexes;
+            for (std::size_t operand = 1U; operand < expression.operands.size();
+                 ++operand) {
+                const auto index = static_integer(scope, expression.operands[operand]);
+                if (!index) {
+                    return nullptr;
+                }
+                indexes.push_back(*index);
+            }
+            return indexed(*prefix, indexes);
+        }
+        if (name.kind == vhpiSliceNameK && expression.operands.size() >= 3U) {
+            const auto left = static_integer(scope, expression.operands[1]);
+            const auto right = static_integer(scope, expression.operands[2]);
+            if (!left || !right) {
+                return nullptr;
+            }
+            return sliced(*prefix, Range { *left, *right, expression.text == "downto" });
+        }
+        return nullptr;
+    }
+
+    // The range of a slice name whose bounds are expressions (vhpiConstraint
+    // of a sliceName, Figure 25): its bounds are the bound expressions.
+    [[nodiscard]] Object* slice_constraint(Object& slice)
+    {
+        if (slice.kind != vhpiSliceNameK || slice.dynamic_scope == nullptr
+            || slice.expression == nullptr || slice.expression->operands.size() < 3U) {
+            return nullptr;
+        }
+        if (const auto found = slice.children.find("@constraint");
+            found != slice.children.end()) {
+            return found->second;
+        }
+        Object* index_type = nullptr;
+        if (slice.parent != nullptr && slice.parent->type != nullptr
+            && slice.parent->type->type_data != nullptr
+            && !slice.parent->type->type_data->index_types.empty()) {
+            index_type = slice.parent->type->type_data->index_types.front();
+        }
+        auto* const range = range_object(Range { }, index_type);
+        range->type_data->range.reset();
+        range->parent = &slice;
+        range->dynamic_scope = slice.dynamic_scope;
+        range->bound_left = slice.expression->operands[1];
+        range->bound_right = slice.expression->operands[2];
+        slice.children.emplace("@constraint", range);
+        return range;
+    }
+
+    // The value of a type conversion with a locally static operand (22.3):
+    // the operand's bits, converted between integer and floating point
+    // types (9.3.6).
+    [[nodiscard]] std::optional<PackedLogic4> conversion_bits(Object& conversion)
+    {
+        if (conversion.expression == nullptr || conversion.parent == nullptr
+            || conversion.expression->operands.empty()) {
+            return std::nullopt;
+        }
+        const auto staticness = expression_staticness(conversion);
+        if (!staticness
+            || (*staticness != vhpiLocallyStatic && *staticness != vhpiGloballyStatic)) {
+            return std::nullopt;
+        }
+        auto* const operand = expression_object(
+            *conversion.parent, conversion.expression->operands.front());
+        if (operand == nullptr) {
+            return std::nullopt;
+        }
+        const auto bits = element_bits(*operand);
+        auto* const target = conversion.type != nullptr ? conversion.type
+                                                        : expression_type(conversion);
+        if (!bits || target == nullptr || target->type_data == nullptr
+            || operand->type == nullptr || operand->type->type_data == nullptr) {
+            return bits;
+        }
+        const auto to = target->type_data->storage;
+        const auto from = operand->type->type_data->storage;
+        const auto width = bits->width();
+        if (to == Storage::real && from == Storage::integer) {
+            const auto value = static_cast<double>(
+                signed_bits(*bits, 0U, std::min<std::size_t>(width, 64U)));
+            return PackedLogic4::from_aval_bval(
+                64U, std::bit_cast<std::uint64_t>(value), 0U);
+        }
+        if (to == Storage::integer && from == Storage::real) {
+            // A real converts to the nearest integer, halfway cases away
+            // from zero (9.3.6).
+            const auto value = std::bit_cast<double>(unsigned_bits(*bits, 0U, 64U));
+            const auto converted = static_cast<std::int64_t>(std::llround(value));
+            return PackedLogic4::from_aval_bval(
+                std::max<std::size_t>(width_of(*target), 1U),
+                static_cast<std::uint64_t>(converted), 0U);
+        }
+        return bits;
     }
 
     // The type a type mark names.
@@ -8439,12 +9052,85 @@ private:
     [[nodiscard]] std::optional<std::pair<double, double>> real_bounds(
         const vhdl::RangeConstraint& constraint) const
     {
-        const auto left = real_literal(constraint.left_expression);
-        const auto right = real_literal(constraint.right_expression);
+        const auto left = real_static(constraint.left_expression);
+        const auto right = real_static(constraint.right_expression);
         if (!left || !right) {
             return std::nullopt;
         }
         return std::pair { *left, *right };
+    }
+
+    // The value of a static real expression a floating point bound can be
+    // written with (IEEE 1076-2019 5.2.5.1, 9.4): a real literal, a constant
+    // of the design with that unique name and a static initializer, and the
+    // predefined sign, `+`, `-`, `*` and `/` over those. None for anything
+    // else (the bound then is the predefined REAL's).
+    [[nodiscard]] std::optional<double> real_static(
+        const std::optional<semantic::ExpressionId> id,
+        const std::size_t depth = 0U) const
+    {
+        if (const auto literal = real_literal(id)) {
+            return literal;
+        }
+        const auto* const expression = id ? hir_expression(*id) : nullptr;
+        if (expression == nullptr || depth > 16U) {
+            return std::nullopt;
+        }
+        const auto operand = [&](const std::size_t index) {
+            return index < expression->operands.size()
+                ? real_static(expression->operands[index], depth + 1U)
+                : std::nullopt;
+        };
+        if (expression->kind == vhdl::ExpressionKind::unary
+            && expression->operands.size() == 1U) {
+            const auto value = operand(0U);
+            if (!value) {
+                return std::nullopt;
+            }
+            if (expression->text == "-") {
+                return -*value;
+            }
+            return expression->text == "+" ? value : std::nullopt;
+        }
+        if (expression->kind == vhdl::ExpressionKind::binary
+            && expression->operands.size() == 2U) {
+            const auto left = operand(0U);
+            const auto right = operand(1U);
+            if (!left || !right) {
+                return std::nullopt;
+            }
+            if (expression->text == "+") {
+                return *left + *right;
+            }
+            if (expression->text == "-") {
+                return *left - *right;
+            }
+            if (expression->text == "*") {
+                return *left * *right;
+            }
+            if (expression->text == "/" && *right != 0.0) {
+                return *left / *right;
+            }
+            return std::nullopt;
+        }
+        if (expression->kind == vhdl::ExpressionKind::name) {
+            const vhdl::Declaration* found = nullptr;
+            for (const auto& declaration : hir_.declarations()) {
+                if (declaration.form != vhdl::DeclarationForm::constant
+                    || !declaration.initializer
+                    || !same_name(declaration.name, expression->text)) {
+                    continue;
+                }
+                if (found != nullptr) {
+                    return std::nullopt;
+                }
+                found = &declaration;
+            }
+            return found != nullptr
+                ? real_static(found->initializer, depth + 1U)
+                : std::nullopt;
+        }
+        return std::nullopt;
     }
 
     // The value elaboration gave a generic of an instance (IEEE 1076-2019
@@ -9294,7 +9980,9 @@ private:
     {
         return is_region(object) || object.kind == vhpiProcessStmtK
             || object.kind == vhpiForLoopK || object.kind == vhpiSubpBodyK
-            || object.kind == vhpiCompDeclK;
+            || object.kind == vhpiCompDeclK
+            || object.kind == vhpiProtectedTypeDeclK
+            || object.kind == vhpiProtectedTypeBodyK;
     }
 
     [[nodiscard]] static bool is_type(const Object& object) noexcept
@@ -9326,11 +10014,114 @@ private:
         if (relation == vhpiCurCallback) {
             return current_callback_;
         }
+        // An iterator's +Use association leads to the base object it
+        // iterates from (Figure 55, class iterator; 19.16): the reference of
+        // the vhpi_iterator call, the root instance when that was NULL for an
+        // association of the design hierarchy, and no object for the
+        // associations that start at the tool or at no object.
+        if (relation == vhpiUse) {
+            auto* const base = handle_of(reference);
+            if (base == nullptr || base->tag != HandleTag::iterator) {
+                error(vhpiError, "vhpiUse needs an iterator");
+                return nullptr;
+            }
+            const auto& iterator = static_cast<const Iterator&>(*base);
+            return iterator.from == nullptr ? nullptr : to_handle(iterator.from);
+        }
         auto* const object = object_of(reference);
         if (object == nullptr) {
             return nullptr;
         }
         switch (relation) {
+        case vhpiProtectedTypeBody:
+        case vhpiProtectedTypeDecl: {
+            // A protected type declaration and its body are two type
+            // declarations of one region with the same name (IEEE 1076-2019
+            // 5.6.1, Figure 21).
+            const bool wanted_body = relation == vhpiProtectedTypeBody;
+            if (object->kind
+                != (wanted_body ? vhpiProtectedTypeDeclK
+                                : vhpiProtectedTypeBodyK)) {
+                return nullptr;
+            }
+            const auto* origin = object->declaration;
+            if (origin == nullptr && object->protected_definition != nullptr) {
+                origin = hir_.find_declaration(
+                    object->protected_definition->declaration);
+            }
+            if (origin == nullptr) {
+                return nullptr;
+            }
+            for (const auto& other : hir_.declarations()) {
+                if (other.form != vhdl::DeclarationForm::type
+                    || !other.declared_type || other.scope != origin->scope
+                    || !same_name(other.name, origin->name)) {
+                    continue;
+                }
+                const auto* const definition = hir_.find_type(*other.declared_type);
+                if (definition != nullptr
+                    && definition->form
+                        == (wanted_body ? vhdl::TypeForm::protected_body
+                                        : vhdl::TypeForm::protected_type)) {
+                    auto* const found = type_of_declaration(other);
+                    return found == nullptr ? nullptr : to_handle(found);
+                }
+            }
+            return nullptr;
+        }
+        case vhpiProtectedTypeInst: {
+            // The elaboration of a variable of a protected type, a region
+            // named like the variable (19.4.3, Figure 15).
+            if (!protected_variable(*object)) {
+                return nullptr;
+            }
+            if (const auto found = object->children.find("@protected");
+                found != object->children.end()) {
+                return to_handle(found->second);
+            }
+            auto* const instance = make_object(
+                vhpiProtectedTypeInstK, object->name, object->parent);
+            instance->case_name = object->case_name;
+            instance->full_name = object->full_name;
+            instance->full_case_name = object->full_case_name;
+            instance->declaration = object->declaration;
+            instance->source = object->source;
+            instance->type = object->type;
+            object->children.emplace("@protected", instance);
+            return to_handle(instance);
+        }
+        case vhpiDerefObj: {
+            // The dereference of an access value, `p.all` (class derefObj,
+            // IEEE 1076-2019 19.8, Figures 7, 17 and 25): a variable, a
+            // variable parameter, or an indexed or selected name of access
+            // type. The designated object exists only while the design
+            // runs, so the model's object has the designated subtype and no
+            // value (22.3: a name that is not locally static has none), and
+            // its names are errors in the design hierarchy model (19.4.3).
+            if ((object->kind != vhpiVarDeclK && object->kind != vhpiVarParamDeclK
+                    && object->kind != vhpiIndexedNameK
+                    && object->kind != vhpiSelectedNameK)
+                || object->type == nullptr || !is_access_type(*object->type)) {
+                return nullptr;
+            }
+            if (const auto found = object->children.find("@deref");
+                found != object->children.end()) {
+                return to_handle(found->second);
+            }
+            const auto* designated = object->type->type_data->designated;
+            if (designated == nullptr && object->type->type_data->base != nullptr
+                && object->type->type_data->base->type_data != nullptr) {
+                designated = object->type->type_data->base->type_data->designated;
+            }
+            if (designated == nullptr) {
+                return nullptr;
+            }
+            auto* const dereference
+                = make_object(vhpiDerefObjK, "", object);
+            dereference->type = subtype_object(*designated, nullptr);
+            object->children.emplace("@deref", dereference);
+            return to_handle(dereference);
+        }
         case DEPRECATED_vhpiValSubtype:
         case vhpiValType:
             // An access or file type's values are of its designated type
@@ -9346,6 +10137,26 @@ private:
             [[fallthrough]];
         case DEPRECATED_vhpiSubtype:
         case vhpiType:
+            if (object->disconnection != nullptr) {
+                // The type a disconnection specification applies to
+                // (Figure 32).
+                const auto& mark = object->disconnection->type_mark;
+                Object* type = nullptr;
+                const auto id = mark.selected
+                    ? mark.selected
+                    : (mark.overloads.empty()
+                              ? std::nullopt
+                              : std::optional { mark.overloads.front() });
+                if (const auto* const declaration
+                    = id ? hir_.find_declaration(*id) : nullptr) {
+                    type = type_of_declaration(*declaration);
+                }
+                if (type == nullptr) {
+                    type = standard_type(
+                        vhdl::without_builtin_prefix(mark.spelling));
+                }
+                return type == nullptr ? nullptr : to_handle(type);
+            }
             if (object->type == nullptr && object->expression != nullptr) {
                 object->type = expression_type(*object);
             }
@@ -9374,7 +10185,8 @@ private:
         case vhpiPrefix:
             if (object->kind == vhpiSelectedNameK
                 || object->kind == vhpiIndexedNameK
-                || object->kind == vhpiSliceNameK) {
+                || object->kind == vhpiSliceNameK
+                || object->kind == vhpiDerefObjK) {
                 return to_handle(object->parent);
             }
             if (!object->implicit_attribute.empty()) {
@@ -9434,6 +10246,9 @@ private:
         }
         case vhpiReturnType: {
             // The result type of a function declaration.
+            if (object->intrinsic_resolved) {
+                return to_handle(object->type);
+            }
             if (object->kind != vhpiFuncDeclK || object->declaration == nullptr
                 || !object->declaration->callable
                 || !object->declaration->callable->return_type) {
@@ -9461,15 +10276,19 @@ private:
             // instance's design unit (IEEE 1076-2019 19.4.2).
             auto* const unit
                 = is_region(*object) ? design_unit_object(*object) : object;
-            auto* const entity
-                = unit == nullptr ? nullptr : primary_unit_object(*unit);
+            auto* const entity = unit == nullptr || unit->kind == vhpiPackBodyK
+                ? nullptr
+                : primary_unit_object(*unit);
             return entity == nullptr ? nullptr : to_handle(entity);
         }
         case vhpiAliasedName:
             return object->aliased == nullptr ? nullptr
                                               : to_handle(object->aliased);
+        case vhpiSignal:
         case DEPRECATED_vhpiBasicSignal:
-            // The basic signal a driver drives (IEEE 1076-2019 19.12.1).
+            // The signal a driver drives (IEEE 1076-2019 19.12.1, Figure 48):
+            // the deprecated BasicSignal association of Annex B is the one
+            // `vhpiSignal` replaces, as `vhpiType` replaces `vhpiSubtype`.
             return object->kind == vhpiDriverK && object->basic != nullptr
                 ? to_handle(object->basic)
                 : nullptr;
@@ -9488,6 +10307,197 @@ private:
             // No net is collapsed, so every signal is the representative of
             // its own simulated net (19.12.2.4).
             return is_signal_object(*object) ? to_handle(object) : nullptr;
+        case vhpiAttrDecl: {
+            // The attribute an attribute specification gives a value to
+            // (Figure 30): the declaration of that name in the regions around.
+            if (object->kind != vhpiAttrSpecK || object->declaration == nullptr) {
+                return nullptr;
+            }
+            const auto wanted = declared_name(*object->declaration);
+            for (auto* scope = object->parent; scope != nullptr;
+                 scope = scope->parent) {
+                if (!is_declarative(*scope)) {
+                    continue;
+                }
+                for (const auto* const declaration : scope->region_declarations) {
+                    if (declaration->form
+                            == vhdl::DeclarationForm::attribute_declaration
+                        && same_name(declared_name(*declaration), wanted)) {
+                        auto* const found = declared(*scope, *declaration);
+                        return found == nullptr ? nullptr : to_handle(found);
+                    }
+                }
+            }
+            return nullptr;
+        }
+        case vhpiAttrSpec: {
+            // The specification that gives a user-defined attribute name its
+            // value (Figure 24): of the prefix, for the attribute named.
+            if (object->kind != vhpiUserAttrNameK || object->parent == nullptr) {
+                return nullptr;
+            }
+            const auto tick = object->name.rfind('\'');
+            if (tick == std::string::npos) {
+                return nullptr;
+            }
+            const auto attribute = std::string_view { object->name }.substr(tick + 1U);
+            for (auto* const specification : attribute_specs_of(*object->parent)) {
+                if (specification->declaration != nullptr
+                    && same_name(declared_name(*specification->declaration), attribute)) {
+                    return to_handle(specification);
+                }
+            }
+            return nullptr;
+        }
+        case vhpiEntityAspect: {
+            auto* const aspect = entity_aspect_of(*object);
+            return aspect == nullptr ? nullptr : to_handle(aspect);
+        }
+        case vhpiLexicalScope: {
+            auto* const scope = lexical_scope_of(*object);
+            return scope == nullptr ? nullptr : to_handle(scope);
+        }
+        case vhpiSimpleName: {
+            // The simple name a prefixed name is a part of (Figure 25).
+            if (object->kind != vhpiIndexedNameK && object->kind != vhpiSelectedNameK
+                && object->kind != vhpiSliceNameK) {
+                return nullptr;
+            }
+            auto* root = object;
+            while ((root->kind == vhpiIndexedNameK || root->kind == vhpiSelectedNameK
+                       || root->kind == vhpiSliceNameK)
+                && root->parent != nullptr) {
+                root = root->parent;
+            }
+            return to_handle(root);
+        }
+        case vhpiUnitDecl: {
+            // The unit a physical literal is written in (Figure 26).
+            if (object->kind != vhpiPhysLiteralK || object->type == nullptr) {
+                return nullptr;
+            }
+            auto* const unit = unit_with_scale(object->type, object->position);
+            return unit == nullptr ? nullptr : to_handle(unit);
+        }
+        case vhpiPhysLiteral: {
+            auto* const definition = unit_definition(*object);
+            return definition == nullptr ? nullptr : to_handle(definition);
+        }
+        case vhpiBaseUnit: {
+            // The primary unit of a physical type (Figure 20).
+            auto* const unit = object->type_data != nullptr
+                    && object->type_data->storage == Storage::physical
+                ? unit_with_scale(object, 1)
+                : nullptr;
+            return unit == nullptr ? nullptr : to_handle(unit);
+        }
+        case vhpiLogicalExpr: {
+            // The expression of the logical file name of a file declaration
+            // (6.4.2.5, Figure 10).
+            if ((object->kind != vhpiFileDeclK && object->kind != vhpiFileParamDeclK)
+                || object->declaration == nullptr
+                || !object->declaration->initializer) {
+                return nullptr;
+            }
+            auto* const expression
+                = expression_object(*object, *object->declaration->initializer);
+            return expression == nullptr ? nullptr : to_handle(expression);
+        }
+        case vhpiResolFunc: {
+            // The resolution function of a subtype declaration (Figure 22),
+            // or named in the subtype indication of a signal, port or signal
+            // parameter (6.3, Figure 14); the type mark STD_LOGIC carries the
+            // function RESOLVED (16.7).
+            const vhdl::SubtypeIndication* indication = nullptr;
+            if (object->kind == vhpiSubtypeDeclK) {
+                if (is_std_logic(object)) {
+                    return to_handle(intrinsic_resolved());
+                }
+                if (object->declaration != nullptr
+                    && object->declaration->subtype) {
+                    indication = &*object->declaration->subtype;
+                }
+            } else if ((object->kind == vhpiSigDeclK
+                           || object->kind == vhpiPortDeclK
+                           || object->kind == vhpiSigParamDeclK)
+                && object->declaration != nullptr
+                && object->declaration->subtype) {
+                indication = &*object->declaration->subtype;
+            }
+            if (indication == nullptr) {
+                return nullptr;
+            }
+            const auto& function = indication->resolution_function;
+            const auto id = function.selected
+                ? function.selected
+                : (function.overloads.empty()
+                          ? std::nullopt
+                          : std::optional { function.overloads.front() });
+            const auto* const found = id ? hir_.find_declaration(*id) : nullptr;
+            auto* declaration
+                = found == nullptr ? nullptr : declaration_object(*object, *found);
+            if (declaration == nullptr && found != nullptr) {
+                // A type has no parent region: look in the instances.
+                (void)root();
+                for (const auto& [path, region] : instances_) {
+                    if (is_declarative(*region)
+                        && std::ranges::find(region->region_declarations, found)
+                            != region->region_declarations.end()) {
+                        declaration = declared(*region, *found);
+                        break;
+                    }
+                }
+            }
+            if (declaration == nullptr && is_std_logic(object->type)) {
+                return to_handle(intrinsic_resolved());
+            }
+            return declaration == nullptr ? nullptr : to_handle(declaration);
+        }
+        case vhpiGroupTempDecl: {
+            auto* const group_template = group_template_of(*object);
+            return group_template == nullptr ? nullptr : to_handle(group_template);
+        }
+        case vhpiBlockConfig: {
+            auto* const block = block_configuration_of(*object);
+            return block == nullptr ? nullptr : to_handle(block);
+        }
+        case vhpiGenIndex: {
+            // The generate index a block configuration selects (Figure 3).
+            if (object->kind != vhpiBlockConfigK
+                || object->block_configuration == nullptr
+                || !object->block_configuration->generate_index) {
+                return nullptr;
+            }
+            // A literal, or a locally static expression of constants (the
+            // index of a block configuration is a static expression, 3.4.2,
+            // so the model evaluates it as the elaborator does).
+            const auto index = static_integer(
+                *object, *object->block_configuration->generate_index);
+            return index ? to_handle(integer_value_object(*index)) : nullptr;
+        }
+        case vhpiAll:
+        case vhpiOthers: {
+            // `all` or `others` of a disconnection specification (Figure 32).
+            if (object->disconnection == nullptr) {
+                return nullptr;
+            }
+            const auto wanted = relation == vhpiAll
+                ? vhdl::DisconnectionSelection::all
+                : vhdl::DisconnectionSelection::others;
+            if (object->disconnection->selection != wanted) {
+                return nullptr;
+            }
+            const auto key = relation == vhpiAll ? "@all" : "@others";
+            if (const auto found = object->children.find(key);
+                found != object->children.end()) {
+                return to_handle(found->second);
+            }
+            auto* const designator = make_object(
+                relation == vhpiAll ? vhpiAllK : vhpiOthersK,
+                relation == vhpiAll ? "all" : "others", object);
+            object->children.emplace(key, designator);
+            return to_handle(designator);
+        }
         case vhpiLibraryDecl:
             // The library a design unit is in (Figure 4).
             return object->unit != nullptr && is_design_unit(*object)
@@ -9522,6 +10532,14 @@ private:
         }
         case vhpiLeftExpr:
         case vhpiRightExpr:
+            // The bound expressions of the range of a slice name.
+            if (object->dynamic_scope != nullptr && object->bound_left
+                && object->bound_right) {
+                auto* const bound = expression_object(*object->dynamic_scope,
+                    relation == vhpiLeftExpr ? *object->bound_left
+                                             : *object->bound_right);
+                return bound == nullptr ? nullptr : to_handle(bound);
+            }
             // The bounds of an integer range (Figure 7) as literals.
             if (object->kind == vhpiIntRangeK && object->type_data != nullptr
                 && object->type_data->range) {
@@ -9529,11 +10547,21 @@ private:
                 return to_handle(integer_value_object(
                     relation == vhpiLeftExpr ? range.left : range.right));
             }
+            // Enumeration, physical and floating point bounds (Figure 7).
+            if (object->kind == vhpiEnumRangeK || object->kind == vhpiPhysRangeK
+                || object->kind == vhpiFloatRangeK) {
+                auto* const bound
+                    = range_bound_object(*object, relation == vhpiLeftExpr);
+                return bound == nullptr ? nullptr : to_handle(bound);
+            }
             return nullptr;
         case vhpiConstraint: {
             if (object->kind == vhpiForLoopK) {
                 auto* const range = loop_range(*object);
                 return range == nullptr ? nullptr : to_handle(range);
+            }
+            if (auto* const range = slice_constraint(*object)) {
+                return to_handle(range);
             }
             // The first constraint of a type (IEEE 1076-2019 19.4.3).
             const auto constraints = type_list(vhpiConstraints, object);
@@ -9580,7 +10608,15 @@ private:
         case vhpiTimeExpr:
         case vhpiValExpr: {
             // The expression of a statement, branch or waveform (IEEE
-            // 1076-2019 19.11); one with no object leads to none.
+            // 1076-2019 19.11); one with no object leads to none. The time
+            // expression of a disconnection specification is its delay
+            // (Figure 32).
+            if (object->disconnection != nullptr) {
+                auto* const delay = relation == vhpiTimeExpr
+                    ? delay_literal(object->disconnection->delay)
+                    : nullptr;
+                return delay == nullptr ? nullptr : to_handle(delay);
+            }
             const auto id = statement_expression(*object, relation);
             auto* expression = id ? expression_object(*object, *id) : nullptr;
             if (!id) {
@@ -9671,6 +10707,12 @@ private:
             Object* value = nullptr;
             if (object->kind == vhpiElemAssocK && object->association != nullptr) {
                 value = expression_object(*object, object->association->value);
+            } else if (object->kind == vhpiAttrSpecK
+                && object->declaration != nullptr && object->declaration->attribute
+                && object->declaration->attribute->value && object->parent != nullptr) {
+                // The value of an attribute specification (Figure 30).
+                value = expression_object(
+                    *object->parent, *object->declaration->attribute->value);
             } else if ((object->kind == vhpiTypeConvK
                            || object->kind == vhpiQualifiedExprK)
                 && object->expression != nullptr
@@ -9712,6 +10754,26 @@ private:
         }
     }
 
+    // Whether an object belongs to the library information model: it is a
+    // declaration of a design unit object (IEEE 1076-2019 19.4.5).
+    [[nodiscard]] static bool in_library_model(const Object& object) noexcept
+    {
+        for (const auto* current = &object; current != nullptr;
+             current = current->parent) {
+            switch (current->kind) {
+            case vhpiEntityDeclK:
+            case vhpiArchBodyK:
+            case vhpiPackDeclK:
+            case vhpiPackBodyK:
+            case vhpiConfigDeclK:
+                return true;
+            default:
+                break;
+            }
+        }
+        return false;
+    }
+
     // The design unit object of a region (IEEE 1076-2019 19.4.2).
     [[nodiscard]] Object* design_unit_object(Object& region)
     {
@@ -9735,10 +10797,154 @@ private:
         return unit;
     }
 
+    // The package declaration unit of a package body unit, or the unit of
+    // the entity a unit belongs to; null where the design does not hold it.
+    [[nodiscard]] const vhdl::Unit* package_declaration_unit(
+        const vhdl::Unit& body) const
+    {
+        for (const auto& unit : hir_.units()) {
+            if (unit.kind == vhdl::UnitKind::package
+                && unit.primary_name.empty()
+                && same_name(unit.library, body.library)
+                && same_name(unit.name, body.primary_name)) {
+                return &unit;
+            }
+        }
+        // A package declaration only the library catalog lists.
+        for (const auto& unit : catalog_units_) {
+            if (unit.kind == vhdl::UnitKind::package
+                && unit.primary_name.empty()
+                && same_name(unit.library, body.library)
+                && same_name(unit.name, body.primary_name)) {
+                return &unit;
+            }
+        }
+        return nullptr;
+    }
+
+    // The package declaration a use clause name `lib.pkg[.item|.all]` selects
+    // from, and the item (empty for `all`); `unit` supplies the library `work`
+    // stands for (IEEE 1076-2019 12.4).
+    [[nodiscard]] const vhdl::Unit* use_clause_package(
+        const vhdl::Unit& unit, const std::string_view text,
+        std::string& item) const
+    {
+        std::vector<std::string> parts;
+        std::size_t start { };
+        while (start <= text.size()) {
+            const auto dot = text.find('.', start);
+            parts.emplace_back(text.substr(start,
+                dot == std::string_view::npos ? std::string_view::npos
+                                              : dot - start));
+            if (dot == std::string_view::npos) {
+                break;
+            }
+            start = dot + 1U;
+        }
+        if (parts.size() < 2U) {
+            return nullptr;
+        }
+        const auto library = same_name(parts[0], "work") ? unit.library : parts[0];
+        item = parts.size() > 2U && !same_name(parts[2], "all") ? parts[2]
+                                                               : std::string {};
+        for (const auto& candidate : hir_.units()) {
+            if (candidate.kind == vhdl::UnitKind::package
+                && candidate.primary_name.empty()
+                && same_name(candidate.library, library)
+                && same_name(candidate.name, parts[1])) {
+                return &candidate;
+            }
+        }
+        return nullptr;
+    }
+
+    // The design units a unit depends on (vhpiDepUnits, Figure 4): the
+    // primary unit of a secondary unit or configuration, and the packages its
+    // use clauses name, each once and not the unit itself.
+    [[nodiscard]] std::vector<Object*> dependent_units(Object& unit)
+    {
+        std::vector<Object*> result;
+        if (unit.unit == nullptr || !is_design_unit(unit)) {
+            return result;
+        }
+        const auto add = [&](const vhdl::Unit* const dependency) {
+            if (dependency == nullptr || dependency == unit.unit) {
+                return;
+            }
+            if (auto* const object = library_unit_object(*dependency);
+                object != nullptr
+                && std::ranges::find(result, object) == result.end()) {
+                result.push_back(object);
+            }
+        };
+        if (unit.kind == vhpiPackBodyK) {
+            add(package_declaration_unit(*unit.unit));
+        } else if ((unit.kind == vhpiArchBodyK || unit.kind == vhpiConfigDeclK)
+            && unit.entity != nullptr) {
+            add(unit.entity);
+        }
+        for (const auto& item : unit.unit->context) {
+            if (item.kind != vhdl::ContextKind::use_clause) {
+                continue;
+            }
+            for (const auto& name : item.selected_names) {
+                std::string selected;
+                add(use_clause_package(*unit.unit, name.text(), selected));
+            }
+        }
+        return result;
+    }
+
+    // The declarations a unit's use clauses make visible (vhpiUses, Figure 4):
+    // all declarations of the package for `.all`, the named one otherwise.
+    [[nodiscard]] std::vector<Object*> used_declarations(Object& unit)
+    {
+        std::vector<Object*> result;
+        if (unit.unit == nullptr || !is_design_unit(unit)) {
+            return result;
+        }
+        for (const auto& item : unit.unit->context) {
+            if (item.kind != vhdl::ContextKind::use_clause) {
+                continue;
+            }
+            for (const auto& name : item.selected_names) {
+                std::string selected;
+                const auto* const package
+                    = use_clause_package(*unit.unit, name.text(), selected);
+                auto* const holder = package == nullptr
+                    ? nullptr
+                    : library_unit_object(*package);
+                if (holder == nullptr) {
+                    continue;
+                }
+                for (const auto* const declaration : holder->region_declarations) {
+                    if (!selected.empty()
+                        && !same_name(declared_name(*declaration), selected)) {
+                        continue;
+                    }
+                    auto* const object = declared(*holder, *declaration);
+                    if (object != nullptr
+                        && std::ranges::find(result, object) == result.end()) {
+                        result.push_back(object);
+                    }
+                }
+            }
+        }
+        return result;
+    }
+
     // The entity declaration an architecture body object is of.
     [[nodiscard]] Object* primary_unit_object(Object& architecture)
     {
-        if (architecture.kind != vhpiArchBodyK
+        if (architecture.kind == vhpiPackBodyK && architecture.unit != nullptr) {
+            // The package declaration a package body completes (Figure 4).
+            const auto* const declaration
+                = package_declaration_unit(*architecture.unit);
+            return declaration == nullptr ? nullptr
+                                          : library_unit_object(*declaration);
+        }
+        if ((architecture.kind != vhpiArchBodyK
+                && architecture.kind != vhpiConfigDeclK)
             || architecture.entity == nullptr) {
             return nullptr;
         }
@@ -9788,6 +10994,495 @@ private:
         return result;
     }
 
+    // The vhpiEntityClassT constant of an entity class spelling (IEEE
+    // 1076-2019 7.2, 23.10), with or without the box of a group template
+    // entry.
+    [[nodiscard]] static std::optional<vhpiIntT> entity_class_value(
+        std::string_view spelling)
+    {
+        if (spelling.ends_with("<>")) {
+            spelling.remove_suffix(2U);
+        }
+        static constexpr std::pair<std::string_view, vhpiIntT> classes[] {
+            { "entity", vhpiEntityEC },
+            { "architecture", vhpiArchitectureEC },
+            { "configuration", vhpiConfigurationEC },
+            { "procedure", vhpiProcedureEC },
+            { "function", vhpiFunctionEC },
+            { "package", vhpiPackageEC },
+            { "type", vhpiTypeEC },
+            { "subtype", vhpiSubtypeEC },
+            { "constant", vhpiConstantEC },
+            { "signal", vhpiSignalEC },
+            { "variable", vhpiVariableEC },
+            { "component", vhpiComponentEC },
+            { "label", vhpiLabelEC },
+            { "literal", vhpiLiteralEC },
+            { "units", vhpiUnitsEC },
+            { "file", vhpiFileEC },
+            { "group", vhpiGroupEC },
+        };
+        for (const auto& [name, value] : classes) {
+            if (same_name(spelling, name)) {
+                return value;
+            }
+        }
+        return std::nullopt;
+    }
+
+    // The entity class entries of a group template, in order (vhpiEntityClassEntries,
+    // Figure 12); an entry with a box allows any number of constituents.
+    [[nodiscard]] std::vector<Object*> entity_class_entries(Object& group)
+    {
+        auto& result = group.lists[ListKind::entity_class_entries];
+        if (!result.empty() || group.kind != vhpiGroupTempDeclK
+            || group.declaration == nullptr || !group.declaration->group) {
+            return result;
+        }
+        for (const auto& entry : group.declaration->group->entries) {
+            auto* const object = make_object(vhpiEntityClassEntryK, "", &group);
+            object->entity_class_text = std::string { entry.text() };
+            if (object->entity_class_text.ends_with("<>")) {
+                object->entity_class_text.resize(object->entity_class_text.size() - 2U);
+                object->entry_unconstrained = true;
+            }
+            result.push_back(object);
+        }
+        return result;
+    }
+
+    // The group template a group declaration is of (vhpiGroupTempDecl).
+    [[nodiscard]] Object* group_template_of(Object& group)
+    {
+        if (group.kind != vhpiGroupDeclK || group.declaration == nullptr
+            || !group.declaration->group
+            || !group.declaration->group->template_name) {
+            return nullptr;
+        }
+        const auto& template_name = *group.declaration->group->template_name;
+        if (template_name.selected) {
+            if (const auto* const found
+                = hir_.find_declaration(*template_name.selected)) {
+                return declaration_object(group, *found);
+            }
+        }
+        // Otherwise the template of that name in the regions around.
+        for (auto* scope = group.parent; scope != nullptr; scope = scope->parent) {
+            for (const auto* const candidate : scope->region_declarations) {
+                if (candidate->form == vhdl::DeclarationForm::group_template
+                    && same_name(declared_name(*candidate), template_name.text())) {
+                    return declared(*scope, *candidate);
+                }
+            }
+        }
+        return nullptr;
+    }
+
+    // The entity designators of an attribute specification, or the
+    // constituents of a group declaration, in order (vhpiEntityDesignators,
+    // Figures 12 and 30). Class entityDesignator is the superclass of decl,
+    // all, others, stmt, literal and designUnit, so a designator is the
+    // object its name denotes in the region that holds the specification,
+    // `all` and `others` the objects of those classes. A name that denotes
+    // no object of the model (a label of a statement the model does not
+    // keep, a signature-qualified subprogram) is an object of no class
+    // kind that carries the name and the entity class (Annex B gives the
+    // abstract class no class kind), with the one property
+    // vhpiEntityClassP. For a group, the class is that of the template's
+    // entry at its position, the last entry's class repeating when that has
+    // a box (6.9).
+    [[nodiscard]] std::vector<Object*> entity_designators(Object& owner)
+    {
+        auto& result = owner.lists[ListKind::entity_designators];
+        if (!result.empty() || owner.declaration == nullptr
+            || owner.parent == nullptr) {
+            return result;
+        }
+        const auto add = [&](const vhdl::Name& name, std::string entity_class) {
+            const auto text = name.text();
+            Object* object = nullptr;
+            if (same_name(text, "all")) {
+                object = make_object(vhpiAllK, "all", &owner);
+            } else if (same_name(text, "others")) {
+                object = make_object(vhpiOthersK, "others", &owner);
+            } else {
+                // A signature after the name selects overloads of one name.
+                const auto bracket = text.find('[');
+                object = lookup_name(*owner.parent,
+                    bracket == std::string_view::npos ? text
+                                                      : text.substr(0U, bracket));
+            }
+            if (object == nullptr) {
+                object = make_object(static_cast<vhpiClassKindT>(0), text, &owner);
+                object->entity_designator = true;
+                object->entity_class_text = std::move(entity_class);
+            }
+            result.push_back(object);
+        };
+        if (owner.kind == vhpiAttrSpecK && owner.declaration->attribute) {
+            for (const auto& name : owner.declaration->attribute->entity_names) {
+                add(name, owner.declaration->attribute->entity_class);
+            }
+        } else if (owner.kind == vhpiGroupDeclK && owner.declaration->group) {
+            const auto classes = [&] {
+                std::vector<std::string> list;
+                if (auto* const group_template = group_template_of(owner)) {
+                    for (auto* const entry : entity_class_entries(*group_template)) {
+                        list.push_back(entry->entity_class_text);
+                    }
+                }
+                return list;
+            }();
+            std::size_t position { };
+            for (const auto& name : owner.declaration->group->entries) {
+                add(name,
+                    classes.empty()
+                        ? std::string { }
+                        : classes[std::min(position, classes.size() - 1U)]);
+                ++position;
+            }
+        }
+        return result;
+    }
+
+    // Whether an attribute specification names the object (7.2): the name,
+    // without a signature, is the object's name.
+    [[nodiscard]] static bool specification_names(
+        const vhdl::Declaration& specification, const Object& target)
+    {
+        if (specification.form != vhdl::DeclarationForm::attribute_specification
+            || !specification.attribute) {
+            return false;
+        }
+        return std::ranges::any_of(specification.attribute->entity_names,
+            [&](const vhdl::Name& name) {
+                const auto text = name.text();
+                return same_name(text.substr(0U, text.find('[')), target.name);
+            });
+    }
+
+    // The attribute specifications that apply to a declared object
+    // (vhpiAttrSpecs, Figure 31): those of its declarative region that name
+    // it. A name of `all` or `others` is not followed.
+    [[nodiscard]] std::vector<Object*> attribute_specs_of(Object& target)
+    {
+        std::vector<Object*> result;
+        if (target.parent == nullptr || !is_declarative(*target.parent)
+            || is_region(target) || target.name.empty()) {
+            return result;
+        }
+        auto& scope = *target.parent;
+        for (const auto* const declaration : scope.region_declarations) {
+            if (specification_names(*declaration, target)) {
+                if (auto* const object = declared(scope, *declaration)) {
+                    result.push_back(object);
+                }
+            }
+        }
+        return result;
+    }
+
+    // The specifications of a region or design unit (vhpiSpecs, Figure 33):
+    // its attribute specifications and, for an architecture body, its
+    // configuration specifications.
+    [[nodiscard]] std::vector<Object*> specs_of(Object& owner)
+    {
+        std::vector<Object*> result;
+        if (is_design_unit(owner) && owner.unit != nullptr) {
+            // A design unit holds the specifications of its own declarative
+            // part (7.2: an entity's specification is in the entity
+            // declarative part). The instance region merges the entity's and
+            // the architecture's declarations, so they are taken from the
+            // unit's own list; the holder is the instance region when the
+            // object belongs to one, else the unit object.
+            Object* const holder
+                = owner.instance != nullptr ? owner.instance : &owner;
+            for (const auto id : owner.unit->declarations) {
+                const auto* const declaration = hir_.find_declaration(id);
+                if (declaration != nullptr
+                    && declaration->form
+                        == vhdl::DeclarationForm::attribute_specification) {
+                    if (auto* const object = declared(*holder, *declaration)) {
+                        result.push_back(object);
+                    }
+                }
+            }
+        } else if (is_declarative(owner)) {
+            for (const auto* const declaration : owner.region_declarations) {
+                if (declaration->form
+                    == vhdl::DeclarationForm::attribute_specification) {
+                    if (auto* const object = declared(owner, *declaration)) {
+                        result.push_back(object);
+                    }
+                }
+            }
+        }
+        if (owner.kind == vhpiArchBodyK) {
+            for (auto* const item : config_specs(owner)) {
+                result.push_back(item);
+            }
+        }
+        for (auto* const item : disconnect_specs(owner)) {
+            result.push_back(item);
+        }
+        return result;
+    }
+
+    // The disconnection specifications of a region or design unit (class
+    // disconnectSpec, IEEE 1076-2019 7.4, Figures 32 and 33): those of the
+    // generate or block statement, of the entity and architecture an
+    // instance elaborates, or of the design unit itself.
+    [[nodiscard]] std::vector<Object*> disconnect_specs(Object& owner)
+    {
+        std::vector<Object*> result;
+        Object* scope = &owner;
+        std::vector<const std::vector<vhdl::DisconnectionSpecification>*> sources;
+        if (is_design_unit(owner)) {
+            if (owner.unit != nullptr) {
+                sources.push_back(&owner.unit->disconnection_specifications);
+            }
+            if (owner.instance != nullptr) {
+                scope = owner.instance;
+            }
+        } else if (is_declarative(owner)) {
+            if (owner.generate != nullptr) {
+                sources.push_back(&owner.generate->disconnection_specifications);
+            } else {
+                if (owner.entity != nullptr) {
+                    sources.push_back(&owner.entity->disconnection_specifications);
+                }
+                if (owner.unit != nullptr) {
+                    sources.push_back(&owner.unit->disconnection_specifications);
+                }
+            }
+        }
+        for (const auto* const specifications : sources) {
+            for (const auto& specification : *specifications) {
+                const auto key = "@disconnect:"
+                    + std::to_string(
+                        reinterpret_cast<std::uintptr_t>(&specification));
+                if (const auto found = owner.children.find(key);
+                    found != owner.children.end()) {
+                    result.push_back(found->second);
+                    continue;
+                }
+                auto* const object
+                    = make_object(vhpiDisconnectSpecK, "", scope);
+                object->disconnection = &specification;
+                object->source = specification.source;
+                owner.children.emplace(key, object);
+                result.push_back(object);
+            }
+        }
+        return result;
+    }
+
+    // The signals a disconnection specification names (vhpiSignals,
+    // Figure 32); `all` and `others` name none of their own.
+    [[nodiscard]] std::vector<Object*> disconnected_signals(Object& spec)
+    {
+        std::vector<Object*> result;
+        if (spec.disconnection == nullptr || spec.parent == nullptr) {
+            return result;
+        }
+        for (const auto& name : spec.disconnection->signals) {
+            if (auto* const signal = lookup_name(*spec.parent, name.text())) {
+                result.push_back(signal);
+            }
+        }
+        return result;
+    }
+
+    // The use clauses of a design unit's context (vhpiUseClauses, Figure 5):
+    // one object per selected name, named for it.
+    [[nodiscard]] std::vector<Object*> use_clauses_of(Object& unit)
+    {
+        auto& result = unit.lists[ListKind::use_clauses];
+        if (!result.empty() || unit.unit == nullptr || !is_design_unit(unit)) {
+            return result;
+        }
+        for (const auto& item : unit.unit->context) {
+            if (item.kind != vhdl::ContextKind::use_clause) {
+                continue;
+            }
+            for (const auto& name : item.selected_names) {
+                result.push_back(make_object(vhpiUseClauseK, name.text(), &unit));
+            }
+        }
+        return result;
+    }
+
+    // The lexical scope a declaration or specification is in (vhpiLexicalScope,
+    // Figure 5): the nearest enclosing design unit, block, generate, loop,
+    // subprogram body or component declaration.
+    [[nodiscard]] Object* lexical_scope_of(Object& object)
+    {
+        for (auto* scope = object.parent; scope != nullptr; scope = scope->parent) {
+            switch (scope->kind) {
+            case vhpiRootInstK:
+            case vhpiCompInstStmtK:
+            case vhpiPackInstK:
+                // A region that instantiates a design unit: its scope is
+                // the unit.
+                return design_unit_object(*scope);
+            case vhpiBlockStmtK:
+            case vhpiForGenerateK:
+            case vhpiIfGenerateK:
+            case vhpiForLoopK:
+            case vhpiSubpBodyK:
+            case vhpiCompDeclK:
+            case vhpiBlockConfigK:
+            case vhpiCompConfigK:
+                return scope;
+            default:
+                break;
+            }
+        }
+        return nullptr;
+    }
+
+    // The unit declaration of a physical type that has a scale (Figure 20).
+    [[nodiscard]] Object* unit_with_scale(Object* type, const std::int64_t scale)
+    {
+        for (auto* const unit : type_list(vhpiUnitDecls, type)) {
+            if (unit->position == scale) {
+                return unit;
+            }
+        }
+        return nullptr;
+    }
+
+    // The physical literal that defines a secondary unit (`cm = 10 mm`,
+    // vhpiPhysLiteral, Figure 20): its scale in primary units.
+    [[nodiscard]] Object* unit_definition(Object& unit)
+    {
+        if (unit.kind != vhpiUnitDeclK || unit.type == nullptr
+            || unit.type->type_data == nullptr || unit.position <= 1) {
+            return nullptr;
+        }
+        const auto found = unit.children.find("@definition");
+        if (found != unit.children.end()) {
+            return found->second;
+        }
+        const auto& units = unit.type->type_data->units;
+        if (units.empty()) {
+            return nullptr;
+        }
+        auto* const object = make_object(vhpiPhysLiteralK,
+            std::to_string(unit.position) + " " + lower(units.front().name),
+            nullptr);
+        object->full_name = object->name;
+        object->full_case_name = object->case_name;
+        object->type = unit.type;
+        object->position = 1;
+        object->constant = PackedLogic4::from_aval_bval(
+            64U, static_cast<std::uint64_t>(unit.position), 0U);
+        unit.children.emplace("@definition", object);
+        return object;
+    }
+
+    // The entity aspect of a component configuration's binding indication:
+    // the entity declaration, the architecture body or the configuration
+    // declaration it names (vhpiEntityAspect, Figure 3); none when open.
+    [[nodiscard]] Object* entity_aspect_of(Object& configuration)
+    {
+        if (configuration.kind != vhpiCompConfigK
+            || configuration.component_config == nullptr) {
+            return nullptr;
+        }
+        const auto& binding = configuration.component_config->binding;
+        const auto leaf = [](const std::string_view text) {
+            const auto dot = text.rfind('.');
+            return dot == std::string_view::npos ? text : text.substr(dot + 1U);
+        };
+        if (binding.kind == vhdl::BindingKind::configuration) {
+            const auto found = std::ranges::find_if(hir_.units(), [&](const auto& c) {
+                return c.kind == vhdl::UnitKind::configuration
+                    && same_name(c.name, leaf(binding.configuration.text()));
+            });
+            return found == hir_.units().end() ? nullptr : library_unit_object(*found);
+        }
+        const auto* const entity = binding_entity(binding);
+        if (entity == nullptr) {
+            return nullptr;
+        }
+        if (!binding.architecture.empty()) {
+            const auto found = std::ranges::find_if(hir_.units(), [&](const auto& c) {
+                return c.kind == vhdl::UnitKind::architecture
+                    && same_name(c.name, binding.architecture)
+                    && same_name(c.primary_name, entity->name)
+                    && same_name(c.library, entity->library);
+            });
+            if (found != hir_.units().end()) {
+                return library_unit_object(*found);
+            }
+        }
+        return library_unit_object(*entity);
+    }
+
+    // The entity declaration a configuration declaration configures (7.3.1).
+    [[nodiscard]] const vhdl::Unit* configured_entity(
+        const vhdl::Unit& configuration) const
+    {
+        const auto found = std::ranges::find_if(hir_.units(), [&](const auto& c) {
+            return c.kind == vhdl::UnitKind::entity
+                && same_name(c.name, configuration.primary_name)
+                && same_name(c.library, configuration.library);
+        });
+        return found == hir_.units().end() ? nullptr : &*found;
+    }
+
+    // The block configuration of a configuration declaration or of a
+    // component configuration (vhpiBlockConfig, 19.5, Figure 3).
+    [[nodiscard]] Object* block_configuration_of(Object& owner)
+    {
+        const vhdl::BlockConfiguration* node = nullptr;
+        if (owner.kind == vhpiConfigDeclK && owner.unit != nullptr
+            && owner.unit->configuration) {
+            node = &*owner.unit->configuration;
+        } else if (owner.kind == vhpiCompConfigK
+            && owner.component_config != nullptr
+            && owner.component_config->block_configuration) {
+            node = &*owner.component_config->block_configuration;
+        }
+        return node == nullptr ? nullptr : block_configuration_object(owner, *node);
+    }
+
+    // One block configuration object per HIR node, a child of the object
+    // that holds it.
+    [[nodiscard]] Object* block_configuration_object(
+        Object& owner, const vhdl::BlockConfiguration& node)
+    {
+        const auto key = "@blockconfig:"
+            + std::to_string(reinterpret_cast<std::uintptr_t>(&node));
+        if (const auto found = owner.children.find(key);
+            found != owner.children.end()) {
+            return found->second;
+        }
+        auto* const object = make_object(vhpiBlockConfigK, "", &owner);
+        object->block_configuration = &node;
+        object->unit = owner.unit;
+        owner.children.emplace(key, object);
+        return object;
+    }
+
+    // The items of a block configuration, component configurations first and
+    // then the nested block configurations (vhpiConfigItems).
+    [[nodiscard]] std::vector<Object*> config_items(Object& block)
+    {
+        std::vector<Object*> result;
+        if (block.kind != vhpiBlockConfigK || block.block_configuration == nullptr) {
+            return result;
+        }
+        for (const auto& component : block.block_configuration->components) {
+            result.push_back(config_spec_object(block, component));
+        }
+        for (const auto& nested : block.block_configuration->blocks) {
+            result.push_back(block_configuration_object(block, nested));
+        }
+        return result;
+    }
+
     // The design unit object of an entity, architecture or package of a
     // library (vhpiDesignUnits); other units have none.
     [[nodiscard]] Object* library_unit_object(const vhdl::Unit& unit)
@@ -9804,7 +11499,16 @@ private:
             kind = vhpiArchBodyK;
             break;
         case vhdl::UnitKind::package:
-            kind = vhpiPackDeclK;
+            // A package body is a design unit of its own, the secondary unit
+            // of its package declaration (IEEE 1076-2019 19.4.5, Figure 4);
+            // the HIR keeps it apart with the package's name in
+            // `primary_name`.
+            kind = unit.primary_name.empty() ? vhpiPackDeclK : vhpiPackBodyK;
+            break;
+        case vhdl::UnitKind::configuration:
+            // A configuration declaration is a design unit of its own
+            // (IEEE 1076-2019 19.5, Figure 3).
+            kind = vhpiConfigDeclK;
             break;
         default:
             return nullptr;
@@ -9813,12 +11517,29 @@ private:
         object->full_name = upper(unit.library) + "." + object->name;
         object->full_case_name = unit.library + "." + object->case_name;
         object->unit = &unit;
-        object->entity = entity_of(unit);
+        object->entity = unit.kind == vhdl::UnitKind::configuration
+            ? configured_entity(unit)
+            : entity_of(unit);
+        // The declarations of a package or package body, for the relations
+        // that name them (vhpiUses, Figure 4).
+        if (unit.kind == vhdl::UnitKind::package) {
+            for (const auto id : unit.declarations) {
+                if (const auto* const declaration = hir_.find_declaration(id)) {
+                    object->region_declarations.push_back(declaration);
+                }
+            }
+        }
         library_units_.emplace(&unit, object);
         return object;
     }
 
     // The design units of a library (vhpiDesignUnits).
+    //
+    // IEEE 1076-2019 19.4.5 gives a library the design units analyzed into
+    // it, not only those of the elaborated design, so the units the
+    // workspace catalog lists that the artifact lacks follow, as objects with
+    // no elaborated children (owner decision 2026-11-07). The catalog is read
+    // once per library and only when a program lists that library.
     [[nodiscard]] std::vector<Object*> library_units(const Object& library)
     {
         std::vector<Object*> result;
@@ -9830,7 +11551,60 @@ private:
                 result.push_back(object);
             }
         }
+        // The catalog is read the first time the library is listed; the
+        // synthetic units of the library are listed after the artifact's own,
+        // in catalog order, every time.
+        const bool read = catalog_source_
+            && catalog_read_.emplace(lower(library.case_name)).second;
+        append_catalog_units(library, result, read);
         return result;
+    }
+
+    void append_catalog_units(
+        const Object& library, std::vector<Object*>& result, const bool read)
+    {
+        if (read) {
+            for (auto& entry : catalog_source_(library.case_name)) {
+                vhdl::Unit unit;
+                if (entry.kind == "entity") {
+                    unit.kind = vhdl::UnitKind::entity;
+                } else if (entry.kind == "architecture") {
+                    unit.kind = vhdl::UnitKind::architecture;
+                } else if (entry.kind == "package"
+                    || entry.kind == "package_body") {
+                    unit.kind = vhdl::UnitKind::package;
+                } else if (entry.kind == "configuration") {
+                    unit.kind = vhdl::UnitKind::configuration;
+                } else {
+                    continue;
+                }
+                unit.library = library.case_name;
+                unit.name = entry.name;
+                unit.primary_name = entry.primary_name;
+                if (entry.kind == "package_body" && unit.primary_name.empty()) {
+                    unit.primary_name = unit.name;
+                }
+                // A unit the artifact holds is listed once, from the HIR.
+                const bool held = std::ranges::any_of(
+                    hir_.units(), [&](const vhdl::Unit& known) {
+                        return known.kind == unit.kind
+                            && same_name(known.library, unit.library)
+                            && same_name(known.name, unit.name)
+                            && same_name(known.primary_name, unit.primary_name);
+                    });
+                if (held) {
+                    continue;
+                }
+                catalog_units_.push_back(std::move(unit));
+            }
+        }
+        for (const auto& unit : catalog_units_) {
+            if (same_name(unit.library, library.case_name)) {
+                if (auto* const object = library_unit_object(unit)) {
+                    result.push_back(object);
+                }
+            }
+        }
     }
 
     // The component declaration a component instantiation names, found in
@@ -10134,6 +11908,11 @@ private:
                 result = drivers_of(*object);
             }
             break;
+        case vhpiTransactions:
+            if (object != nullptr && object->kind == vhpiDriverK) {
+                result = driver_transactions(*object);
+            }
+            break;
         case vhpiBasicSignals:
             if (object != nullptr && is_signal_object(*object)) {
                 result = basic_signals(*object);
@@ -10159,6 +11938,57 @@ private:
         case vhpiConfigSpecs:
             if (object != nullptr) {
                 result = config_specs(*object);
+            }
+            break;
+        case vhpiConfigItems:
+            if (object != nullptr) {
+                result = config_items(*object);
+            }
+            break;
+        case vhpiEntityDesignators:
+            if (object != nullptr) {
+                result = entity_designators(*object);
+            }
+            break;
+        case vhpiAttrSpecs:
+            if (object != nullptr) {
+                result = attribute_specs_of(*object);
+            }
+            break;
+        case vhpiAttrDecls:
+            declarations([](const vhdl::Declaration& d) {
+                return d.form == Form::attribute_declaration;
+            });
+            break;
+        case vhpiSignals:
+            if (object != nullptr && object->kind == vhpiDisconnectSpecK) {
+                result = disconnected_signals(*object);
+            }
+            break;
+        case vhpiSpecs:
+            if (object != nullptr) {
+                result = specs_of(*object);
+            }
+            break;
+        case vhpiUseClauses:
+            if (object != nullptr) {
+                result = use_clauses_of(*object);
+            }
+            break;
+        case vhpiDepUnits:
+            if (object != nullptr) {
+                result = dependent_units(*object);
+            }
+            break;
+        case vhpiUses:
+            if (object != nullptr) {
+                result = used_declarations(*object);
+            }
+            break;
+        case DEPRECATED_vhpiEntityClassEntrys:
+        case vhpiEntityClassEntries:
+            if (object != nullptr) {
+                result = entity_class_entries(*object);
             }
             break;
         case DEPRECATED_vhpiContributors:
@@ -10394,6 +12224,7 @@ private:
         auto stored = std::make_unique<Iterator>();
         stored->items = std::vector<Handle*>(items.begin(), items.end());
         stored->relation = relation;
+        stored->from = object;
         iterators_.push_back(std::move(stored));
         return to_handle(iterators_.back().get());
     }
@@ -10494,6 +12325,42 @@ private:
         return width;
     }
 
+    // The function declaration of IEEE.STD_LOGIC_1164.RESOLVED, the
+    // resolution function of STD_LOGIC (IEEE 1076-2019 16.7:
+    // `function resolved (s : std_ulogic_vector) return std_ulogic`), which
+    // the compiled HIR does not retain: a pure function with one constant
+    // parameter, so `vhpiResolFunc` of an STD_LOGIC signal leads to a
+    // function declaration like any user-written resolution function
+    // (Figure 14).
+    [[nodiscard]] Object* intrinsic_resolved()
+    {
+        if (resolved_function_ != nullptr) {
+            return resolved_function_;
+        }
+        auto* const function = make_object(vhpiFuncDeclK, "RESOLVED", nullptr);
+        function->case_name = "resolved";
+        function->intrinsic_resolved = true;
+        function->full_name = "@IEEE:STD_LOGIC_1164:RESOLVED";
+        function->full_case_name = "@ieee:std_logic_1164:resolved";
+        function->type = standard_type("std_ulogic");
+        auto* const parameter = make_object(vhpiConstParamDeclK, "S", function);
+        parameter->case_name = "s";
+        parameter->full_name = function->full_name + ":S";
+        parameter->full_case_name = function->full_case_name + ":s";
+        parameter->type = standard_type("std_ulogic_vector");
+        function->lists[ListKind::param_decls].push_back(parameter);
+        resolved_function_ = function;
+        return function;
+    }
+
+    // Whether a type is STD_LOGIC, which carries the function RESOLVED.
+    [[nodiscard]] static bool is_std_logic(const Object* const type) noexcept
+    {
+        return type != nullptr && type->type_data != nullptr
+            && type->type_data->resolved && same_name(type->name, "std_logic")
+            && type->type_data->library == "IEEE";
+    }
+
     [[nodiscard]] Object* make_type(const vhpiClassKindT kind,
         const std::string_view name, const std::string_view library,
         const std::string_view package)
@@ -10537,6 +12404,25 @@ private:
             data.literals = std::move(literals);
             return object;
         };
+        // INTEGER covers 64 bits from VHDL-2019 on (IEEE 1076-2019
+        // 5.2.3.1), as the elaborated design lays it out. A design mixes
+        // VHDL units of one package family (FSIM-ART-VHDEP-001 refuses the
+        // others) and has one STD.STANDARD: when any unit is VHDL-2019,
+        // INTEGER is 64 bits for every unit, VHDL-2008 ones included (their
+        // standard only sets a minimum range, 1076-2008 5.2.3.1). One
+        // width therefore holds for the whole design.
+        const bool long_integers = std::ranges::any_of(hir_.units(),
+            [](const vhdl::Unit& unit) {
+                return unit.standard.ends_with("2019")
+                    || unit.standard.ends_with("-19") || unit.standard == "19";
+            });
+        const auto integer_low = long_integers
+            ? std::numeric_limits<std::int64_t>::min()
+            : std::int64_t { std::numeric_limits<std::int32_t>::min() };
+        const auto integer_high = long_integers
+            ? std::numeric_limits<std::int64_t>::max()
+            : std::int64_t { std::numeric_limits<std::int32_t>::max() };
+        const auto integer_width = long_integers ? 64U : 32U;
         const auto integer = [&](const std::string_view name,
                                  const std::int64_t left,
                                  const std::int64_t right) {
@@ -10544,7 +12430,7 @@ private:
                 = make_type(vhpiIntTypeDeclK, name, "std", "standard");
             auto& data = *object->type_data;
             data.storage = Storage::integer;
-            data.width = 32U;
+            data.width = integer_width;
             data.range = Range { left, right, false };
             return object;
         };
@@ -10563,16 +12449,14 @@ private:
             return object;
         };
         if (key == "integer") {
-            type = integer("INTEGER", std::numeric_limits<std::int32_t>::min(),
-                std::numeric_limits<std::int32_t>::max());
+            type = integer("INTEGER", integer_low, integer_high);
         } else if (key == "natural" || key == "positive") {
             auto* const base = standard_type("integer");
             type = make_type(vhpiSubtypeDeclK, key, "std", "standard");
             auto& data = *type->type_data;
             data.storage = Storage::integer;
-            data.width = 32U;
-            data.range = Range { key == "natural" ? 0 : 1,
-                std::numeric_limits<std::int32_t>::max(), false };
+            data.width = integer_width;
+            data.range = Range { key == "natural" ? 0 : 1, integer_high, false };
             data.base = base;
             data.parent = base;
         } else if (key == "bit") {
@@ -10681,15 +12565,72 @@ private:
         return type;
     }
 
-    // Evaluate a range bound from the HIR.
+    // Evaluate a range bound from the HIR. Bounds of an enumeration or
+    // physical subtype of `mark` that the HIR keeps only as expressions
+    // are read from their literals.
     [[nodiscard]] std::optional<Range> range_of(
-        const vhdl::RangeConstraint& constraint) const
+        const vhdl::RangeConstraint& constraint,
+        const Object* const mark = nullptr) const
     {
-        if (!constraint.left || !constraint.right) {
+        const auto left = constraint.left
+            ? constraint.left
+            : literal_bound(constraint.left_expression, mark);
+        const auto right = constraint.right
+            ? constraint.right
+            : literal_bound(constraint.right_expression, mark);
+        if (!left || !right) {
             return std::nullopt;
         }
-        return Range { *constraint.left, *constraint.right,
-            constraint.descending };
+        return Range { *left, *right, constraint.descending };
+    }
+
+    // The position of an enumeration literal, or the value of a physical
+    // literal in the primary unit (IEEE 1076-2019 5.2.2.1, 5.2.4.1), that
+    // bounds a range of `mark`.
+    [[nodiscard]] std::optional<std::int64_t> literal_bound(
+        const std::optional<semantic::ExpressionId> id,
+        const Object* const mark) const
+    {
+        const auto* const source = scalar_source(mark);
+        const auto* const expression = id ? hir_expression(*id) : nullptr;
+        if (source == nullptr || expression == nullptr) {
+            return std::nullopt;
+        }
+        const auto unit_scale = [&](const std::string_view name)
+            -> std::optional<std::int64_t> {
+            for (const auto& unit : source->units) {
+                if (same_name(unit.name, name)) {
+                    return unit.scale;
+                }
+            }
+            return std::nullopt;
+        };
+        if (expression->kind == vhdl::ExpressionKind::name) {
+            std::string_view name = expression->text;
+            if (const auto dot = name.rfind('.');
+                dot != std::string_view::npos && !name.starts_with('\\')) {
+                name.remove_prefix(dot + 1U);
+            }
+            for (std::size_t position = 0U;
+                 position < source->literals.size(); ++position) {
+                if (same_name(source->literals[position], name)) {
+                    return static_cast<std::int64_t>(position);
+                }
+            }
+            return unit_scale(name);
+        }
+        constexpr std::string_view physical { "@vhdl-physical:" };
+        if (expression->kind == vhdl::ExpressionKind::call
+            && expression->text.starts_with(physical)
+            && expression->operands.size() == 1U) {
+            const auto magnitude = integer_literal(expression->operands.front());
+            const auto scale = unit_scale(
+                std::string_view { expression->text }.substr(physical.size()));
+            if (magnitude && scale) {
+                return *magnitude * *scale;
+            }
+        }
+        return std::nullopt;
     }
 
     // The object of a declared type or subtype.
@@ -10921,6 +12862,23 @@ private:
                 result->type_data->designated = &*definition.element_subtype;
             }
             break;
+        case vhdl::TypeForm::protected_type:
+        case vhdl::TypeForm::protected_body:
+            // Lexical scopes holding the methods and, in the body, the
+            // private declarations (IEEE 1076-2019 5.6, Figure 5).
+            result = make_type(
+                definition.form == vhdl::TypeForm::protected_body
+                    ? vhpiProtectedTypeBodyK
+                    : vhpiProtectedTypeDeclK,
+                name, "work", "");
+            result->type_data->storage = Storage::other;
+            result->protected_definition = &definition;
+            for (const auto id : definition.protected_members) {
+                if (const auto* const member = hir_.find_declaration(id)) {
+                    result->region_declarations.push_back(member);
+                }
+            }
+            break;
         default:
             break;
         }
@@ -11092,7 +13050,7 @@ private:
         // A constraint that repeats the type mark's adds nothing.
         if (subtype.constraints.size() == 1U
             && mark->type_data->storage != Storage::array) {
-            const auto range = range_of(subtype.constraints.front());
+            const auto range = range_of(subtype.constraints.front(), mark);
             if (!range || range == mark->type_data->range) {
                 return mark;
             }
@@ -11120,7 +13078,8 @@ private:
             data.unconstrained
                 = data.dimensions.size() != std::max<std::size_t>(
                       data.dimension_count, 1U);
-        } else if (const auto range = range_of(subtype.constraints.front())) {
+        } else if (const auto range
+                   = range_of(subtype.constraints.front(), mark)) {
             data.range = range;
         }
         return result;
@@ -11199,7 +13158,7 @@ private:
     // A range object; its class follows the type of the range's values
     // (IEEE 1076-2019 19.4.3).
     [[nodiscard]] Object* range_object(
-        const Range& range, const Object* const index_type = nullptr)
+        const Range& range, Object* const index_type = nullptr)
     {
         auto kind = vhpiIntRangeK;
         if (index_type != nullptr && index_type->type_data != nullptr) {
@@ -11221,7 +13180,111 @@ private:
         auto* const object = make_object(kind, "", nullptr);
         object->type_data = std::make_unique<TypeData>();
         object->type_data->range = range;
+        // The type whose values the bounds are (vhpiLeftExpr, vhpiRightExpr).
+        object->type = index_type;
         return object;
+    }
+
+    // The type that holds the literals or units of a scalar (sub)type.
+    [[nodiscard]] static const TypeData* scalar_source(const Object* type)
+    {
+        for (std::size_t depth = 0U; type != nullptr && depth < 32U; ++depth) {
+            if (type->type_data != nullptr
+                && (!type->type_data->literals.empty()
+                    || !type->type_data->units.empty())) {
+                return type->type_data.get();
+            }
+            type = type->type_data != nullptr
+                ? (type->type_data->base != nullptr && type->type_data->base != type
+                        ? type->type_data->base
+                        : type->type_data->parent)
+                : nullptr;
+        }
+        return nullptr;
+    }
+
+    // A bound of an enumeration, physical or floating point range as an
+    // expression object (IEEE 1076-2019 19.4.3, Figure 7): an enumeration
+    // literal, a physical literal written in the largest unit of its type
+    // that holds it exactly, or a real literal.
+    [[nodiscard]] Object* range_bound_object(
+        const Object& range, const bool left)
+    {
+        if (range.type_data == nullptr) {
+            return nullptr;
+        }
+        const auto& data = *range.type_data;
+        if (range.kind == vhpiFloatRangeK && data.real_range) {
+            const double value = left ? data.real_range->first
+                                      : data.real_range->second;
+            char text[40];
+            std::snprintf(text, sizeof text, "%.17g", value);
+            if (const auto found = real_bound_objects_.find(text);
+                found != real_bound_objects_.end()) {
+                return found->second;
+            }
+            auto* const object = make_object(vhpiRealLiteralK, text, nullptr);
+            object->full_name = object->name;
+            object->full_case_name = object->case_name;
+            object->type = standard_type("real");
+            object->constant = PackedLogic4::from_aval_bval(
+                64U, std::bit_cast<std::uint64_t>(value), 0U);
+            real_bound_objects_.emplace(text, object);
+            return object;
+        }
+        if (!data.range) {
+            return nullptr;
+        }
+        const auto value = left ? data.range->left : data.range->right;
+        const auto* const source = scalar_source(range.type);
+        if (range.kind == vhpiEnumRangeK && source != nullptr && value >= 0
+            && static_cast<std::size_t>(value) < source->literals.size()) {
+            const auto key = std::pair { range.type, value };
+            if (const auto found = enum_bound_objects_.find(key);
+                found != enum_bound_objects_.end()) {
+                return found->second;
+            }
+            auto* const object = make_object(vhpiEnumLiteralK,
+                source->literals[static_cast<std::size_t>(value)], range.type);
+            object->full_name = object->name;
+            object->full_case_name = object->case_name;
+            object->position = value;
+            object->type = range.type;
+            enum_bound_objects_.emplace(key, object);
+            return object;
+        }
+        if (range.kind == vhpiPhysRangeK && source != nullptr
+            && !source->units.empty()) {
+            // The largest unit that divides the value (the primary unit
+            // has scale 1, so one always does).
+            const PhysicalUnit* chosen = nullptr;
+            for (const auto& unit : source->units) {
+                if (unit.scale > 0 && value % unit.scale == 0
+                    && (chosen == nullptr || unit.scale > chosen->scale)) {
+                    chosen = &unit;
+                }
+            }
+            if (chosen == nullptr) {
+                return nullptr;
+            }
+            const auto name
+                = std::to_string(value / chosen->scale) + " " + lower(chosen->name);
+            const auto key = std::pair { range.type, value };
+            if (const auto found = phys_bound_objects_.find(key);
+                found != phys_bound_objects_.end()) {
+                return found->second;
+            }
+            auto* const object = make_object(vhpiPhysLiteralK, name, nullptr);
+            object->full_name = object->name;
+            object->full_case_name = object->case_name;
+            object->type = range.type;
+            object->position = chosen->scale;
+            object->constant = PackedLogic4::from_aval_bval(
+                64U, static_cast<std::uint64_t>(value), 0U);
+            phys_bound_objects_.emplace(key, object);
+            return object;
+        }
+        return nullptr;
     }
 
     // The range of a real type or subtype (IEEE 1076-2019 19.4.3).
@@ -11526,6 +13589,25 @@ private:
             return vhpiUndefined;
         }
         auto& object = static_cast<Object&>(*base);
+        // vhpiLevelP and vhpiIsInvalidP are deprecated Annex B constants
+        // that no clause defines, so reading either is an error on every
+        // object (B.1).
+        if (property == DEPRECATED_vhpiIsInvalidP
+            || property == DEPRECATED_vhpiLevelP) {
+            error(vhpiError,
+                "the deprecated property has no definition in IEEE 1076-2019");
+            return vhpiUndefined;
+        }
+        if (object.entity_designator) {
+            // The properties the model gives an entity designator.
+            if (property == vhpiEntityClassP) {
+                if (const auto value = entity_class_value(object.entity_class_text)) {
+                    return *value;
+                }
+            }
+            error(vhpiError, "an entity designator has only vhpiEntityClassP");
+            return vhpiUndefined;
+        }
         if (object.stack_frame) {
             // Annex B gives class stackFrame no class kind and the model
             // gives it the one property.
@@ -11566,7 +13648,8 @@ private:
             return object.kind;
         case vhpiCapabilitiesP:
             // Only the capability sets that are fully provided (17.3).
-            return vhpiProvidesHierarchy | vhpiProvidesForeignModel;
+            return vhpiProvidesHierarchy | vhpiProvidesForeignModel
+                | vhpiProvidesAdvancedForeignModel;
         // No part of a foreign program's state is saved or restored for it:
         // its handles, callbacks and private data go through vhpi_put_data
         // and vhpi_get_data (IEEE 1076-2019 20.7, 20.8).
@@ -11675,6 +13758,10 @@ private:
             }
             break;
         case vhpiIsUnconstrainedP:
+            // An entity class entry with a box (Figure 12).
+            if (object.kind == vhpiEntityClassEntryK) {
+                return object.entry_unconstrained ? 1 : 0;
+            }
             if (type != nullptr && type->type_data) {
                 return type->type_data->unconstrained ? 1 : 0;
             }
@@ -11753,15 +13840,28 @@ private:
                     && object.kind != vhpiPackInstK)) {
                 return foreign_binding(object.unit) != nullptr ? 1 : 0;
             }
-            // A subprogram body of the design is not foreign: the FOREIGN
-            // attribute is not retained, and foreign subprograms register
-            // through vhpi_register_foreignf (IEEE 1076-2019 20.4).
+            // A subprogram body is foreign when a FOREIGN attribute
+            // specification in its declarative region names the body or its
+            // declaration (IEEE 1076-2019 20.4.2; the HIR keeps the flag in
+            // the callable profile).
+            if (object.kind == vhpiSubpBodyK) {
+                const auto foreign_of = [](const vhdl::Declaration* const d) {
+                    return d != nullptr && d->callable && d->callable->foreign;
+                };
+                return foreign_of(object.body_declaration)
+                        || foreign_of(object.declaration)
+                    ? 1
+                    : 0;
+            }
             if (object.process != nullptr || object.kind == vhpiDriverK
-                || object.equivalent || object.kind == vhpiSubpBodyK) {
+                || object.equivalent) {
                 return 0;
             }
             break;
         case vhpiIsPureP:
+            if (object.intrinsic_resolved) {
+                return 1;
+            }
             if (object.kind == vhpiFuncDeclK && object.declaration != nullptr
                 && object.declaration->callable) {
                 return object.declaration->callable->pure ? 1 : 0;
@@ -11845,6 +13945,13 @@ private:
             }
             break;
         case vhpiIsOpenP:
+            if (object.kind == vhpiCompConfigK
+                && object.component_config != nullptr) {
+                return object.component_config->binding.kind
+                        == vhdl::BindingKind::open
+                    ? 1
+                    : 0;
+            }
             if (object.kind == vhpiAssocElemK) {
                 return object.port_association != nullptr
                         && port_connection(object).open
@@ -11889,6 +13996,9 @@ private:
             }
             break;
         case vhpiIsNullP:
+            if (object.kind == vhpiTransactionK) {
+                return object.transaction_null ? 1 : 0;
+            }
             if (is_range(object) && object.type_data
                 && object.type_data->range) {
                 return object.type_data->range->length() == 0 ? 1 : 0;
@@ -11944,6 +14054,16 @@ private:
             }
             break;
         case vhpiIsDefaultP:
+            // A component configuration with no binding indication of its
+            // own takes the default one (7.3.3, Figure 3).
+            if (object.kind == vhpiCompConfigK
+                && object.component_config != nullptr) {
+                const auto& binding = object.component_config->binding;
+                return binding.kind == vhdl::BindingKind::entity
+                        && binding.entity.text().empty()
+                    ? 1
+                    : 0;
+            }
             if (object.kind == vhpiCompInstStmtK
                 && object.occurrence != nullptr) {
                 return default_binding(object) ? 1 : 0;
@@ -11995,6 +14115,23 @@ private:
                     || object.kind == vhpiFileParamDeclK)
                 && object.declaration != nullptr) {
                 return open_mode(object);
+            }
+            break;
+        case vhpiEntityClassP:
+            // The entity class of an attribute specification (IEEE
+            // 1076-2019 7.2, 23.10; the vhpiEntityClassT constants).
+            if (object.kind == vhpiAttrSpecK && object.declaration != nullptr
+                && object.declaration->attribute) {
+                if (const auto value = entity_class_value(
+                        object.declaration->attribute->entity_class)) {
+                    return *value;
+                }
+            }
+            // An entity class entry of a group template (Figure 12).
+            if (object.kind == vhpiEntityClassEntryK) {
+                if (const auto value = entity_class_value(object.entity_class_text)) {
+                    return *value;
+                }
             }
             break;
         case vhpiAttrKindP:
@@ -12157,6 +14294,33 @@ private:
         }
         const std::string* text = nullptr;
         std::string scratch;
+        // The names of a derefObj are errors in the design hierarchy
+        // information model; in the library information model its Name is
+        // that of the access value followed by `.all` (IEEE 1076-2019
+        // 19.4.3, the names of derefObj).
+        if (object.kind == vhpiDerefObjK
+            && (property == vhpiNameP || property == vhpiCaseNameP
+                || property == vhpiFullNameP || property == vhpiFullCaseNameP
+                || property == vhpiDefNameP)) {
+            const auto* const prefix = object.parent;
+            if (prefix == nullptr || !in_library_model(*prefix)
+                || property == vhpiDefNameP) {
+                error(vhpiError,
+                    "the names of a derefObj are errors in the design "
+                    "hierarchy model");
+                return nullptr;
+            }
+            scratch = (property == vhpiCaseNameP ? prefix->case_name
+                              : property == vhpiFullNameP
+                          ? prefix->full_name
+                          : property == vhpiFullCaseNameP
+                          ? prefix->full_case_name
+                          : prefix->name)
+                + ".all";
+            strings_.push_back(std::move(scratch));
+            return reinterpret_cast<const vhpiCharT*>(
+                strings_.back().c_str());
+        }
         switch (property) {
         case vhpiNameP:
             text = &object.name;
@@ -12201,6 +14365,41 @@ private:
                 break;
             }
             return nullptr;
+        case vhpiLogicalNameP:
+            // The file logical name of a file declaration (IEEE 1076-2019
+            // 6.4.2.5, 19.4.3 Figure 10). The name is an expression the
+            // elaboration evaluates; the runtime keeps no handle from a
+            // declaration to its open file here, so the value is the literal
+            // of the declaration or the string value of the constant or
+            // generic it names, and any other name reads as the empty string
+            // (no error).
+            if (object.kind != vhpiFileDeclK
+                && object.kind != vhpiFileParamDeclK) {
+                error(vhpiError, "vhpiLogicalNameP needs a file declaration");
+                return nullptr;
+            }
+            if (object.declaration != nullptr
+                && object.declaration->initializer) {
+                if (const auto* const name
+                    = hir_expression(*object.declaration->initializer);
+                    name != nullptr && name->decoded_string) {
+                    scratch = *name->decoded_string;
+                } else if (name != nullptr && object.parent != nullptr) {
+                    if (auto* const named = expression_object(
+                            *object.parent, *object.declaration->initializer)) {
+                        std::string buffer(4096U, '\0');
+                        vhpiValueT value { };
+                        value.format = vhpiStrVal;
+                        value.bufSize = static_cast<std::uint32_t>(buffer.size());
+                        value.value.str
+                            = reinterpret_cast<vhpiCharT*>(buffer.data());
+                        if (read_value(*named, value) == 0) {
+                            scratch = buffer.c_str();
+                        }
+                    }
+                }
+            }
+            break;
         case vhpiToolVersionP:
             scratch = std::string { fsim::version };
             break;
@@ -12261,6 +14460,36 @@ private:
                 return nullptr;
             }
             scratch = std::string { source->target.text() };
+            break;
+        }
+        case vhpiSpecNameP:
+            // The block a block configuration configures (Figure 3).
+            if (object.kind == vhpiBlockConfigK
+                && object.block_configuration != nullptr) {
+                scratch = std::string { object.block_configuration->block.text() };
+                break;
+            }
+            error(vhpiError, "vhpiSpecNameP needs a block configuration");
+            return nullptr;
+        case vhpiInstNamesP: {
+            // The instance list of a component configuration: its labels
+            // separated by commas, or `all` or `others` (7.3.1).
+            if (object.kind != vhpiCompConfigK
+                || object.component_config == nullptr) {
+                error(vhpiError, "vhpiInstNamesP needs a component configuration");
+                return nullptr;
+            }
+            const auto& configuration = *object.component_config;
+            if (configuration.selection == vhdl::InstanceSelection::all) {
+                scratch = "all";
+            } else if (configuration.selection == vhdl::InstanceSelection::others) {
+                scratch = "others";
+            } else {
+                for (const auto& label : configuration.labels) {
+                    scratch += scratch.empty() ? "" : ", ";
+                    scratch += label;
+                }
+            }
             break;
         }
         case DEPRECATED_vhpiOpNameP:
@@ -12378,7 +14607,8 @@ private:
     [[nodiscard]] static bool is_design_unit(const Object& object) noexcept
     {
         return object.kind == vhpiArchBodyK || object.kind == vhpiEntityDeclK
-            || object.kind == vhpiPackDeclK;
+            || object.kind == vhpiPackDeclK || object.kind == vhpiPackBodyK
+            || object.kind == vhpiConfigDeclK;
     }
 
     // The UnitName of a design unit: `library.unit`, and for an
@@ -12437,6 +14667,7 @@ private:
         case vhpiGenericDeclK:
         case vhpiConstDeclK:
         case vhpiVarDeclK:
+        case vhpiProtectedTypeInstK:
         case vhpiAliasDeclK:
             scopes.push_back(object.name);
             region = object.parent;
@@ -12764,6 +14995,14 @@ private:
         }
         auto* const type = is_type(*object) ? object : object->type;
         switch (property) {
+        case vhpiTimeP:
+            // The time component of a transaction (IEEE 1076-2019 10.5.2.1,
+            // 19.12.1), absolute, in femtoseconds.
+            if (object->kind == vhpiTransactionK) {
+                return physical(static_cast<std::int64_t>(
+                    object->transaction_ticks * femtoseconds_per_tick_));
+            }
+            break;
         case vhpiPhysValP: {
             vhpiValueT value { };
             value.format = vhpiPhysVal;
@@ -12800,6 +15039,23 @@ private:
     [[nodiscard]] std::optional<std::pair<runtime::simir::ProcessId, std::size_t>>
     variable_local(const Object& object) const
     {
+        // A variable a running call elaborated (14.6 b): its debug local, when
+        // the activation is the newest of its subprogram, which the write
+        // reaches; an outer activation of a recursive call has its registers
+        // saved on the frame stack, where a deposit has no access (22.5.2).
+        if (object.activation != nullptr) {
+            if ((object.kind != vhpiVarDeclK && object.kind != vhpiVarParamDeclK)
+                || !frame_alive(*object.activation)
+                || object.activation->frame_callee == nullptr) {
+                return std::nullopt;
+            }
+            (void)activation_value(object);
+            if (!object.local
+                || activation_depth(*object.activation).second != 0U) {
+                return std::nullopt;
+            }
+            return object.local;
+        }
         if (object.local_resolved) {
             return object.local;
         }
@@ -12853,6 +15109,9 @@ private:
     [[nodiscard]] std::optional<PackedLogic4> element_bits(const Object& object)
     {
         std::optional<PackedLogic4> whole;
+        if (object.kind == vhpiTypeConvK) {
+            return conversion_bits(const_cast<Object&>(object));
+        }
         if (object.activation != nullptr) {
             whole = activation_value(object);
         } else if (object.kind == vhpiDriverK) {
@@ -12932,11 +15191,28 @@ private:
     }
 
     // The scalar format of a type's values (IEEE 1076-2019 22.4).
+    // Whether an integer type's range needs vhpiLongIntT: the native format
+    // must represent every position of the type (IEEE 1076-2019 22.4), and
+    // INTEGER is 64 bits wide from VHDL-2019 on (5.2.3.1).
+    [[nodiscard]] static bool long_integer(const TypeData& data)
+    {
+        constexpr auto low = std::int64_t {
+            std::numeric_limits<std::int32_t>::min() };
+        constexpr auto high = std::int64_t {
+            std::numeric_limits<std::int32_t>::max() };
+        if (!data.range) {
+            return data.width > 32U;
+        }
+        const auto [least, most] = std::minmax(
+            data.range->left, data.range->right);
+        return least < low || most > high;
+    }
+
     [[nodiscard]] static vhpiFormatT scalar_format(const TypeData& data)
     {
         switch (data.storage) {
         case Storage::integer:
-            return vhpiIntVal;
+            return long_integer(data) ? vhpiLongIntVal : vhpiIntVal;
         case Storage::logic9:
             return vhpiLogicVal;
         case Storage::enumeration:
@@ -12969,7 +15245,7 @@ private:
         const auto& element = *data.element->type_data;
         switch (element.storage) {
         case Storage::integer:
-            return vhpiIntVecVal;
+            return long_integer(element) ? vhpiLongIntVecVal : vhpiIntVecVal;
         case Storage::logic9:
             return vhpiLogicVecVal;
         case Storage::enumeration:
@@ -12985,6 +15261,12 @@ private:
         default:
             return vhpiRawDataVal;
         }
+    }
+
+    [[nodiscard]] static bool fits_int(const std::int64_t value) noexcept
+    {
+        return value >= std::numeric_limits<vhpiIntT>::min()
+            && value <= std::numeric_limits<vhpiIntT>::max();
     }
 
     // The scalar value at `offset` as an integer of the type's position.
@@ -13196,6 +15478,12 @@ private:
             const auto position = scalar_at(scalar, *bits, offset);
             switch (format) {
             case vhpiIntVal:
+                // A vhpiIntT holds the value itself (IEEE 1076-2019
+                // 22.2.3): a 64-bit INTEGER outside its range is not read
+                // truncated.
+                if (!fits_int(position)) {
+                    return false;
+                }
                 value.value.intg = static_cast<vhpiIntT>(position);
                 return true;
             case vhpiLongIntVal:
@@ -13238,8 +15526,11 @@ private:
                 return 0;
             }
             if (!store_scalar(data, 0U, value.format)) {
-                error(vhpiError, "unsupported value format "
-                        + std::to_string(value.format));
+                error(vhpiError, value.format == vhpiIntVal
+                        ? object.full_name
+                            + " has a value outside the range of vhpiIntVal"
+                        : "unsupported value format "
+                            + std::to_string(value.format));
                 return -1;
             }
             value.numElems = 1;
@@ -13358,8 +15649,26 @@ private:
                 return static_cast<int>(size);
             }
             for (std::size_t position = 0U; position < count; ++position) {
-                value.value.intgs[position] = static_cast<vhpiIntT>(
-                    scalar_at(element, *bits, offset_of(position)));
+                const auto scalar
+                    = scalar_at(element, *bits, offset_of(position));
+                if (!fits_int(scalar)) {
+                    error(vhpiError, object.full_name
+                            + " has an element outside the range of "
+                              "vhpiIntVecVal");
+                    return -1;
+                }
+                value.value.intgs[position] = static_cast<vhpiIntT>(scalar);
+            }
+            return 0;
+        }
+        case vhpiLongIntVecVal: {
+            const auto size = count * sizeof(vhpiLongIntT);
+            if (!need(size)) {
+                return static_cast<int>(size);
+            }
+            for (std::size_t position = 0U; position < count; ++position) {
+                value.value.longintgs[position]
+                    = scalar_at(element, *bits, offset_of(position));
             }
             return 0;
         }
@@ -13711,8 +16020,34 @@ private:
 
     [[nodiscard]] int get_value(const vhpiHandleT handle, vhpiValueT* const value)
     {
-        auto* const object = object_of(handle);
+        auto* object = object_of(handle);
         if (object == nullptr || value == nullptr) {
+            return -1;
+        }
+        // An indexed or slice name has a value only when it is locally
+        // static (IEEE 1076-2019 22.3): operands that are locally static
+        // expressions name a part of the prefix like literal ones do.
+        if (object->dynamic_scope != nullptr) {
+            auto* const resolved = resolve_dynamic_name(*object);
+            if (resolved == nullptr) {
+                error(vhpiError,
+                    object->full_name + " is not a locally static name");
+                return -1;
+            }
+            object = resolved;
+        }
+        if (object->kind == vhpiTypeConvK && object->type == nullptr) {
+            object->type = expression_type(*object);
+        }
+        // The designated object of an access value exists at run time only,
+        // so a derefObj is no locally static name (IEEE 1076-2019 22.3).
+        if (object->kind == vhpiDerefObjK) {
+            error(vhpiError, "a derefObj is not a locally static name");
+            return -1;
+        }
+        // A null transaction has no value component (IEEE 1076-2019 10.5.2.2).
+        if (object->kind == vhpiTransactionK && object->transaction_null) {
+            error(vhpiError, "a null transaction has no value");
             return -1;
         }
         return read_value(*object, *value);
@@ -13832,6 +16167,9 @@ private:
                 break;
             case vhpiIntVecVal:
                 elements = buffer / sizeof(vhpiIntT);
+                break;
+            case vhpiLongIntVecVal:
+                elements = buffer / sizeof(vhpiLongIntT);
                 break;
             case vhpiRealVecVal:
                 elements = buffer / sizeof(vhpiRealT);
@@ -14540,6 +16878,8 @@ private:
                     return nullptr;
                 }
             }
+            simulation_.note_foreign_structure(
+                "a process created by vhpi_create");
             auto* const process
                 = make_object(vhpiProcessStmtK, name, nullptr);
             process->foreign = index;
@@ -14692,6 +17032,13 @@ private:
             count = buffer / sizeof(vhpiIntT);
             if (index < count) {
                 element.value.intg = vector.value.intgs[index];
+            }
+            break;
+        case vhpiLongIntVecVal:
+            element.format = vhpiLongIntVal;
+            count = buffer / sizeof(vhpiLongIntT);
+            if (index < count) {
+                element.value.longintg = vector.value.longintgs[index];
             }
             break;
         case vhpiRealVecVal:
@@ -14849,12 +17196,33 @@ private:
             return 1;
         }
         if (values == nullptr) {
-            // A null transaction disconnects a guarded signal's driver
-            // (22.6); the driver of a foreign process is for a signal that
-            // has no guard here.
-            error(vhpiError, "a null transaction needs a driver for a guarded "
-                             "signal");
-            return 1;
+            // A null transaction disconnects the driver of a guarded signal
+            // (IEEE 1076-2019 10.5.2.2, 23.34); it takes the delay and no
+            // value. The driver of an unguarded signal cannot be
+            // disconnected, which is the 23.34 error.
+            const std::uint64_t ticks
+                = delay != nullptr ? from_vhpi_time(*delay) : 0U;
+            if (drivers.empty()) {
+                error(vhpiError, "no driver to disconnect");
+                return 1;
+            }
+            try {
+                for (const auto* const driver : drivers) {
+                    if (!simulation_.disconnect_foreign_driver(
+                            *driver_process(*driver), *driver->signal,
+                            ticks)) {
+                        error(vhpiError, "a null transaction needs a driver "
+                                         "for a guarded signal");
+                        return 1;
+                    }
+                }
+            } catch (const std::exception& failure) {
+                error(vhpiError,
+                    std::string { "cannot schedule the null transaction: " }
+                        + failure.what());
+                return 1;
+            }
+            return 0;
         }
         if (count == 0U || drivers.empty()) {
             error(vhpiError, "no value to schedule");
@@ -15244,6 +17612,11 @@ private:
     std::map<const vhdl::Statement*, std::size_t> loop_numbers_;
     std::map<std::uint32_t, Object*> literal_objects_;
     std::map<std::int64_t, Object*> integer_objects_;
+    // The bounds of enumeration, physical and floating point ranges, shared
+    // by value (vhpiLeftExpr, vhpiRightExpr).
+    std::map<std::pair<const Object*, std::int64_t>, Object*> enum_bound_objects_;
+    std::map<std::pair<const Object*, std::int64_t>, Object*> phys_bound_objects_;
+    std::map<std::string, Object*, std::less<>> real_bound_objects_;
     // The shared variables held by a running vhpi_protected_call.
     std::set<const Object*> protected_held_;
     std::map<std::string, Object*, std::less<>> physical_literals_;
@@ -15313,12 +17686,19 @@ private:
     std::uint64_t transaction_token_ { };
     Object* root_ { };
     Object* tool_ { };
+    Object* resolved_function_ { };
     vhpiHandleT dispatching_ { };
     // The callback whose routine is running.
     vhpiHandleT current_callback_ { };
     // The source of the library directories vhpiLibPhysicalNameP reports,
     // and the directories once read.
     VhpiLibraryDirectories library_source_;
+    // The units the workspace catalog lists per library, read on the first
+    // listing of that library; the units the design artifact lacks are
+    // synthetic `vhdl::Unit`s that carry the name, kind and library only.
+    VhpiLibraryUnits catalog_source_;
+    std::set<std::string, std::less<>> catalog_read_;
+    std::deque<vhdl::Unit> catalog_units_;
     std::optional<std::map<std::string, std::filesystem::path>>
         library_directories_;
     std::vector<std::unique_ptr<ForeignModel>> foreign_models_;
@@ -15426,12 +17806,13 @@ std::unique_ptr<VhpiForeignService> attach_vhpi_modules(
     const std::span<const std::string> arguments,
     diagnostic::Engine& diagnostics,
     ForeignCompanion companion,
-    VhpiLibraryDirectories libraries)
+    VhpiLibraryDirectories libraries,
+    VhpiLibraryUnits library_units)
 {
     auto service = std::make_unique<LiveService>(
         simulation, std::move(print), arguments);
     service->set_companion(std::move(companion));
-    service->set_libraries(std::move(libraries));
+    service->set_libraries(std::move(libraries), std::move(library_units));
     service->attach();
     if (!service->load(modules, registries, diagnostics)) {
         return nullptr;

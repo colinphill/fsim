@@ -508,9 +508,11 @@ transitions use the new table and the ones pending keep their time. A
 reannotation that would add or remove a split (a load that had no delay when
 the design was elaborated, a delay that becomes zero for a whole load, or a
 change in which drivers form a group) cannot change the processes of a
-running simulation: it keeps the running split and its delay tables, and takes
-the effective path and check timing only (the split below would take such a
-load at the safe point, once the engines can grow a running design). Existing
+running simulation: a load that had no delay is split at the safe point, as
+the split below does for a first port delay put, a load that loses its delay
+takes a zero table, and the delay tables of the other loads stay. The values
+`vpi_put_delays` stored for the net delay records are dropped with the
+records (`Simulation::sdf_net_delay_epoch`). Existing
 and deferred native modules keep their captured code/cache identities; their
 compilation inputs do not contain those mutable timing tables.
 

@@ -117,6 +117,8 @@ using VhdlVhpiDriverLogicResult =
 using VhdlVhpiWriteResult =
     VhdlVhpiDriverResult<VhdlVhpiWriteDescriptor>;
 
+struct VhdlVhpiDriverEvents;
+
 class VhdlVhpiDriverSystem final {
  public:
   VhdlVhpiDriverSystem(
@@ -170,7 +172,23 @@ class VhdlVhpiDriverSystem final {
       std::uint64_t identity,
       fsim_vhpi_handle_v1 owner);
 
+  // Run-state save and restart of pending delayed writes and driver
+  // transactions (#128). They are the scheduler event kinds "vhpi.write" and
+  // "vhpi.transaction" (data: the system and an identity); the entries are
+  // saved with the foreign state. These bind the owner domain "vhpi_driver"
+  // for the event codec and give a restored event's handle back to its entry
+  // (IEEE 1076-2019 23.18 vhpi_put_value with a delay, 23.20 vhpi_schedule_transaction).
+  void bind_event_owner(SchedulerEventOwners& owners);
+  [[nodiscard]] bool bind_restored_write(
+      std::uint64_t identity, const ScheduledTaskHandle& handle);
+  [[nodiscard]] bool bind_restored_transaction(
+      std::uint64_t identity, const ScheduledTaskHandle& handle);
+
  private:
+  friend struct VhdlVhpiDriverEvents;
+  [[nodiscard]] Scheduler::Task write_task(std::uint64_t identity);
+  [[nodiscard]] Scheduler::Task transaction_task(
+      std::uint64_t driver, std::uint64_t transaction);
   struct TransactionEntry {
     VhdlVhpiTransactionDescriptor descriptor;
     ScheduledTaskHandle task;

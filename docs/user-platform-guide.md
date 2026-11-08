@@ -110,6 +110,41 @@ The largest retained UVM 1.2 and UVM 2020 Debug qualification runs used
 6 GiB. These are Linux measurements, not inferred Windows thresholds. Windows
 measurements require the pinned LLVM-MinGW hosted lanes.
 
+## Save, restart and reset
+
+A simulation can write its whole run state to a file and later continue from
+it (IEEE 1800-2023 D.8, D.9). Three routes write a file:
+
+- The system tasks `$save("file")` and `$incsave("file")`. The file name is a
+  string literal. The save is taken at the end of the current time slot, once
+  nothing is pending in it (the active, inactive and nonblocking events and the
+  reactive events have drained); it never refuses because events are pending.
+  `$incsave` writes only what changed since the last `$save` of the run and
+  names that full file, which must still be present and unchanged when the
+  incremental file is restarted.
+- `fsim simulate --save-at TIME --save-file FILE` (or the configuration keys
+  `simulate.save_at` and `simulate.save_file`) saves at the end of the time
+  slot at `TIME`, and the run then goes on to its end or to `--duration`.
+- The Tcl command `fsim::save FILE ?incremental?`, between run commands.
+
+Three routes restore one: the system task `$restart("file")`, `fsim simulate
+--restart FILE` (or `simulate.restart`), and the Tcl command `fsim::restart
+FILE`. A restart repeats the command line of the save: the same design, the
+same VPI, VHPI and DPI libraries, plusargs and engine. A file saved under
+another design, build or command line is refused (`FSIM-SAVE-0016`), as is a
+file of another layout version (`FSIM-SAVE-0009`) or a damaged one
+(`FSIM-SAVE-0015`). Files the design had open at the save are reopened without
+truncation and positioned again; a wave trace of the restarted run goes to a
+new file. Save, restart and reset work on the v4 engine and the reference
+interpreter; the debug engine follows the interpreter. A run with a SystemC
+part, or with a live chandle, cannot be saved.
+
+`$reset` returns the run to its time-zero state; `$reset_count` and
+`$reset_value` read the number of resets and the value the last `$reset`
+passed (D.8). The run rebuilds its time-zero state from the design artifact.
+
+A design that uses none of these tasks pays nothing for them.
+
 ## Foreign libraries
 
 `simulate --vpi LIB[:BOOTSTRAP]` and `--vhpi LIB[:BOOTSTRAP]` load VPI and VHPI

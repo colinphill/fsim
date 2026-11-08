@@ -29,9 +29,8 @@ HierarchyBuilder::collect_compiled_systemverilog_bound_instances(
         && active_compiled_systemverilog_configuration_->configuration
         && !active_compiled_systemverilog_configuration_
             ->configuration->designs.empty()) {
-        logical_path = active_compiled_systemverilog_configuration_
-                           ->configuration->designs.front()
-                           .cell;
+        logical_path
+            = active_compiled_systemverilog_configuration_cell_;
         if (path.size()
                 > active_compiled_systemverilog_configuration_root_.size()
             && path.starts_with(

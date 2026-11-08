@@ -2170,37 +2170,33 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
     resolve_expression(argument, scope);
   }
 }
-void Resolver::resolve_statement(
+[[gnu::noinline]] std::unique_ptr<Scope> Resolver::declare_statement_scope(
+    Statement& statement, const Scope& inherited_scope) {
+  auto declared_scope = std::make_unique<Scope>(inherited_scope);
+  for (auto& alias : statement.type_aliases) {
+    if (auto scoped = resolve_class_scoped_type(alias.type, *declared_scope)) {
+      alias.type = std::move(*scoped);
+    }
+    declared_scope->aliases.insert_or_assign(alias.name, &alias.type);
+  }
+  for (auto& declaration : statement.declarations) {
+    if (auto scoped = resolve_class_scoped_type(
+            declaration.type, *declared_scope)) {
+      declaration.type = std::move(*scoped);
+    }
+    if (declaration.initializer) {
+      resolve_typed_expression(
+          *declaration.initializer, *declared_scope, declaration.type);
+    }
+    declared_scope->objects.assign(declaration.name, declaration.type);
+  }
+  return declared_scope;
+}
+[[gnu::noinline]] bool Resolver::resolve_statement_head(
     Statement& statement,
-    const Scope& inherited_scope,
+    const Scope& scope,
     const std::optional<std::string>& return_class,
     const SystemVerilogScalarKind return_scalar) {
-  // Only a statement that declares objects needs its own scope copy.
-  std::optional<Scope> declared_scope;
-  if (!statement.type_aliases.empty()) {
-    declared_scope = inherited_scope;
-    for (auto& alias : statement.type_aliases) {
-      if (auto scoped = resolve_class_scoped_type(alias.type, *declared_scope)) {
-        alias.type = std::move(*scoped);
-      }
-      declared_scope->aliases.insert_or_assign(alias.name, &alias.type);
-    }
-  }
-  if (!statement.declarations.empty()) {
-    if (!declared_scope) declared_scope = inherited_scope;
-    for (auto& declaration : statement.declarations) {
-      if (auto scoped = resolve_class_scoped_type(
-              declaration.type, *declared_scope)) {
-        declaration.type = std::move(*scoped);
-      }
-      if (declaration.initializer) {
-        resolve_typed_expression(
-            *declaration.initializer, *declared_scope, declaration.type);
-      }
-      declared_scope->objects.assign(declaration.name, declaration.type);
-    }
-  }
-  const Scope& scope = declared_scope ? *declared_scope : inherited_scope;
   // `$cast(dest, value);` discards the call's result (IEEE 1800-2017
   // 6.24.2); a class destination resolves to the checked class cast.
   if (statement.kind == StatementKind::TaskCall
@@ -2261,7 +2257,7 @@ void Resolver::resolve_statement(
                 : std::string{});
       }
       statement.value = Expression{};
-      return;
+      return false;
     }
   }
   // A task called through a selected receiver, `items[i].run(x)`, parses as
@@ -2296,7 +2292,7 @@ void Resolver::resolve_statement(
       statement.task_argument_names.assign(2U, std::string{});
       resolve_expression(statement.task_arguments.back(), scope);
       statement.value = Expression{};
-      return;
+      return false;
     }
     if (identity
         && !find_methods(*identity, name, SystemVerilogClassMethodKind::Task)
@@ -2305,7 +2301,7 @@ void Resolver::resolve_statement(
           *identity, name, SystemVerilogClassMethodKind::Task,
           statement.value.operands.size() - 1U, statement.span);
       if (!match || !match->method) {
-        return;
+        return false;
       }
       statement.kind = StatementKind::TaskCall;
       statement.task_name = "@sv-task:" + match->method->canonical_identity;
@@ -2343,7 +2339,7 @@ void Resolver::resolve_statement(
           resolve_expression(statement.task_arguments[index], scope);
         }
       }
-      return;
+      return false;
     }
   }
   auto target_type = resolve_expression(statement.target, scope);
@@ -2419,15 +2415,24 @@ void Resolver::resolve_statement(
   resolve_expression(statement.loop_initial, scope);
   resolve_expression(statement.loop_limit, scope);
   resolve_expression(statement.loop_update_target, scope);
-  for (auto& update : statement.loop_updates) {
-    resolve_statement(update, scope, return_class, return_scalar);
-  }
+  return true;
+}
+[[gnu::noinline]] void Resolver::resolve_statement_tail(
+    Statement& statement, const Scope& scope) {
   for (auto& output : statement.output_values) {
     resolve_expression(output.value, scope);
+  }
+  // The argument expressions kept for the VPI (vpiArgument, 37.43) name
+  // the same objects as the output values.
+  for (auto& argument : statement.output_arguments) {
+    resolve_expression(argument, scope);
   }
   for (auto& sensitivity : statement.sensitivities) {
     resolve_member_sensitivity(sensitivity, scope);
     resolve_expression(sensitivity.expression, scope);
+    if (sensitivity.guard) {
+      resolve_expression(*sensitivity.guard, scope);
+    }
   }
   if (statement.kind == StatementKind::Report) {
     for (auto& argument : statement.task_arguments) {
@@ -2437,6 +2442,27 @@ void Resolver::resolve_statement(
   if (statement.kind == StatementKind::TaskCall) {
     resolve_task_call(statement, scope);
   }
+}
+void Resolver::resolve_statement(
+    Statement& statement,
+    const Scope& inherited_scope,
+    const std::optional<std::string>& return_class,
+    const SystemVerilogScalarKind return_scalar) {
+  // Only a statement that declares objects needs its own scope copy. The
+  // copy and the statement's own work stay out of this frame, which every
+  // nested statement repeats (a long else-if chain nests a level per branch).
+  std::unique_ptr<Scope> declared_scope;
+  if (!statement.type_aliases.empty() || !statement.declarations.empty()) {
+    declared_scope = declare_statement_scope(statement, inherited_scope);
+  }
+  const Scope& scope = declared_scope ? *declared_scope : inherited_scope;
+  if (!resolve_statement_head(statement, scope, return_class, return_scalar)) {
+    return;
+  }
+  for (auto& update : statement.loop_updates) {
+    resolve_statement(update, scope, return_class, return_scalar);
+  }
+  resolve_statement_tail(statement, scope);
   for (auto& child : statement.statements) {
     resolve_statement(child, scope, return_class, return_scalar);
   }

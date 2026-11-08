@@ -1,0 +1,11 @@
+#c initial scope=top
+#c set status=1
+#c changed scope=top.sub
+#c misctf reason_scope
+#c report scope=top.sub.blk
+#c misctf reason_scope
+#c report scope=top.sub.tk
+#c misctf reason_scope
+#c report scope=top.sub
+#c misctf reason_scope
+#c report scope=top

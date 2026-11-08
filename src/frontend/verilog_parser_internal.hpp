@@ -23,6 +23,10 @@
 
 namespace fsim::frontend {
 
+/// Whether `action` is a legal pass or fail statement of a deferred assertion
+/// or cover (IEEE 1800-2023 16.4); `final` selects the Postponed-region rule.
+[[nodiscard]] bool valid_deferred_action(const Statement& action, bool final);
+
 /// The binary operator a compound assignment applies (`+=` applies "+"),
 /// or empty for any other token (IEEE 1800-2017 11.4.1).
 [[nodiscard]] constexpr std::string_view compound_assignment_operator(
@@ -289,6 +293,8 @@ class VerilogParser final : private detail::ParserBase {
   // The `iff` guard of the single event of the last event control parsed
   // (IEEE 1800-2017 9.4.2.3).
   std::optional<Expression> event_guard_;
+  // Why the last concurrent assertion directive could not be prepared.
+  std::string sva_reject_reason_;
   // Compilation-unit forward type declarations awaiting their definition.
   std::vector<Token> compilation_unit_forward_types_;
   // Reports undeclared names a compilation-unit subprogram noted since
@@ -399,11 +405,24 @@ class VerilogParser final : private detail::ParserBase {
   bool resolve_sva_directive(DesignUnit& unit, std::size_t index);
   // Moves the concurrent assertion statements of procedures to directives
   // enabled by those procedures (IEEE 1800-2017 16.14.6).
+  // `names_event_or_clocking` tells whether an identifier is an event
+  // variable or a clocking block of the scope (16.14.6 c) 1)).
   void extract_procedural_assertions(
       std::vector<Process>& processes,
       std::vector<VariableDeclaration>& variables,
       std::vector<SystemVerilogConcurrentAssertion>& directives,
-      std::vector<SystemVerilogAssertionDeclaration>& declarations);
+      std::vector<SystemVerilogAssertionDeclaration>& declarations,
+      const std::function<bool(std::string_view)>& names_event_or_clocking);
+
+  // Records on a procedure that holds concurrent assertion statements what
+  // its clock inference needs while its tokens are at hand: the event
+  // expressions of its one event control and whether a term of one appears in
+  // the body (IEEE 1800-2023 16.14.6). The token ranges are the event control
+  // after its `@` (empty when the procedure has none outside its body) and
+  // the body.
+  void record_procedure_clock_inference(Process& process,
+      std::size_t control_begin, std::size_t control_end,
+      std::size_t body_begin, std::size_t body_end);
 
   SystemVerilogClockingSkew parse_clocking_skew();
 
@@ -458,6 +477,23 @@ class VerilogParser final : private detail::ParserBase {
   // A boolean assertion operand parsed as an ordinary expression; empty
   // when the tokens use sequence or property operators.
   std::optional<Expression> assertion_expression(std::span<const Token> tokens);
+  // The expression tree of a property or sequence declaration (or of the
+  // property instance of a directive) for the VPI (IEEE 1800-2023
+  // 37.50-37.54); empty when the body is not covered.
+  std::optional<SystemVerilogAssertionTree> build_assertion_tree(
+      const DesignUnit& unit, std::vector<Token> tokens,
+      const SystemVerilogAssertionDeclaration* declaration);
+  // Groups the sequences a published tree joins on different clocks into
+  // multiclock sequence expressions (IEEE 1800-2023 37.56).
+  static void wrap_multiclock_sequences(SystemVerilogAssertionTree& tree,
+      const std::vector<Sensitivity>& default_clock, const SourceSpan& span,
+      bool property_root);
+  void publish_assertion_trees(const DesignUnit& unit,
+      std::vector<SystemVerilogAssertionDeclaration>& declarations,
+      std::vector<SystemVerilogConcurrentAssertion>& assertions);
+  // A clocking event's tokens as an event control's sensitivities; empty
+  // when they do not parse completely.
+  std::vector<Sensitivity> assertion_clock_events(std::span<const Token> tokens);
   // A clocked inline property `assert property (@(e) ...)` becomes a
   // synthesized property declaration that the directive names.
   bool parse_generate_concurrent_assertion(GenerateBody& body);

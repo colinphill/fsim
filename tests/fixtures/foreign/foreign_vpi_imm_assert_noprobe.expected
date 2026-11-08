@@ -1,0 +1,2 @@
+#c register failed: vpi_register_assertion_cb: callbacks on an immediate or deferred assertion need the execution probes of simulate --foreign-probes (configuration key simulate.foreign_probes)
+#c action

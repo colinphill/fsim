@@ -140,6 +140,17 @@ static void list(vpiHandle scope, const char* label)
     vpiHandle assertion;
     while (iterator != NULL && (assertion = vpi_scan(iterator)) != NULL) {
         vpiHandle const parent = vpi_handle(vpiScope, assertion);
+        const PLI_INT32 type = vpi_get(vpiType, assertion);
+        if (type == vpiImmediateAssert || type == vpiImmediateAssume
+            || type == vpiImmediateCover) {
+            // Immediate and deferred assertions are members of vpiAssertion
+            // too (37.49); they have no label here.
+            vpi_printf("#c %s %s line=%d deferred=%d final=%d\n", label,
+                text(vpiType, assertion), (int)vpi_get(vpiLineNo, assertion),
+                (int)vpi_get(vpiIsDeferred, assertion),
+                (int)vpi_get(vpiIsFinal, assertion));
+            continue;
+        }
         vpi_printf("#c %s %s name=%s full=%s line=%d scope=%s\n", label,
             text(vpiType, assertion), text(vpiName, assertion),
             text(vpiFullName, assertion), (int)vpi_get(vpiLineNo, assertion),
@@ -148,6 +159,32 @@ static void list(vpiHandle scope, const char* label)
             vpi_printf("#c %s has no file\n", text(vpiName, assertion));
         }
     }
+}
+
+// The action statements, clocking event and disable condition of a
+// concurrent assertion (37.50 vpiStmt, vpiElseStmt, vpiClockingEvent,
+// vpiDisableCondition).
+static void parts(vpiHandle assertion, const char* name)
+{
+    vpiHandle const pass = vpi_handle(vpiStmt, assertion);
+    vpiHandle const fail = vpi_handle(vpiElseStmt, assertion);
+    vpiHandle const clock = vpi_handle(vpiClockingEvent, assertion);
+    vpiHandle const disable = vpi_handle(vpiDisableCondition, assertion);
+    char event[96] = "none";
+    if (clock != NULL) {
+        vpiHandle const operands = vpi_iterate(vpiOperand, clock);
+        vpiHandle const first = operands != NULL ? vpi_scan(operands) : NULL;
+        snprintf(event, sizeof event, "%s(%s)",
+            vpi_get(vpiOpType, clock) == vpiPosedgeOp ? "posedge" : "other",
+            first != NULL ? text(vpiName, first) : "");
+        if (operands != NULL && first != NULL) {
+            vpi_free_object(operands);
+        }
+    }
+    vpi_printf("#c parts %s stmt=%s else=%s clock=%s disable=%s\n", name,
+        pass != NULL ? text(vpiType, pass) : "none",
+        fail != NULL ? text(vpiType, fail) : "none", event,
+        disable != NULL ? text(vpiName, disable) : "none");
 }
 
 // Attempt starts and outcomes of a_seq with the time each attempt started
@@ -272,6 +309,9 @@ static PLI_INT32 start(p_cb_data data)
         at(&steps[index]);
     }
     sequence_assertions(top);
+    parts(a_req, "a_req");
+    parts(c_hit, "c_hit");
+    parts(a_seq, "a_seq");
     return 0;
 }
 

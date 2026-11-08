@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "fsim/runtime/scheduler_events.hpp"
 #include "fsim/runtime/run_state_image.hpp"
 #include "fsim/runtime/systemverilog_string.hpp"
 #include "simir_internal.hpp"
@@ -58,6 +59,13 @@ bool Interpreter::mcd_flush(const FileHandle descriptor)
 void Interpreter::set_operation_budget(const std::uint64_t operations)
 {
     impl_->operation_budget = operations;
+}
+
+void Interpreter::set_reset_values(
+    const std::int32_t count, const std::int32_t value) noexcept
+{
+    impl_->reset_count_result = count;
+    impl_->reset_value_result = value;
 }
 
 void Interpreter::set_plusargs(const std::span<const std::string> plusargs)
@@ -1994,6 +2002,13 @@ ProcessId Interpreter::Impl::add_process_program_impl(
                 throw std::invalid_argument { "duplicate SimIR debug-local name" };
             }
         }
+        for (const auto& slot : process.call_results()) {
+            if (slot.name.empty() || slot.register_id >= process.register_count()) {
+                throw std::invalid_argument {
+                    "invalid SimIR call-result metadata"
+                };
+            }
+        }
         std::set<std::string> string_local_names;
         for (const auto& local : process.debug_string_locals()) {
             if (local.name.empty()
@@ -2878,7 +2893,7 @@ bool Interpreter::set_net_delay_table(
     const auto program = original != nullptr
         ? ProcessProgramView { *original }
         : impl_->get_process(process).program();
-    bool writes = false;
+    bool writes = impl_->split_gate_drivers.contains(process);
     for (const auto& operation : std::as_const(program.operations())) {
         writes = writes || operation_holds<WriteNetDelay>(operation);
     }
@@ -2900,8 +2915,26 @@ std::optional<NetDelayTable> Interpreter::net_delay_table(
 
 bool Interpreter::graft_net_delay(NetDelayGraft& graft, std::string& reason)
 {
+    const auto done = graft_net_delay_planned(graft, reason);
+    // A reset's twin takes the same graft (replay_plan_onto); the ids the run
+    // gave the added processes are kept with it.
+    if (done && !impl_->replaying_plan) {
+        Impl::PlanStep step;
+        step.kind = Impl::PlanStep::Kind::graft_net_delay;
+        step.after_start = true;
+        step.graft = graft;
+        impl_->plan_journal.push_back(std::move(step));
+    }
+    return done;
+}
+
+bool Interpreter::graft_net_delay_planned(
+    NetDelayGraft& graft, std::string& reason)
+{
     auto& impl = *impl_;
-    if (!impl.started || !impl.scheduler.at_safe_point()
+    if (!impl.started
+        || !(impl.scheduler.at_safe_point() || impl.replaying_plan
+            || impl.restoring_plan)
         || graft.signals.empty() || graft.processes.empty()) {
         reason = "the graft is empty or the run is not at a safe point";
         return false;
@@ -2925,6 +2958,37 @@ bool Interpreter::graft_net_delay(NetDelayGraft& graft, std::string& reason)
             }
         }
     }
+    // A bidirectional switch (tran, tranif; IEEE 1800-2023 28.8) is a
+    // descriptor the host's switch network reads: it has no operations or
+    // sensitivity, and a rewritten one only names the control's delayed copy
+    // (28.16: the turn-on and turn-off delays are the control's). They are
+    // retargeted after the copy exists; the rest of the graft is the same as
+    // any other. Put back into `graft` on return, for the plan journal.
+    std::vector<std::pair<ProcessId, Process>> switch_loads;
+    for (auto load = graft.rewritten.begin(); load != graft.rewritten.end();) {
+        bool descriptor { };
+        if (load->first < impl.processes.size()) {
+            const auto view = impl.processes.program_view(load->first);
+            descriptor = view.switch_bidirectional()
+                && view.switch_control().has_value();
+        }
+        if (descriptor) {
+            switch_loads.push_back(std::move(*load));
+            load = graft.rewritten.erase(load);
+        } else {
+            ++load;
+        }
+    }
+    struct RestoreSwitchLoads {
+        NetDelayGraft& graft;
+        std::vector<std::pair<ProcessId, Process>>& loads;
+        ~RestoreSwitchLoads()
+        {
+            for (auto& load : loads) {
+                graft.rewritten.push_back(load);
+            }
+        }
+    } restore_switch_loads { graft, switch_loads };
     // Each added driver starts as an elaboration-time split's driver is after
     // its first run: the net's current value on its own bits of the copy, z
     // on the others (set directly, so no resolution and no event).
@@ -2983,8 +3047,10 @@ bool Interpreter::graft_net_delay(NetDelayGraft& graft, std::string& reason)
     };
     // A compiled run asks its kernel, which owns the run (the evaluator never
     // runs its members): it validates, then adds the signals and processes
-    // through Impl::push_signal_late and push_process_late.
-    if (impl.static_kernel) {
+    // through Impl::push_signal_late and push_process_late. A switch's
+    // control is a host signal (the switch network is the host's), so its
+    // copy and driver are the host's too, added as the evaluator adds them.
+    if (impl.static_kernel && switch_loads.empty()) {
         ReplanRequest request;
         request.kind = ReplanRequest::Kind::graft_net_delay;
         request.graft = graft;
@@ -3040,6 +3106,52 @@ bool Interpreter::graft_net_delay(NetDelayGraft& graft, std::string& reason)
                 return false;
             }
         }
+    }
+    // The switch descriptors: the connection each one is in the switch
+    // network, and the copy it reads the control from from now on.
+    struct Retarget {
+        std::size_t connection { };
+        SignalId net { };
+        SignalId copy { };
+        ProcessId process { };
+    };
+    std::vector<Retarget> retargets;
+    for (const auto& [id, rewritten] : switch_loads) {
+        const auto view = impl.processes.program_view(id);
+        const auto net = view.switch_control();
+        const auto copy = rewritten.switch_control;
+        if (!net || !copy || rewritten.switch_source != view.switch_source()
+            || rewritten.switch_target != view.switch_target()
+            || !net_of_copy.contains(*copy) || net_of_copy.at(*copy) != *net) {
+            reason = "a switch is not retargeted to the delayed copy of its "
+                     "control";
+            return false;
+        }
+        std::optional<std::size_t> found;
+        for (std::size_t index = 0U; index < impl.switch_connections.size();
+            ++index) {
+            const auto& connection = impl.switch_connections[index];
+            if (connection.control == net
+                && connection.source == *view.switch_source()
+                && connection.target == *view.switch_target()
+                && connection.source_offset == view.switch_source_offset()
+                && connection.target_offset == view.switch_target_offset()
+                && connection.width == view.switch_width()
+                && connection.active_high == view.switch_active_high()
+                && connection.resistive == view.switch_resistive()
+                && std::ranges::none_of(retargets,
+                    [&](const Retarget& done) {
+                        return done.connection == index;
+                    })) {
+                found = index;
+                break;
+            }
+        }
+        if (!found) {
+            reason = "a switch is not in the switch network";
+            return false;
+        }
+        retargets.push_back({ *found, *net, *copy, id });
     }
     // The load processes: one (net, copy) pair each, the signals of their
     // reads and sensitivity renamed in place.
@@ -3133,17 +3245,134 @@ bool Interpreter::graft_net_delay(NetDelayGraft& graft, std::string& reason)
                 added.initial_value = value;
             }
         }
-        (void)impl.push_signal_late(std::move(added));
+        // Copied, not moved: the graft is journaled for a reset's twin.
+        const auto copy_id = impl.push_signal_late(added);
+        // The host's driver writes the copy: the kernel does not own it.
+        if (impl.static_kernel
+            && copy_id < impl.static_kernel_owned_signal.size()) {
+            impl.static_kernel_owned_signal[copy_id] = 0U;
+        }
+    }
+    if (impl.static_kernel && !graft.signals.empty()) {
+        impl.static_kernel->note_late_signals();
     }
     for (auto& added : graft.processes) {
-        impl.push_process_late(std::move(added), false);
+        impl.push_process_late(added, false);
     }
     for (auto& [id, rewritten] : graft.rewritten) {
         const auto found = std::ranges::find(rewrites, id, &Rewrite::process);
-        impl.rewrite_process_reads_late(
-            id, std::move(rewritten), found->net, found->copy);
+        impl.rewrite_process_reads_late(id, rewritten, found->net, found->copy);
+    }
+    for (const auto& retarget : retargets) {
+        auto& connection = impl.switch_connections[retarget.connection];
+        std::erase(impl.switch_control_adjacency[retarget.net],
+            retarget.connection);
+        connection.control = retarget.copy;
+        impl.switch_control_adjacency[retarget.copy].push_back(
+            retarget.connection);
+        for (const auto& [id, rewritten] : switch_loads) {
+            if (id == retarget.process) {
+                impl.rewrite_process_reads_late(
+                    id, rewritten, retarget.net, retarget.copy);
+            }
+        }
+        impl.invalidate_switch_components();
     }
     seed_drivers();
+    reason.clear();
+    return true;
+}
+
+bool Interpreter::split_gate_delay(
+    const ProcessId process, Process rewritten, std::string& reason,
+    const bool dry_run)
+{
+    auto& impl = *impl_;
+    // A reset's twin takes the split the run made (replay_plan_onto): nothing
+    // has run on it, so its safe-point test is waived as the graft's is.
+    if (!dry_run && (!impl.started
+            || !(impl.scheduler.at_safe_point() || impl.replaying_plan
+                || impl.restoring_plan))) {
+        reason = "the simulation is not at a safe point";
+        return false;
+    }
+    // Kept for the twin of a reset: the program the driver runs from now on.
+    std::optional<Process> journaled;
+    if (!dry_run && !impl.replaying_plan) {
+        journaled = rewritten;
+    }
+    // The kernel's executor is the host member's own (a kernel member may be
+    // the host): the kernel decides whether the process is a member it can
+    // re-plan, so only a process of the interpreter's own plan is refused for
+    // an executor.
+    const bool kernel_owned = impl.static_kernel != nullptr;
+    if (process >= impl.processes.size()
+        || (!kernel_owned && impl.processes.has_executor(process))
+        || impl.processes.is_compact_constant(process)) {
+        reason = "the gate's driver has an executor or is a constant driver";
+        return false;
+    }
+    std::optional<SignalId> written;
+    for (std::size_t index = 0U; index < rewritten.operations.size(); ++index) {
+        Operation scratch;
+        if (const auto* const delayed = operation_get_if<WriteNetDelay>(
+                &rewritten.operations.expanded_ref(index, scratch))) {
+            written = delayed->signal;
+        }
+    }
+    if (!written || *written >= impl.signals.size()) {
+        reason = "the rewritten driver has no delayed write";
+        return false;
+    }
+    if (impl.static_kernel) {
+        ReplanRequest request;
+        request.kind = ReplanRequest::Kind::split_gate_delay;
+        request.gate_process = process;
+        request.gate_program = std::move(rewritten);
+        request.gate_dry_run = dry_run;
+        auto result = impl.static_kernel->replan_at_safe_point(request);
+        if (!result.done) {
+            reason = std::move(result.reason);
+            return false;
+        }
+        if (dry_run) {
+            reason.clear();
+            return true;
+        }
+    } else {
+        const auto original = impl.processes.program_view(process);
+        if (original.operations().size() != rewritten.operations.size()) {
+            reason = "the rewritten driver differs in shape from the running one";
+            return false;
+        }
+        // A replay (a restore's or a reset twin's) rewrites the driver before
+        // the saved state replaces its state, as the safe-point test above.
+        const auto& state = impl.processes.at(process);
+        const bool replay = impl.replaying_plan || impl.restoring_plan;
+        if (!replay && (state.halted || state.status == ProcessStatus::running
+            || state.status == ProcessStatus::finished
+            || state.status == ProcessStatus::killed)) {
+            reason = "the gate's driver is running, halted or done";
+            return false;
+        }
+        if (dry_run) {
+            reason.clear();
+            return true;
+        }
+        // The sensitivity and the reads are unchanged: the signal pair names
+        // no move of a wait.
+        impl.rewrite_process_reads_late(
+            process, std::move(rewritten), *written, *written);
+    }
+    impl.split_gate_drivers.insert(process);
+    if (journaled) {
+        Impl::PlanStep step;
+        step.kind = Impl::PlanStep::Kind::split_gate_delay;
+        step.after_start = true;
+        step.gate_process = process;
+        step.gate_program = std::move(journaled);
+        impl.plan_journal.push_back(std::move(step));
+    }
     reason.clear();
     return true;
 }
@@ -3466,6 +3695,7 @@ Interpreter::Impl::recognize_constant_driver_startup(
         || program.string_register_count() != 0U
         || program.container_register_count() != 0U
         || !program.debug_locals().empty()
+        || !program.call_results().empty()
         || !program.debug_string_locals().empty()
         || !program.debug_container_locals().empty()
         || !program.container_register_types().empty()
@@ -3625,6 +3855,21 @@ Interpreter::Impl::recognize_constant_driver_startup(
     return result;
 }
 
+void Interpreter::start_for_restore()
+{
+    if (impl_->started) {
+        return;
+    }
+    impl_->start_restoring = true;
+    try {
+        start();
+    } catch (...) {
+        impl_->start_restoring = false;
+        throw;
+    }
+    impl_->start_restoring = false;
+}
+
 void Interpreter::start()
 {
     if (impl_->validation_only) {
@@ -3735,6 +3980,11 @@ void Interpreter::start()
             "package static initialization started with pending scheduler work"
         };
     }
+    // A restore runs no package static initializer (they may print or call
+    // out): the restored signal values and containers hold their results.
+    if (impl_->start_restoring) {
+        package_startup_actions.clear();
+    }
     for (const auto& action : package_startup_actions) {
         if (impl_->scheduler.has_pending() || impl_->stopped_by_design) {
             throw std::logic_error {
@@ -3819,6 +4069,7 @@ void Interpreter::start()
                 = initial_value;
         }
         impl_->build_sampled_history_clock_index();
+        impl_->refresh_sampled_value_words();
     }
     impl_->started = true;
     impl_->initialize_vhdl_resolutions();
@@ -3875,6 +4126,11 @@ void Interpreter::start()
                       << " sensitivity=" << first.static_sensitivity().size()
                       << " first=" << first.name() << '\n';
         }
+    }
+    if (impl_->start_restoring) {
+        // The tables a restore fills are built; the saved processes, waits
+        // and pending events replace the time-zero arming below.
+        return;
     }
     std::vector<bool> prearmed_static_waits(
         impl_->processes.size(), false);
@@ -4126,36 +4382,6 @@ RunResult Interpreter::finish()
     return result;
 }
 
-bool Interpreter::can_reset_run_state() const noexcept
-{
-    return false;
-}
-
-bool Interpreter::reset_run_state()
-{
-    return can_reset_run_state();
-}
-
-bool Interpreter::record_run_state(RunStateImage& image) const
-{
-    if (impl_->static_kernel) {
-        std::string bytes;
-        impl_->static_kernel->record_value_section(bytes);
-        image.put("kernel.values", 1U, std::move(bytes));
-    }
-    return false;
-}
-
-bool Interpreter::restore_run_state(const RunStateImage& image)
-{
-    if (!impl_->static_kernel) {
-        return false;
-    }
-    const auto* const section = image.find("kernel.values");
-    return section != nullptr && section->version == 1U
-        && impl_->static_kernel->restore_value_section(section->bytes);
-}
-
 void Interpreter::deposit_signal(SignalId signal, PackedLogic4 value,
     const ProcessSchedulingDomain origin_domain)
 {
@@ -4199,6 +4425,99 @@ void Interpreter::schedule_host_driver_waveform(const ProcessId process,
     note_external_signal_write(signal);
     impl_->schedule_projected_waveform(
         process, signal, elements, offset, rejection, mode);
+}
+
+std::vector<DriverTransaction> Interpreter::driver_transactions(
+    const ProcessId process, const SignalId signal, const std::size_t offset,
+    const std::size_t width) const
+{
+    std::vector<DriverTransaction> result;
+    if (process >= impl_->processes.size() || width == 0U) {
+        return result;
+    }
+    const auto current = driver_value(process, signal);
+    if (offset + width > current.width()) {
+        return result;
+    }
+    // The times of the pending transactions of the range's scalars.
+    std::set<SimulationTick> times;
+    for (std::size_t bit = 0U; bit < width; ++bit) {
+        const auto found = impl_->projected_drivers.find(
+            Impl::ProjectedDriverKey { process, signal,
+                static_cast<std::uint32_t>(offset + bit) });
+        if (found == impl_->projected_drivers.end()) {
+            continue;
+        }
+        for (const auto& transaction : found->second.transactions) {
+            times.insert(transaction.time);
+        }
+    }
+    // Null transactions of the driver (a disconnection of a guarded signal).
+    std::set<SimulationTick> nulls;
+    if (const auto found = impl_->vhdl_pending_disconnects.find(
+            std::pair { signal, process });
+        found != impl_->vhdl_pending_disconnects.end()) {
+        nulls.insert(found->second.begin(), found->second.end());
+        times.insert(found->second.begin(), found->second.end());
+    }
+    for (const auto time : times) {
+        DriverTransaction transaction;
+        transaction.time = time;
+        transaction.null = nulls.contains(time);
+        PackedLogic4 value = current;
+        if (offset != 0U || width != current.width()) {
+            value = PackedLogic4(width, Logic4::zero);
+            if (current.is_logic9()) {
+                for (std::size_t bit = 0U; bit < width; ++bit) {
+                    value.set_logic9(bit, current.get_logic9(offset + bit));
+                }
+            } else {
+                for (std::size_t bit = 0U; bit < width; ++bit) {
+                    value.set(bit, current.get(offset + bit));
+                }
+            }
+        }
+        for (std::size_t bit = 0U; bit < width; ++bit) {
+            const auto found = impl_->projected_drivers.find(
+                Impl::ProjectedDriverKey { process, signal,
+                    static_cast<std::uint32_t>(offset + bit) });
+            if (found == impl_->projected_drivers.end()) {
+                continue;
+            }
+            // The latest transaction of the bit at or before this time.
+            const Impl::ProjectedTransaction* latest = nullptr;
+            for (const auto& pending : found->second.transactions) {
+                if (pending.time <= time) {
+                    latest = &pending;
+                }
+            }
+            if (latest == nullptr) {
+                continue;
+            }
+            if (value.is_logic9()) {
+                value.set_logic9(bit, latest->value);
+            } else {
+                value.set(bit, to_logic4(latest->value));
+            }
+        }
+        transaction.value = std::move(value);
+        result.push_back(std::move(transaction));
+    }
+    return result;
+}
+
+bool Interpreter::disconnect_host_driver(const ProcessId process,
+    const SignalId signal, const SimulationTick delay)
+{
+    if (process >= impl_->processes.size()) {
+        throw std::out_of_range("invalid SimIR process ID");
+    }
+    if (!impl_->vhdl_resolvers.contains(signal)) {
+        return false;
+    }
+    note_external_signal_write(signal);
+    impl_->schedule_vhdl_disconnect(process, signal, delay);
+    return true;
 }
 
 void Interpreter::force_host_driver(const ProcessId process,
@@ -4502,12 +4821,15 @@ void Interpreter::schedule_signal_at(SignalId signal, PackedLogic4 value,
             + ", value has width " + std::to_string(value.width()) + ")");
     }
     note_external_signal_write(signal);
+    // A closure of the embedding program: a run-state save refuses while it
+    // is pending (FSIM-SAVE-0004).
     impl_->scheduler.schedule_at(
         time, SchedulerPhase::update, order,
-        [state = impl_.get(), signal, value = std::move(value)](
-            Scheduler&) mutable {
-            state->stage_update(signal, std::move(value));
-        });
+        host_closure_task("Interpreter::schedule_signal_at",
+            [state = impl_.get(), signal, value = std::move(value)](
+                Scheduler&) mutable {
+                state->stage_update(signal, std::move(value));
+            }));
 }
 
 void Interpreter::schedule_scalar_signal_at(
@@ -4978,8 +5300,8 @@ std::vector<Interpreter::SvaObligation> Interpreter::finish_sva_monitors()
                       << '\n';
         }
         if (finished.failures != 0U || finished.holds != 0U) {
-            result.push_back(
-                { key.first, finished.failures, finished.holds });
+            result.push_back({ key.first, finished.failures, finished.holds,
+                finished.failure_starts, finished.hold_starts });
         }
     }
     return result;
@@ -5010,13 +5332,49 @@ bool Interpreter::kill_sva_attempt(
     return killed;
 }
 
+namespace {
+
+// The monitor of the process that popped an outcome last: each pop stamps
+// its block with Impl::sva_pop_serial (h_pop_serial), on both engines.
+template <typename Monitors>
+[[nodiscard]] const sva::Monitor* sva_last_popped(const Monitors& monitors,
+    const ProcessId design_process)
+{
+    const sva::Monitor* last = nullptr;
+    for (const auto& [key, monitor] : monitors) {
+        if (key.first == design_process && monitor
+            && monitor->last_outcome_serial() != 0
+            && (last == nullptr
+                || monitor->last_outcome_serial() > last->last_outcome_serial())) {
+            last = monitor.get();
+        }
+    }
+    return last;
+}
+
+} // namespace
+
 std::optional<std::int64_t> Interpreter::sva_outcome_start(
     const ProcessId design_process) const
 {
-    const auto found = impl_->sva_outcome_starts.find(design_process);
-    return found == impl_->sva_outcome_starts.end()
+    const auto* const monitor = sva_last_popped(impl_->sva_monitors, design_process);
+    return monitor == nullptr
         ? std::nullopt
-        : std::optional<std::int64_t> { found->second };
+        : std::optional<std::int64_t> { monitor->last_outcome_start() };
+}
+
+std::optional<std::pair<std::uint32_t, std::uint32_t>>
+Interpreter::sva_outcome_fail(const ProcessId design_process) const
+{
+    const auto* const monitor = sva_last_popped(impl_->sva_monitors, design_process);
+    if (monitor == nullptr) {
+        return std::nullopt;
+    }
+    const auto fail = monitor->last_outcome_fail();
+    if (fail.line == 0U) {
+        return std::nullopt;
+    }
+    return std::pair { fail.line, fail.column };
 }
 
 void Interpreter::set_sva_attempt_hook(SvaAttemptHook hook)
@@ -5024,10 +5382,61 @@ void Interpreter::set_sva_attempt_hook(SvaAttemptHook hook)
     impl_->sva_attempt_hook = std::move(hook);
 }
 
+void Interpreter::bind_assertion_start_reports() noexcept
+{
+    impl_->assertion_starts_bound = true;
+}
+
+void Interpreter::set_sva_step_hook(SvaStepHook hook)
+{
+    impl_->sva_step_hook = std::move(hook);
+}
+
+bool Interpreter::set_sva_step(
+    const std::span<const ProcessId> design_processes,
+    const std::int64_t start_time, const bool enable)
+{
+    // The stepping mode of an attempt cannot change once it has started
+    // (IEEE 1800-2023 39.5.2): a monitor that refuses the request leaves
+    // every monitor and the pending list unchanged.
+    for (auto& [key, monitor] : impl_->sva_monitors) {
+        if (std::ranges::find(design_processes, key.first)
+                != design_processes.end()
+            && !monitor->request_step(start_time, enable)) {
+            return false;
+        }
+    }
+    for (const auto process : design_processes) {
+        auto& starts = impl_->sva_step_requests[process];
+        const auto found = std::ranges::find(starts, start_time);
+        if (enable && found == starts.end()) {
+            starts.push_back(start_time);
+        } else if (!enable && found != starts.end()) {
+            starts.erase(found);
+        }
+    }
+    return true;
+}
+
+PackedLogic4 Interpreter::read_call_result(
+    const ProcessId process, const std::size_t slot) const
+{
+    return read_local_register(process, slot, 0U, true);
+}
+
 PackedLogic4 Interpreter::read_debug_local(
     const ProcessId process,
     const std::size_t local_index,
     const std::size_t newer_activations) const
+{
+    return read_local_register(process, local_index, newer_activations, false);
+}
+
+PackedLogic4 Interpreter::read_local_register(
+    const ProcessId process,
+    const std::size_t local_index,
+    const std::size_t newer_activations,
+    const bool call_result) const
 {
     // A kernel thread member, or a fork child of one, owns its registers.
     const auto kernel_owner = impl_->static_kernel
@@ -5038,10 +5447,12 @@ PackedLogic4 Interpreter::read_debug_local(
     const auto program = kernel_original != nullptr
         ? ProcessProgramView { *kernel_original }
         : impl_->processes.program_view(kernel_owner.value_or(process));
-    if (local_index >= program.debug_locals().size()) {
+    const auto& locals
+        = call_result ? program.call_results() : program.debug_locals();
+    if (local_index >= locals.size()) {
         throw std::out_of_range { "invalid SimIR debug-local index" };
     }
-    const auto& local = program.debug_locals()[local_index];
+    const auto& local = locals[local_index];
     if (kernel_member) {
         return impl_->static_kernel->debug_register(*kernel_owner,
             local.register_id, local.width, newer_activations);

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_vpi_class_model.hpp"
 
+#include "application_vpi_operator_type.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <utility>
@@ -84,6 +86,90 @@ struct SourcePlace {
     return std::string { text.substr(begin, end - begin) };
 }
 
+// An internal marker call (`@inside-range`, `@dist-:=`, ...) is no
+// function call.
+[[nodiscard]] bool marker_call(const sv::ConstraintExpression& expression)
+{
+    return expression.text.starts_with('@');
+}
+
+// The operator of an operation leaf (IEEE 1800-2023 37.78 vpiOpType); empty
+// for a leaf that is no operation.
+[[nodiscard]] std::optional<PLI_INT32> operation_type(
+    const sv::ConstraintExpression& expression)
+{
+    using Kind = sv::ConstraintExpressionKind;
+    switch (expression.kind) {
+    case Kind::name:
+        // A skipped foreach index variable is a null operation (37.38
+        // detail 2).
+        return expression.text.empty() ? std::optional { vpiNullOp }
+                                       : std::nullopt;
+    case Kind::concatenation:
+        return vpiConcatOp;
+    case Kind::replication:
+        return vpiMultiConcatOp;
+    case Kind::assignment_pattern:
+        return vpiAssignmentPatternOp;
+    case Kind::conditional:
+        return vpiConditionOp;
+    case Kind::inside_set:
+        return vpiInsideOp;
+    case Kind::unary:
+    case Kind::binary: {
+        // `x++` and `--x` keep the frontend's `post++` spelling.
+        if (expression.text == "pre++") {
+            return vpiPreIncOp;
+        }
+        if (expression.text == "post++") {
+            return vpiPostIncOp;
+        }
+        if (expression.text == "pre--") {
+            return vpiPreDecOp;
+        }
+        if (expression.text == "post--") {
+            return vpiPostDecOp;
+        }
+        const auto found
+            = operator_type(expression.text, expression.operands.size());
+        return found ? found : std::optional { vpiNullOp };
+    }
+    default:
+        return std::nullopt;
+    }
+}
+
+// The unpacked dimensions an indexed name has: a declared unpacked array
+// dimension or a dynamic array, queue or associative array (7.4, 7.5, 7.8,
+// 7.9, 7.10), each of which an index selects an element of.
+[[nodiscard]] std::size_t unpacked_depth(const sv::ConstraintExpression& root)
+{
+    if (root.kind != sv::ConstraintExpressionKind::name
+        || root.bindings.empty()) {
+        return 0U;
+    }
+    const auto& type = root.bindings.front().type;
+    return type.unpacked_dimensions.size() + (type.container_form ? 1U : 0U);
+}
+
+// The type of an index expression `a[i]` (37.19): an element of an unpacked
+// array is a var select, a bit of a packed value a bit select. The HIR keeps
+// the declared type of the indexed name, so the n-th index of `a[i][j]`
+// selects an element while n does not exceed the name's unpacked dimensions
+// and a bit afterwards. An indexed expression the HIR does not type (the
+// result of a call or of a member select) is read as a bit select.
+[[nodiscard]] PLI_INT32 index_type(const sv::ConstraintExpression& expression)
+{
+    std::size_t level = 1U;
+    const auto* base = &expression.operands.front();
+    while (base->kind == sv::ConstraintExpressionKind::index
+        && !base->operands.empty()) {
+        ++level;
+        base = &base->operands.front();
+    }
+    return level <= unpacked_depth(*base) ? vpiVarSelect : vpiBitSelect;
+}
+
 // The type of a leaf expression of a constraint (37.34, 37.38): the HIR
 // keeps the expression tree, not the VPI expression objects.
 [[nodiscard]] PLI_INT32 leaf_type(const sv::ConstraintExpression& expression)
@@ -96,14 +182,58 @@ struct SourcePlace {
     case Kind::string_literal:
         return vpiConstant;
     case Kind::name:
-        // A skipped foreach index variable is a null operation (37.38
-        // detail 2).
         return expression.text.empty() ? vpiOperation : vpiRefObj;
     case Kind::inside_range:
         return vpiRange;
+    // A bit, element or part select (37.19).
+    case Kind::index:
+        return expression.operands.size() == 2U ? index_type(expression)
+                                                : vpiOperation;
+    case Kind::slice:
+        if (expression.operands.size() != 3U) {
+            return vpiOperation;
+        }
+        return expression.text == ":" ? vpiPartSelect : vpiIndexedPartSelect;
+    // A function call (37.77): a system function when the name starts with
+    // `$`.
+    case Kind::call:
+        if (marker_call(expression)) {
+            return vpiOperation;
+        }
+        return expression.text.starts_with('$') ? vpiSysFuncCall : vpiFuncCall;
     default:
         return vpiOperation;
     }
+}
+
+// vpiConstType of a literal leaf (37.59).
+[[nodiscard]] PLI_INT32 constant_type(const sv::ConstraintExpression& expression)
+{
+    using Kind = sv::ConstraintExpressionKind;
+    switch (expression.kind) {
+    case Kind::string_literal:
+        return vpiStringConst;
+    case Kind::boolean_literal:
+    case Kind::logic_literal:
+        return vpiBinaryConst;
+    default:
+        break;
+    }
+    const auto quote = expression.text.find('\'');
+    if (quote == std::string::npos) {
+        return vpiIntConst;
+    }
+    auto rest = std::string_view { expression.text }.substr(quote + 1U);
+    if (!rest.empty() && (rest.front() == 's' || rest.front() == 'S')) {
+        rest.remove_prefix(1U);
+    }
+    const auto base = rest.empty() ? 'd'
+                                   : static_cast<char>(std::tolower(
+                                       static_cast<unsigned char>(rest.front())));
+    return base == 'o' ? vpiOctConst
+        : base == 'h'  ? vpiHexConst
+        : base == 'd'  ? vpiDecConst
+                       : vpiBinaryConst;
 }
 
 // A source-like spelling of an expression; the tree keeps operators and
@@ -129,6 +259,12 @@ struct SourcePlace {
             return decompile(operands[0]) + "[" + decompile(operands[1]) + "]";
         }
         break;
+    case Kind::slice:
+        if (operands.size() == 3U) {
+            return decompile(operands[0]) + "[" + decompile(operands[1])
+                + expression.text + decompile(operands[2]) + "]";
+        }
+        break;
     default:
         break;
     }
@@ -137,6 +273,66 @@ struct SourcePlace {
         text += (index == 0U ? "" : ", ") + decompile(operands[index]);
     }
     return text + ")";
+}
+
+// The bit size of a numeric literal (37.59 vpiSize): the written size of a
+// sized literal, 32 for an unsized integer or based literal, one for an
+// unbased unsized fill (`'1`, 5.7.1).
+[[nodiscard]] std::optional<std::int64_t> literal_size(
+    const sv::ConstraintExpression& expression)
+{
+    const auto quote = expression.text.find('\'');
+    if (expression.kind == sv::ConstraintExpressionKind::boolean_literal) {
+        return 1;
+    }
+    if (expression.kind == sv::ConstraintExpressionKind::integer_literal) {
+        return expression.text.find_first_of(".eE") == std::string::npos
+            ? std::optional<std::int64_t> { 32 }
+            : std::nullopt;
+    }
+    if (quote == std::string::npos) {
+        return std::nullopt;
+    }
+    std::int64_t size { };
+    bool digits = false;
+    for (const auto character : expression.text.substr(0U, quote)) {
+        if (character >= '0' && character <= '9') {
+            size = size * 10 + (character - '0');
+            digits = true;
+        }
+    }
+    if (digits) {
+        return size;
+    }
+    const auto rest = expression.text.substr(quote + 1U);
+    const bool based = !rest.empty()
+        && std::string_view { "sSbBoOdDhH" }.find(rest.front())
+            != std::string_view::npos;
+    return based ? 32 : 1;
+}
+
+// Whether a select index is a constant expression (37.19 vpiConstantSelect):
+// a literal, a parameter, or an operation over them.
+[[nodiscard]] bool constant_index(const sv::ConstraintExpression& expression)
+{
+    using Kind = sv::ConstraintExpressionKind;
+    switch (expression.kind) {
+    case Kind::integer_literal:
+    case Kind::boolean_literal:
+    case Kind::logic_literal:
+    case Kind::string_literal:
+        return true;
+    case Kind::name:
+        return !expression.bindings.empty()
+            && expression.bindings.front().kind
+            == sv::ConstraintReferenceKind::parameter;
+    case Kind::unary:
+    case Kind::binary:
+    case Kind::conditional:
+        return std::ranges::all_of(expression.operands, constant_index);
+    default:
+        return false;
+    }
 }
 
 [[nodiscard]] bool disable_soft(const sv::ConstraintExpression& expression)
@@ -498,6 +694,17 @@ VpiClassModel::constraint_identity(const std::uint64_t serial) const
     return std::pair { constraint.canonical_identity, constraint.name };
 }
 
+const sv::ConstraintExpression* VpiClassModel::leaf_expression(
+    const std::uint64_t serial) const
+{
+    const auto& entry = entries_.at(serial);
+    if (entry.kind != Kind::constraint_item) {
+        return nullptr;
+    }
+    const auto& node = nodes_.at(entry.member);
+    return item_type(node) == vpiConstant ? node.expression : nullptr;
+}
+
 std::optional<std::int64_t> VpiClassModel::property(
     const std::uint64_t serial, const PLI_INT32 property) const
 {
@@ -546,13 +753,17 @@ std::optional<std::int64_t> VpiClassModel::property(
         return std::nullopt;
     // A constraint (37.34): vpiAutomatic reflects the keyword of its
     // declaration (detail 1), vpiAccessType whether it was declared out of
-    // the class (detail 3). vpiVirtual is left undefined: the LRM does not
-    // say whether a pure constraint is virtual.
+    // the class (detail 3). vpiVirtual is true for a pure constraint, the
+    // constraint counterpart of a pure virtual method (18.5.2: an obligation
+    // on every derived class); the LRM gives constraints no `virtual`
+    // keyword, so no other constraint is virtual.
     case Kind::constraint: {
         const auto& constraint = source.constraints.at(entry.member);
         switch (property) {
         case vpiAutomatic:
             return constraint.static_constraint ? 0 : 1;
+        case vpiVirtual:
+            return constraint.pure ? 1 : 0;
         case vpiAccessType:
             return constraint.external ? vpiExternAcc : 0;
         case vpiAllocScheme:
@@ -645,6 +856,16 @@ std::optional<std::string> VpiClassModel::string_property(
     case Kind::constraint_item:
         if (property == vpiDecompile) {
             return decompile(*nodes_.at(entry.member).expression);
+        }
+        // A name and a function call are named like their expression
+        // (37.76, 37.77).
+        if (property == vpiName) {
+            const auto& expression = *nodes_.at(entry.member).expression;
+            const auto kind = leaf_type(expression);
+            if (kind == vpiRefObj || kind == vpiFuncCall
+                || kind == vpiSysFuncCall) {
+                return expression.text;
+            }
         }
         return std::nullopt;
     case Kind::extends:
@@ -977,9 +1198,39 @@ std::optional<std::int64_t> VpiClassModel::item_property(
         }
         return std::nullopt;
     case vpiOpType:
-        if (expression.kind == sv::ConstraintExpressionKind::name
-            && expression.text.empty()) {
-            return vpiNullOp;
+        return item_type(node) == vpiOperation ? operation_type(expression)
+                                               : std::nullopt;
+    // A select with only constant indexes (37.19).
+    case vpiConstantSelect: {
+        const auto selection = item_type(node);
+        if (selection != vpiBitSelect && selection != vpiVarSelect
+            && selection != vpiPartSelect && selection != vpiIndexedPartSelect) {
+            return std::nullopt;
+        }
+        return std::ranges::all_of(
+                   std::span { expression.operands }.subspan(1U),
+                   [](const sv::ConstraintExpression& index) {
+                       return constant_index(index);
+                   })
+            ? 1
+            : 0;
+    }
+    case vpiIndexedPartSelectType:
+        if (item_type(node) != vpiIndexedPartSelect) {
+            return std::nullopt;
+        }
+        return expression.text == "+:" ? vpiPosIndexed : vpiNegIndexed;
+    case vpiConstType:
+        return item_type(node) == vpiConstant
+            ? std::optional<std::int64_t> { constant_type(expression) }
+            : std::nullopt;
+    case vpiSize:
+        // A string literal is eight bits a character (37.59).
+        if (expression.kind == sv::ConstraintExpressionKind::string_literal) {
+            return static_cast<std::int64_t>(8U * expression.text.size());
+        }
+        if (item_type(node) == vpiConstant) {
+            return literal_size(expression);
         }
         return std::nullopt;
     default:
@@ -1037,8 +1288,16 @@ fsim_vpi_handle_v1 VpiClassModel::constraint_relation(
     const auto child = [&](const sv::ConstraintExpression& operand) {
         return item_of(owner, node.constraint, entry.member, operand, false);
     };
+    const auto selection = item_type(node);
+    const bool bit_or_var = selection == vpiBitSelect || selection == vpiVarSelect;
+    const bool part = selection == vpiPartSelect;
+    const bool indexed_part = selection == vpiIndexedPartSelect;
     switch (type) {
+    // The parent of a select is the expression selected (37.19).
     case vpiParent:
+        if ((bit_or_var || part || indexed_part) && !operands.empty()) {
+            return child(operands.front());
+        }
         return node.parent == none
             ? make(Kind::constraint, node.declaration, node.specialization,
                 node.constraint)
@@ -1051,12 +1310,25 @@ fsim_vpi_handle_v1 VpiClassModel::constraint_relation(
             return child(operands.front());
         }
         break;
+    // The index of a bit select (37.19).
+    case vpiIndex:
+        if (bit_or_var && operands.size() == 2U) {
+            return child(operands[1]);
+        }
+        break;
+    // The base and the width of an indexed part select (37.19).
+    case vpiBaseExpr:
+    case vpiWidthExpr:
+        if (indexed_part) {
+            return child(operands[type == vpiBaseExpr ? 1U : 2U]);
+        }
+        break;
     // The array a foreach constraint indexes (37.38 detail 1).
     case vpiVariables:
         if (expression.kind == CKind::foreach_constraint) {
-            const auto selection = foreach_selection(expression);
-            if (selection.array != nullptr) {
-                return child(*selection.array);
+            const auto indexed = foreach_selection(expression);
+            if (indexed.array != nullptr) {
+                return child(*indexed.array);
             }
         }
         break;
@@ -1068,6 +1340,16 @@ fsim_vpi_handle_v1 VpiClassModel::constraint_relation(
     case vpiValueRange:
         if (expression.kind == CKind::distribution_item && operands.size() == 2U) {
             return child(operands[0]);
+        }
+        break;
+    // The bounds of a range leaf (37.62).
+    case vpiLeftRange:
+    case vpiRightRange:
+        if (expression.kind == CKind::inside_range && operands.size() == 2U) {
+            return child(operands[type == vpiLeftRange ? 0U : 1U]);
+        }
+        if (part) {
+            return child(operands[type == vpiLeftRange ? 1U : 2U]);
         }
         break;
     case vpiWeight:
@@ -1145,6 +1427,29 @@ std::vector<fsim_vpi_handle_v1> VpiClassModel::constraint_iterate(
         if (expression.kind == CKind::solve_before && operands.size() == 2U) {
             const auto& list = operands[type == vpiSolveBefore ? 0U : 1U];
             for (const auto& operand : list.operands) {
+                leaf(operand);
+            }
+        }
+        break;
+    // The indexes of a var select (37.19): one for each select level.
+    case vpiIndex:
+        if (item_type(node) == vpiVarSelect && operands.size() == 2U) {
+            leaf(operands[1]);
+        }
+        break;
+    // The operands of an operation (37.78) and the arguments of a function
+    // call (37.77), in source order.
+    case vpiOperand:
+        if (leaf_type(expression) == vpiOperation) {
+            for (const auto& operand : operands) {
+                leaf(operand);
+            }
+        }
+        break;
+    case vpiArgument:
+        if (leaf_type(expression) == vpiFuncCall
+            || leaf_type(expression) == vpiSysFuncCall) {
+            for (const auto& operand : operands) {
                 leaf(operand);
             }
         }

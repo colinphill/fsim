@@ -799,6 +799,8 @@ void CompiledDesign::refresh_lookup_indexes()
             = scan_vhdl_primary_unit(
                   vhdl_hir.units(), secondary).value_or(nullptr);
     }
+    rebuilt.vhdl_wide_integer = std::ranges::any_of(vhdl_hir.units(),
+        [](const vhdl::Unit& unit) { return unit.standard == "2019"; });
     build(rebuilt.declarations, semantics.declarations().size(),
         systemverilog_hir.declarations(), vhdl_hir.declarations());
     build(rebuilt.types, semantics.types().size(),
@@ -1297,6 +1299,15 @@ std::optional<std::size_t> CompiledDesign::vhdl_analysis_rank(
         }
     }
     return std::nullopt;
+}
+
+bool CompiledDesign::vhdl_wide_integer() const noexcept
+{
+    if (lookup_indexes_current()) {
+        return lookup_indexes_.vhdl_wide_integer;
+    }
+    return std::ranges::any_of(vhdl_hir.units(),
+        [](const vhdl::Unit& unit) { return unit.standard == "2019"; });
 }
 
 std::optional<const vhdl::Unit*> CompiledDesign::vhdl_primary_unit(

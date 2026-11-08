@@ -490,8 +490,15 @@ void Interpreter::Impl::StaticKernel::build_parallel_plan()
             case KOp::load_field:
             case KOp::load_slot9:
             case KOp::load_field9:
-            case KOp::wide_load:
                 touch_slot(inst.x, false);
+                break;
+            case KOp::wide_load:
+                if (inst.sub == 3U) {
+                    // A host signal, as load_host.
+                    host_touches[inst.x].push_back({ group[unit], unit, false });
+                } else {
+                    touch_slot(inst.x, false);
+                }
                 break;
             case KOp::dynamic_extract:
             case KOp::dynamic_part_select:
@@ -522,7 +529,11 @@ void Interpreter::Impl::StaticKernel::build_parallel_plan()
                 }
                 break;
             case KOp::wide_store:
-                if (inst.sub == 0U) {
+                if (inst.sub == 3U) {
+                    // A host signal, as store_host.
+                    host_touches[inst.d].push_back({ group[unit], unit, true });
+                    ok = false;
+                } else if (inst.sub == 0U) {
                     touch_slot(inst.d, true);
                 } else if (inst.sub == 1U) {
                     touch_nba(inst.d);
@@ -1498,6 +1509,9 @@ bool Interpreter::Impl::StaticKernel::run_parallel_batch(const BatchPhase phase,
     if (batch_private_) {
         step_item_base_.resize(step_item_offset_ + count, 0U);
     }
+    if (sva_table_used_) {
+        refresh_sva_table();
+    }
     if (inline_items) {
         batch_dispatch_ = BatchDispatch::inline_items;
         for (std::uint32_t item = 0U; item < count; ++item) {
@@ -2201,6 +2215,9 @@ void Interpreter::Impl::StaticKernel::run_domain_items(
 {
     // FSIM_KERNEL_MT_INLINE: the leader runs every item itself, in order.
     static const bool inline_items = std::getenv("FSIM_KERNEL_MT_INLINE") != nullptr;
+    if (sva_table_used_) {
+        refresh_sva_table();
+    }
     if (inline_items) {
         for (std::uint32_t item = 0U; item < count; ++item) {
             body(0U, item);
@@ -2874,6 +2891,10 @@ void Interpreter::Impl::StaticKernel::run_in_lane(Lane& lane,
     frame.kernel = this;
     frame.writes = &lane.writes;
     frame.containers = container_info_.data();
+    if (sva_table_used_) {
+        // Refreshed by the leader before the lanes run (refresh_sva_table).
+        frame.sva = &sva_table_;
+    }
     StaticKernelNativeEntry code { };
     kernel_word::Word* registers { };
     bool two_state { };

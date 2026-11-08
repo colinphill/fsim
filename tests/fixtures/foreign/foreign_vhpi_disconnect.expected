@@ -1,0 +1,2 @@
+#c spec kind=vhpidisconnectspeck type=bit time=5 ns signals=b1,b2 all=0 others=0
+#c spec kind=vhpidisconnectspeck type=integer time=7 ns signals= all=0 others=1

@@ -1,0 +1,12 @@
+#c path 0 rise 2,4,6 fall 2,4,6
+#c path 1 rise 1,2,3 fall 4,5,6
+#c path 2 rise 4,8,12 fall 4,8,12
+#c driver top.u.y term type=vpiDelayTerm delaytype=1 device=vpiDelayDevice devicetype=1 module=top.u parent=top.u in=1 out=1
+#c load top.u.c term type=vpiDelayTerm delaytype=1 device=vpiDelayDevice devicetype=1 module=top.u parent=top.u in=1 out=1
+#c driver top.u.z term type=vpiDelayTerm delaytype=1 device=vpiDelayDevice devicetype=1 module=top.u parent=top.u in=1 out=1
+#c put top.x1 turn-on/turn-off 3,7
+#c 19 t1=1 t0=z
+#c 52 t1=1 t0=z
+#c 53 t1=1 t0=1
+#c 56 t1=1 t0=1
+#c 58 t1=z t0=1

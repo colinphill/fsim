@@ -23,6 +23,15 @@ constexpr std::uint8_t flag_signed = 1U << 4U;
 constexpr std::uint8_t flag_increasing = 1U << 5U;
 constexpr std::uint8_t flag_descending = 1U << 6U;
 constexpr std::uint8_t flag_two_state = 1U << 7U;
+/// store_slot_part and store_slot_dynamic with flag_nba only: the store is a
+/// later 64-bit piece of one wide nonblocking write (expand_family_accesses),
+/// the same update event as the pieces before it.
+constexpr std::uint8_t flag_continues = flag_blocking | flag_nba;
+/// High bit of StaticKernelWrite::instruction (kinds 0, never read as an
+/// instruction): the queued word continues the update of the word before it
+/// (one NBA's pieces; IEEE 1800-2023 4.4.2.2, 10.4.2). Every other adjacent
+/// write is an update event of its own.
+constexpr std::uint32_t write_continues = 0x80000000U;
 
 /// Compiled narrow instruction set; see simir_static_kernel_compiled.cpp.
 enum class KOp : std::uint8_t {
@@ -146,11 +155,86 @@ enum class KOp : std::uint8_t {
     /// 1: with 'U' masks) through the kernel's delayed-write helper, which
     /// holds its pending changes as kernel timers.
     net_delay,
+    // y6
+    /// Arithmetic and logic on chunked wide registers (widths over 64): the
+    /// family is `offset` (WideFamily), the operator `sub` (BinaryOperator,
+    /// ShiftOperator, ReductionOperator or LogicalBinaryOperator), the
+    /// operand width `width`. d, x, y and z are register-file storage indices
+    /// of wide operands or narrow registers; aux (wide_alu_* bits, one group
+    /// per operand slot d x y z) tells which are wide, which wide ones carry
+    /// 'U' and weak masks and which registers are of Logic9 kind. imm_a is
+    /// y's width and imm_b x's width; flag_signed: a signed shift amount.
+    /// Generated code computes it over the chunks (static_kernel_codegen);
+    /// the bytecode tier through the reference value functions.
+    wide_alu,
+    // Concurrent assertions (IEEE 1800-2023 16.14, 39.4.2; task #186). A
+    // directive's attempt state is its monitor's flat block
+    // (sva::AttemptStorage), published in the kernel's table of block bases
+    // (StaticKernelSvaTable::blocks) at entry member_base[member] + aux.
+    /// One clock tick of the SvaOperation at SimIR index x of the member
+    /// (y its register base, aux the directive's ordinal in the member):
+    /// the guards, start and disabled registers are read from the register
+    /// file, the monitor advances its attempts (sva::Monitor::tick), and
+    /// d (32 bits) receives the pending outcome count. The monitor is
+    /// created and bound to its table entry at the first tick.
+    sva_tick,
+    /// The next outcome of that directive into d (32 bits; 0 when none, else
+    /// sva::Outcome): the inline ring pop of the block, which also records
+    /// the outcome's start and fail position and the pop serial
+    /// (h_last_start, h_last_fail_*, h_pop_serial) for the host's callback.
+    /// A null entry (the monitor was restored, or none exists yet) binds
+    /// through fsim_sk_sva_bind first.
+    sva_outcome,
+    /// A sampled-value read (16.5.1, 16.9.3) into the narrow register d
+    /// (width bits): sub the SignalReadKind. aux bit 0 set: $sampled of the
+    /// Preponed value, x the offset in Impl::sampled_value_words; clear: a
+    /// clocked history read, x the ring's start in sampled_ring_words,
+    /// offset the signal's width, z the $past depth, imm_a/imm_b the
+    /// signal's default (an empty history).
+    sva_sampled_load,
 };
 
-/// Number of kernel instruction kinds (KOp values 0 .. net_delay).
+/// Number of kernel instruction kinds (KOp values 0 .. sva_sampled_load).
 inline constexpr std::size_t kernel_op_count
-    = static_cast<std::size_t>(KOp::net_delay) + 1U;
+    = static_cast<std::size_t>(KOp::sva_sampled_load) + 1U;
+
+/// KOp::wide_alu operation families (KInst::offset).
+enum class WideFamily : std::uint32_t {
+    binary,
+    shift,
+    unary_not,
+    reduce,
+    conditional,
+    logical_not,
+    logical_binary,
+    two_state,
+    /// Bits [imm_a, imm_a + width) of the wide x (imm_b bits) into the wide
+    /// d (width bits): Extract between wide registers.
+    extract,
+    /// Insert: the source y (imm_a bits; a narrow register or wide) at bit
+    /// imm_b of the wide target x, into the wide d (width bits).
+    insert,
+    /// DynamicInsert: as insert at the offset the index register z selects
+    /// (CompiledBody::indices[imm_b]); an unknown or out-of-range index, or
+    /// a field past the target, leaves the target as it is (flag_strict:
+    /// an error), IEEE 1800-2023 11.5.1.
+    dynamic_insert,
+    /// DynamicPartSelect with a wide result: the bits of the wide x (imm_a
+    /// bits) that the 32 bit base register y and the part imm_b
+    /// (CompiledBody::parts) select, into the wide d (width bits); flags the
+    /// part's flag_increasing, flag_descending and flag_two_state. Bits
+    /// outside the source read X (0 for two-state) and an unknown base
+    /// selects nothing, as dynamic_part_select_value (IEEE 1800-2023 11.5.1).
+    dynamic_part_select,
+};
+
+/// KOp::wide_alu operand slots (d, x, y, z are 0 .. 3): KInst::aux holds
+/// `wide_alu_masks << slot` for a wide operand with masks, `wide_alu_wide <<
+/// slot` for a wide operand (else a narrow register), and `wide_alu_logic9
+/// << slot` for a register of Logic9 kind.
+inline constexpr std::uint32_t wide_alu_masks = 1U;
+inline constexpr std::uint32_t wide_alu_wide = 1U << 4U;
+inline constexpr std::uint32_t wide_alu_logic9 = 1U << 8U;
 
 /// Chunks of a wide register of `width` bits.
 [[nodiscard]] constexpr std::uint32_t wide_chunks(const std::uint32_t width) noexcept

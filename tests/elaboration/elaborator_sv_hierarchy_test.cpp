@@ -1023,15 +1023,15 @@ endmodule
     assert(elaborated.ok());
     assert(elaborated.design);
 
-    const auto* top = find_specialization(*elaborated.design, "configured");
+    const auto* top = find_specialization(*elaborated.design, "configured_top");
     const auto* left = find_specialization(
-        *elaborated.design, "configured.left");
+        *elaborated.design, "configured_top.left");
     const auto* right = find_specialization(
-        *elaborated.design, "configured.right");
+        *elaborated.design, "configured_top.right");
     const auto* lane0 = find_specialization(
-        *elaborated.design, "configured.lanes[0].generated");
+        *elaborated.design, "configured_top.lanes[0].generated");
     const auto* lane1 = find_specialization(
-        *elaborated.design, "configured.lanes[1].generated");
+        *elaborated.design, "configured_top.lanes[1].generated");
     assert(top && left && right && lane0 && lane1);
     assert(std::ranges::any_of(
         top->parameter_identity_values,
@@ -1070,11 +1070,11 @@ endmodule
         }));
 
     for (const auto path : {
-             "configured.left.all_leaf_monitor",
-             "configured.right.all_leaf_monitor",
-             "configured.lanes[0].generated.all_leaf_monitor",
-             "configured.lanes[1].generated.all_leaf_monitor",
-             "configured.lanes[1].generated.selected_monitor" }) {
+             "configured_top.left.all_leaf_monitor",
+             "configured_top.right.all_leaf_monitor",
+             "configured_top.lanes[0].generated.all_leaf_monitor",
+             "configured_top.lanes[1].generated.all_leaf_monitor",
+             "configured_top.lanes[1].generated.selected_monitor" }) {
         const auto* bound = find_specialization(*elaborated.design, path);
         assert(bound);
         assert(bound->library == "work");
@@ -1083,7 +1083,7 @@ endmodule
     assert(
         find_specialization(
             *elaborated.design,
-            "configured.lanes[0].generated.selected_monitor")
+            "configured_top.lanes[0].generated.selected_monitor")
         == nullptr);
 
     const auto mismatch = fsim::frontend::parse_text(

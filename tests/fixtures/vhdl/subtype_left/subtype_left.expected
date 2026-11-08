@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+subtype sig 'X''X''U''X''q''U'
+subtype var b'X''X''U''X''U'
+subtype chr 'q''q'nuldelc130lf'A'
+subtype att 'X''1''U''Z''X''U''-'
+subtype vec UUUUUUUU'X'UUUUUU

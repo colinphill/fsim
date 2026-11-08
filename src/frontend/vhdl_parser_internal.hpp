@@ -100,6 +100,10 @@ private:
   // The resolution indication before a subtype's type mark, if any:
   // `f T`, `(f) T` or `((f)) T` (IEEE 1076-2008 6.3).
   std::string parse_vhdl_resolution_indication(bool signal_kind_follows);
+  // A subtype indication of a constant or variable declaration, whose
+  // optional resolution indication (IEEE 1076-2019 6.3) has no effect on the
+  // object but stays on the subtype.
+  Type parse_vhdl_resolved_subtype();
 
   void
   parse_vhdl_package_generic_map(std::vector<ParameterOverride> &associations,

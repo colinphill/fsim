@@ -1299,6 +1299,8 @@ DebuggerFrameInfo DebuggerSession::frame(const std::size_t index) const
   case runtime::simir::ExecutionPointKind::thread_end:
   case runtime::simir::ExecutionPointKind::thread_enter:
   case runtime::simir::ExecutionPointKind::object_created:
+  case runtime::simir::ExecutionPointKind::assertion_pass:
+  case runtime::simir::ExecutionPointKind::assertion_fail:
     result.point_kind = "probe";
     break;
   }
@@ -1306,6 +1308,11 @@ DebuggerFrameInfo DebuggerSession::frame(const std::size_t index) const
   for (std::size_t local_index = 0U;
       local_index < program.debug_locals.size(); ++local_index) {
     const auto& local = program.debug_locals[local_index];
+    // A function's result register (lowerer_hir_callable.cpp) is read by
+    // the foreign interfaces only.
+    if (local.name.find(".@result@") != std::string::npos) {
+      continue;
+    }
     std::string value;
     try {
       if (local.systemverilog_scalar
@@ -1933,6 +1940,9 @@ void DebuggerSession::show_locals()  {
     for (std::size_t index = 0; index < process.debug_locals.size();
          ++index) {
       const auto& local = process.debug_locals[index];
+      if (local.name.find(".@result@") != std::string::npos) {
+        continue;
+      }
       output_ << local.name << " = ";
       try {
         if (local.systemverilog_scalar

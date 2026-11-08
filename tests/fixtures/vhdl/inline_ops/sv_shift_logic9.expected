@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+inl shl l1=x01zx010
+inl shl r2=00xx01zx
+inl shl a1=xxx01zx0
+inl shl v3=1zx01000
+inl shl vx=xxxxxxxx

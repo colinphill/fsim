@@ -2,7 +2,8 @@
 // PLI 1.0 module input port delay conformance plug-in (IEEE 1364-2005
 // 22.5.2, 23.1, 23.14, 23.90, Table 130): acc_fetch_delays,
 // acc_replace_delays and acc_append_delays on module input ports, port bits
-// and intermodule paths, with accMapToMipd, through a veriusertfs table.
+// and intermodule paths, with accMapToMipd, and the pulse routines on paths
+// and ports, through a veriusertfs table.
 // Lines starting with "#c " form the checked trace.
 #include "fsim/runtime/acc_user.h"
 #include "fsim/runtime/veriuser.h"
@@ -35,6 +36,14 @@ static void fetch2(const char* fetch_label, const char* delay_label, handle obje
     double d[2];
     flag(fetch_label, acc_fetch_delays(object, &d[0], &d[1]));
     show_array(delay_label, d, 2);
+}
+
+/* Fetch the reject and error limits of the two delays of an object. */
+static void pulse4(const char* label, handle object)
+{
+    double p[4];
+    flag(label, acc_fetch_pulsere(object, &p[0], &p[1], &p[2], &p[3]));
+    show_array(label, p, 4);
 }
 
 static PLI_INT32 calltf_mipd(PLI_INT32 data, PLI_INT32 reason)
@@ -113,6 +122,26 @@ static PLI_INT32 calltf_mipd(PLI_INT32 data, PLI_INT32 reason)
     fetch2("bit0 fetch", "bit0 delays", bit0);
     fetch2("bit1 fetch", "bit1 delays", bit1);
     fetch2("vec port fetch", "vec port delays", vec_port);
+
+    /* The pulse routines on an intermodule path and on input ports (23.2,
+       23.27, 23.91, 23.94): without limits in the SDF a pulse is rejected
+       and errors at the delay. */
+    pulse4("ic0 pulsere", ic0);
+    flag("ic0 replace pulsere", acc_replace_pulsere(ic0, 1.0, 2.0, 3.0, 4.0));
+    pulse4("ic0 pulsere", ic0);
+    flag("ic0 set pulsere", acc_set_pulsere(ic0, 50.0, 100.0));
+    pulse4("ic0 pulsere", ic0);
+    fetch2("ic0 fetch", "ic0 delays", ic0);
+    pulse4("mipd pulsere", in);
+    flag("mipd replace pulsere", acc_replace_pulsere(in, 2.0, 3.0, 4.0, 5.0));
+    pulse4("mipd pulsere", in);
+    fetch2("mipd fetch", "mipd delays", in);
+    pulse4("bit0 pulsere", bit0);
+    flag("bit0 replace pulsere", acc_replace_pulsere(bit0, 1.0, 2.0, 3.0, 4.0));
+    pulse4("bit0 pulsere", bit0);
+    pulse4("vec port pulsere", vec_port);
+    /* A reject limit above the error limit is refused. */
+    flag("mipd bad pulsere", acc_replace_pulsere(in, 3.0, 2.0, 4.0, 5.0));
     acc_close();
     return 0;
 }

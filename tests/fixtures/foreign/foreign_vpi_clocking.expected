@@ -1,4 +1,5 @@
 #c cb type=vpiClockingBlock full=top.cb instance=top event=vpiEventControl condition=-
+#c cb condition-op optype=39 operand=clk
 #c cb default-input type=vpiDelayControl delay=1
 #c cb default-output type=vpiDelayControl delay=2
 #c cb default-edges input=none output=none
@@ -25,6 +26,7 @@
 #c cb2.mon input-skew none
 #c cb2.mon output-skew type=vpiDelayControl delay=4
 #c gck type=vpiClockingBlock full=top.gck instance=top event=vpiEventControl condition=-
+#c gck condition-op optype=39 operand=clk
 #c gck default-input none
 #c gck default-output none
 #c gck default-edges input=none output=none

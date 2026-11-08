@@ -210,6 +210,7 @@ int fsim_application_case_vhdl_arrays();
 int fsim_application_case_vhdl_attributes();
 int fsim_application_case_vhdl_composite_operations();
 int fsim_application_case_vhdl_advanced_types();
+int fsim_application_case_run_state();
 int fsim_application_case_vhdl_projected();
 int fsim_application_case_systemc_datatypes();
 int fsim_application_case_systemc_tlm1();
@@ -229,6 +230,7 @@ constexpr NamedApplicationCase application_cases[] = {
         fsim_application_case_vhdl_composite_operations },
     { "vhdl_advanced_types",
         fsim_application_case_vhdl_advanced_types },
+    { "run_state", fsim_application_case_run_state },
     { "vhdl_projected", fsim_application_case_vhdl_projected },
     { "systemc_datatypes", fsim_application_case_systemc_datatypes },
     { "systemc_tlm1", fsim_application_case_systemc_tlm1 },

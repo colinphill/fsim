@@ -1,0 +1,4 @@
+wide_fields W=128 checks=720 mismatches=0
+wide_fields W=129 checks=720 mismatches=0
+wide_fields W=200 checks=720 mismatches=0
+wide_fields W=65 checks=720 mismatches=0

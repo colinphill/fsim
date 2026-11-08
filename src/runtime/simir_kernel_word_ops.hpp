@@ -524,6 +524,39 @@ struct Logic9Planes {
     return all_x(width);
 }
 
+/// The VHDL matching equality ("?=", IEEE 1076-2019 9.2.3) of two
+/// std_ulogic values held as words with 'U' and weak masks: '-' (the word Z
+/// with its weak bit) matches anything, 'L' and 'H' count as 0 and 1; a pair
+/// of known elements that differ decides '0', else 'U' where either of a
+/// pair is 'U', else X where either is X, Z or 'W', else '1'. `unknown` is
+/// the result's 'U' mask (bit 0).
+struct MatchResult {
+    Word value;
+    std::uint64_t unknown { };
+};
+
+[[nodiscard]] constexpr MatchResult vhdl_match_equal9(const Word l,
+    const std::uint64_t lu, const std::uint64_t lw, const Word r,
+    const std::uint64_t ru, const std::uint64_t rw,
+    const std::uint32_t width) noexcept
+{
+    const auto m = mask(width);
+    const auto dont_care = (lw & ~l.a & l.b) | (rw & ~r.a & r.b);
+    const auto active = ~dont_care & m;
+    const auto meta = l.b | r.b;
+    const auto either_u = lu | ru;
+    if (((l.a ^ r.a) & ~meta & active) != 0U) {
+        return { { 0U, 0U }, 0U };
+    }
+    if ((either_u & active) != 0U) {
+        return { { 1U, 1U }, 1U };
+    }
+    if ((meta & active & ~either_u) != 0U) {
+        return { { 1U, 1U }, 0U };
+    }
+    return { { 1U, 0U }, 0U };
+}
+
 /// shift_value() for a logic4 value of `width` bits and an amount of
 /// `amount_width` bits.
 [[nodiscard]] constexpr Word shift(ShiftOperator operation, const Word value,

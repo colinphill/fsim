@@ -132,6 +132,19 @@
 #c foreach loopvar vpiIntegerVar
 #c foreach loopvar vpiOperation null
 #c foreach body vpiAssignment line=81
+#c foreach-string vpiForeachStmt line=88 collection=set loopvars=1 body=vpiAssignment line=89
+#c operation line=109 value=00000000000000000000000000001110
+#c operation line=110 value=0001
+#c operation line=111 value=00000000000000000000000000001010
+#c operation line=112 value=11111111111111111111111111111111
+#c operation line=113 value=00000000000000000000000000000010
+#c operation line=114 value=0101
+#c operation line=115 value=0
+#c operation line=116 value=10101010
+#c operation line=117 value=1000
+#c operation line=118 value=11111111111111111111111111111010
+#c display line=125 $display: 5
+#c display line=126 $write: "a\n" top.n "b"
 #c 10 force vpiForce line=40 top.q=0101
 #c 12 release vpiRelease line=41 top.q=0101
 #c 13 assign vpiAssignStmt line=42 top.r=1110

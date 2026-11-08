@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+inl glitch t=10 fail a=1 past=0 past2=0 rose=0 stable=1 changed=0 sampled=0
+inl glitch t=10 cover stable a=1 past=0
+inl glitch t=20 fail a=2 past=0 past2=0 rose=1 stable=0 changed=1 sampled=1
+inl glitch t=30 fail a=3 past=1 past2=0 rose=0 stable=0 changed=1 sampled=2
+inl glitch t=40 fail a=4 past=2 past2=1 rose=1 stable=0 changed=1 sampled=3
+inl glitch t=50 fail a=5 past=3 past2=2 rose=0 stable=0 changed=1 sampled=4
+inl glitch t=60 fail a=6 past=4 past2=3 rose=1 stable=0 changed=1 sampled=5

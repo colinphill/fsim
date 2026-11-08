@@ -158,7 +158,7 @@ namespace fsim::runtime::simir {
         || operation_holds<SignalDrivingValue>(operation)
         || operation_holds<FormatDisplay>(operation)
         || (report && report->severity == AssertionSeverity::failure)
-        || (disable_fork && disable_fork->site)
+        || (disable_fork && (disable_fork->site || disable_fork->deferred_reports))
         || operation_holds<ProcessSelf>(operation)
         || operation_holds<ProcessStatusQuery>(operation)
         || operation_holds<ProcessCompleted>(operation)

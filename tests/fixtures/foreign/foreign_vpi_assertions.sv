@@ -30,4 +30,12 @@ module top;
   else
     $display("action fail a_seq %0t", $time);
   cs_hit: cover sequence (@(posedge clk) a ##1 b);
+
+  // Immediate and deferred assertions are members of vpiAssertion (37.49);
+  // the task is never called.
+  task automatic chk;
+    assert (a) $display("pass"); else $display("fail");
+    assume #0 (b) else $display("assume");
+    cover final (a) $display("cover");
+  endtask
 endmodule

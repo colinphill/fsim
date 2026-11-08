@@ -1,0 +1,4 @@
+#c a resolfunc=resolved kind=vhpifuncdeclk params=1 pure=1 return=std_ulogic param=s:std_ulogic_vector
+#c b resolfunc=sum_i kind=vhpifuncdeclk params=1 pure=1 return=integer param=v:int_array
+#c c resolfunc=-
+#c rs resolfunc=sum_i kind=vhpifuncdeclk params=1 pure=1 return=integer param=v:int_array

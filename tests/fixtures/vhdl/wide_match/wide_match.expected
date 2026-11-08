@@ -1,0 +1,4 @@
+wide_match W=128 checks=87 mismatches=0 outcomes=01UX
+wide_match W=200 checks=87 mismatches=0 outcomes=01UX
+wide_match W=256 checks=87 mismatches=0 outcomes=01UX
+wide_match W=65 checks=87 mismatches=0 outcomes=01UX

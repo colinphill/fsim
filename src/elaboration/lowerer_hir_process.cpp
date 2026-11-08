@@ -591,7 +591,12 @@ std::vector<std::string> Lowerer::hir_named_scope_path() const
         }
         start = dot + 1U;
     }
-    for (const auto& scope : local_scope_) {
+    std::size_t first_local = 0U;
+    if (!hir_callable_scopes_.empty()) {
+        path.push_back(hir_callable_scopes_.back().name);
+        first_local = std::min(hir_callable_scopes_.back().local_base, local_scope_.size());
+    }
+    for (const auto& scope : std::span { local_scope_ }.subspan(first_local)) {
         if (!scope.empty() && scope.front() != '$') {
             path.push_back(scope);
         }
@@ -991,6 +996,7 @@ std::vector<SignalId> Lowerer::hir_statement_signal_dependencies(
         }
         for (const auto& sensitivity : source.sensitivities) {
             append_expression(sensitivity.expression);
+            append_expression(sensitivity.guard);
         }
         for (const auto& argument : source.task_arguments) {
             append_expression(argument.actual);
@@ -2370,10 +2376,19 @@ bool Lowerer::initialize_hir_declarations(
             }
             return std::nullopt;
         }();
+        // A STD_ULOGIC or CHARACTER subtype with a range starts at its left
+        // bound, found along the subtype chain (X01 at 'X', IEEE 1076-2008
+        // 6.4.2.3).
+        const bool vhdl_bounded_scalar = binding->domain
+                == frontend::ValueDomain::Logic9
+            || (vhdl_effective_subtype
+                && same_hir_identifier(
+                    simple_name_of(vhdl_effective_subtype->type_mark.spelling),
+                    "character", true));
         const auto vhdl_composite_default = declaration->vhdl != nullptr
                 && declaration->vhdl->subtype && !initializer && !vhdl_file
             ? hir_vhdl_default_value(*declaration->vhdl->subtype,
-                  binding->width)
+                  binding->width, 0U, vhdl_bounded_scalar)
             : std::nullopt;
         if (!retained_static && binding->width != 0U
             && vhdl_captured_scalar_default) {
@@ -2639,6 +2654,7 @@ std::optional<Process> Lowerer::lower_hir_process(
             if (name.find('.') == std::string::npos) {
                 return std::nullopt;
             }
+            hierarchical_last_found_ = false;
             auto signal = hir_hierarchical_signal(name);
             for (auto lexical = hierarchy;
                  !signal && !lexical.empty();) {
@@ -2651,8 +2667,51 @@ std::optional<Process> Lowerer::lower_hir_process(
             }
             if (signal) {
                 hierarchical_reference_used_ = true;
+                if (hierarchical_last_found_
+                    && hierarchical_last_signal_ == *signal
+                    && std::ranges::find(
+                           description.hierarchical_sensitivities,
+                           std::pair<SignalId, std::string> {
+                               *signal, hierarchical_last_path_ })
+                        == description.hierarchical_sensitivities.end()) {
+                    description.hierarchical_sensitivities.emplace_back(
+                        *signal, hierarchical_last_path_);
+                }
             }
             return signal;
+        };
+        // An event with its own `iff` guard (IEEE 1800-2023 9.4.2.3) is
+        // waited for by the process body's leading event control, which
+        // tests the guard of the event that fired.
+        const bool guarded_events = std::ranges::any_of(input.sensitivities,
+            [](const semantic::sv::Sensitivity& sensitivity) {
+                return sensitivity.guard.has_value();
+            });
+        // The signal under the selects of an event control operand whose
+        // base is a hierarchical name (`u1.v[1]`, `posedge u1.bus[2]`,
+        // `u1.v[3:2]`): the operand is re-evaluated on a change of the whole
+        // signal, and the name's mark makes a load port's delayed copy wake
+        // the process (IEEE 1364-2005 16.2.4).
+        const auto hierarchical_select_base
+            = [&](semantic::ExpressionId current) -> std::optional<SignalId> {
+            for (std::size_t depth = 0U; depth < 16U; ++depth) {
+                const auto record
+                    = specialized_hir_unit_->find_expression(current);
+                if (!record || record->systemverilog == nullptr) {
+                    return std::nullopt;
+                }
+                const auto& node = *record->systemverilog;
+                if (node.kind == semantic::sv::ExpressionKind::name) {
+                    return hierarchical_sensitivity(node.text);
+                }
+                if ((node.kind != semantic::sv::ExpressionKind::index
+                        && node.kind != semantic::sv::ExpressionKind::slice)
+                    || node.operands.empty()) {
+                    return std::nullopt;
+                }
+                current = node.operands.front();
+            }
+            return std::nullopt;
         };
         bool dynamic_terms { };
         for (const auto& sensitivity : input.sensitivities) {
@@ -2701,8 +2760,22 @@ std::optional<Process> Lowerer::lower_hir_process(
                         dynamic_terms = true;
                         break;
                     }
-                    if (const auto selected = hir_static_signal_sensitivity(
-                            *sensitivity.expression, input.scope)) {
+                    // A select of a load port's hierarchical name waits on
+                    // the port's delayed copy (IEEE 1364-2005 16.2.4), so it
+                    // is not subscribed to the exact leaf: the operand is
+                    // re-evaluated on a change of the whole signal, which the
+                    // name's mark moves to the copy.
+                    const auto marks_before
+                        = description.hierarchical_sensitivities.size();
+                    const bool hierarchical_select
+                        = hierarchical_select_base(*sensitivity.expression)
+                            .has_value()
+                        && description.hierarchical_sensitivities.size()
+                            != marks_before;
+                    if (const auto selected = hierarchical_select
+                            ? std::nullopt
+                            : hir_static_signal_sensitivity(
+                                *sensitivity.expression, input.scope)) {
                         // A constant selected element/bit subscribes to its
                         // exact leaf SignalId and normalized bit range.
                         description.sensitivities.push_back(*selected);
@@ -2788,6 +2861,9 @@ std::optional<Process> Lowerer::lower_hir_process(
                            *sensitivity.expression, input.scope)
                         .value_or(binding->width) == binding->width) {
                     signal = binding->signal;
+                    // The name of a load port (`@(u1.a)`) denotes its
+                    // delayed copy (IEEE 1364-2005 16.2.4): mark it.
+                    (void)hierarchical_select_base(*sensitivity.expression);
                 }
                 if (const auto named = specialized_hir_unit_->find_expression(
                         *sensitivity.expression);
@@ -2815,6 +2891,11 @@ std::optional<Process> Lowerer::lower_hir_process(
                         description.sensitivities.push_back({
                             dependency, runtime::simir::EdgeKind::any });
                     }
+                    if (const auto base = hierarchical_select_base(
+                            *sensitivity.expression)) {
+                        description.sensitivities.push_back({
+                            *base, runtime::simir::EdgeKind::any });
+                    }
                     continue;
                 }
                 if (!signal) {
@@ -2837,6 +2918,10 @@ std::optional<Process> Lowerer::lower_hir_process(
                     }
                     auto dependencies = hir_signal_dependencies(
                         *sensitivity.expression, input.scope);
+                    if (const auto base = hierarchical_select_base(
+                            *sensitivity.expression)) {
+                        dependencies.push_back(*base);
+                    }
                     if (dependencies.empty()) {
                         dynamic_terms = true;
                         break;
@@ -2858,6 +2943,10 @@ std::optional<Process> Lowerer::lower_hir_process(
             }
             if (!signal) {
                 signal = hir_named_signal(sensitivity.signal, input.scope);
+                if (signal) {
+                    // Marks a load port's hierarchical name (see above).
+                    (void)hierarchical_sensitivity(sensitivity.signal);
+                }
             }
             if (!signal) {
                 signal = hierarchical_sensitivity(sensitivity.signal);
@@ -2885,6 +2974,30 @@ std::optional<Process> Lowerer::lower_hir_process(
             }
             description.sensitivities.push_back(
                 { *signal, edge_kind(sensitivity.edge) });
+        }
+        // Guarded events keep the static sensitivity when every event is a
+        // plain scalar signal (one term per event, in order); the wake then
+        // tests the guard of the event that fired.
+        if (guarded_events && !dynamic_terms) {
+            const bool plain
+                = description.sensitivities.size()
+                    == input.sensitivities.size()
+                && !description.wildcard_sensitivity
+                && std::ranges::none_of(input.sensitivities,
+                    [](const semantic::sv::Sensitivity& sensitivity) {
+                        return sensitivity.expression.has_value();
+                    })
+                && std::ranges::all_of(description.sensitivities,
+                    [&](const runtime::simir::Sensitivity& term) {
+                        return term.edge == runtime::simir::EdgeKind::any
+                            || design_.signal_info_[term.signal].width == 1U;
+                    });
+            if (plain) {
+                description.wake_guards.assign(
+                    input.sensitivities.begin(), input.sensitivities.end());
+            } else {
+                dynamic_terms = true;
+            }
         }
         if (dynamic_terms) {
             description.sensitivities.clear();
@@ -4715,9 +4828,24 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
     generated_processes_.clear();
     implicit_signal_dependencies_.clear();
     hierarchical_marks_.clear();
+    // The event controls through hierarchical names: the process waits on a
+    // load port's delayed copy there too (IEEE 1364-2005 16.2.4).
+    for (const auto& [signal, path] : description.hierarchical_sensitivities) {
+        hierarchical_marks_.push_back({ 0U, 0U, signal, true, path, true });
+    }
     deferred_assertion_action_phase_.reset();
     deferred_assertion_action_handoff_.reset();
+    deferred_assertion_action_effects_.clear();
     language_ = language;
+    // A process that holds a deferred assertion (directly or in a callable
+    // it calls) clears its report queue at each flush point (16.4.2); no
+    // other process gets the operation.
+    hir_process_flushes_deferred_ = false;
+    if (language != frontend::Language::Vhdl2008) {
+        std::set<std::uint32_t> visited_callables;
+        hir_process_flushes_deferred_ = hir_contains_deferred_assertion(
+            description.statements, visited_callables);
+    }
     sample_concurrent_assertion_reads_
         = description.concurrent_assertion;
     hierarchy_ = std::string { hierarchy };
@@ -4926,6 +5054,11 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
             process_.operations[*event_filter_branch]);
         branch.when_true = static_cast<InstructionIndex>(
             process_.operations.size());
+    }
+    if (description.event_expression) {
+        // The process resumes once its event control matched; a wake the
+        // edge filter rejects is no resumption (IEEE 1800-2023 16.4.2).
+        emit_deferred_flush_point();
     }
     if (language == frontend::Language::Vhdl2008) {
         load_hir_vhdl_shared_access_heaps();
@@ -5956,16 +6089,38 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
                 *guard, active, inactive, UnknownBranchPolicy::error };
             process_.operations[finish] = Jump { end };
         }
-    } else if ((!description.leading_wait.empty()
-                   && !lower_hir_sensitivity_wait(description.leading_wait,
-                       std::nullopt, { }, hir_source_span(description.source)))
-        || !lower_hir_statements(description.statements)) {
-        process_ = { };
-        hir_local_registers_.clear();
-        hir_local_string_registers_.clear();
-        hir_local_container_registers_.clear();
-        hir_local_container_types_.clear();
-        return std::nullopt;
+    } else {
+        std::optional<std::pair<InstructionIndex, RegisterId>> wake_branch;
+        bool lowered = description.leading_wait.empty()
+            || lower_hir_sensitivity_wait(description.leading_wait,
+                std::nullopt, { }, hir_source_span(description.source));
+        if (lowered && !description.wake_guards.empty()) {
+            wake_branch = lower_hir_wake_guard(
+                description.wake_guards, description.sensitivities);
+            lowered = wake_branch.has_value();
+        }
+        lowered = lowered && lower_hir_statements(description.statements);
+        if (!lowered) {
+            process_ = { };
+            hir_local_registers_.clear();
+            hir_local_string_registers_.clear();
+            hir_local_container_registers_.clear();
+            hir_local_container_types_.clear();
+            return std::nullopt;
+        }
+        if (wake_branch) {
+            // No guarded event fired: the body is skipped and the process
+            // waits again. The landing operation is a no-op constant.
+            const auto end = static_cast<InstructionIndex>(
+                process_.operations.size());
+            const auto landing = allocate_register(
+                1U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(
+                LoadConstant { landing, unsigned_value(0U, 1U) });
+            process_.operations[wake_branch->first] = Branch {
+                wake_branch->second, wake_branch->first + 1U, end,
+                UnknownBranchPolicy::when_false };
+        }
     }
     store_hir_vhdl_shared_access_heaps();
     auto callable_body_begin = process_.operations.size();
@@ -6204,6 +6359,19 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
             process_.operations.insert(
                 process_.operations.cbegin() + resume_entry,
                 WaitSensitivity { });
+            if (hir_process_flushes_deferred_) {
+                // The flush point right after the process's wait (16.4.2).
+                const auto flush_at
+                    = static_cast<InstructionIndex>(resume_entry + 1U);
+                for (auto& operation : process_.operations) {
+                    relocate_instruction_targets(operation, flush_at);
+                }
+                shift_readonly_output_writes(flush_at, 1U);
+                process_.operations.insert(
+                    process_.operations.cbegin() + flush_at,
+                    DisableFork { std::nullopt, true });
+                ++callable_body_begin;
+            }
         }
         ++callable_body_begin;
     }
@@ -6230,6 +6398,10 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
         process_termination.emplace_back(Jump { resume_entry });
     } else {
         process_termination.emplace_back(WaitSensitivity { });
+        if (hir_process_flushes_deferred_) {
+            process_termination.emplace_back(
+                DisableFork { std::nullopt, true });
+        }
         process_termination.emplace_back(Jump { resume_entry });
     }
     for (std::size_t inserted { };

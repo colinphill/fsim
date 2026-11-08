@@ -302,6 +302,10 @@ namespace {
         append_field(result, mapping.target_instance_path);
         append_field(result, delay_mode_identity(node, ir));
         append_field(result, mapping.condition_identity);
+        // A DEVICE maps once for each module path that ends at its output.
+        if (mapping.specify_path)
+            append_field(result, std::to_string(
+                static_cast<std::uint64_t>(*mapping.specify_path)));
         for (const auto& endpoint : mapping.endpoints)
             append_field(result, endpoint_identity(endpoint));
         return result;
@@ -613,15 +617,28 @@ namespace {
         }
         state.prior_order = order;
         state.have_prior = true;
-        const auto key = mapping_key(
+        const auto base = mapping_key(
             mapping.cell_id, mapping.node_id, mapping.target_instance_path);
+        // A DEVICE maps once for each module path that ends at its output
+        // (and once more for the outputs no path ends at): the node/target
+        // is consumed by its first mapping.
+        const bool device = mapping.construct_kind == SdfConstructKind::Device;
+        const auto key = device && mapping.specify_path
+            ? base + 'P' + std::to_string(
+                  static_cast<std::uint64_t>(*mapping.specify_path))
+            : base;
+        const auto device_marker = 'D' + base;
+        const bool device_consumed
+            = device && state.seen_mappings.contains(device_marker);
         if (!state.seen_mappings.emplace(key).second) {
             diagnose(state.diagnostics, "FSIM-SDF-MAP-002",
                 "SDF endpoint resolution contains a duplicate node/target mapping",
                 span);
             return false;
         }
-        if (state.expected.erase(key) != 1U) {
+        if (device)
+            state.seen_mappings.insert(device_marker);
+        if (!device_consumed && state.expected.erase(base) != 1U) {
             diagnose(state.diagnostics, "FSIM-SDF-MAP-004",
                 "SDF endpoint resolution contains an unsupported or unowned mapping",
                 span);

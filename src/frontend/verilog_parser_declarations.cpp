@@ -3498,6 +3498,8 @@ Process VerilogParser::parse_always() {
           "always_latch requires SystemVerilog");
   }
   std::optional<Expression> process_event_guard;
+  std::size_t control_begin { };
+  std::size_t control_end { };
   const bool implicit_sensitivity =
       process.kind == ProcessKind::SystemVerilogAlwaysComb
       || process.kind == ProcessKind::SystemVerilogAlwaysLatch;
@@ -3515,14 +3517,18 @@ Process VerilogParser::parse_always() {
     process.sensitivities.push_back(
         Sensitivity{EdgeKind::Any, "*", start.span, {}});
   } else if (match(TokenKind::At)) {
+    control_begin = index_;
     process.sensitivities = parse_sensitivity();
+    control_end = index_;
     process_event_guard = std::exchange(event_guard_, std::nullopt);
   } else if (process.kind != ProcessKind::VerilogAlways) {
     error(current(), "FSIM-SV-PARSE-012",
           "always process requires an event control in this frontend "
           "slice");
   }
+  const auto body_begin = index_;
   auto body = parse_statement();
+  const auto body_end = index_;
   if (body) {
     if (body->kind == StatementKind::Block
         && body->label.empty()
@@ -3613,6 +3619,8 @@ Process VerilogParser::parse_always() {
     }
   }
   process.span = span_from(start, previous());
+  record_procedure_clock_inference(
+      process, control_begin, control_end, body_begin, body_end);
   current_procedural_names_.clear();
   current_procedural_types_.clear();
   return process;

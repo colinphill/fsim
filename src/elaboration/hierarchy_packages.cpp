@@ -1951,16 +1951,12 @@ namespace {
             && declaration->callable && declaration->callable->default_callable;
     }
 
-    // The INTEGER width the specialization's unit's own standard gives: 64
-    // bits under VHDL-2019 (IEEE 1076-2019 5.2.3.1), otherwise 32.
+    // The design's INTEGER width: 64 bits when any unit is VHDL-2019 (IEEE
+    // 1076-2019 5.2.3.1), whatever the standard of this unit, otherwise 32.
     [[nodiscard]] std::size_t compiled_vhdl_unit_integer_width(
         const semantic::SpecializedHirUnit& specialization)
     {
-        const auto unit = specialization.design().find_unit(
-            specialization.unit());
-        return unit && unit->vhdl != nullptr && unit->vhdl->standard == "2019"
-            ? 64U
-            : 32U;
+        return specialization.design().vhdl_wide_integer() ? 64U : 32U;
     }
 
     // The width of STD.STANDARD.INTEGER for the specialization's unit: 64
@@ -2899,24 +2895,11 @@ namespace {
                 };
             } else if (!result
                 && definition.form == semantic::vhdl::TypeForm::physical) {
-                const auto declaration = specialization.find_declaration(
-                    definition.declaration);
-                const auto* physical_scope
-                    = declaration && declaration->vhdl != nullptr
-                    ? semantic::find_by_id(
-                          specialization.design().semantics.scopes(),
-                          declaration->vhdl->scope)
-                    : nullptr;
-                const auto owner_unit = physical_scope != nullptr
-                    ? compiled_vhdl_unit(
-                          specialization.design(), physical_scope->unit)
-                    : nullptr;
                 const auto storage_width = subtype.integer_storage_width != 0U
                     ? subtype.integer_storage_width
                     : definition.base.integer_storage_width != 0U
                     ? definition.base.integer_storage_width
-                    : owner_unit != nullptr
-                            && owner_unit->standard == "2019"
+                    : specialization.design().vhdl_wide_integer()
                     ? 64U
                     : 32U;
                 result = CompiledVhdlSignalLayout {
@@ -4919,6 +4902,22 @@ namespace {
             }
         }
         if (!executable_body) {
+            // IEEE.STD_LOGIC_1164.RESOLVED is intrinsic (16.7): a subtype
+            // resolved by it, such as X01 or a user `resolved std_ulogic`,
+            // resolves like STD_LOGIC.
+            const auto designator = std::string_view { result.designator };
+            const auto separator = designator.find_last_of('.');
+            const auto simple = separator == std::string_view::npos
+                ? designator
+                : designator.substr(separator + 1U);
+            const auto base = compiled_vhdl_signal_type(
+                specialization, subtype, owner_scope);
+            if (compiled_vhdl_name_equal(simple, "resolved") && base
+                && base->domain == frontend::ValueDomain::Logic9) {
+                result.designator = "std_logic";
+                result.kind = ResolutionKind::std_logic;
+                return result;
+            }
             result.issue = CompiledVhdlResolutionIssue::missing_body;
             return result;
         }
@@ -5675,6 +5674,77 @@ namespace {
         };
     }
 
+    // The leftmost value of a range-constrained STD_ULOGIC subtype
+    // (`subtype X01 is resolved std_ulogic range 'X' to '1'`): the left
+    // bound of the first range constraint along the subtype chain, a
+    // position in STD_ULOGIC or a character literal (IEEE 1076-2008
+    // 6.4.2.3, 16.7). Nullopt without one, and for anything wider than one
+    // element: the range of a vector (`std_logic_vector(3 downto 0)`) is its
+    // index range, not a range of STD_ULOGIC values.
+    std::optional<PackedLogic4> compiled_vhdl_logic9_left(
+        const semantic::SpecializedHirUnit& specialization,
+        const std::optional<std::int64_t> folded,
+        const std::optional<semantic::ExpressionId> expression,
+        const std::size_t width)
+    {
+        if (width != 1U) {
+            return std::nullopt;
+        }
+        constexpr std::string_view literals = "UX01ZWLH-";
+        std::optional<char> left;
+        if (folded && *folded >= 0
+            && static_cast<std::size_t>(*folded) < literals.size()) {
+            left = literals[static_cast<std::size_t>(*folded)];
+        } else if (const auto code = compiled_vhdl_character_bound(
+                       specialization, std::nullopt, expression)) {
+            left = static_cast<char>(*code);
+        }
+        if (!left || literals.find(*left) == std::string_view::npos) {
+            return std::nullopt;
+        }
+        return PackedLogic4::from_logic9_msb_string(std::string(1U, *left));
+    }
+
+    std::optional<PackedLogic4> compiled_vhdl_logic9_left(
+        const semantic::SpecializedHirUnit& specialization,
+        const semantic::vhdl::SubtypeIndication& subtype,
+        const std::size_t width)
+    {
+        const auto ranged = [](const semantic::vhdl::RangeConstraint& range) {
+            return range.kind != semantic::vhdl::RangeKind::array_index
+                && (range.left.has_value() || range.left_expression.has_value());
+        };
+        const semantic::vhdl::RangeConstraint* constraint = nullptr;
+        if (const auto found = std::ranges::find_if(subtype.constraints, ranged);
+            found != subtype.constraints.end()) {
+            constraint = &*found;
+        }
+        auto type_id = subtype.type_mark.target.valid()
+            ? subtype.type_mark.target
+            : compiled_vhdl_link_subtype(specialization, subtype)
+                  .type_mark.target;
+        std::unordered_set<std::uint32_t> visiting;
+        while (constraint == nullptr && type_id.valid()
+            && visiting.insert(type_id.value()).second) {
+            const auto type = specialization.find_type(type_id);
+            if (!type || type->vhdl == nullptr
+                || (type->vhdl->form != semantic::vhdl::TypeForm::subtype
+                    && type->vhdl->form != semantic::vhdl::TypeForm::alias)) {
+                break;
+            }
+            const auto& constraints = type->vhdl->base.constraints;
+            if (const auto found = std::ranges::find_if(constraints, ranged);
+                found != constraints.end()) {
+                constraint = &*found;
+            }
+            type_id = type->vhdl->base.type_mark.target;
+        }
+        return constraint == nullptr
+            ? std::nullopt
+            : compiled_vhdl_logic9_left(specialization, constraint->left,
+                  constraint->left_expression, width);
+    }
+
     // The default value of a record or array subtype (IEEE 1076-2008
     // 6.4.2.3): each scalar subelement takes its subtype's leftmost value.
     // A record's first element is most significant, as is an array's left
@@ -5863,6 +5933,12 @@ namespace {
             return std::nullopt;
         }
         const auto domain = vhdl_value_domain(subtype.domain);
+        if (domain == frontend::ValueDomain::Logic9) {
+            if (auto left = compiled_vhdl_logic9_left(specialization,
+                    chain_left, chain_left_expression, width)) {
+                return left;
+            }
+        }
         if (const auto range = compiled_integer_range(subtype)) {
             return compiled_vhdl_integral_value(range->left, domain, width);
         }
@@ -8027,7 +8103,10 @@ namespace {
                 } else if (compiled_vhdl_name_equal(index_subtype, "positive")) {
                     left = 1;
                 } else if (compiled_vhdl_name_equal(index_subtype, "integer")) {
-                    left = std::numeric_limits<std::int32_t>::min();
+                    left = specialization.design().vhdl_wide_integer()
+                        ? std::numeric_limits<std::int64_t>::min()
+                        : static_cast<std::int64_t>(
+                              std::numeric_limits<std::int32_t>::min());
                 }
                 if (!left) {
                     return std::nullopt;
@@ -11739,11 +11818,45 @@ namespace {
             return callable->callable->lifetime
                 != semantic::sv::Lifetime::automatic;
         };
+        // A ref actual that is not a static variable: an automatic local
+        // (of a callable, or of a block declared automatic), or a dynamic
+        // object such as a class property or a dynamic container element.
+        const auto deferred_ref_actual_is_static
+            = [&](const semantic::ExpressionId id) {
+                  if (!static_reference_actual(static_reference_actual, id)) {
+                      return false;
+                  }
+                  auto current = id;
+                  for (;;) {
+                      const auto expression = compiled.find_expression(current);
+                      if (!expression || expression->systemverilog == nullptr) {
+                          return true;
+                      }
+                      const auto& source = *expression->systemverilog;
+                      if ((source.kind == ExpressionKind::index
+                              || source.kind == ExpressionKind::slice)
+                          && !source.operands.empty()) {
+                          current = source.operands.front();
+                          continue;
+                      }
+                      if (source.kind != ExpressionKind::name
+                          || !source.referenced_name
+                          || !source.referenced_name->selected) {
+                          return true;
+                      }
+                      const auto declaration = compiled.find_declaration(
+                          *source.referenced_name->selected);
+                      return !declaration || declaration->systemverilog == nullptr
+                          || declaration->systemverilog->lifetime
+                          != semantic::sv::Lifetime::automatic;
+                  }
+              };
         const auto validate_associations = [&](const auto& formals,
                                                const auto& associations,
                                                const bool automatic,
                                                const bool function,
-                                               const std::string_view context) {
+                                               const std::string_view context,
+                                               const bool deferred_action = false) {
             const auto association_code = function
                 ? "FSIM-ELAB-SVFUNC-010"
                 : "FSIM-ELAB-SVTASK-012";
@@ -11838,6 +11951,17 @@ namespace {
                                 + (function ? "function" : "task")
                                 + " actual must be a writable variable target "
                                   "of an automatic callable",
+                            association.source);
+                    } else if (deferred_action
+                        && !deferred_ref_actual_is_static(
+                            *association.actual)) {
+                        // IEEE 1800-2023 16.4: an automatic or dynamic
+                        // variable is an error as a ref or const ref
+                        // actual of a deferred assertion action.
+                        append("FSIM-ELAB-SVASSERT-003",
+                            "an automatic or dynamic variable cannot be "
+                            "passed to a ref or const ref formal of a "
+                            "deferred assertion action",
                             association.source);
                     } else if (formal->systemverilog->static_reference
                         && !static_reference_actual(static_reference_actual,
@@ -12417,6 +12541,7 @@ namespace {
             }
             for (const auto& sensitivity : source.sensitivities) {
                 visit_optional(sensitivity.expression);
+                visit_optional(sensitivity.guard);
             }
             for (const auto& output : source.output_values) {
                 visit_optional(output.value);
@@ -13166,6 +13291,306 @@ namespace {
                 }
             }
         }
+        // IEEE 1800-2023 16.4: an action of a final deferred assertion is a
+        // subroutine "legally called in the Postponed region", where it is
+        // illegal to write a net or variable or to schedule an event in an
+        // earlier region (4.4.2.9).  Decided statically here: the callee
+        // body (and every user callable it calls) is walked for a write to
+        // a variable that is not an automatic local of the callee, a
+        // nonblocking or timed assignment, a time or event control, an
+        // event trigger or a process control.  A system task is legal.
+        struct PostponedViolation {
+            std::string what;
+            semantic::SourceSpanId source;
+        };
+        std::function<std::optional<PostponedViolation>(
+            const semantic::sv::Declaration&, std::set<std::uint32_t>&)>
+            postponed_callable_violation;
+        postponed_callable_violation
+            = [&](const semantic::sv::Declaration& callee,
+                  std::set<std::uint32_t>& visiting)
+            -> std::optional<PostponedViolation> {
+            if (!callee.callable
+                || !visiting.insert(callee.id.value()).second) {
+                return std::nullopt;
+            }
+            // Class methods are automatic unless declared static (8.6).
+            bool automatic_callee = callee.callable->lifetime
+                == semantic::sv::Lifetime::automatic;
+            if (callee.callable->lifetime
+                == semantic::sv::Lifetime::implicit) {
+                for (const auto& candidate :
+                    compiled.systemverilog_hir.classes()) {
+                    for (const auto& method : candidate.methods) {
+                        if (method.declaration == callee.id
+                            && method.lifetime
+                                != semantic::sv::ClassLifetime::static_lifetime) {
+                            automatic_callee = true;
+                        }
+                    }
+                }
+            }
+            const auto local_automatic = [&](const semantic::ExpressionId id) {
+                auto current = id;
+                for (;;) {
+                    const auto expression = compiled.find_expression(current);
+                    if (!expression || expression->systemverilog == nullptr) {
+                        return false;
+                    }
+                    const auto& source = *expression->systemverilog;
+                    if ((source.kind == ExpressionKind::index
+                            || source.kind == ExpressionKind::slice)
+                        && !source.operands.empty()) {
+                        current = source.operands.front();
+                        continue;
+                    }
+                    if (source.kind != ExpressionKind::name
+                        || !source.referenced_name
+                        || !source.referenced_name->selected) {
+                        return false;
+                    }
+                    const auto declaration = compiled.find_declaration(
+                        *source.referenced_name->selected);
+                    if (!declaration || declaration->systemverilog == nullptr) {
+                        return false;
+                    }
+                    const auto& selected = *declaration->systemverilog;
+                    // An output, inout or non-const ref formal stands for
+                    // the caller's variable.
+                    if (selected.direction == semantic::sv::Direction::output
+                        || selected.direction == semantic::sv::Direction::inout
+                        || (selected.direction == semantic::sv::Direction::ref
+                            && !selected.const_reference)) {
+                        return false;
+                    }
+                    const auto* owner = enclosing_callable(selected.scope);
+                    return owner != nullptr && owner->id == callee.id
+                        && (selected.lifetime
+                                == semantic::sv::Lifetime::automatic
+                            || (selected.lifetime
+                                    != semantic::sv::Lifetime::static_lifetime
+                                && automatic_callee));
+                }
+            };
+            std::optional<PostponedViolation> found;
+            std::function<void(semantic::ExpressionId)> scan_expression;
+            scan_expression = [&](const semantic::ExpressionId id) {
+                if (found || !id.valid()) {
+                    return;
+                }
+                const auto expression = compiled.find_expression(id);
+                if (!expression || expression->systemverilog == nullptr) {
+                    return;
+                }
+                const auto& source = *expression->systemverilog;
+                if (source.kind == ExpressionKind::update
+                    && !source.operands.empty()
+                    && !local_automatic(source.operands.front())) {
+                    found = PostponedViolation {
+                        "updates a variable that is not an automatic local",
+                        source.source
+                    };
+                    return;
+                }
+                if (source.kind == ExpressionKind::call
+                    && source.referenced_name) {
+                    auto selected = source.referenced_name->selected;
+                    if (!selected && source.referenced_name->overloads.size() == 1U) {
+                        selected = source.referenced_name->overloads.front();
+                    }
+                    const auto called = selected
+                        ? compiled.find_declaration(*selected)
+                        : std::nullopt;
+                    if (called && called->systemverilog != nullptr) {
+                        found = postponed_callable_violation(
+                            *called->systemverilog, visiting);
+                        if (found) {
+                            return;
+                        }
+                    }
+                }
+                // A class method call names its method by identity; a
+                // virtual one may reach any override with the same profile.
+                if ((source.kind == ExpressionKind::class_method_call
+                        || source.kind == ExpressionKind::class_static_method_call)
+                    && !source.class_member_identity.empty()
+                    && !source.class_member_identity.starts_with('@')) {
+                    std::vector<semantic::DeclarationId> methods;
+                    const semantic::sv::ClassMethod* target = nullptr;
+                    for (const auto& candidate :
+                        compiled.systemverilog_hir.classes()) {
+                        for (const auto& method : candidate.methods) {
+                            if (method.canonical_identity
+                                == source.class_member_identity) {
+                                target = &method;
+                            }
+                        }
+                    }
+                    for (const auto& candidate :
+                        compiled.systemverilog_hir.classes()) {
+                        for (const auto& method : candidate.methods) {
+                            if (&method == target
+                                || (target != nullptr && target->virtual_method
+                                    && !target->profile_identity.empty()
+                                    && method.profile_identity
+                                        == target->profile_identity)) {
+                                methods.push_back(method.declaration);
+                            }
+                        }
+                    }
+                    for (const auto declaration_id : methods) {
+                        const auto called = compiled.find_declaration(
+                            declaration_id);
+                        if (called && called->systemverilog != nullptr) {
+                            found = postponed_callable_violation(
+                                *called->systemverilog, visiting);
+                            if (found) {
+                                return;
+                            }
+                        }
+                    }
+                }
+                for (const auto operand : source.operands) {
+                    scan_expression(operand);
+                }
+                for (const auto& argument : source.call_arguments) {
+                    if (argument.actual) {
+                        scan_expression(*argument.actual);
+                    }
+                }
+            };
+            std::function<void(semantic::StatementId)> scan_statement;
+            scan_statement = [&](const semantic::StatementId statement_id) {
+                if (found || !statement_id.valid()) {
+                    return;
+                }
+                const auto view = compiled.find_statement(statement_id);
+                if (!view || view->systemverilog == nullptr) {
+                    return;
+                }
+                const auto& source = *view->systemverilog;
+                using Kind = semantic::sv::StatementKind;
+                switch (source.kind) {
+                case Kind::assignment:
+                case Kind::procedural_assign:
+                case Kind::deassign:
+                case Kind::force:
+                case Kind::release:
+                    if (source.assignment_kind
+                            == semantic::sv::AssignmentKind::nonblocking
+                        || source.assignment_control
+                            != semantic::sv::AssignmentControl::none
+                        || !source.target
+                        || !local_automatic(*source.target)) {
+                        found = PostponedViolation {
+                            "writes a net or variable that is not an "
+                            "automatic local, or schedules an assignment",
+                            source.source
+                        };
+                    }
+                    break;
+                case Kind::delay_control:
+                case Kind::event_control:
+                case Kind::wait_statement:
+                case Kind::wait_order:
+                case Kind::event_trigger:
+                case Kind::fork:
+                case Kind::wait_fork:
+                case Kind::disable_fork:
+                    found = PostponedViolation {
+                        "suspends or schedules an event in an earlier region",
+                        source.source
+                    };
+                    break;
+                case Kind::container_method:
+                    if (!source.target || !local_automatic(*source.target)) {
+                        found = PostponedViolation {
+                            "calls a method on a container that is not an "
+                            "automatic local",
+                            source.source
+                        };
+                    }
+                    break;
+                case Kind::task_call: {
+                    auto selected = source.task.selected;
+                    if (!selected && source.task.overloads.size() == 1U) {
+                        selected = source.task.overloads.front();
+                    }
+                    const auto called = selected
+                        ? compiled.find_declaration(*selected)
+                        : std::nullopt;
+                    if (called && called->systemverilog != nullptr) {
+                        found = postponed_callable_violation(
+                            *called->systemverilog, visiting);
+                    }
+                    break;
+                }
+                default:
+                    break;
+                }
+                if (found) {
+                    return;
+                }
+                visit_statement_expressions(source, scan_expression);
+                for (const auto nested : source.loop_updates) {
+                    scan_statement(nested);
+                }
+                for (const auto nested : source.statements) {
+                    scan_statement(nested);
+                }
+                for (const auto nested : source.else_statements) {
+                    scan_statement(nested);
+                }
+                for (const auto& alternative : source.case_alternatives) {
+                    for (const auto nested : alternative.statements) {
+                        scan_statement(nested);
+                    }
+                }
+            };
+            for (const auto formal_id : callee.callable->formals) {
+                const auto formal = compiled.find_declaration(formal_id);
+                if (formal && formal->systemverilog != nullptr
+                    && (formal->systemverilog->direction
+                            == semantic::sv::Direction::output
+                        || formal->systemverilog->direction
+                            == semantic::sv::Direction::inout)) {
+                    found = PostponedViolation {
+                        "has an output or inout formal, which writes the "
+                        "caller's variable",
+                        formal->systemverilog->source
+                    };
+                    break;
+                }
+            }
+            for (const auto statement_id : callee.statements) {
+                scan_statement(statement_id);
+            }
+            visiting.erase(callee.id.value());
+            return found;
+        };
+        // The action statements of deferred assertions, and whether each
+        // belongs to a final one (16.4).
+        std::unordered_map<std::uint32_t, bool> deferred_action_statements;
+        for (const auto& candidate : compiled.systemverilog_hir.statements()) {
+            const bool deferred_cover
+                = candidate.kind == semantic::sv::StatementKind::conditional
+                && candidate.immediate_directive
+                    == semantic::sv::Statement::ImmediateDirective::cover;
+            if ((candidate.kind != semantic::sv::StatementKind::assertion
+                    && !deferred_cover)
+                || !(candidate.immediate_deferred || candidate.immediate_final
+                    || candidate.delay || candidate.output_postponed)) {
+                continue;
+            }
+            const bool final_assertion
+                = candidate.immediate_final || candidate.output_postponed;
+            for (const auto id : candidate.statements) {
+                deferred_action_statements[id.value()] = final_assertion;
+            }
+            for (const auto id : candidate.else_statements) {
+                deferred_action_statements[id.value()] = final_assertion;
+            }
+        }
         for (const auto& statement : compiled.systemverilog_hir.statements()) {
             if (!compiled_scope_belongs_to_unit(
                     compiled, statement.scope, unit.id)) {
@@ -13191,13 +13616,30 @@ namespace {
                         && !actuals.empty()) {
                         actuals = actuals.subspan(1U);
                     }
+                    const auto deferred_action
+                        = deferred_action_statements.find(statement.id.value());
                     validate_associations(
                         callable->systemverilog->callable->formals,
                         actuals,
                         callable->systemverilog->callable->lifetime
                             == semantic::sv::Lifetime::automatic,
                         false,
-                        "task argument");
+                        "task argument",
+                        deferred_action != deferred_action_statements.end());
+                    if (deferred_action != deferred_action_statements.end()
+                        && deferred_action->second) {
+                        std::set<std::uint32_t> visiting;
+                        if (const auto violation = postponed_callable_violation(
+                                *callable->systemverilog, visiting)) {
+                            append("FSIM-ELAB-SVASSERT-004",
+                                "'" + callable->systemverilog->name
+                                    + "' cannot be called by a final deferred "
+                                      "assertion action: it "
+                                    + violation->what
+                                    + " (the Postponed region allows neither)",
+                                violation->source);
+                        }
+                    }
                 }
                 continue;
             }
@@ -15130,18 +15572,29 @@ void HierarchyBuilder::add_root(
         && root.systemverilog->kind
             == semantic::sv::UnitKind::configuration) {
         const auto& configuration = *root.systemverilog;
-        if (!configuration.configuration
-            || configuration.configuration->designs.size() != 1U) {
+        // Each design cell of the configuration is its own root, named
+        // after the cell (IEEE 1800-2023 33.4.1.1, 33.2).
+        const semantic::sv::ConfigurationDesign* selected_design = nullptr;
+        if (configuration.configuration) {
+            const auto& designs = configuration.configuration->designs;
+            const auto found = std::ranges::find(
+                designs, active_root_,
+                &semantic::sv::ConfigurationDesign::cell);
+            if (found != designs.end()) {
+                selected_design = &*found;
+            } else if (designs.size() == 1U) {
+                selected_design = &designs.front();
+            }
+        }
+        if (selected_design == nullptr) {
             report(
                 "FSIM-ELAB-SVCONFIG-001",
                 "configuration '" + configuration.name
-                    + "' selected as one root must contain exactly one "
-                      "design top",
+                    + "' has no design top for root '" + active_root_ + "'",
                 compiled_source_span(*compiled_, configuration.source));
             return;
         }
-        const auto& design
-            = configuration.configuration->designs.front();
+        const auto& design = *selected_design;
         auto selected = design.target
             ? compiled_->find_unit(*design.target)
             : std::optional<semantic::CompiledUnitView> { };
@@ -15177,7 +15630,9 @@ void HierarchyBuilder::add_root(
         auto saved_root
             = active_compiled_systemverilog_configuration_root_;
         active_compiled_systemverilog_configuration_ = &configuration;
+        auto saved_cell = active_compiled_systemverilog_configuration_cell_;
         active_compiled_systemverilog_configuration_root_ = active_root_;
+        active_compiled_systemverilog_configuration_cell_ = design.cell;
         static_cast<void>(instantiate_compiled_systemverilog_unit(
             CompiledSystemVerilogInstantiationContext {
                 *selected, active_root_, { }, { }, { }, { },
@@ -15186,6 +15641,8 @@ void HierarchyBuilder::add_root(
             = saved_configuration;
         active_compiled_systemverilog_configuration_root_
             = std::move(saved_root);
+        active_compiled_systemverilog_configuration_cell_
+            = std::move(saved_cell);
         return;
     }
     static_cast<void>(instantiate_compiled_systemverilog_unit(
@@ -16404,6 +16861,7 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
         return false;
     }
     CompiledHierarchyStackGuard stack_guard { stack_, stack_key };
+    const auto lowering_sequence = systemverilog_unit_sequence_++;
     register_systemverilog_resolution_functions(unit);
     std::vector<CompiledSpecializationFailure>
         specialization_failures;
@@ -17080,7 +17538,12 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
     std::vector<DeferredGeneratedSystemVerilogItem> deferred_generated;
     register_generated_class_specializations(
         path, specialized->unit(), generate_occurrences);
-    if (!lower_compiled_systemverilog_processes(
+    // In a design with DPI exports the instance's processes wait for the
+    // whole hierarchy (systemverilog_defers_process_lowering).
+    const bool defer_process_lowering
+        = systemverilog_defers_process_lowering();
+    if (!defer_process_lowering
+        && !lower_compiled_systemverilog_processes(
             unit, *specialized, path, source_language,
             active_concurrent_statements, active_processes,
             generate_occurrences, generated_materializations, lowerer,
@@ -17102,8 +17565,10 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
             occurrence.path, generated_materializations[index].signals,
             specialization.processes);
     }
-    attach_verilog_specify_drivers(
-        specify_path_begin, specialization.processes);
+    if (!defer_process_lowering) {
+        attach_verilog_specify_drivers(
+            specify_path_begin, specialization.processes);
+    }
     add_systemverilog_alias_connections(
         root_materialization.alias_plan, path, signals,
         specialization);
@@ -17392,7 +17857,8 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
         return false;
     }
     ForwardDeferredSystemVerilogItems forward_missed;
-    if ((!deferred_processes.empty() || !deferred_statements.empty())
+    if (!defer_process_lowering
+        && (!deferred_processes.empty() || !deferred_statements.empty())
         && !lower_deferred_systemverilog_processes(
             unit, *specialized, path, source_language, deferred_processes,
             lowerer, specialization_index, program_owner,
@@ -17403,7 +17869,7 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
     // instance's subtree is complete; this instance's own wait for an
     // enclosing one (IEEE 1800-2017 23.6).
     lower_forward_deferred_systemverilog(path, false);
-    if (!forward_missed.processes.empty()
+    if (defer_process_lowering || !forward_missed.processes.empty()
         || !forward_missed.statements.empty()) {
         // Package variables reached later resolve through this instance's
         // type owners, as the frame's own lowerer does.
@@ -17437,7 +17903,7 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
             return materialize(*materialization->specialization,
                 type_resolver, default_resolver, fallback_resolver);
         };
-        forward_deferred_systemverilog_.push_back({
+        ForwardDeferredSystemVerilogLowering forward_entry {
             &unit,
             root_materialization_owner,
             systemverilog_specialization_owners_,
@@ -17479,7 +17945,31 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
                         default_resolver, fallback_resolver);
                 });
             },
-        });
+            {},
+        };
+        if (defer_process_lowering) {
+            // The children exist now; nothing below uses the generated
+            // scopes' storage or the clocking processes any more.
+            auto payload = std::make_shared<DeferredUnitLowering>();
+            payload->concurrent_statements
+                = std::move(active_concurrent_statements);
+            payload->processes = std::move(active_processes);
+            payload->occurrences = std::make_shared<std::vector<
+                hierarchy_sv_generate_detail::Occurrence>>(
+                std::move(generate_occurrences));
+            payload->generated = std::make_shared<
+                std::vector<SystemVerilogHirMaterialization>>(
+                std::move(generated_materializations));
+            payload->clocking_processes = std::move(clocking_processes);
+            payload->concurrent_order = concurrent_order;
+            payload->specify_path_begin = specify_path_begin;
+            payload->sequence = lowering_sequence;
+            forward_entry.unit_lowering = std::move(payload);
+            deferred_unit_lowerings_.push_back(std::move(forward_entry));
+        } else {
+            forward_deferred_systemverilog_.push_back(
+                std::move(forward_entry));
+        }
     }
     if (!deferred_generated.empty()
         && !lower_deferred_generated_systemverilog(unit, source_language,
@@ -17488,8 +17978,11 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
             lowerer)) {
         return false;
     }
-    // Every lowerer that records under this instance's path is done.
-    vhdl_lowering_index_.callable_bodies->release_instance_bodies(path);
+    // Every lowerer that records under this instance's path is done (a
+    // deferred instance releases them after its lowering).
+    if (!defer_process_lowering) {
+        vhdl_lowering_index_.callable_bodies->release_instance_bodies(path);
+    }
     resolve_compiled_systemverilog_virtual_interface_initializers(
         unit, pending_virtual_interface_initializers);
     for (std::size_t index = defparam_guard.size();
@@ -18480,11 +18973,15 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_instance_worklist(
             = active_compiled_systemverilog_configuration_;
         auto saved_configuration_root
             = active_compiled_systemverilog_configuration_root_;
+        auto saved_configuration_cell
+            = active_compiled_systemverilog_configuration_cell_;
         if (nested_configuration != nullptr) {
             active_compiled_systemverilog_configuration_
                 = nested_configuration;
             active_compiled_systemverilog_configuration_root_
                 = child_path;
+            active_compiled_systemverilog_configuration_cell_
+                = nested_configuration->configuration->designs.front().cell;
         }
         if (child->systemverilog->kind
             == semantic::sv::UnitKind::interface) {
@@ -18519,6 +19016,8 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_instance_worklist(
             = saved_configuration;
         active_compiled_systemverilog_configuration_root_
             = std::move(saved_configuration_root);
+        active_compiled_systemverilog_configuration_cell_
+            = std::move(saved_configuration_cell);
         if (!instantiated) {
             return false;
         }
@@ -25783,6 +26282,13 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
                 working_specialization, *declaration.subtype, width, 0U,
                 false)) {
             initial = *composite;
+        } else if (domain == frontend::ValueDomain::Logic9) {
+            // A STD_ULOGIC subtype with a range starts at its left bound
+            // (X01 at 'X', IEEE 1076-2008 6.4.2.3).
+            if (auto left = compiled_vhdl_logic9_left(
+                    working_specialization, *declaration.subtype, width)) {
+                initial = std::move(*left);
+            }
         }
     }
     if (declaration.initializer) {
@@ -28539,15 +29045,24 @@ bool HierarchyBuilder::validate_compiled_vhdl_physical_type_units(
             type.scalar_range->left, type.scalar_range->left_expression);
         const auto range_right = static_bound(
             type.scalar_range->right, type.scalar_range->right_expression);
-        if (!range_left || !range_right
-            || *range_left < std::numeric_limits<std::int32_t>::min()
-            || *range_left > std::numeric_limits<std::int32_t>::max()
-            || *range_right < std::numeric_limits<std::int32_t>::min()
-            || *range_right > std::numeric_limits<std::int32_t>::max()) {
+        // VHDL-2019 requires any physical range within -(2**63) and
+        // (2**63)-1 (IEEE 1076-2019 5.2.4.1); without a VHDL-2019 unit in
+        // the design the range stays the implementation's 32 bits, as
+        // INTEGER does (the design has one INTEGER, whatever the unit's
+        // own standard).
+        const bool wide = compiled_->vhdl_wide_integer();
+        const auto fits = [&](const std::int64_t bound) {
+            return wide
+                || (bound >= std::numeric_limits<std::int32_t>::min()
+                    && bound <= std::numeric_limits<std::int32_t>::max());
+        };
+        if (!range_left || !range_right || !fits(*range_left)
+            || !fits(*range_right)) {
             report(
                 "FSIM-ELAB-VHPHYSICAL-002",
-                "a bounded physical range must be locally static and "
-                "fit signed 32-bit primary-unit ticks",
+                wide ? "a bounded physical range must be locally static"
+                     : "a bounded physical range must be locally static and "
+                       "fit signed 32-bit primary-unit ticks before VHDL-2019",
                 compiled_source_span(
                     *compiled_, type.scalar_range->source));
             valid = false;
@@ -29221,18 +29736,6 @@ bool HierarchyBuilder::validate_compiled_vhdl_subtype_declarations(
                 continue;
             }
             if (profile.type_class == SubtypeClass::enumeration) {
-                auto left = constraint.left
-                    ? constraint.left
-                    : constraint.left_expression
-                    ? specialized->evaluate_integral_expression(
-                          *constraint.left_expression)
-                    : std::nullopt;
-                auto right = constraint.right
-                    ? constraint.right
-                    : constraint.right_expression
-                    ? specialized->evaluate_integral_expression(
-                          *constraint.right_expression)
-                    : std::nullopt;
                 // A character literal of a predefined enumeration type
                 // without a retained definition: its position.
                 const auto predefined_literal
@@ -29262,11 +29765,28 @@ bool HierarchyBuilder::validate_compiled_vhdl_subtype_declarations(
                         ? std::nullopt
                         : std::optional { static_cast<std::int64_t>(position) };
                 };
+                // An intrinsic enumeration's character literal is its
+                // position in that type (IEEE 1076-2019 16.3, 16.7); the
+                // integral fold reads a digit as an integer and may resolve
+                // the spelling to a same-spelled literal of another
+                // enumeration, so it decides only the other bounds.
+                auto left = predefined_literal(constraint.left_expression);
                 if (!left) {
-                    left = predefined_literal(constraint.left_expression);
+                    left = constraint.left
+                        ? constraint.left
+                        : constraint.left_expression
+                        ? specialized->evaluate_integral_expression(
+                              *constraint.left_expression)
+                        : std::nullopt;
                 }
+                auto right = predefined_literal(constraint.right_expression);
                 if (!right) {
-                    right = predefined_literal(constraint.right_expression);
+                    right = constraint.right
+                        ? constraint.right
+                        : constraint.right_expression
+                        ? specialized->evaluate_integral_expression(
+                              *constraint.right_expression)
+                        : std::nullopt;
                 }
                 if (!left && profile.enumeration_type
                     && constraint.left_expression) {
@@ -29369,7 +29889,7 @@ bool HierarchyBuilder::validate_compiled_vhdl_subtype_declarations(
                         > std::max(profile.scalar_range->left,
                             profile.scalar_range->right))) {
                 const auto legacy_predefined_integer
-                    = architecture.standard != "2019"
+                    = !compiled_->vhdl_wide_integer()
                     && compiled_vhdl_name_equal(
                         type.base.type_mark.spelling, "integer");
                 report(
@@ -36556,6 +37076,9 @@ void HierarchyBuilder::finalize()
     {
         const support::ScopedPhaseProfile phase {
             "elaboration_forward_deferred" };
+        // The instances of a design with DPI exports lower their processes
+        // now that every instance, signal and specialization exists.
+        static_cast<void>(lower_deferred_unit_lowerings());
         lower_forward_deferred_systemverilog({ }, true);
     }
     record_coverage_concurrent_statements();
@@ -36755,7 +37278,7 @@ HierarchyBuilder::dispatch_compiled_systemverilog_instance(
             = *active_compiled_systemverilog_configuration_;
         const auto& declaration = *configuration.configuration;
         auto configured_child_path
-            = declaration.designs.front().cell;
+            = active_compiled_systemverilog_configuration_cell_;
         if (child_path.size()
                 > active_compiled_systemverilog_configuration_root_.size()
             && child_path.starts_with(

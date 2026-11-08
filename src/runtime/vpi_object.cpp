@@ -523,14 +523,17 @@ std::vector<Observer> snapshot_observers(
             return kind == SystemVerilogVpiObjectKind::Class
                 && descriptor_kind == SystemVerilogVpiDescriptorKind::Class;
         }
-        // A memory is a fixed unpacked array, or a dynamic array or queue
-        // whose words follow its size (IEEE 1800-2023 37.17).
+        // A memory is a fixed unpacked array, or a dynamic array, queue or
+        // associative array whose words follow its size (IEEE 1800-2023
+        // 37.17).
         if (kind == SystemVerilogVpiObjectKind::Memory) {
             return descriptor_kind
                 == SystemVerilogVpiDescriptorKind::UnpackedArray
                 || descriptor_kind
                 == SystemVerilogVpiDescriptorKind::DynamicArray
-                || descriptor_kind == SystemVerilogVpiDescriptorKind::Queue;
+                || descriptor_kind == SystemVerilogVpiDescriptorKind::Queue
+                || descriptor_kind
+                == SystemVerilogVpiDescriptorKind::AssociativeArray;
         }
         if (kind == SystemVerilogVpiObjectKind::Array) {
             return descriptor_kind == SystemVerilogVpiDescriptorKind::PackedArray
@@ -697,12 +700,31 @@ bool SystemVerilogVpiObjectRegistry::normalize_name(
         return false;
     }
     if (input.front() != '\\') {
-        if (input.find('.') != std::string_view::npos
-            || std::ranges::any_of(input, [](const char character) {
-                   return std::isspace(
-                              static_cast<unsigned char>(character))
-                       != 0;
-               })) {
+        // A string literal index (an associative array word, IEEE 1800-2023
+        // 37.17 detail 28) may hold '.' and white space; the rest of a name
+        // may not.
+        std::size_t depth { };
+        bool quoted { };
+        for (std::size_t index = 0; index < input.size(); ++index) {
+            const auto character = input[index];
+            if (quoted) {
+                if (character == '\\') {
+                    ++index;
+                } else if (character == '"') {
+                    quoted = false;
+                }
+            } else if (character == '"' && depth != 0U) {
+                quoted = true;
+            } else if (character == '[') {
+                ++depth;
+            } else if (character == ']' && depth != 0U) {
+                --depth;
+            } else if (character == '.'
+                || std::isspace(static_cast<unsigned char>(character)) != 0) {
+                return false;
+            }
+        }
+        if (quoted) {
             return false;
         }
         normalized.assign(input);

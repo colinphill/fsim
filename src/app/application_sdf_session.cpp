@@ -24,6 +24,7 @@
 #include <limits>
 #include <map>
 #include <set>
+#include <span>
 #include <tuple>
 #include <ranges>
 
@@ -468,6 +469,7 @@ std::optional<SdfSessionPlan> plan_sdf_session_inputs(
     }
     std::vector<SdfReannotationLayer> layers;
     std::vector<std::shared_ptr<const SdfSessionPublication>> pending;
+    std::vector<elaboration::SdfDeviceGateDelay> device_gates;
     pending.reserve(request.inputs.size());
     constexpr std::size_t maximum_body_bytes = 64U << 20U;
     std::size_t body_bytes { };
@@ -756,6 +758,37 @@ std::optional<SdfSessionPlan> plan_sdf_session_inputs(
                 }
                 continue;
             }
+            if (annotation.target_kind == SdfTimingTargetKind::Device) {
+                // A DEVICE delay of an output that no module path ends at
+                // (IEEE 1497-2001 5.4.1; the endpoint resolution maps the
+                // outputs that have paths to those paths): the delays of the
+                // primitives that drive it. The rise, fall and turn-off
+                // delays are the transitions to 1, to 0 and to z.
+                for (const auto& endpoint : annotation.endpoints) {
+                    auto single = annotation;
+                    single.endpoints = { endpoint };
+                    const auto record
+                        = net_delay_record(single, *precedence.application);
+                    if (!record || record->delays.size() != 12U) {
+                        diagnostics.error("FSIM-SDF-SESSION-003",
+                            "SDF DEVICE delay has no complete effective timing");
+                        return std::nullopt;
+                    }
+                    elaboration::SdfDeviceGateDelay device;
+                    device.instance = endpoint.instance_path;
+                    device.object = endpoint.object_path;
+                    device.signal = endpoint.signal;
+                    device.delays = { record->delays[0], record->delays[1],
+                        record->delays[2] };
+                    // A later DEVICE of the same output replaces an earlier
+                    // one (IEEE 1364-2005 16.3: order of occurrence).
+                    std::erase_if(device_gates, [&](const auto& each) {
+                        return each.signal == device.signal;
+                    });
+                    device_gates.push_back(std::move(device));
+                }
+                continue;
+            }
             if (annotation.target_kind != SdfTimingTargetKind::SpecifyPath
                 && annotation.target_kind
                     != SdfTimingTargetKind::TimingCheck) {
@@ -843,6 +876,22 @@ std::optional<SdfSessionPlan> plan_sdf_session_inputs(
             "SDF interconnect delay is annotated as the delay from all "
             "sources, like a PORT delay: " + note);
     }
+    // The DEVICE delays that reach gates are put in the design now; a
+    // running simulation puts them on its gates at its safe point
+    // (Simulation::commit_sdf_reannotation), because it gave the design's
+    // processes to its engine. A design with processes and no gate that
+    // drives the output has nothing to delay.
+    if (!result_state.processes.empty()) {
+        for (const auto& device : device_gates) {
+            if (elaboration::apply_sdf_device_gate_delays(result_state,
+                    std::span { &device, 1U }) == 0U) {
+                diagnostics.warning("FSIM-SDF-SESSION-006",
+                    "SDF DEVICE delay does not delay the output: no module "
+                    "path ends at it and no primitive drives it: "
+                        + device.object);
+            }
+        }
+    }
     auto result_design = elaboration::ElaboratedDesign::from_state(
         std::move(result_state));
     if (!result_design) {
@@ -851,7 +900,8 @@ std::optional<SdfSessionPlan> plan_sdf_session_inputs(
         return std::nullopt;
     }
     return SdfSessionPlan { std::move(*result_design),
-        std::move(pending), std::move(control.application) };
+        std::move(pending), std::move(control.application),
+        std::move(device_gates) };
 }
 
 bool apply_sdf_session_inputs(BuiltProject& built,

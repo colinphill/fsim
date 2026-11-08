@@ -2,35 +2,89 @@
 #c   in top.u.a type=vpiPathTerm direction=input edge=0x0
 #c   in top.u.b type=vpiPathTerm direction=input edge=0x0
 #c   out top.u.q_full type=vpiPathTerm direction=output edge=0x0
+#c   delay vpiConstant 3
+#c   mtm 3,3,3
 #c path 1 type=vpiModPath pathtype=2 polarity=unknown datapolarity=unknown ifnone=0 line=27 module=top.u instance=top.u condition=NULL file=ok
 #c   in top.u.a type=vpiPathTerm direction=input edge=0x0
 #c   out top.u.q_par type=vpiPathTerm direction=output edge=0x0
-#c path 2 type=vpiModPath pathtype=2 polarity=unknown datapolarity=unknown ifnone=0 line=28 module=top.u instance=top.u condition=NULL file=ok
+#c   delay vpiConstant 2
+#c   mtm 2,2,2
+#c path 2 type=vpiModPath pathtype=2 polarity=unknown datapolarity=unknown ifnone=0 line=28 module=top.u instance=top.u condition=top.u.en file=ok
 #c   in top.u.a type=vpiPathTerm direction=input edge=0x0
 #c   out top.u.q_none type=vpiPathTerm direction=output edge=0x0
+#c   delay vpiConstant 4
+#c   mtm 4,4,4
 #c path 3 type=vpiModPath pathtype=2 polarity=unknown datapolarity=unknown ifnone=1 line=29 module=top.u instance=top.u condition=NULL file=ok
 #c   in top.u.a type=vpiPathTerm direction=input edge=0x0
 #c   out top.u.q_none type=vpiPathTerm direction=output edge=0x0
+#c   delay vpiConstant 5
+#c   mtm 5,5,5
 #c path 4 type=vpiModPath pathtype=2 polarity=unknown datapolarity=positive ifnone=0 line=30 module=top.u instance=top.u condition=NULL file=ok
 #c   in top.u.clk type=vpiPathTerm direction=input edge=0xd
 #c   out top.u.q_edge type=vpiPathTerm direction=output edge=0x0
 #c   data top.u.d type=vpiPathTerm direction=input edge=0x0
-#c tchk 0 type=setup(1) object=vpiTchk line=31 module=top.u instance=top.u terms=2 limits=4,0 file=ok
+#c   delay vpiConstant 6
+#c   mtm 6,6,6
+#c path 5 type=vpiModPath pathtype=2 polarity=unknown datapolarity=unknown ifnone=0 line=35 module=top.u instance=top.u condition=NULL file=ok
+#c   in top.u.en type=vpiPathTerm direction=input edge=0x0
+#c   out top.u.q_par type=vpiPathTerm direction=output edge=0x0
+#c   delay vpiOperation op=mintypmax
+#c     delay vpiConstant 1
+#c     delay vpiConstant 2
+#c     delay vpiConstant 3
+#c   mtm 1,2,3
+#c path 6 type=vpiModPath pathtype=2 polarity=unknown datapolarity=unknown ifnone=0 line=36 module=top.u instance=top.u condition=NULL file=ok
+#c   in top.u.b type=vpiPathTerm direction=input edge=0x0
+#c   out top.u.q_par type=vpiPathTerm direction=output edge=0x0
+#c   delay vpiOperation op=list
+#c     delay vpiConstant 2
+#c     delay vpiConstant 3
+#c   mtm 2,2,2
+#c tchk 0 type=setup(1) object=vpiTchk line=31 module=top.u instance=top.u terms=4 limits=4,0 file=ok
+#c   expr vpiTchkTerm -
+#c   expr vpiTchkTerm -
+#c   expr vpiConstant 4
+#c   expr vpiReg top.u.ntf_setup
+#c   delay 4
 #c   ref top.u.clk type=vpiTchkTerm edge=0xd condition=NULL
 #c   data top.u.d type=vpiTchkTerm edge=0x0 condition=NULL
 #c   notifier top.u.ntf_setup
-#c tchk 1 type=hold(2) object=vpiTchk line=32 module=top.u instance=top.u terms=2 limits=3,0 file=ok
+#c tchk 1 type=hold(2) object=vpiTchk line=32 module=top.u instance=top.u terms=4 limits=3,0 file=ok
+#c   expr vpiTchkTerm -
+#c   expr vpiTchkTerm -
+#c   expr vpiConstant 3
+#c   expr vpiReg top.u.ntf_hold
+#c   delay 3
 #c   ref top.u.clk type=vpiTchkTerm edge=0xd condition=NULL
 #c   data top.u.d type=vpiTchkTerm edge=0x0 condition=NULL
 #c   notifier top.u.ntf_hold
-#c tchk 2 type=setuphold(8) object=vpiTchk line=33 module=top.u instance=top.u terms=2 limits=2,1 file=ok
+#c tchk 2 type=setuphold(8) object=vpiTchk line=33 module=top.u instance=top.u terms=5 limits=2,1 file=ok
+#c   expr vpiTchkTerm -
+#c   expr vpiTchkTerm -
+#c   expr vpiConstant 2
+#c   expr vpiConstant 1
+#c   expr vpiReg top.u.ntf_sh
+#c   delay 2
 #c   ref top.u.clk type=vpiTchkTerm edge=0xd condition=NULL
 #c   data top.u.d type=vpiTchkTerm edge=0x0 condition=NULL
 #c   notifier top.u.ntf_sh
-#c tchk 3 type=width(4) object=vpiTchk line=34 module=top.u instance=top.u terms=1 limits=5,0 file=ok
+#c tchk 3 type=width(4) object=vpiTchk line=34 module=top.u instance=top.u terms=4 limits=5,0 file=ok
+#c   expr vpiTchkTerm -
+#c   expr vpiConstant 5
+#c   expr vpiConstant 0
+#c   expr vpiReg top.u.ntf_width
+#c   delay 5
 #c   ref top.u.clk type=vpiTchkTerm edge=0xd condition=NULL
 #c   data NULL
 #c   notifier top.u.ntf_width
+#c tchk 4 type=hold(2) object=vpiTchk line=37 module=top.u instance=top.u terms=3 limits=2,0 file=ok
+#c   expr vpiTchkTerm -
+#c   expr vpiTchkTerm -
+#c   expr vpiConstant 2
+#c   delay 2
+#c   ref top.u.clk type=vpiTchkTerm edge=0xd condition=top.u.en
+#c   data top.u.d type=vpiTchkTerm edge=0x0 condition=top.u.a
+#c   notifier NULL
 #c violation all 33 type=setup ref=top.u.clk data=top.u.d notifier=top.u.ntf_setup=0
 #c violation all 36 type=width ref=top.u.clk data=NULL notifier=top.u.ntf_width=0
 #c violation width 36 type=width ref=top.u.clk data=NULL notifier=top.u.ntf_width=0

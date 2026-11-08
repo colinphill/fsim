@@ -440,6 +440,34 @@ struct Interpreter::Impl : SchedulerBatchTask {
         std::uint64_t generation { };
     };
 
+    // A delayed generic signal update (VHDL `after`, VITAL trigger, delayed
+    // timing signals): the pending value waits in a pooled slot so the
+    // scheduler event is a fixed-size token and a save writes the slot (#128).
+    enum class DelayedUpdateKind : std::uint8_t {
+        whole,
+        slice,
+        word,
+        slice_word,
+    };
+
+    struct DelayedUpdateSlot {
+        DelayedUpdateKind kind { };
+        ProcessId driver { };
+        SignalId signal { };
+        PackedLogic4 value;
+        Logic4Word word;
+        std::size_t offset { };
+        std::size_t next_free { no_systemverilog_update_slot };
+        std::uint64_t generation { 1U };
+        bool occupied { };
+    };
+
+    struct DelayedUpdateToken {
+        Impl* owner { };
+        std::size_t slot { no_systemverilog_update_slot };
+        std::uint64_t generation { };
+    };
+
     static_assert(std::is_trivially_copyable_v<SystemVerilogUpdateToken>);
     static_assert(sizeof(SystemVerilogUpdateToken)
         <= ::fsim::runtime::detail::scheduler_task_payload_size);
@@ -464,6 +492,9 @@ struct Interpreter::Impl : SchedulerBatchTask {
 
     struct ProcessCallableFrameState {
         std::uint32_t identity { };
+        // The call-stack depth of the call it saves for, so a disable that
+        // ends the call restores it (IEEE 1800-2023 9.6.2).
+        std::size_t call_depth { };
         std::vector<RegisterId> packed_ids;
         std::vector<StringRegisterId> string_ids;
         std::vector<ContainerRegisterId> container_ids;
@@ -593,6 +624,9 @@ struct Interpreter::Impl : SchedulerBatchTask {
         // The process's thread_start point was raised (probe builds).
         bool thread_announced { };
         std::optional<InstructionIndex> fork_site;
+        // The parent's call depth at the fork: a child forked inside a task
+        // a disabled block called ends with it (IEEE 1800-2023 9.6.2).
+        std::size_t fork_depth { };
         // Spawned by a detached fork (a pending clocking drive).
         bool fork_detached { };
         std::optional<std::uint64_t> fork_group;
@@ -943,6 +977,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
         auto operator<=>(const SampledHistoryKey&) const = default;
     };
 
+    // The scheduling stamp of one sampled value in a ring: what the
+    // same-time-step test compares (IEEE 1800-2023 16.5.1, 16.9.3).
     struct SampledHistorySlot {
         SimulationTick time { };
         ProcessSchedulingDomain process_domain {
@@ -951,21 +987,37 @@ struct Interpreter::Impl : SchedulerBatchTask {
         ProcessSchedulingDomain event_domain {
             ProcessSchedulingDomain::generic
         };
-        SchedulerPhase event_phase { SchedulerPhase::active };
         std::uint64_t generic_delta { };
-        std::uint64_t systemverilog_round { };
-
-        auto operator<=>(const SampledHistorySlot&) const = default;
     };
 
-    struct SampledHistoryState {
-        // Fixed-size rings are prepared before simulation for statically
-        // expanded SV clocked histories. PackedLogic4 copy assignment reuses
-        // the inline planes or shared wide backing and does not allocate.
-        std::vector<PackedLogic4> values;
-        std::size_t first_value { };
-        std::size_t value_count { };
-        std::optional<SampledHistorySlot> last_slot;
+    // One ring per distinct SampledHistoryKey, a fixed block of 64-bit words
+    // inside `sampled_ring_words` (a position-independent layout the
+    // compiled kernel addresses as `base[ring + index]`). Word indices from
+    // the ring's first word:
+    //   0 capacity (values)       1 first (index of the oldest value)
+    //   2 count                   3 words per value
+    //   4 width in bits           5 shape: 1 for a Logic9 value, else 0
+    //   6 last slot valid         7 slot time
+    //   8 slot process domain     9 slot event domain
+    //  10 slot generic delta     11 reserved
+    //  12.. capacity * words-per-value value words: a Logic4 value is its
+    //       aval then its bval plane (ceil(width / 64) words each), a Logic9
+    //       value its four code planes.
+    // The ring never changes shape after allocation; growing a ring's
+    // capacity allocates a new block at the end and moves the values.
+    struct SampledRing {
+        static constexpr std::size_t capacity { 0U };
+        static constexpr std::size_t first { 1U };
+        static constexpr std::size_t count { 2U };
+        static constexpr std::size_t value_words { 3U };
+        static constexpr std::size_t width { 4U };
+        static constexpr std::size_t shape { 5U };
+        static constexpr std::size_t slot_valid { 6U };
+        static constexpr std::size_t slot_time { 7U };
+        static constexpr std::size_t slot_process_domain { 8U };
+        static constexpr std::size_t slot_event_domain { 9U };
+        static constexpr std::size_t slot_generic_delta { 10U };
+        static constexpr std::size_t header_words { 12U };
     };
 
     struct MailboxWriter {
@@ -1418,13 +1470,15 @@ struct Interpreter::Impl : SchedulerBatchTask {
 
     Scheduler scheduler;
     Scheduler::DiscardHookToken scheduler_discard_hook { };
-    // Native generic Update tickets hold a pointer to this stable member.
-    // Initialize it once and never replace it while scheduler work may exist.
+    // Built on first dispatch by ensure_update_commit_callback; the scheduled
+    // event is the registered kind interp.update_commit.
     Scheduler::Task update_commit_callback;
     std::vector<SystemVerilogUpdateSlot> systemverilog_update_slots;
     std::size_t systemverilog_update_free_head {
         no_systemverilog_update_slot
     };
+    std::vector<DelayedUpdateSlot> delayed_update_slots;
+    std::size_t delayed_update_free_head { no_systemverilog_update_slot };
     CohortSnapshotPool cohort_snapshots;
     std::vector<ProcessId> active_cohort_ready;
     std::vector<ExecutionContext> cohort_overflow_contexts;
@@ -1502,6 +1556,11 @@ struct Interpreter::Impl : SchedulerBatchTask {
     // process working directory, which would race parallel simulation.
     std::filesystem::path vhdl_working_directory;
     std::vector<std::string> plusargs;
+    // $reset_count and $reset_value (IEEE 1800-2023 D.8): the resets the
+    // tool has done and the value the last one passed. The embedder sets
+    // them after each reset and restart (Interpreter::set_reset_values).
+    std::int32_t reset_count_result { };
+    std::int32_t reset_value_result { };
     SystemVerilogTimeFormat time_format;
     // The seed of `$random` without an argument; it starts at zero, as in
     // `$random(seed)` with a zero seed (IEEE 1800-2017 20.15.2, Annex N).
@@ -1561,6 +1620,12 @@ struct Interpreter::Impl : SchedulerBatchTask {
     // Drivers of guarded signals disconnected by a null transaction
     // (IEEE 1076-2008 10.5.2.2); a later value reconnects them.
     std::set<std::pair<SignalId, ProcessId>> vhdl_disconnected_drivers;
+    // The times of the null transactions a driver still has to apply, by
+    // signal and process (IEEE 1076-2019 10.5.2.2): added by
+    // schedule_vhdl_disconnect, removed when DriverDisconnect applies one.
+    // They only serve the projected-waveform read (driver_transactions).
+    std::map<std::pair<SignalId, ProcessId>, std::vector<SimulationTick>>
+        vhdl_pending_disconnects;
     // Drivers a foreign architecture created at run time (IEEE 1076-2019
     // 23.6) for a user-resolved signal, in creation order: sources of the
     // signal after resolver.drivers (14.7.3.2). Empty without a foreign
@@ -1663,10 +1728,31 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::vector<std::uint8_t>
         native_signal_publication_shape_certificate;
     bool native_signal_dependencies_unknown { };
-    std::map<SampledHistoryKey, SampledHistoryState> sampled_histories;
+    // The sampled-value rings (SampledRing) and where each key's ring starts,
+    // allocated once at start for every sampled read of every process.
+    std::vector<std::uint64_t> sampled_ring_words;
+    std::map<SampledHistoryKey, std::uint64_t> sampled_ring_offsets;
+    // The Preponed sampled values (sampled_values) of the signals the mask
+    // names, as flat Logic4 words the compiled kernel reads in place
+    // (KOp::sva_sampled_load): a signal's aval words then its bval words at
+    // sampled_value_word_offsets[signal] (no_sampled_value_words when the
+    // signal has none). Written beside sampled_values at each time slot's
+    // start and rebuilt from them after a restore.
+    static constexpr std::uint32_t no_sampled_value_words = 0xffff'ffffU;
+    std::vector<std::uint64_t> sampled_value_words;
+    std::vector<std::uint32_t> sampled_value_word_offsets;
     // Capture SV clocked history at publication, even if the reader skips
     // evaluating its sampled-value operation for that time step.
-    std::vector<std::vector<SampledHistoryKey>> sampled_history_keys_by_clock;
+    struct SampledClockRing {
+        SampledHistoryKey key;
+        std::uint64_t ring { };
+    };
+    std::vector<std::vector<SampledClockRing>> sampled_history_keys_by_clock;
+    // A compiled kernel baked ring starts into its instructions
+    // (KOp::sva_sampled_load): from then on a ring may not be added or moved
+    // while the run goes on, only laid out at start from the plan.
+    bool sampled_ring_layout_baked { };
+    bool sampled_ring_layout_building { };
     std::vector<std::unique_ptr<PackedLogic4>> forced_values;
     std::vector<std::unique_ptr<PackedLogic4>> forced_masks;
     // A force on a port-connected net by its own name and one through a
@@ -1760,10 +1846,19 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::map<std::pair<ProcessId, std::uint32_t>,
         std::unique_ptr<sva::Monitor>>
         sva_monitors;
-    // The start tick of the attempt each design process's monitor reported
-    // an outcome for last, and the observer of attempt starts.
-    std::unordered_map<ProcessId, std::int64_t> sva_outcome_starts;
+    // The serial of the last outcome pop over every monitor: each pop stamps
+    // its block (h_pop_serial), so the monitor of a design process that
+    // reported last is the one with the greatest stamp (sva_outcome_start,
+    // sva_outcome_fail). The compiled kernel's inline pop (KOp::sva_outcome)
+    // increments it through StaticKernelSvaTable::pop_serial.
+    std::int64_t sva_pop_serial { };
+    // The observer of attempt starts.
     SvaAttemptHook sva_attempt_hook;
+    // The step events of attempts stepping is enabled for, and the start
+    // times a library asked stepping for before the process's monitor
+    // existed (39.5.2).
+    SvaStepHook sva_step_hook;
+    std::map<ProcessId, std::vector<std::int64_t>> sva_step_requests;
     std::vector<ModulePath> module_paths;
     std::vector<ModuleTimingCheck> module_timing_checks;
     std::vector<ModuleTimingCheckState> module_timing_check_states;
@@ -1874,6 +1969,10 @@ struct Interpreter::Impl : SchedulerBatchTask {
     // its slotted WriteDelayed operations, which exist only in a run with a
     // foreign library.
     std::unordered_map<ProcessId, TransitionDelays> driver_delay_overrides;
+    // Gate drivers split_gate_delay gave a delay slot: their writes are
+    // WriteNetDelay now, so set_net_delay_table accepts them although the
+    // startup program still holds the delay-free write.
+    std::unordered_set<ProcessId> split_gate_drivers;
     // The tables vpi_put_delays and acc_replace_delays gave an interconnect
     // delay's driver (Interpreter::set_net_delay_table); they replace the
     // tables of its WriteNetDelay operations.
@@ -1975,6 +2074,13 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::shared_ptr<const ForkSpawnFilter> fork_spawn_filter;
     /// The filter may read signals: prepare_callback_observation runs first.
     bool fork_spawn_filter_observes { true };
+    /// A library has registered cbAssertionStart (or another assertion-attempt
+    /// callback, IEEE 1800-2023 39.4.2): the attempt-start reports of the
+    /// concurrent assertion evaluators (Display::inert) run. Tested where the
+    /// report runs, so binding works at any time in the run and costs nothing
+    /// while clear (generated code reads StaticKernelNativeFrame::
+    /// assertion_starts).
+    bool assertion_starts_bound { };
     ClassAllocateContextHook class_allocate_context_hook;
     std::optional<std::uint64_t> pending_class_allocation_seed;
     ClassPropertyReadHook class_property_read_hook;
@@ -2012,12 +2118,66 @@ struct Interpreter::Impl : SchedulerBatchTask {
     bool has_bidirectional_switches { };
     bool switch_refreshing { };
     bool started { };
+    /// Builds a fresh interpreter of the same design, configured as this one
+    /// was before start; reset_run_state() takes the time-zero image from it
+    /// (IEEE 1800-2023 D.8). Empty when the embedder cannot reset.
+    std::function<std::unique_ptr<Interpreter>()> reset_source;
+    /// The embedder's scheduler-event owners and handle takers
+    /// (Interpreter::set_run_state_event_host).
+    Interpreter::RunStateEventHost run_state_event_host;
+    /// The requests a foreign interface made that change the plan of the run
+    /// or its time-zero state (watches, an opened boundary, foreign writes
+    /// that revive or dissolve logic, a late net-delay graft), in order. A
+    /// reset builds its twin from the artifact and replays them
+    /// (Interpreter::replay_plan_onto), so the twin has the plan the run has
+    /// and the restore of its image fits (IEEE 1800-2023 D.8; #128). Nothing
+    /// is recorded by a run that makes none of these requests.
+    struct PlanStep {
+        enum class Kind : std::uint8_t {
+            watch_changes,
+            watch_transactions,
+            open_boundary,
+            external_write,
+            graft_net_delay,
+            /// vpi_put_delays gave a gate without a delay a delay slot
+            /// (Interpreter::split_gate_delay; IEEE 1800-2023 28.16, 38.32):
+            /// the driver and its program as it runs from then on.
+            split_gate_delay,
+        };
+        Kind kind { Kind::watch_changes };
+        /// Made after start(), so a replay applies it to a started twin.
+        bool after_start { };
+        std::vector<SignalId> signals;
+        std::optional<NetDelayGraft> graft;
+        /// split_gate_delay: the driver (its id in the run) and the
+        /// rewritten program; the twin's driver has the same id because a
+        /// gate driver is a process of the design.
+        ProcessId gate_process { };
+        std::optional<Process> gate_program;
+    };
+    std::vector<PlanStep> plan_journal;
+    std::set<SignalId> plan_watched;
+    std::set<SignalId> plan_transactions;
+    std::set<SignalId> plan_written;
+    bool plan_boundary_open { };
+    /// A twin receives the journal: the graft's safe-point test is waived
+    /// (nothing has run).
+    bool replaying_plan { };
+    /// A restart rebuilds the run-time plan of the saved run on this run
+    /// (Interpreter::set_plan_replay): the safe-point tests are waived as
+    /// for a twin, but the requests are journaled, since this run is the
+    /// one a later save or reset describes.
+    bool restoring_plan { };
+    /// Why the last reset_run_state() failed (empty when it did not).
+    std::string reset_failure;
     /// push_process_late is registering a process of the running simulation
     /// (add_process_program_impl lifts its started check).
     bool late_process_registration { };
     bool late_process_kernel_member { };
     bool package_static_startup_actions_entered { };
     bool start_in_progress { };
+    /// Interpreter::start_for_restore(): start() builds the tables only.
+    bool start_restoring { };
     bool package_static_initialization_active { };
     ProcessId package_static_initialization_process {
         std::numeric_limits<ProcessId>::max()
@@ -2689,6 +2849,20 @@ struct Interpreter::Impl : SchedulerBatchTask {
     };
     struct ProcessAssertionStorage;
     void run_sva(AssertionStorage&, const SvaOperation&);
+    /// The monitor of the directive at `operation.site` of the storage's
+    /// process, created from the plan and the bound registers at the first
+    /// call (and given the step requests made before it existed, 39.5.2).
+    [[nodiscard]] sva::Monitor& sva_monitor_bind(AssertionStorage& storage,
+        const SvaOperation& operation);
+    /// The monitor of (process, site), if it exists.
+    [[nodiscard]] sva::Monitor* sva_monitor_find(ProcessId process,
+        std::uint32_t site) noexcept;
+    /// One clock tick of `monitor` with the sampled guards decoded: the
+    /// $assertoff filter, the tick, the attempt-start and step hooks;
+    /// returns the pending outcome count (the operation's result).
+    [[nodiscard]] std::size_t sva_tick_core(AssertionStorage& storage,
+        sva::Monitor& monitor, const std::vector<bool>& guards, bool start,
+        bool disabled);
     void run_sampled_read(AssertionStorage&, const ReadSignal&);
     void execute_sva(ProcessState&, const SvaOperation&);
     void execute_pla(ProcessState&, const PlaEvaluate&);
@@ -2787,23 +2961,47 @@ struct Interpreter::Impl : SchedulerBatchTask {
         ProcessState& process,
         const ReadSignal& operation);
     void build_sampled_history_clock_index();
-    static void ensure_sampled_history_capacity(
-        SampledHistoryState& history,
+    /// The rings the design's programs need (sampled_ring_plan): each key's
+    /// capacity and its start in sampled_ring_words, a function of the design
+    /// alone, so the compiled kernel may bake a start before the rings exist.
+    struct SampledRingPlanEntry {
+        SampledHistoryKey key;
+        std::size_t capacity { };
+        std::uint64_t offset { };
+    };
+    [[nodiscard]] std::vector<SampledRingPlanEntry> sampled_ring_plan() const;
+    [[nodiscard]] std::optional<std::uint64_t> planned_sampled_ring_offset(
+        const SampledHistoryKey& key) const;
+    /// Lays out sampled_value_words for the masked signals (once; later calls
+    /// add signals the layout misses).
+    void ensure_sampled_value_word_layout();
+    /// The layout, then a copy of every sampled value into its words.
+    void refresh_sampled_value_words();
+    /// Copies sampled_values[signal] into its words, if it has any.
+    void store_sampled_value_words(SignalId signal) noexcept;
+    /// The ring start of `key`, allocating it (or growing it to `capacity`
+    /// values) when the plan scan did not reach it; `shape` gives the value
+    /// width and kind.
+    [[nodiscard]] std::uint64_t ensure_sampled_ring(
+        const SampledHistoryKey& key,
         std::size_t capacity,
-        const PackedLogic4& initial_value);
-    [[nodiscard]] static const PackedLogic4& sampled_history_value(
-        const SampledHistoryState& history,
-        std::size_t index);
+        const PackedLogic4& shape);
+    [[nodiscard]] static std::size_t sampled_ring_size(
+        std::size_t width, bool logic9, std::size_t capacity);
+    static void init_sampled_ring(std::uint64_t* ring,
+        const PackedLogic4& shape, std::size_t capacity);
+    [[nodiscard]] static PackedLogic4 sampled_ring_value(
+        const std::uint64_t* ring, std::size_t index);
     [[nodiscard]] static SampledHistorySlot make_sampled_history_slot(
         SimulationTick time,
         ProcessSchedulingDomain process_domain,
         SignalChangeOrigin origin,
         std::uint64_t generic_delta);
     [[nodiscard]] static bool same_sampled_history_slot(
-        const SampledHistorySlot& previous,
+        const std::uint64_t* ring,
         const SampledHistorySlot& current);
-    static void append_sampled_history(
-        SampledHistoryState& history,
+    static void append_sampled_ring(
+        std::uint64_t* ring,
         const SampledHistorySlot& slot,
         const PackedLogic4& value);
 
@@ -3059,6 +3257,18 @@ struct Interpreter::Impl : SchedulerBatchTask {
         ConstantDriverStartupEntry& process);
     void execute_static_cohort(std::span<const ProcessId> processes);
     void execute_queued_static_cohort(std::size_t cohort);
+    /// Queues one delayed generic update `delay` ticks ahead, in the Update
+    /// region (IEEE 1076-2019 10.5.2.2 transport and inertial delays).
+    void schedule_delayed_update(DelayedUpdateKind kind, ProcessId driver,
+        SignalId signal, PackedLogic4 value, Logic4Word word,
+        std::size_t offset, SimulationTick delay);
+    static void dispatch_delayed_update(
+        Scheduler& scheduler, const DelayedUpdateToken& token);
+    void clear_delayed_update_pool() noexcept;
+    /// Gives a restored cancelable event's handle back to its owner (the kind
+    /// names which handle); false for an unknown kind.
+    [[nodiscard]] bool bind_restored_event_handle(std::string_view kind,
+        std::uint64_t key, const ScheduledTaskHandle& handle);
     void prepare_systemverilog_update_pool();
     [[nodiscard]] SystemVerilogUpdateToken reserve_systemverilog_update(
         ProcessId process,
@@ -3714,6 +3924,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
         std::optional<StableOrder> order = std::nullopt);
 
     void schedule_update_commit();
+    /// Builds update_commit_callback on first use (also after a restart).
+    void ensure_update_commit_callback();
     void block_native_logic9_update_before_generic(SignalId signal);
 
     void stage_update_unrouted(

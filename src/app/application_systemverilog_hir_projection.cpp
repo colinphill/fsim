@@ -842,6 +842,7 @@ template <typename Input>
     profile.function = true;
     profile.return_type = result_type;
     profile.lifetime = callable_lifetime;
+    profile.extern_prototype = input.extern_prototype;
     for (const auto& argument : input.arguments) {
         profile.formals.push_back(add_function_argument(
             argument, function_scope, declaration_origin));
@@ -909,6 +910,8 @@ template <typename Input>
     sv::CallableProfile profile;
     profile.function = false;
     profile.lifetime = callable_lifetime;
+    profile.extern_prototype = input.extern_prototype;
+    profile.extern_forkjoin = input.extern_forkjoin;
     for (const auto& argument : input.arguments) {
         profile.formals.push_back(add_task_argument(
             argument, task_scope, declaration_origin));
@@ -1715,7 +1718,10 @@ template <typename Input>
         output.event.push_back({ edge_kind(input_event.edge),
             input_event.signal,
             expression(input_event.expression, scope, output.origin),
-            source(input_event.span) });
+            source(input_event.span), input_event.systemverilog_source_order,
+            input_event.guard
+                ? std::optional { expression(*input_event.guard, scope, output.origin) }
+                : std::nullopt });
     }
     if (input.default_input_skew) {
         output.default_input_skew = clocking_skew(
@@ -1937,15 +1943,19 @@ template <typename Input>
             source(input_variable.span) });
     }
     if (input.clock) {
+        // The executable HIR builder fills the clocking events.
         output.clock = sv::AssertionClock {
             source_tokens(input.clock->event_tokens),
-            source(input.clock->span)
+            source(input.clock->span),
+            { },
         };
     }
     if (input.disable) {
+        // The executable HIR builder fills the condition expression.
         output.disable = sv::AssertionDisable {
             source_tokens(input.disable->condition_tokens),
-            source(input.disable->span)
+            source(input.disable->span),
+            std::nullopt,
         };
     }
     for (const auto& input_reference : input.references) {

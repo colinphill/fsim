@@ -953,6 +953,83 @@ std::optional<Lowerer::HirVhdlShape> Lowerer::compute_hir_vhdl_shape(
         ? hir_vhdl_returned_result_shape(
               expression_id, hir_process_scope_, std::nullopt, true)
         : std::nullopt;
+    // The predefined logical operators (IEEE 1076-2008 9.2.2) and shift
+    // operators (9.2.4) of one-dimensional arrays: the result has the
+    // index range of the operand (the left one, when both are arrays), so
+    // a formal that takes the result for its actual has its bounds.
+    // Overloads outside STD.STANDARD choose their own result subtype.
+    const auto shifting = source.kind == Kind::binary
+        && source.operands.size() == 2U
+        && (equal_ignoring_ascii_case(source.text, "sll")
+            || equal_ignoring_ascii_case(source.text, "srl")
+            || equal_ignoring_ascii_case(source.text, "sla")
+            || equal_ignoring_ascii_case(source.text, "sra")
+            || equal_ignoring_ascii_case(source.text, "rol")
+            || equal_ignoring_ascii_case(source.text, "ror"));
+    const auto predefined_array_operator
+        = ((source.kind == Kind::unary && source.operands.size() == 1U
+               && equal_ignoring_ascii_case(source.text, "not"))
+              || (source.kind == Kind::binary && source.operands.size() == 2U
+                  && (equal_ignoring_ascii_case(source.text, "and")
+                      || equal_ignoring_ascii_case(source.text, "or")
+                      || equal_ignoring_ascii_case(source.text, "nand")
+                      || equal_ignoring_ascii_case(source.text, "nor")
+                      || equal_ignoring_ascii_case(source.text, "xor")
+                      || equal_ignoring_ascii_case(source.text, "xnor")))
+              || shifting)
+        && (source.builtin_operator
+                == semantic::vhdl::BuiltinOperatorIdentity::none
+            // The linker marks every logical operator STD_LOGIC_1164 makes
+            // visible; one with an operand of a predefined vector
+            // (BIT_VECTOR, BOOLEAN_VECTOR: no declared type) is the
+            // predefined operator of that type.
+            || std::ranges::any_of(source.operands, [&](const auto operand) {
+                   const auto operand_subtype = hir_vhdl_expression_subtype(operand);
+                   using Identity = semantic::vhdl::BuiltinTypeIdentity;
+                   return operand_subtype
+                       && (operand_subtype->builtin_type == Identity::std_standard_bit_vector
+                           || operand_subtype->builtin_type
+                               == Identity::std_standard_boolean_vector);
+               }))
+        && [&] {
+               const auto selected = source.referenced_name
+                   ? source.referenced_name->selected
+                   : std::nullopt;
+               const auto overload = selected
+                   ? specialized_hir_unit_->find_declaration(*selected)
+                   : std::nullopt;
+               return !overload || overload->vhdl == nullptr
+                   || !overload->vhdl->scope.valid()
+                   || specialized_hir_unit_->design().vhdl_scope_in_package(
+                       overload->vhdl->scope, "std", "standard");
+           }();
+    // A concatenation of predefined vectors (BIT_VECTOR) names no declared
+    // array type; the result has its array operands' type, whose bounds the
+    // concatenation sets itself (9.2.5).
+    const auto concatenation_array
+        = [&]() -> std::optional<semantic::vhdl::SubtypeIndication> {
+        if (auto array = hir_vhdl_concatenation_subtype(expression_id)) {
+            return array;
+        }
+        if (!concatenation
+            || (source.referenced_name && source.referenced_name->selected)) {
+            return std::nullopt;
+        }
+        for (const auto operand : source.operands) {
+            auto array = hir_vhdl_expression_subtype(operand);
+            if (!array || array->type_mark.target.valid()
+                || !hir_vhdl_array_type_family(*array)) {
+                continue;
+            }
+            std::erase_if(array->constraints, [](const RangeConstraint& range) {
+                return range.kind == RangeKind::array_index;
+            });
+            array->unconstrained = true;
+            array->executable_width.reset();
+            return array;
+        }
+        return std::nullopt;
+    };
     if (function_result
         && (function_result->width != 0U || function_result->null_range)) {
         HirVhdlShape called;
@@ -1185,10 +1262,22 @@ std::optional<Lowerer::HirVhdlShape> Lowerer::compute_hir_vhdl_shape(
                           source.operands.front(), *declared, scope);
             }
         }
+    } else if (predefined_array_operator) {
+        for (std::size_t index { };
+            index < (shifting || source.operands.size() == 1U
+                    ? 1U : source.operands.size());
+            ++index) {
+            if (auto operand = hir_vhdl_shape(source.operands[index]);
+                operand && operand->complete()
+                && operand->ranges.size() == 1U) {
+                facts = std::move(operand);
+                break;
+            }
+        }
     } else if (concatenation && !result) {
         // The predefined "&" yields its array operands' type (9.2.5); the
         // range is fixed below from the index subtype.
-        if (const auto array = hir_vhdl_concatenation_subtype(expression_id)) {
+        if (const auto array = concatenation_array()) {
             result = hir_vhdl_subtype_shape(*array, scope);
             if (result && result->ranges.size() == 1U) {
                 result->ranges.front().reset();
@@ -1246,7 +1335,7 @@ std::optional<Lowerer::HirVhdlShape> Lowerer::compute_hir_vhdl_shape(
         && (source.kind == Kind::string_literal
             || source.kind == Kind::aggregate || concatenation)) {
         if (auto declared = concatenation
-                ? hir_vhdl_concatenation_subtype(expression_id)
+                ? concatenation_array()
                 : hir_vhdl_expression_subtype(expression_id)) {
             // The operands' element constraints give the element length
             // the range is counted in (9.2.5).

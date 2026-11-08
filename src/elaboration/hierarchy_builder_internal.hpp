@@ -1848,6 +1848,20 @@ private:
     // keep their instance's materialization and the specializations of its
     // ancestors alive until an enclosing instance completes, or the whole
     // design at finalize().
+    // Everything lower_compiled_systemverilog_processes takes for one
+    // instance, kept until the hierarchy is complete.
+    struct DeferredUnitLowering {
+        std::vector<semantic::StatementId> concurrent_statements;
+        std::vector<semantic::ProcessId> processes;
+        std::shared_ptr<std::vector<hierarchy_sv_generate_detail::Occurrence>>
+            occurrences;
+        std::shared_ptr<std::vector<SystemVerilogHirMaterialization>>
+            generated;
+        std::vector<Process> clocking_processes;
+        std::size_t concurrent_order { };
+        std::size_t specify_path_begin { };
+        std::uint64_t sequence { };
+    };
     struct ForwardDeferredSystemVerilogLowering {
         const semantic::sv::Unit* unit { };
         std::shared_ptr<SystemVerilogHirMaterialization> materialization;
@@ -1866,6 +1880,9 @@ private:
             package_container;
         std::function<std::optional<StringObjectId>(semantic::DeclarationId)>
             package_string;
+        // Set for an instance whose processes are all lowered after the
+        // whole hierarchy exists (see systemverilog_defers_process_lowering).
+        std::shared_ptr<DeferredUnitLowering> unit_lowering;
     };
     // Retries the forward-deferred items of instances below `ancestor`, or
     // all of them with an empty ancestor; `final` reports what still misses.
@@ -1873,6 +1890,18 @@ private:
         std::string_view ancestor, bool final);
     std::vector<ForwardDeferredSystemVerilogLowering>
         forward_deferred_systemverilog_;
+    // True when a design declares DPI exports. A call to a context import
+    // then serves the exports of every instance of the design (IEEE
+    // 1800-2023 35.5.3, 35.7), so each instance's SystemVerilog processes
+    // are lowered in one pass once every instance, signal and
+    // specialization exists, in hierarchy (pre-)order, instead of being
+    // lowered while the hierarchy is built and retried.
+    [[nodiscard]] bool systemverilog_defers_process_lowering();
+    bool lower_deferred_unit_lowerings();
+    std::optional<bool> systemverilog_defers_lowering_;
+    std::uint64_t systemverilog_unit_sequence_ { };
+    std::vector<ForwardDeferredSystemVerilogLowering>
+        deferred_unit_lowerings_;
     std::vector<std::shared_ptr<const void>>
         systemverilog_specialization_owners_;
     // Append a lowered SystemVerilog concurrent statement to the
@@ -2153,6 +2182,10 @@ private:
     const semantic::sv::Unit*
         active_compiled_systemverilog_configuration_ { };
     std::string active_compiled_systemverilog_configuration_root_;
+    // The design-statement cell the active configuration's root instance
+    // instantiates; instance selectors name it as their first component
+    // (IEEE 1800-2023 33.4.1.1).
+    std::string active_compiled_systemverilog_configuration_cell_;
     struct ActiveCompiledSystemVerilogDefparam {
         std::string target_path;
         std::string parameter;

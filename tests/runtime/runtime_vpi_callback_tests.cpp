@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -973,6 +974,48 @@ void test_systemverilog_vpi_callback_lifecycle()
             && other_manager.remove_callback(value_change.value)
                 == SystemVerilogVpiCallbackError::CrossManager,
         "VPI lifecycle APIs reject object payloads, nonlifecycle dispatch, malformed handles, and cross-manager removal");
+}
+
+// The save audit of the callback manager (#128; class S row dispatching):
+// outside a delivery nothing is reported, inside one the kind being delivered
+// is (FSIM-SAVE-0011); the callback runs synchronously, so the manager is at
+// rest again once the dispatch returns.
+void test_systemverilog_vpi_callback_rest_state()
+{
+    SystemVerilogVpiObjectRegistry registry { 905 };
+    Scheduler scheduler;
+    SystemVerilogVpiTimeService time_service {
+        scheduler, SystemVerilogVpiTimeProfile { -9, -12 }
+    };
+    SystemVerilogVpiCallbackManager manager {
+        registry, scheduler, time_service, 50'000
+    };
+    std::vector<std::string> idle;
+    manager.audit_rest_state(idle);
+    require_vpi_callback(idle.empty(),
+        "a manager with no delivery in progress is at rest");
+
+    std::vector<std::string> inside;
+    const auto start = manager.register_callback(
+        { SystemVerilogVpiCallbackKind::StartOfSimulation,
+            std::nullopt,
+            std::nullopt,
+            300,
+            [&](const SystemVerilogVpiCallbackEvent&) {
+                manager.audit_rest_state(inside);
+            } });
+    require_vpi_callback(start
+            && manager.dispatch_lifecycle_now(
+                   SystemVerilogVpiCallbackKind::StartOfSimulation)
+                == SystemVerilogVpiCallbackError::None,
+        "the start-of-simulation callback runs");
+    require_vpi_callback(inside.size() == 1U
+            && inside.front().starts_with("FSIM-SAVE-0011: VPI callbacks of kind"),
+        "a delivery in progress is reported as FSIM-SAVE-0011");
+    std::vector<std::string> after;
+    manager.audit_rest_state(after);
+    require_vpi_callback(after.empty(),
+        "the manager is at rest again when the dispatch returned");
 }
 
 } // namespace fsim::tests::runtime

@@ -69,8 +69,8 @@ module top;
     // or final deferred, whose actions are subroutine calls (16.4, 37.55).
     task automatic chk;
         assert (d !== 4'bzzzz) n = 1;
-        assume #0 (d !== 4'bzzzz) else $info("assume failed");
-        cover final (d !== 4'bzzzz) $info("covered");
+        assume #0 (d !== 4'bzzzz) else $display("assume failed");
+        cover final (d !== 4'bzzzz) $display("covered");
     endtask
 
     // A foreach statement keeps its collection, its loop variables (a
@@ -79,5 +79,50 @@ module top;
     task automatic each;
         foreach (arr[i, ])
             n = i;
+    endtask
+
+    // A foreach over a string (12.7.3, SystemVerilog-2023) is a foreach too:
+    // collection, one loop variable and its body.
+    task automatic each_str;
+        string str;
+        foreach (str[k])
+            n = k;
+    endtask
+
+    // Operation expressions have the value of their operands combined by the
+    // operator, self-determined (11.4, 11.6.1, 11.8.1, 37.78). Expected
+    // binary values, widths from 11.6.1:
+    //   P * 3 + M        32-bit signed: 18 + -4 = 14
+    //   U + 4'd7         4-bit unsigned: 10 + 7 = 17 modulo 16 = 1
+    //   (P > M) ? P - M : 0   P > M is 1, P - M = 10
+    //   P / M            6 / -4 truncates toward zero: -1 (11.4.2)
+    //   P % M            the sign of the first operand: 2 (11.4.2)
+    //   ~U               4-bit: ~1010 = 0101
+    //   &U               reduction and of 1010 = 0
+    //   {U, U}           8 bits: 10101010
+    //   U << 2           the left operand's 4 bits: 1000
+    //   -P               32-bit two's complement of 6
+    localparam int P = 6;
+    localparam int M = -4;
+    localparam logic [3:0] U = 4'ha;
+    task automatic ops;
+        n = P * 3 + M;
+        n = U + 4'd7;
+        n = (P > M) ? P - M : 0;
+        n = P / M;
+        n = P % M;
+        n = ~U;
+        n = &U;
+        n = {U, U};
+        n = U << 2;
+        n = -P;
+    endtask
+
+    // Output task arguments as written (37.62): a lone literal, and string
+    // literals after the first argument, are arguments too; a string literal
+    // is decompiled with its escapes.
+    task automatic shown;
+        $display(5);
+        $write("a\n", n, "b");
     endtask
 endmodule

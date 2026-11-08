@@ -2,7 +2,8 @@
 // VPI live class object conformance plug-in (IEEE 1800-2023 37.17 detail 14,
 // 37.33, 37.34, 37.38, 38.36.1): class variables and class objects, the
 // properties of a live object, its constraints, cbValueChange on a class
-// variable, cbSizeChange on a dynamic array and a queue, and cbReclaimObj at
+// variable, cbSizeChange on a dynamic array, a queue, an associative array and a
+// string, and cbReclaimObj at
 // the end of the simulation.
 // Lines starting with "#c " form the checked trace.
 #include "fsim/runtime/vpi_abi.h"
@@ -58,8 +59,10 @@ static PLI_INT32 value_changed(p_cb_data data)
 
 static PLI_INT32 size_changed(p_cb_data data)
 {
-    vpi_printf("#c sizechange %s size=%d\n", name_of(data->obj),
-        (int)vpi_get(vpiSize, data->obj));
+    // The callback's value is the new size (IEEE 1800-2023 37.17 detail 14).
+    vpi_printf("#c sizechange %s size=%d value=%d\n", name_of(data->obj),
+        (int)vpi_get(vpiSize, data->obj),
+        data->value != NULL ? (int)data->value->value.integer : -1);
     return 0;
 }
 
@@ -130,6 +133,83 @@ static void property_of(vpiHandle member)
         obj == NULL ? "null" : "set", vpi_get(vpiObjId, member) > 0);
 }
 
+static const char* op_name(PLI_INT32 op)
+{
+    switch (op) {
+    case vpiInsideOp: return "vpiInsideOp";
+    case vpiGtOp: return "vpiGtOp";
+    case vpiMultOp: return "vpiMultOp";
+    case vpiAddOp: return "vpiAddOp";
+    case vpiNotOp: return "vpiNotOp";
+    case vpiEqOp: return "vpiEqOp";
+    default: return "other-op";
+    }
+}
+
+static const char* const_name(PLI_INT32 kind)
+{
+    return kind == vpiIntConst ? "vpiIntConst"
+        : kind == vpiDecConst  ? "vpiDecConst"
+                               : "other-const";
+}
+
+// Set while the constraint `ops` (1) or `sel` (2, with constant values) is
+// dumped.
+static int show_tree;
+
+// The expression tree of a constraint leaf (37.78 vpiOpType and vpiOperand,
+// 37.62 range bounds, 37.59 constants), one line a node.
+static void tree(const char* indent, vpiHandle node)
+{
+    char deeper[48];
+    PLI_INT32 type = vpi_get(vpiType, node);
+    vpiHandle iterator;
+    vpiHandle operand;
+
+    snprintf(deeper, sizeof deeper, "%s  ", indent);
+    if (type == vpiOperation) {
+        vpi_printf("#c %snode vpiOperation op=%s operands=%d\n", indent,
+            op_name(vpi_get(vpiOpType, node)), count_of(vpiOperand, node));
+        iterator = vpi_iterate(vpiOperand, node);
+        while (iterator != NULL && (operand = vpi_scan(iterator)) != NULL) {
+            tree(deeper, operand);
+        }
+    } else if (type == vpiRange) {
+        vpi_printf("#c %snode vpiRange\n", indent);
+        tree(deeper, vpi_handle(vpiLeftRange, node));
+        tree(deeper, vpi_handle(vpiRightRange, node));
+    } else if (type == vpiConstant) {
+        vpi_printf("#c %snode vpiConstant const=%s text=%s", indent,
+            const_name(vpi_get(vpiConstType, node)),
+            text(vpi_get_str(vpiDecompile, node)));
+        if (show_tree == 2) {
+            s_vpi_value constant = { vpiIntVal, { 0 } };
+            vpi_get_value(node, &constant);
+            vpi_printf(" size=%d value=%d", (int)vpi_get(vpiSize, node),
+                constant.format == vpiSuppressVal ? -1
+                                                  : (int)constant.value.integer);
+        }
+        vpi_printf("\n");
+    } else if (type == vpiVarSelect || type == vpiBitSelect) {
+        vpi_printf("#c %snode %s constant-select=%d\n", indent,
+            type_of(node), (int)vpi_get(vpiConstantSelect, node));
+        tree(deeper, vpi_handle(vpiParent, node));
+        tree(deeper,
+            type == vpiBitSelect ? vpi_handle(vpiIndex, node)
+                                 : first_of(vpiIndex, node));
+    } else if (type == vpiPartSelect) {
+        vpi_printf("#c %snode vpiPartSelect constant-select=%d\n", indent,
+            (int)vpi_get(vpiConstantSelect, node));
+        tree(deeper, vpi_handle(vpiParent, node));
+        tree(deeper, vpi_handle(vpiLeftRange, node));
+        tree(deeper, vpi_handle(vpiRightRange, node));
+    } else {
+        vpi_printf("#c %snode %s name=%s\n", indent, type_of(node),
+            name_of(node));
+    }
+}
+
+
 static void constraint_item(const char* indent, vpiHandle item);
 
 static void items(const char* indent, PLI_INT32 relation, vpiHandle owner)
@@ -150,6 +230,9 @@ static void constraint_item(const char* indent, vpiHandle item)
     snprintf(deeper, sizeof deeper, "%s  ", indent);
     vpi_printf("#c %sitem %s soft=%d parent=%s\n", indent, type_of(item),
         (int)vpi_get(vpiSoft, item), type_of(parent));
+    if (show_tree && (type == vpiOperation)) {
+        tree(deeper, item);
+    }
     if (type == vpiImplication || type == vpiConstrIf
         || type == vpiConstrIfElse) {
         vpi_printf("#c %scondition %s\n", deeper,
@@ -189,7 +272,12 @@ static void constraint_of(vpiHandle constraint)
         (int)vpi_get(vpiAccessType, constraint),
         (int)vpi_get(vpiAllocScheme, constraint),
         type_of(vpi_handle(vpiParent, constraint)));
+    show_tree = strcmp(name, "ops") == 0 ? 1 : strcmp(name, "sel") == 0 ? 2 : 0;
+    if (show_tree == 1) {
+        vpi_printf("#c   virtual=%d\n", (int)vpi_get(vpiVirtual, constraint));
+    }
     items("", vpiConstraintItem, constraint);
+    show_tree = 0;
 }
 
 static PLI_INT32 check(p_cb_data data)
@@ -241,6 +329,10 @@ static PLI_INT32 start(p_cb_data data)
         vpi_handle_by_name("top.dyn", NULL), "");
     register_cb(cbSizeChange, size_changed,
         vpi_handle_by_name("top.q", NULL), "");
+    register_cb(cbSizeChange, size_changed,
+        vpi_handle_by_name("top.aa", NULL), "");
+    register_cb(cbSizeChange, size_changed,
+        vpi_handle_by_name("top.s", NULL), "");
     register_cb(cbReclaimObj, reclaimed, vpi_handle(vpiClassTypespec, a),
         "typespec");
     register_cb(cbEndOfSimulation, ended, NULL, "");

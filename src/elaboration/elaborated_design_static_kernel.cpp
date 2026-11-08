@@ -173,6 +173,7 @@ runtime::simir::Process host_stub(const runtime::simir::ProcessProgramView& host
     auto stub = host.materialize();
     stub.static_sensitivity = std::move(sensitivity);
     stub.debug_locals.clear();
+    stub.call_results.clear();
     stub.debug_string_locals.clear();
     stub.debug_container_locals.clear();
     stub.expression_profiles = { };

@@ -215,6 +215,13 @@ std::span<const TclCommandSpec> existing_command_specs()
     static constexpr std::array run_arguments {
         TclCommandArgument { "duration", TclCompletionDomain::literal, true },
     };
+    static constexpr std::array save_arguments {
+        TclCommandArgument { "file", TclCompletionDomain::literal },
+        TclCommandArgument { "incremental", TclCompletionDomain::literal, true },
+    };
+    static constexpr std::array restart_arguments {
+        TclCommandArgument { "file", TclCompletionDomain::literal },
+    };
     static constexpr std::array event_arguments {
         TclCommandArgument { "event", TclCompletionDomain::literal },
         TclCommandArgument { "script", TclCompletionDomain::literal },
@@ -279,6 +286,12 @@ std::span<const TclCommandSpec> existing_command_specs()
         TclCommandSpec { "fsim::run", "fsim::run ?DURATION?",
             "Run the loaded simulation.",
             TclCommandCapability::simulation, false, run_arguments, invoke_existing },
+        TclCommandSpec { "fsim::save", "fsim::save FILE ?incremental?",
+            "Save the run state of the loaded simulation to a file.",
+            TclCommandCapability::simulation, false, save_arguments, invoke_existing },
+        TclCommandSpec { "fsim::restart", "fsim::restart FILE",
+            "Restore the run state of the loaded simulation from a file.",
+            TclCommandCapability::simulation, false, restart_arguments, invoke_existing },
         TclCommandSpec { "fsim::get_simulation", "fsim::get_simulation",
             "Return the loaded simulation state.",
             TclCommandCapability::workspace, true, { }, invoke_existing },

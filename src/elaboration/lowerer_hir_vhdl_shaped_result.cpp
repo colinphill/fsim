@@ -205,7 +205,7 @@ Lowerer::lower_hir_vhdl_shaped_range_use(
         const auto width = expected_width != 0U ? expected_width
             : static_cast<std::size_t>(
                   frontend::vhdl_predefined_integer_storage_width(
-                      vhdl_standard_));
+                      vhdl_integer_standard()));
         return std::optional { query(*container, *attribute, *selected, width) };
     }
     // `a(r'range)` where r's range is known only at run time: the slice of

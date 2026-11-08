@@ -23,7 +23,7 @@ using namespace static_kernel_compiled_detail;
 namespace kw = kernel_word;
 
 namespace {
-constexpr std::string_view native_magic { "fsim-static-kernel-templates-v1" };
+constexpr std::string_view native_magic { "fsim-static-kernel-templates-v2" };
 
 /// The operands build_native binds to slots (bind_slot), in binding order:
 /// the field, and whether it holds the slot's arena offset (else its index;
@@ -38,8 +38,13 @@ void visit_slot_operands(Inst& inst, Visit&& visit)
     case KOp::load_field:
     case KOp::load_slot9:
     case KOp::load_field9:
-    case KOp::wide_load:
         visit(inst.x, false);
+        break;
+    case KOp::wide_load:
+        // Sub 3 reads a host signal (bound as load_host's).
+        if (inst.sub != 3U) {
+            visit(inst.x, false);
+        }
         break;
     case KOp::dynamic_extract:
     case KOp::dynamic_part_select:
@@ -52,8 +57,13 @@ void visit_slot_operands(Inst& inst, Visit&& visit)
     case KOp::store_slot_dynamic:
     case KOp::store_slot_part:
     case KOp::store_vhdl:
-    case KOp::wide_store:
         visit(inst.d, false);
+        break;
+    case KOp::wide_store:
+        // Sub 3 writes a host signal (bound as store_host's).
+        if (inst.sub != 3U) {
+            visit(inst.d, false);
+        }
         break;
     case KOp::wide_move:
         visit(inst.d, false);
@@ -564,7 +574,11 @@ Interpreter::Impl::StaticKernel::build_operation_tier(
         [&](const std::uint32_t pc) {
             return !thread
                 && (member.vhdl ? pc == member.body_end
-                                : pc < member.body_begin || pc >= member.body_end);
+                                : pc < member.body_begin
+                                    || (pc >= member.body_end
+                                        && pc < (member.family_expansion_begin != 0U
+                                                ? member.family_expansion_begin
+                                                : pc + 1U)));
         });
     if (!thread && native_prologue(member) && member.prologue_end != member.body_begin
         && member.prologue_end < size) {
@@ -909,6 +923,43 @@ void Interpreter::Impl::StaticKernel::finish_native(NativeUnit& unit,
     }
 }
 
+namespace {
+
+/// The error generated code reports through fsim_sk_fail (reason 2, a
+/// deoptimization, is handled by the caller). The messages are those of the
+/// reference operations (evaluate_slow_op, integer_binary_value, ...), so a
+/// run reports the same text whichever tier executes the instruction.
+[[nodiscard]] const char* native_fail_message(const std::uint32_t reason)
+{
+    switch (reason) {
+    case 3U:
+        return "dynamic packed index contains an unknown or high-impedance "
+               "value or is outside the declared range";
+    case 4U:
+        return "extract range is outside the source value";
+    case 5U:
+        return "VHDL integer operand contains an unknown or high-impedance value";
+    case 6U:
+        return "VHDL integer arithmetic overflow";
+    case 7U:
+        return "VHDL integer division by zero";
+    case 8U:
+        return "VHDL integer exponent must be nonnegative";
+    case 9U:
+        return "dynamic packed index is invalid";
+    case 10U:
+        return "invalid dynamic part-select write";
+    case 11U:
+        return "insert range is outside the target value";
+    case 12U:
+        return "static kernel write is outside its signal";
+    default:
+        return "branch condition is unknown or high impedance";
+    }
+}
+
+} // namespace
+
 void Interpreter::Impl::StaticKernel::native_fail(
     StaticKernelNativeFrame* frame, const std::uint32_t at,
     const std::uint32_t reason)
@@ -923,7 +974,7 @@ void Interpreter::Impl::StaticKernel::native_fail(
     try {
         kernel.fail(frame->member,
             (kernel.members_[frame->member].vhdl ? 0U : kernel.members_[frame->member].body_begin) + at,
-            "branch condition is unknown or high impedance");
+            native_fail_message(reason));
     } catch (...) {
         kernel.scratch().native_exception = std::current_exception();
         frame->status = 1U;
@@ -1242,15 +1293,6 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
     helpers.notify = &StaticKernel::native_notify;
     helpers.notify_field = &StaticKernel::native_notify_field;
     helpers.member_due = &StaticKernel::native_member_due;
-    helpers.binary = [](const std::uint64_t operation_width, const std::uint64_t la,
-                         const std::uint64_t lb, const std::uint64_t ra,
-                         const std::uint64_t rb, std::uint64_t* out) {
-        const auto result = kw::binary(
-            static_cast<BinaryOperator>(operation_width & 0xffU), { la, lb },
-            { ra, rb }, static_cast<std::uint32_t>(operation_width >> 8U));
-        out[0] = result.a;
-        out[1] = result.b;
-    };
     helpers.fail = &StaticKernel::native_fail;
     if (std::getenv("FSIM_STATIC_KERNEL_PERF_MAP") != nullptr) {
         std::vector<std::size_t> units_of(templates_.size(), 0U);
@@ -1594,8 +1636,18 @@ void Interpreter::Impl::StaticKernel::canonicalize_unit(const CompiledBody& inst
         case KOp::load_host:
             inst.x = bind(2U, inst.x, inst.x, 0U);
             break;
+        case KOp::wide_load:
+            if (inst.sub == 3U) {
+                inst.x = bind(2U, inst.x, inst.x, 0U);
+            }
+            break;
         case KOp::store_host:
             inst.d = bind(2U, inst.d, inst.d, 0U);
+            break;
+        case KOp::wide_store:
+            if (inst.sub == 3U) {
+                inst.d = bind(2U, inst.d, inst.d, 0U);
+            }
             break;
         case KOp::mem_read:
             inst.x = bind(3U, inst.x, inst.x, 0U);
@@ -2432,6 +2484,15 @@ void Interpreter::Impl::StaticKernel::concatenate_members(CompiledBody& program,
             case KOp::generic:
                 inst.y += register_base;
                 break;
+            case KOp::sva_tick:
+            case KOp::sva_outcome:
+                // The tick reads its SimIR operands at the register base.
+                inst.y += register_base;
+                reg(inst.d);
+                break;
+            case KOp::sva_sampled_load:
+                reg(inst.d);
+                break;
             case KOp::net_delay:
                 // y is the SimIR operation, not a register.
                 reg(inst.x);
@@ -2508,8 +2569,17 @@ void Interpreter::Impl::StaticKernel::concatenate_members(CompiledBody& program,
                 break;
             case KOp::store_slot:
             case KOp::store_slot_nba:
+                reg(inst.x);
+                break;
             case KOp::store_host:
                 reg(inst.x);
+                if (inst.aux != 0U) {
+                    // A dynamic index (offset 0) or part select (1): the
+                    // base register, and the selection in the body's side
+                    // tables.
+                    reg(inst.y);
+                    inst.aux += inst.offset == 0U ? index_base : part_base;
+                }
                 break;
             case KOp::store_slot_dynamic:
                 reg(inst.x);
@@ -2558,6 +2628,12 @@ void Interpreter::Impl::StaticKernel::concatenate_members(CompiledBody& program,
                 break;
             case KOp::wide_store:
                 reg(inst.x);
+                if (inst.sub == 3U && inst.imm_a != 0U) {
+                    // A host signal's dynamic write: register y, and the
+                    // selection (imm_a: position + 1, from bit 32 a part).
+                    reg(inst.y);
+                    inst.imm_a += (inst.imm_a >> 32U) != 0U ? part_base : index_base;
+                }
                 break;
             case KOp::wide_part_insert:
                 reg(inst.d);
@@ -2565,6 +2641,22 @@ void Interpreter::Impl::StaticKernel::concatenate_members(CompiledBody& program,
                 reg(inst.y);
                 reg(inst.z);
                 inst.aux += part_base;
+                break;
+            case KOp::wide_alu:
+                // Unused operand slots hold zero: shifted with the rest,
+                // they name nothing.
+                reg(inst.d);
+                reg(inst.x);
+                reg(inst.y);
+                reg(inst.z);
+                if (static_cast<WideFamily>(inst.offset) == WideFamily::dynamic_insert) {
+                    // imm_b names the selection in the body's indices.
+                    inst.imm_b += index_base;
+                } else if (static_cast<WideFamily>(inst.offset)
+                    == WideFamily::dynamic_part_select) {
+                    // imm_b names the part in the body's parts.
+                    inst.imm_b += part_base;
+                }
                 break;
             case KOp::load_slot9:
             case KOp::store_vhdl:

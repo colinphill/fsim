@@ -1,0 +1,9 @@
+#c run scope=top.f
+#c note id=1 value=10 total=10
+#c note id=0 value=20 total=20
+#c note id=1 value=5 total=15
+#c note id=1 value=7 total=7
+#c wait id=0 time=4
+#c run wait status=0
+#c run scope after=top.f
+#c run done time=4

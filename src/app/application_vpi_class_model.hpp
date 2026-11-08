@@ -80,6 +80,10 @@ public:
     /// other object of the model.
     [[nodiscard]] std::optional<std::pair<std::string, std::string>>
     typespec_class(std::uint64_t serial) const;
+    /// The expression of a constraint leaf object (37.34); null for any other
+    /// object. vpi_get_value on a constant leaf reads it.
+    [[nodiscard]] const semantic::sv::ConstraintExpression* leaf_expression(
+        std::uint64_t serial) const;
     /// The canonical identity and the name of a constraint of the model;
     /// none for any other object.
     [[nodiscard]] std::optional<std::pair<std::string, std::string>>

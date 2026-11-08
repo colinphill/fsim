@@ -1,8 +1,10 @@
 #c driver top.d: none
 #c load top.d: vpiContAssign line=17
+#c load top.d: vpiContAssign line=66
 #c use top.d: vpiContAssign line=17
 #c use top.d: vpiAssignment line=34
 #c use top.d: vpiAssignment line=35
+#c use top.d: vpiContAssign line=66
 #c driver top.q: none
 #c load top.q: none
 #c use top.q: vpiAssignment line=38
@@ -34,9 +36,9 @@
 #c load top.u.y: vpiPort y
 #c use top.u.y: vpiContAssign line=5
 #c use top.u.y: vpiPort y
-#c driver top.gv: none
+#c driver top.gv: vpiContAssign line=66
 #c load top.gv: none
-#c use top.gv: none
+#c use top.gv: vpiContAssign line=66
 #c line 35 lhs: vpiVarSelect parent=top.mem const=1
 #c line 35 lhs:   index 1
 #c line 37 lhs: vpiVarSelect parent=top.mem const=0
@@ -63,16 +65,33 @@
 #c top.bump:   vpiIODecl n dir=1 size=32 signed=1
 #c top.bump:   vpiIODecl m dir=2 size=32 signed=1
 #c top.bump:   no return
+#c cp::twice: vpiFunction method=0 virtual=0 visibility=1 access=1
+#c cp::twice: functype=1 size=32 signed=1
+#c cp::twice:   vpiIODecl x dir=1 size=32 signed=1
+#c cp::twice:   return vpiIntVar twice size=32
+#c cp::note: vpiTask method=0 virtual=0 visibility=1 access=1
+#c cp::note:   vpiIODecl n dir=1 size=32 signed=1
+#c cp::note:   vpiIODecl m dir=2 size=32 signed=1
+#c cp::note:   no return
 #c top.dpi_twice: vpiFunction access=4 pure=1 context=0 cstr=2 cid=c_conn_twice
 #c top.dpi_twice: method=0 virtual=0 visibility=1
 #c top.dpi_twice: functype=1 size=32 signed=1
+#c top.dpi_twice:   vpiIODecl x dir=1 size=32 signed=1 parent=top.dpi_twice
+#c top.dpi_twice:   return vpiIntVar dpi_twice size=32 signed=1
 #c top.dpi_note: vpiTask access=4 pure=0 context=1 cstr=2 cid=c_conn_note
 #c top.dpi_note: method=0 virtual=0 visibility=1
+#c top.dpi_note:   vpiIODecl x dir=1 size=32 signed=1 parent=top.dpi_note
+#c top.dpi_note:   no return
 #c top.dpi_exp: vpiFunction access=3 pure=0 context=0 cstr=2 cid=dpi_exp
 #c top.dpi_exp: method=0 virtual=0 visibility=1
 #c top.dpi_exp: functype=1 size=32 signed=1
-#c dpi call line 55: vpiFuncCall top.dpi_twice access=4 functype=1
-#c dpi call line 56: vpiTaskCall top.dpi_note access=4
+#c top.dpi_exp:   vpiIODecl x dir=1 size=32 signed=1 parent=top.dpi_exp
+#c top.dpi_exp:   return vpiIntVar dpi_exp size=32 signed=1
+#c top.dpi_twice: formal x typespec=vpiIntTypespec
+#c top.dpi_twice: result typespec=vpiIntTypespec
+#c top.dpi_note: formal x typespec=vpiIntTypespec
+#c dpi call line 58: vpiFuncCall top.dpi_twice access=4 functype=1
+#c dpi call line 59: vpiTaskCall top.dpi_note access=4
 #c top.w: vpiContAssign netdeclassign=0
 #c top.w:   vpiContAssignBit offset=0 size=1 parent=vpiContAssign
 #c top.w:   vpiContAssignBit offset=1 size=1 parent=vpiContAssign
@@ -81,5 +100,5 @@
 #c top.nd: vpiContAssign netdeclassign=1
 #c top.nd:   vpiContAssignBit offset=0 size=1 parent=vpiContAssign
 #c top.nd:   vpiContAssignBit offset=1 size=1 parent=vpiContAssign
-#c sysfunc $clog2 functype=1
+#c sysfunc $clog2 functype=1 value=3
 #c sysfunc $time functype=3 value=0

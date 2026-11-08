@@ -1167,6 +1167,14 @@ struct VerilogSpecifyPathInfo {
     bool conditional { };
     bool ifnone { };
     std::vector<runtime::SimulationTick> delays;
+    /// The minimum, typical and maximum value of each delay in `delays`,
+    /// when the path writes a minimum:typical:maximum triple or names a
+    /// specparam that is one (IEEE 1800-2023 30.4.1); empty otherwise.
+    /// `delays` holds the one the delay mode selected. SDF annotation
+    /// replaces `delays` and clears these.
+    std::vector<runtime::SimulationTick> minimum_delays;
+    std::vector<runtime::SimulationTick> typical_delays;
+    std::vector<runtime::SimulationTick> maximum_delays;
     frontend::SourceSpan source;
 };
 
@@ -1189,6 +1197,10 @@ struct VerilogPrimitiveTerminalInfo {
     std::uint32_t offset { };
     std::uint32_t width { };
     std::string expression;
+    // The HIR expression of a terminal that is not a static selection of a
+    // signal (a constant or a concatenation), for the VPI expr object (IEEE
+    // 1800-2023 37.35 prim term vpiExpr).
+    std::optional<std::uint32_t> hir_expression;
 };
 
 /// One transition delay of a primitive in simulation ticks. A delay without
@@ -1300,6 +1312,10 @@ struct HierarchicalSignalRead {
     bool implicit { };
     /// The full hierarchical path the name resolved to.
     std::string path;
+    /// The name is in the event control of the process (`@(u1.a)`,
+    /// `@(posedge u1.clk)`): `reg` is unused, and the process waits on the
+    /// load's delayed copy in place of the net.
+    bool sensitivity { };
 };
 
 struct ElaboratedDesignState {
@@ -1344,6 +1360,9 @@ struct ElaboratedDesignState {
     /// The reads of signals through hierarchical names, ordered by process
     /// and register.
     std::vector<HierarchicalSignalRead> hierarchical_reads;
+    /// ElaboratedDesign::uses_simulation_control(), computed once when the
+    /// process rows are final.
+    bool uses_simulation_control { };
 };
 
 /// One pure acyclic continuous-assignment cone selected for A2 fusion. The
@@ -1540,6 +1559,15 @@ public:
     /// a driver. Runs without a library never call it and keep the constant
     /// WriteInertial operations. Returns the operations changed.
     std::size_t bind_primitive_delay_slots();
+    /// Whether a process runs $save, $incsave, $restart or $reset (IEEE
+    /// 1800-2023 D.7-D.9). Such a run keeps the host's time steps, so the
+    /// save point (the end of a time slot) is reached at the right time.
+    /// Computed once, when elaboration freezes the process rows, and kept in
+    /// the design artifact: a run does not scan the processes for it.
+    [[nodiscard]] bool uses_simulation_control() const noexcept
+    {
+        return uses_simulation_control_;
+    }
     /// Whether any signal holds nine values (ValueKind::logic9): only those
     /// can take a weak value ('H', 'L', 'W', '-') a foreign client writes.
     [[nodiscard]] bool has_nine_value_signals() const noexcept;
@@ -1628,6 +1656,13 @@ public:
     [[nodiscard]] StaticKernelPlan plan_static_kernel(
         const StaticKernelAccessPlan& access = { }) const;
 
+    /// Replaces the module paths and timing checks and keeps everything else,
+    /// including the net delay splits and the processes a running design has
+    /// handed to its interpreter: a live SDF reannotation changes only the
+    /// timing of paths and checks (the delayed loads follow separately).
+    void replace_module_timing(std::vector<VerilogSpecifyPathInfo> paths,
+        std::vector<runtime::simir::ModuleTimingCheck> checks);
+
     [[nodiscard]] ElaboratedDesignState state() const &;
     /// Transfer the complete portable state out of a design that has reached
     /// its final ownership boundary. This avoids duplicating every process
@@ -1691,6 +1726,7 @@ private:
     [[nodiscard]] runtime::simir::ProcessProgramView process_view(
         std::size_t process) const noexcept;
     void finalize_process_rows();
+    [[nodiscard]] bool scan_simulation_control();
     [[nodiscard]] runtime::simir::SignalDriverInventory
     compute_signal_driver_inventory() const;
     friend class HierarchyBuilder;
@@ -1743,6 +1779,7 @@ private:
         process_rows_;
     std::shared_ptr<detail::RuntimeProcessProgramTableBuilder>
         process_builder_;
+    bool uses_simulation_control_ { };
     std::vector<SpecializationInfo> specializations_;
     struct SpecializationPathHash {
         using is_transparent = void;

@@ -68,13 +68,27 @@ static void clocking(vpiHandle block)
     vpiHandle instance = vpi_handle(vpiInstance, block);
     vpiHandle iterator;
     vpiHandle io;
+    vpiHandle condition;
     char owner[64];
-    const char* name = name_of(block);
+    // vpi_get_str's string lasts until the next call (38.12): keep a copy.
+    char name[64];
+    snprintf(name, sizeof name, "%s", name_of(block));
     vpi_printf("#c %s type=%s full=%s instance=%s event=%s condition=%s\n",
         name, text(vpi_get_str(vpiType, block)),
         text(vpi_get_str(vpiFullName, block)), name_of(instance),
         event != NULL ? text(vpi_get_str(vpiType, event)) : "-",
         event != NULL ? name_of(vpi_handle(vpiCondition, event)) : "-");
+    // An event with an edge has an operation as its condition (37.48).
+    condition = event != NULL ? vpi_handle(vpiCondition, event) : NULL;
+    if (condition != NULL && vpi_get(vpiType, condition) == vpiOperation) {
+        vpiHandle operands = vpi_iterate(vpiOperand, condition);
+        vpiHandle operand = operands != NULL ? vpi_scan(operands) : NULL;
+        vpi_printf("#c %s condition-op optype=%d operand=%s\n", name,
+            (int)vpi_get(vpiOpType, condition), name_of(operand));
+        if (operands != NULL) {
+            vpi_free_object(operands);
+        }
+    }
     skew(name, "default-input", block, vpiInputSkew);
     skew(name, "default-output", block, vpiOutputSkew);
     vpi_printf("#c %s default-edges input=%s output=%s\n", name,

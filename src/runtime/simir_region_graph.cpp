@@ -362,10 +362,12 @@ infer_static_read_ranges(
         if (!exact || candidate_ranges.empty()) {
             continue;
         }
-        if (std::ranges::any_of(program.debug_locals(), [&](const auto& local) {
-                return std::ranges::find(visited, local.register_id)
-                    != visited.end();
-            })) {
+        const auto observed_register = [&](const auto& local) {
+            return std::ranges::find(visited, local.register_id)
+                != visited.end();
+        };
+        if (std::ranges::any_of(program.debug_locals(), observed_register)
+            || std::ranges::any_of(program.call_results(), observed_register)) {
             continue;
         }
         ranges.emplace(instruction, std::move(candidate_ranges));
@@ -488,10 +490,10 @@ bool visit_known_region_accesses(
             return true;
         } else if constexpr (std::is_same_v<T, VitalDelay>) {
             record_write(value.output);
-            for (const auto mirror : value.mirrors) {
+            for (const auto mirror : value.wire->mirrors) {
                 record_write(mirror);
             }
-            for (const auto& wire_source : value.wire_sources) {
+            for (const auto& wire_source : value.wire->wire_sources) {
                 observe(wire_source.shadow, RegionObservation::events);
             }
             return true;
@@ -894,7 +896,8 @@ std::string static_loop_failure(const ProcessProgramView& process)
         || process.switch_resistive()) return "switch";
     if (process.string_register_count() != 0U) return "string_registers";
     if (process.container_register_count() != 0U) return "container_registers";
-    if (!process.debug_locals().empty() || !process.debug_string_locals().empty()
+    if (!process.debug_locals().empty() || !process.call_results().empty()
+        || !process.debug_string_locals().empty()
         || !process.debug_container_locals().empty()) return "debug_locals";
     if (!process.static_trigger_regions().empty()) return "static_trigger_regions";
     const auto count = operations.size();
@@ -918,6 +921,7 @@ bool static_loop(const ProcessProgramView& process)
         || process.string_register_count() != 0U
         || process.container_register_count() != 0U
         || !process.debug_locals().empty()
+        || !process.call_results().empty()
         || !process.debug_string_locals().empty()
         || !process.debug_container_locals().empty()
         || !process.static_trigger_regions().empty()) {

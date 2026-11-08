@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+#include "simir_events.hpp"
 #include "simir_internal.hpp"
 
 #include <algorithm>
@@ -120,6 +121,17 @@ void Interpreter::Impl::schedule_update_commit()
         }
         return;
     }
+    // One descriptor per request (IEEE 1076-2019 20.7: the event is saved as
+    // the registered kind interp.update_commit and re-created by a restart).
+    scheduler.schedule_internal(SchedulerPhase::update,
+        std::numeric_limits<StableOrder>::max(),
+        events::make<events::UpdateCommit>(
+            events::UpdateCommit::Payload { this }));
+    update_commit_scheduled = true;
+}
+
+void Interpreter::Impl::ensure_update_commit_callback()
+{
     // A generic Update ticket may borrow this member's address. Keep the
     // callable stable after its first initialization.
     if (!update_commit_callback) {
@@ -1192,10 +1204,6 @@ void Interpreter::Impl::schedule_update_commit()
             drain_vhdl_resolutions();
         };
     }
-
-    scheduler.schedule(SchedulerPhase::update,
-        std::numeric_limits<StableOrder>::max(), update_commit_callback);
-    update_commit_scheduled = true;
 }
 
 void Interpreter::Impl::note_unresolved_update_owner(

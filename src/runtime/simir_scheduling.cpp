@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "simir_internal.hpp"
+#include "simir_events.hpp"
 
 #include <bit>
 #include <cstdio>
@@ -328,30 +329,29 @@ bool Interpreter::Impl::route_module_path_update(
                 }
                 if (!pending->second.retain_delay
                     || x_delay < *selected[bit]) {
-                    auto update_x = [this, driver, signal, target_bit,
-                                        change_origin](Scheduler&) {
-                        if (change_origin.process_domain
-                            == ProcessSchedulingDomain::systemverilog) {
-                            commit_driver_slice(
-                                driver, signal,
-                                PackedLogic4 { 1U, Logic4::x },
-                                target_bit, change_origin, false);
-                        } else {
-                            stage_update_unrouted(
-                                driver, signal,
-                                PackedLogic4 { 1U, Logic4::x },
-                                target_bit);
-                        }
-                    };
+                    // A registered event (#128): the pulse reaches the load
+                    // as x at `x_delay`.
+                    if (x_delay
+                        > std::numeric_limits<SimulationTick>::max() - now) {
+                        throw std::overflow_error {
+                            "simulation time overflow while scheduling event"
+                        };
+                    }
+                    const auto update_x
+                        = events::make<events::ModulePathPulseX>(
+                            events::ModulePathPulseX::Payload { this, driver,
+                                signal, static_cast<std::uint32_t>(target_bit),
+                                1U, change_origin.process_domain,
+                                change_origin.phase });
                     if (change_origin.process_domain
                         == ProcessSchedulingDomain::systemverilog) {
-                        scheduler.schedule_systemverilog_after(
-                            x_delay, SchedulerPhase::active, orders[bit],
-                            std::move(update_x));
+                        scheduler.schedule_internal_systemverilog_at(
+                            now + x_delay, SchedulerPhase::active, orders[bit],
+                            update_x);
                     } else {
-                        scheduler.schedule_after(
-                            x_delay, SchedulerPhase::update, orders[bit],
-                            std::move(update_x));
+                        scheduler.schedule_internal_at(
+                            now + x_delay, SchedulerPhase::update, orders[bit],
+                            update_x);
                     }
                 }
             }
@@ -395,30 +395,21 @@ bool Interpreter::Impl::route_module_path_update(
                 show_cancelled[bit] });
         (void)inserted;
         try {
-            auto mature = [this, key, driver, signal, target_bit,
-                              scalar = std::move(scalar), change_origin](
-                             Scheduler&) mutable {
-                    pending_module_path_writes.erase(key);
-                    if (change_origin.process_domain
-                        == ProcessSchedulingDomain::systemverilog) {
-                        commit_driver_slice(
-                            driver, signal, std::move(scalar), target_bit,
-                            change_origin, false);
-                    } else {
-                        stage_update_unrouted(
-                            driver, signal, std::move(scalar), target_bit);
-                    }
-                };
+            // A registered event (#128): the pending record keeps the value.
+            const Scheduler::Task mature { events::make<events::ModulePathMature>(
+                events::ModulePathMature::Payload { this, driver, signal,
+                    static_cast<std::uint32_t>(target_bit), 1U,
+                    change_origin.process_domain, change_origin.phase }) };
             if (change_origin.process_domain
                 == ProcessSchedulingDomain::systemverilog) {
                 pending->second.handle
                     = scheduler.schedule_systemverilog_after_cancelable(
                         *selected[bit], SchedulerPhase::active, orders[bit],
-                        std::move(mature));
+                        mature);
             } else {
                 pending->second.handle = scheduler.schedule_after_cancelable(
                     *selected[bit], SchedulerPhase::update, orders[bit],
-                    std::move(mature));
+                    mature);
             }
         } catch (...) {
             pending_module_path_writes.erase(pending);
@@ -527,43 +518,19 @@ void Interpreter::Impl::schedule_inertial(
             ScheduledTaskHandle { }, value });
     (void)inserted;
     try {
-        auto mature = [this,
-                          key,
-                          process,
-                          signal,
-                          offset,
-                          value = std::move(value),
-                          origin](Scheduler&) mutable {
-                pending_inertial_writes.erase(key);
-                if (origin.process_domain
-                    == ProcessSchedulingDomain::systemverilog) {
-                    if (offset) {
-                        commit_driver_slice(
-                            process, signal, std::move(value), *offset,
-                            origin, false);
-                    } else {
-                        commit_driver(
-                            process, signal, std::move(value), origin, false);
-                    }
-                } else if (offset) {
-                    stage_update_slice(
-                        process,
-                        signal,
-                        std::move(value),
-                        *offset);
-                } else {
-                    stage_update(
-                        process, signal, std::move(value));
-                }
-            };
+        // A registered event (#128): the pending record keeps the value.
+        const Scheduler::Task mature { events::make<events::InertialMature>(
+            events::InertialMature::Payload { this, process, signal,
+                key.offset, key.width, origin.process_domain, origin.phase,
+                offset.has_value() }) };
         if (origin.process_domain
             == ProcessSchedulingDomain::systemverilog) {
             pending->second.handle
                 = scheduler.schedule_systemverilog_after_cancelable(
-                    *delay, origin.phase, process, std::move(mature));
+                    *delay, origin.phase, process, mature);
         } else {
             pending->second.handle = scheduler.schedule_after_cancelable(
-                *delay, SchedulerPhase::update, process, std::move(mature));
+                *delay, SchedulerPhase::update, process, mature);
         }
     } catch (...) {
         pending_inertial_writes.erase(pending);
@@ -632,9 +599,9 @@ void Interpreter::Impl::schedule_net_delay(
     }
     auto& state = pending->second;
     const auto now = scheduler.now();
-    const auto mature = [this, key, process, signal, origin](Scheduler&) {
-        mature_net_delay(key, process, signal, origin);
-    };
+    const Scheduler::Task mature { events::make<events::NetDelayMature>(
+        events::NetDelayMature::Payload { this, process, signal, key.offset,
+            key.width, origin.process_domain, origin.phase }) };
     for (std::uint32_t bit = 0U; bit < width; ++bit) {
         state.change(
             bit, driver_current.get(offset + bit), value.get(bit), now, delays,
@@ -807,32 +774,15 @@ void Interpreter::Impl::schedule_projected_scalar_waveform(
                 "new projected transaction was not retained");
         }
         try {
+            // A registered event (#128), identified by the transaction id.
             pending->handle = scheduler.schedule_after_cancelable(
                 delay,
                 SchedulerPhase::update,
                 process,
-                [this, key, id, process, signal, offset](Scheduler&) {
-                    const auto found_driver = projected_drivers.find(key);
-                    if (found_driver == projected_drivers.end()) {
-                        return;
-                    }
-                    auto& state = found_driver->second;
-                    const auto found_transaction = std::ranges::find(
-                        state.transactions,
-                        id,
-                        &ProjectedTransaction::id);
-                    if (found_transaction == state.transactions.end()) {
-                        return;
-                    }
-                    auto committed_value = PackedLogic4 { 1U, Logic4::x };
-                    committed_value.fill(found_transaction->value);
-                    state.transactions.erase(found_transaction);
-                    stage_update_slice(
-                        process,
-                        signal,
-                        committed_value,
-                        offset);
-                });
+                Scheduler::Task { events::make<
+                    events::ProjectedTransactionMature>(
+                    events::ProjectedTransactionMature::Payload {
+                        this, process, signal, offset, id }) });
         } catch (...) {
             transactions.erase(pending);
             throw;
@@ -1002,74 +952,17 @@ void Interpreter::Impl::schedule_projected_waveform(
             }
         }
 
-        scheduler.schedule_after(
-            element.delay,
+        // A registered event (#128): the bits' transaction ids are
+        // consecutive, and their transactions hold the value.
+        scheduler.schedule_internal_at(
+            scheduler.now() + element.delay,
             SchedulerPhase::update,
             process,
-            [this, process, signal, first, width,
-                ids = std::move(transaction_ids),
-                value = element.value](Scheduler&) mutable {
-                bool complete_group = true;
-                for (std::size_t bit = 0; bit < width; ++bit) {
-                    const ProjectedDriverKey key {
-                        process, signal,
-                        static_cast<std::uint32_t>(first + bit)
-                    };
-                    const auto driver = projected_drivers.find(key);
-                    if (driver == projected_drivers.end()
-                        || std::ranges::find(
-                               driver->second.transactions,
-                               ids[bit],
-                               &ProjectedTransaction::id)
-                            == driver->second.transactions.end()) {
-                        complete_group = false;
-                        break;
-                    }
-                }
-                if (complete_group) {
-                    for (std::size_t bit = 0; bit < width; ++bit) {
-                        const ProjectedDriverKey key {
-                            process, signal,
-                            static_cast<std::uint32_t>(first + bit)
-                        };
-                        auto& transactions
-                            = projected_drivers.find(key)->second.transactions;
-                        transactions.erase(std::ranges::find(
-                            transactions,
-                            ids[bit],
-                            &ProjectedTransaction::id));
-                    }
-                    stage_update_slice(
-                        process, signal, std::move(value), first);
-                    return;
-                }
-                for (std::size_t bit = 0; bit < width; ++bit) {
-                    const ProjectedDriverKey key {
-                        process, signal,
-                        static_cast<std::uint32_t>(first + bit)
-                    };
-                    const auto driver = projected_drivers.find(key);
-                    if (driver == projected_drivers.end()) {
-                        continue;
-                    }
-                    auto& transactions = driver->second.transactions;
-                    const auto transaction = std::ranges::find(
-                        transactions,
-                        ids[bit],
-                        &ProjectedTransaction::id);
-                    if (transaction == transactions.end()) {
-                        continue;
-                    }
-                    auto scalar = PackedLogic4 { 1U, Logic4::x };
-                    scalar.fill(transaction->value);
-                    transactions.erase(transaction);
-                    stage_update_slice(
-                        process,
-                        signal,
-                        std::move(scalar),
-                        first + bit);
-                }
-            });
+            events::make<events::ProjectedGroupMature>(
+                events::ProjectedGroupMature::Payload { this, process, signal,
+                    static_cast<std::uint32_t>(first),
+                    static_cast<std::uint32_t>(width),
+                    transaction_ids.front() }));
         return;
     }
     // The bits of a multi-bit VHDL scalar keep or reject their old

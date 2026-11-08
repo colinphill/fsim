@@ -23,5 +23,36 @@ namespace fsim::runtime::simir {
     std::string_view text,
     std::error_code& error);
 [[nodiscard]] bool vhdl_access_denied(const std::error_code& error);
+// Whether a live child of a deferred-report Fork, resuming at `pc`, is still
+// a pending report that a flush point clears (IEEE 1800-2023 16.4.1).
+// The child starts at its branch with a WaitRegion for the region the
+// action runs in, and suspends there with its pc one past it. Until then it
+// is pending. An observed report matures in the Observed region, and after
+// that it may no longer be flushed, even while its action waits to start in
+// the Reactive region. A final report matures in the Postponed region, where
+// no process resumes. A started action has moved past the wait and runs to
+// its end.
+template <typename Operations>
+[[nodiscard]] bool deferred_report_pending(
+    const Operations& operations, const Fork& fork,
+    const InstructionIndex pc, const SchedulerPhase current)
+{
+    if (fork.branches.empty()) {
+        return false;
+    }
+    const auto branch = fork.branches.front();
+    if (pc == branch) {
+        return true;
+    }
+    if (pc != branch + 1U || branch >= operations.size()) {
+        return false;
+    }
+    const auto* const wait = operation_get_if<WaitRegion>(&operations[branch]);
+    if (wait == nullptr) {
+        return false;
+    }
+    return wait->phase == SchedulerPhase::postponed
+        || current < SchedulerPhase::observed;
+}
 
 } // namespace fsim::runtime::simir

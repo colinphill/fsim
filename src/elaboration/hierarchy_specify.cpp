@@ -605,6 +605,50 @@ void HierarchyBuilder::validate_verilog_specify(
         }
         working = specialization.with_hierarchy_identities(identities);
     };
+    // The minimum and maximum value of each specparam written as a
+    // minimum:typical:maximum triple (IEEE 1800-2023 6.20.5, 30.4.1, 31.4),
+    // and of every specparam computed from one, so a path delay or timing
+    // limit that names them has its three values (vpi_get_delays with
+    // mtm_flag, 38.10). The tables exist from the first triple; before it
+    // every value is its typical value. `bound` is the value in use: 0 the
+    // value the delay mode selected (`specparam_values`: a specparam's
+    // `value` is the mode's alternative, select_delay_alternatives), 1 the
+    // minimum, 2 the maximum, 3 the typical one.
+    using Working = std::remove_cvref_t<decltype(working)>;
+    std::array<std::unordered_map<std::string, std::int64_t>, 3U>
+        bound_values;
+    std::array<std::unordered_map<std::string, double>, 3U> bound_reals;
+    std::array<std::vector<semantic::SpecializedHirNamedIdentity>, 3U>
+        bound_identities;
+    std::array<std::optional<Working>, 3U> bound_working;
+    bool have_bounds { };
+    std::size_t bound { };
+    const auto current_working = [&]() -> const Working& {
+        return bound != 0U && bound_working[bound - 1U]
+            ? *bound_working[bound - 1U] : working;
+    };
+    const auto specparam_integral = [&](const std::string& name)
+        -> const std::int64_t* {
+        if (bound != 0U) {
+            const auto& table = bound_values[bound - 1U];
+            if (const auto found = table.find(name); found != table.end()) {
+                return &found->second;
+            }
+        }
+        const auto found = specparam_values.find(name);
+        return found == specparam_values.end() ? nullptr : &found->second;
+    };
+    const auto specparam_real = [&](const std::string& name)
+        -> const double* {
+        if (bound != 0U) {
+            const auto& table = bound_reals[bound - 1U];
+            if (const auto found = table.find(name); found != table.end()) {
+                return &found->second;
+            }
+        }
+        const auto found = specparam_reals.find(name);
+        return found == specparam_reals.end() ? nullptr : &found->second;
+    };
     struct StaticSpecparamValue {
         std::string identity;
         std::optional<std::int64_t> integral;
@@ -620,7 +664,7 @@ void HierarchyBuilder::validate_verilog_specify(
             std::size_t)> evaluate;
         evaluate = [&](const semantic::ExpressionId expression,
                        const std::size_t depth) -> std::optional<double> {
-            const auto view = working.find_expression(expression);
+            const auto view = current_working().find_expression(expression);
             if (depth > 64U || !view || view->systemverilog == nullptr) {
                 return std::nullopt;
             }
@@ -646,18 +690,17 @@ void HierarchyBuilder::validate_verilog_specify(
                     if (spelling == nullptr) {
                         continue;
                     }
-                    if (const auto found = specparam_reals.find(*spelling);
-                        found != specparam_reals.end()) {
+                    if (const auto* const found = specparam_real(*spelling)) {
                         saw_real = true;
-                        return found->second;
+                        return *found;
                     }
                 }
                 const auto selected
-                    = semantic::CompiledDesignResolver { working }
+                    = semantic::CompiledDesignResolver { current_working() }
                           .resolve_expression_name(expression, { }, true)
                           .unique();
                 const auto declaration = selected
-                    ? working.find_declaration(*selected)
+                    ? current_working().find_declaration(*selected)
                     : std::nullopt;
                 if (declaration && declaration->systemverilog != nullptr
                     && declaration->systemverilog->initializer
@@ -696,7 +739,7 @@ void HierarchyBuilder::validate_verilog_specify(
                                         : *left / *right;
             }
             if (const auto integral
-                = working.evaluate_integral_expression(expression)) {
+                = current_working().evaluate_integral_expression(expression)) {
                 return static_cast<double>(*integral);
             }
             return std::nullopt;
@@ -704,13 +747,71 @@ void HierarchyBuilder::validate_verilog_specify(
         const auto value = evaluate(root, 0U);
         return saw_real ? value : std::nullopt;
     };
+    // An integral constant expression of literals, earlier specparams and
+    // the operators + - * / %, with every specparam at the value of the
+    // table in use (`bound`): arithmetic on minimum:typical:maximum values
+    // applies to each of the three (IEEE 1800-2023 11.11, 30.4.1). Anything
+    // else is evaluated as the specialization does.
+    std::function<std::optional<std::int64_t>(semantic::ExpressionId,
+        std::size_t)> bounded_specparam_integral;
+    bounded_specparam_integral = [&](const semantic::ExpressionId expression,
+                                     const std::size_t depth)
+        -> std::optional<std::int64_t> {
+        const auto view = current_working().find_expression(expression);
+        if (depth > 64U || !view || view->systemverilog == nullptr) {
+            return std::nullopt;
+        }
+        const auto& item = *view->systemverilog;
+        if (item.kind == semantic::sv::ExpressionKind::name) {
+            for (const auto* spelling : { &item.text,
+                     item.referenced_name ? &item.referenced_name->spelling
+                                          : nullptr }) {
+                if (spelling == nullptr) {
+                    continue;
+                }
+                if (const auto* const found = specparam_integral(*spelling)) {
+                    return *found;
+                }
+            }
+        } else if (item.kind == semantic::sv::ExpressionKind::unary
+            && item.operands.size() == 1U
+            && (item.text == "-" || item.text == "+")) {
+            const auto operand = bounded_specparam_integral(
+                item.operands.front(), depth + 1U);
+            if (!operand) {
+                return std::nullopt;
+            }
+            return item.text == "-" ? -*operand : *operand;
+        } else if (item.kind == semantic::sv::ExpressionKind::binary
+            && item.operands.size() == 2U
+            && (item.text == "+" || item.text == "-" || item.text == "*"
+                || item.text == "/" || item.text == "%")) {
+            const auto left = bounded_specparam_integral(
+                item.operands[0], depth + 1U);
+            const auto right = bounded_specparam_integral(
+                item.operands[1], depth + 1U);
+            if (!left || !right) {
+                return std::nullopt;
+            }
+            if ((item.text == "/" || item.text == "%") && *right == 0) {
+                return std::nullopt;
+            }
+            return item.text == "+" ? *left + *right
+                : item.text == "-"  ? *left - *right
+                : item.text == "*"  ? *left * *right
+                : item.text == "/"  ? *left / *right
+                                    : *left % *right;
+        }
+        return current_working().evaluate_integral_expression(expression);
+    };
     const auto validate_specparam_expression = [&](
                                                    const semantic::ExpressionId
                                                        expression,
                                                    const semantic::SourceSpanId
                                                        expression_source,
                                                    const std::string_view
-                                                       description)
+                                                       description,
+                                                   const bool quiet = false)
         -> std::optional<StaticSpecparamValue> {
         if (const auto real = real_specparam_value(expression)) {
             return StaticSpecparamValue {
@@ -720,15 +821,33 @@ void HierarchyBuilder::validate_verilog_specify(
                     .canonical(),
                 std::nullopt, real };
         }
-        const auto integral
-            = working.evaluate_integral_expression(expression);
-        const auto identity = compiled_specparam_identity(
-            expression, working, integral);
+        const auto integral = bound != 0U
+            ? bounded_specparam_integral(expression, 0U)
+            : current_working().evaluate_integral_expression(expression);
+        // A computed bound is its own constant: the declaration a name
+        // resolves to holds the typical value.
+        const auto computed = [&] {
+            const auto view = current_working().find_expression(expression);
+            return view && view->systemverilog != nullptr
+                && (view->systemverilog->kind
+                        == semantic::sv::ExpressionKind::name
+                    || view->systemverilog->kind
+                        == semantic::sv::ExpressionKind::unary
+                    || view->systemverilog->kind
+                        == semantic::sv::ExpressionKind::binary);
+        }();
+        const auto identity = bound != 0U && integral && computed
+            ? std::optional<std::string> {
+                  canonical_specparam_integral_identity(*integral) }
+            : compiled_specparam_identity(
+                  expression, current_working(), integral);
         if (!identity) {
-            report("FSIM-ELAB-SVSPEC-001",
-                std::string { description }
-                    + " is not a locally static integral expression",
-                source(expression_source));
+            if (!quiet) {
+                report("FSIM-ELAB-SVSPEC-001",
+                    std::string { description }
+                        + " is not a locally static integral expression",
+                    source(expression_source));
+            }
             return std::nullopt;
         }
         return StaticSpecparamValue { *identity, integral, std::nullopt };
@@ -760,6 +879,55 @@ void HierarchyBuilder::validate_verilog_specify(
             validate_alternative(specparam.typical);
             validate_alternative(specparam.maximum);
             validate_alternative(specparam.path_pulse_error_limit);
+            // The bounds of the specparam, and of the ones that follow it
+            // when they use it: a minimum or maximum alternative stands for
+            // the value in its own table, any other specparam is its value
+            // computed from the earlier bounds.
+            if (!specparam.path_pulse && value
+                && (have_bounds || specparam.minimum || specparam.maximum)) {
+                if (!have_bounds) {
+                    have_bounds = true;
+                    for (std::size_t each = 0U; each < 3U; ++each) {
+                        bound_values[each] = specparam_values;
+                        bound_reals[each] = specparam_reals;
+                        bound_identities[each] = identities;
+                        bound_working[each] = working;
+                    }
+                }
+                for (std::size_t each = 0U; each < 3U; ++each) {
+                    const auto& alternative = each == 0U ? specparam.minimum
+                        : each == 1U ? specparam.maximum : specparam.typical;
+                    bound = each + 1U;
+                    const auto bounded = validate_specparam_expression(
+                        alternative ? *alternative : specparam.value,
+                        specparam.source, "specparam '" + specparam.name + "'",
+                        true);
+                    bound = 0U;
+                    // A value that is not static keeps the typical one.
+                    const auto& chosen = bounded ? *bounded : *value;
+                    auto& table = bound_identities[each];
+                    const auto existing = std::ranges::find(table,
+                        specparam.name,
+                        &semantic::SpecializedHirNamedIdentity::name);
+                    if (existing == table.end()) {
+                        table.push_back({ specparam.name, chosen.identity });
+                    } else {
+                        existing->identity = chosen.identity;
+                    }
+                    bound_values[each].erase(specparam.name);
+                    bound_reals[each].erase(specparam.name);
+                    if (chosen.integral) {
+                        bound_values[each].insert_or_assign(
+                            specparam.name, *chosen.integral);
+                    }
+                    if (chosen.real) {
+                        bound_reals[each].insert_or_assign(
+                            specparam.name, *chosen.real);
+                    }
+                    bound_working[each]
+                        = specialization.with_hierarchy_identities(table);
+                }
+            }
         }
     }
 
@@ -842,20 +1010,18 @@ void HierarchyBuilder::validate_verilog_specify(
         if (view && view->systemverilog != nullptr
             && view->systemverilog->kind
                 == semantic::sv::ExpressionKind::name) {
-            const auto named = specparam_values.find(
-                view->systemverilog->text);
-            if (named != specparam_values.end()) {
-                return std::optional<std::int64_t> { named->second };
+            if (const auto* const named
+                = specparam_integral(view->systemverilog->text)) {
+                return std::optional<std::int64_t> { *named };
             }
             if (view->systemverilog->referenced_name) {
-                const auto spelled = specparam_values.find(
-                    view->systemverilog->referenced_name->spelling);
-                if (spelled != specparam_values.end()) {
-                    return std::optional<std::int64_t> { spelled->second };
+                if (const auto* const spelled = specparam_integral(
+                        view->systemverilog->referenced_name->spelling)) {
+                    return std::optional<std::int64_t> { *spelled };
                 }
             }
         }
-        return working.evaluate_integral_expression(expression);
+        return current_working().evaluate_integral_expression(expression);
     };
     const auto simulation_time = [&](
                                       const semantic::sv::DelayValue& delay,
@@ -863,8 +1029,16 @@ void HierarchyBuilder::validate_verilog_specify(
                                       const std::string_view code,
                                       const std::string_view role,
                                       const std::optional<semantic::ExpressionId>
-                                          expression_override = std::nullopt)
+                                          expression_override = std::nullopt,
+                                      const bool quiet = false)
         -> std::optional<runtime::SimulationTick> {
+        const auto complain = [&](std::string failure_code,
+                                  std::string message) {
+            if (!quiet) {
+                report(std::move(failure_code), std::move(message),
+                    source(location));
+            }
+        };
         auto ticks = delay.magnitude;
         const auto expression = expression_override
             ? expression_override
@@ -875,11 +1049,10 @@ void HierarchyBuilder::validate_verilog_specify(
                     * static_cast<double>(delay.magnitude);
                 if (!(scaled >= 0.0) || scaled > 9.0e18
                     || delay.divisor != 1U || !delay.unit.empty()) {
-                    report(std::string { code },
+                    complain(std::string { code },
                         std::string { role } + " at '" + path
                             + "' is not a static nonnegative simulation "
-                              "time",
-                        source(location));
+                              "time");
                     return std::nullopt;
                 }
                 return static_cast<runtime::SimulationTick>(
@@ -893,20 +1066,18 @@ void HierarchyBuilder::validate_verilog_specify(
                         > std::numeric_limits<std::uint64_t>::max()
                             / delay.magnitude);
             if (overflow) {
-                report(std::string { code },
+                complain(std::string { code },
                     std::string { role } + " at '" + path
-                        + "' is not a static nonnegative simulation time",
-                    source(location));
+                        + "' is not a static nonnegative simulation time");
                 return std::nullopt;
             }
             ticks = static_cast<std::uint64_t>(*value)
                 * delay.magnitude;
         }
         if (delay.divisor != 1U || !delay.unit.empty()) {
-            report(std::string { code },
+            complain(std::string { code },
                 std::string { role } + " at '" + path
-                    + "' was not normalized to project ticks",
-                source(location));
+                    + "' was not normalized to project ticks");
             return std::nullopt;
         }
         return ticks;
@@ -1106,6 +1277,13 @@ void HierarchyBuilder::validate_verilog_specify(
                         + "' requires 1, 2, 3, 6, or 12 transition delays",
                     source(module_path.source));
             }
+            // The three values of a delay written as a minimum:typical:
+            // maximum triple, or through specparams that are one (IEEE
+            // 1800-2023 30.4.1): kept beside the one the delay mode selects,
+            // for vpi_get_delays with mtm_flag (38.10). Empty when no delay
+            // of the path has more than one value.
+            std::array<std::vector<runtime::SimulationTick>, 3U> triples;
+            bool has_triple { };
             for (const auto& delay : module_path.delays) {
                 const auto ticks = simulation_time(delay.primary,
                     delay.primary.source, "FSIM-ELAB-SVSPEC-007",
@@ -1113,6 +1291,33 @@ void HierarchyBuilder::validate_verilog_specify(
                 if (ticks) {
                     normalized.delays.push_back(*ticks);
                 }
+                const std::array<const std::optional<
+                                     semantic::sv::DelayValue>*, 3U>
+                    alternatives { &delay.minimum, &delay.typical,
+                        &delay.maximum };
+                // bound: 1 the minimum, 3 the typical, 2 the maximum (0 is the
+                // value the delay mode selected, which `delay.primary` is).
+                static constexpr std::array<std::size_t, 3U> bounds { 1U, 3U,
+                    2U };
+                for (std::size_t each = 0U; each < 3U; ++each) {
+                    bound = bounds[each];
+                    const auto& alternative = *alternatives[each];
+                    const auto value = simulation_time(
+                        alternative ? *alternative : delay.primary,
+                        delay.primary.source, "FSIM-ELAB-SVSPEC-007",
+                        "specify path delay", std::nullopt, true);
+                    bound = 0U;
+                    triples[each].push_back(value ? *value : ticks.value_or(0U));
+                }
+                has_triple = has_triple
+                    || triples[0].back() != triples[1].back()
+                    || triples[2].back() != triples[1].back();
+            }
+            if (has_triple
+                && normalized.delays.size() == module_path.delays.size()) {
+                normalized.minimum_delays = std::move(triples[0]);
+                normalized.typical_delays = std::move(triples[1]);
+                normalized.maximum_delays = std::move(triples[2]);
             }
             if (normalized.sources.size() == module_path.sources.size()
                 && normalized.destinations.size()

@@ -1563,6 +1563,19 @@ if(FSIM_PERFORMANCE_PYTHON_EXECUTABLE)
     fsim.performance-campaign-profiler
     PROPERTIES LABELS "fast;performance;python"
   )
+  # #128: every run-state member of the scheduler, interpreter, reference
+  # process, static kernel, simulation and foreign hosts has a save/restart
+  # class in docs/run-state-classification.tsv.
+  add_test(
+    NAME fsim.run-state-classification
+    COMMAND "${FSIM_PERFORMANCE_PYTHON_EXECUTABLE}" -I
+      "${PROJECT_SOURCE_DIR}/scripts/check_run_state_classification.py"
+      "${PROJECT_SOURCE_DIR}"
+  )
+  set_tests_properties(
+    fsim.run-state-classification
+    PROPERTIES LABELS "fast;structure;save-restart;python;positive;negative"
+  )
 endif()
 
 # cocotb smoke tests (docs/cocotb.md), registered when FSIM_COCOTB_PYTHON is
@@ -4899,6 +4912,9 @@ if(TARGET fsim_application)
       fsim.application.vhdl_advanced_types
       fast vhdl access protected physical cache debugger vcd)
     fsim_add_application_case(
+      3 run_state app/run_state_application_test.cpp
+      fsim.application.run_state fast save-restart)
+    fsim_add_application_case(
       3 vhdl_projected app/vhdl_projected_application_test.cpp
       fsim.application.vhdl_projected fast vhdl projected-waveforms)
     fsim_add_application_case(
@@ -5964,6 +5980,23 @@ fsim_register_simple_test(
     "fast;vhdl;records;arrays;expressions;cache"
   )
 
+  # #128: save and restore of a running simulation on the reference evaluator
+  # and on engine v4.
+  add_executable(
+    fsim_run_state_application_tests
+    app/run_state_application_test.cpp
+  )
+  fsim_configure_test(fsim_run_state_application_tests)
+  target_link_libraries(
+    fsim_run_state_application_tests
+    PRIVATE fsim_application
+  )
+  fsim_register_simple_test(
+    fsim.application.run_state
+    fsim_run_state_application_tests
+    "fast;save-restart"
+  )
+
   add_executable(
     fsim_vhdl_projected_application_tests
     app/vhdl_projected_application_test.cpp
@@ -6744,6 +6777,352 @@ set_tests_properties(fsim.application.vhdl-weak-values PROPERTIES
   LABELS "application;vhdl;positive"
   TIMEOUT 600)
 
+# Range-constrained STD_ULOGIC and CHARACTER subtypes (X01, UX01, X01Z,
+# `character range 'q' to 'z'`) start at T'LEFT for signals and variables;
+# their scalar attributes are STD_ULOGIC literals; CHARACTER'IMAGE of a
+# control character is its identifier. Interpreter, kernel, verified kernel
+# and reference scheduler.
+add_test(
+  NAME fsim.application.vhdl-subtype-left
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/subtype_left"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/subtype_left/run_subtype_left.cmake"
+)
+set_tests_properties(fsim.application.vhdl-subtype-left PROPERTIES
+  LABELS "application;vhdl;positive"
+  TIMEOUT 600)
+
+# Wide and nine-value operations the v4 kernel compiles inline, with no
+# runtime helper: weak 128-element vectors (dynamic selects, part inserts,
+# signal assignment), shifts and rotates with a signed amount, VHDL integer
+# arithmetic, numeric_std division, the matching equality, a VHDL-93 shared
+# variable, SystemVerilog division, modulo, power and dynamic part
+# selects of a wide variable, wide-result dynamic part selects, and dynamic
+# part-select writes to array elements (byte lanes of a memory). The interpreter, the kernel, the kernel under
+# FSIM_KERNEL_VERIFY and the reference scheduler must all equal the
+# hand-derived .expected files.
+add_test(
+  NAME fsim.application.inline-ops-vhdl
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=inline_ops
+    -DFSIM_LANGUAGE=vhdl
+    -DFSIM_STANDARD=2008
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+add_test(
+  NAME fsim.application.inline-ops-shared-variable
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=shared_variable
+    -DFSIM_LANGUAGE=vhdl
+    -DFSIM_STANDARD=1993
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+add_test(
+  NAME fsim.application.inline-ops-systemverilog
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=inline_arith
+    -DFSIM_LANGUAGE=sv
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+add_test(
+  NAME fsim.application.inline-ops-part-select-wide
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=part_select_wide
+    -DFSIM_LANGUAGE=sv
+    -DFSIM_FORBID_GENERIC=DynamicPartSelect
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+add_test(
+  NAME fsim.application.inline-ops-mem-part
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=mem_part
+    -DFSIM_LANGUAGE=sv
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# Wide moves into a resolved net and reversed part selects of an ascending
+# source, which the kernel does not fuse into one word-level move (wide_load,
+# wide_alu and wide_store instead), and concatenations of a VHDL-driven
+# nine-value net with SystemVerilog constants (a Logic9 operand of a Logic4
+# result reads through coerce_weak).
+add_test(
+  NAME fsim.application.inline-ops-wide-move
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=wide_move
+    -DFSIM_LANGUAGE=sv
+    -DFSIM_FORBID_GENERIC=DynamicPartSelect
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# Concurrent-assertion evaluators compile to native member code (IEEE
+# 1800-2023 16.14): no member of the run may report the operation tier, and
+# the monitor's tick and outcome pop (SvaOperation) and the sampled-value
+# reads (ReadSignal: $sampled, $rose, $fell, $past) are kernel instructions,
+# never the operation helper (task #186 stage 2). The outcome reports of the
+# directives (Display, a library operation) keep their helper.
+add_test(
+  NAME fsim.application.inline-ops-assertion-members
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=assertion_members
+    -DFSIM_LANGUAGE=sv
+    "-DFSIM_FORBID_REASON=tier:not_compiled:(assertion|operation|register_width|wide_host_read|display_source|width_conflict)"
+    -DFSIM_FORBID_NOT_COMPILED=assertion
+    "-DFSIM_FORBID_GENERIC=SvaOperation\;ReadSignal\;Binary\;Branch\;Concatenate\;Extract\;Insert\;ConditionalSelect\;LogicalBinary\;LogicalNot\;Reduction\;CopyRegister\;WriteBlocking\;WriteUpdate\;WaitRegion"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# A glitching clock (two rising edges in one time step) with a change of
+# the sampled signal between them. IEEE 1800-2023 16.5 leaves such a clock
+# undefined; fsim ticks an assertion once per time step, and the compiled
+# kernel's inline sampled reads ($past, $sampled; task #186 stage 2) match
+# the interpreter and FSIM_KERNEL_VERIFY on it (engine parity, 16.9.3).
+add_test(
+  NAME fsim.application.inline-ops-sampled-glitch
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=sampled_glitch
+    -DFSIM_LANGUAGE=sv
+    # $time in the action blocks is an inline load of the kernel's time.
+    -DFSIM_FORBID_GENERIC=SystemVerilogMath
+    "-DFSIM_FORBID_REASON=tier:not_compiled:(assertion|operation)"
+    -DFSIM_FORBID_NOT_COMPILED=assertion
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+add_test(
+  NAME fsim.application.inline-ops-concat-logic9
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=concat_logic9
+    -DFSIM_LANGUAGE=mixed
+    -DFSIM_TOP=vtop
+    -DFSIM_FORBID_GENERIC=Concatenate\;ReadSignal\;WriteUpdate
+    -DFSIM_FORBID_EFFECT=wide_load\;wide_concat\;wide_store
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+add_test(
+  NAME fsim.application.inline-ops-concat-logic9-narrow
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=concat_logic9_narrow
+    -DFSIM_LANGUAGE=mixed
+    -DFSIM_TOP=vtop
+    -DFSIM_FORBID_GENERIC=Concatenate
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+add_test(
+  NAME fsim.application.inline-ops-sv-shift-logic9
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=sv_shift_logic9
+    -DFSIM_LANGUAGE=mixed
+    -DFSIM_TOP=vtop
+    -DFSIM_FORBID_GENERIC=Shift
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+add_test(
+  NAME fsim.application.inline-ops-poly-call
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=poly_call
+    -DFSIM_LANGUAGE=vhdl
+    -DFSIM_STANDARD=2008
+    -DFSIM_FORBID_NOT_COMPILED=register_width
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+add_test(
+  NAME fsim.application.inline-ops-family-access
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=family_access
+    -DFSIM_LANGUAGE=sv
+    -DFSIM_FORBID_GENERIC=ReadSignal\;WriteUpdate\;WriteUpdateSlice
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+add_test(
+  NAME fsim.application.inline-ops-part-slice-resolved
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=part_slice_resolved
+    -DFSIM_LANGUAGE=vhdl
+    -DFSIM_STANDARD=2008
+    -DFSIM_FORBID_GENERIC=WriteUpdateDynamicPartSlice
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+add_test(
+  NAME fsim.application.inline-ops-net-dynamic-write
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=net_dynamic_write
+    -DFSIM_LANGUAGE=mixed
+    -DFSIM_TOP=vtop
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+add_test(
+  NAME fsim.application.inline-ops-part-slice-vhdl
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=part_slice_vhdl
+    -DFSIM_LANGUAGE=vhdl
+    -DFSIM_STANDARD=2008
+    -DFSIM_FORBID_GENERIC=WriteUpdateDynamicPartSlice
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# Wide and dynamic accesses the kernel compiles inline (#166): 96 bit host
+# signals read and written through the register file's chunks (with and
+# without the kernel's mirrors of host signals), nine-value and two-plane
+# shared variables written through a variable part select or index, 128 bit
+# values written through a dynamic index or part select as pieces, and 128 bit
+# elements of unpacked arrays (KOp::mem_read and mem_write sub 1).
+add_test(
+  NAME fsim.application.inline-ops-wide-host
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=wide_host
+    -DFSIM_LANGUAGE=vhdl
+    -DFSIM_STANDARD=2008
+    -DFSIM_FORBID_GENERIC=ReadSignal\;WriteProjected\;WriteProjectedSlice\;WriteProjectedDynamicSlice\;Extract
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+add_test(
+  NAME fsim.application.inline-ops-wide-host-unmirrored
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=wide_host
+    -DFSIM_LANGUAGE=vhdl
+    -DFSIM_STANDARD=2008
+    -DFSIM_FORBID_GENERIC=ReadSignal\;WriteProjected\;WriteProjectedSlice\;WriteProjectedDynamicSlice\;Extract
+    -DFSIM_KERNEL_ENV=FSIM_KERNEL_NO_MIRRORS=1
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+add_test(
+  NAME fsim.application.inline-ops-shared-part
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=shared_part
+    -DFSIM_LANGUAGE=vhdl
+    -DFSIM_STANDARD=1993
+    -DFSIM_FORBID_GENERIC=WriteBlockingDynamicPartSlice
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+add_test(
+  NAME fsim.application.inline-ops-wide-dyn-write
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=wide_dyn_write
+    -DFSIM_LANGUAGE=sv
+    -DFSIM_FORBID_GENERIC=WriteBlockingDynamicPartSlice\;WriteUpdateDynamicPartSlice
+    -DFSIM_FORBID_EFFECT=store_slot_dynamic\;store_slot_part
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+add_test(
+  NAME fsim.application.inline-ops-wide-container
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=wide_container
+    -DFSIM_LANGUAGE=sv
+    -DFSIM_FORBID_GENERIC=ContainerRead\;WriteContainerObjectElement
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+add_test(
+  NAME fsim.application.inline-ops-wide-thread
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=wide_thread
+    -DFSIM_LANGUAGE=sv
+    -DFSIM_FORBID_GENERIC=ReadSignal\;WriteBlocking\;WriteUpdate\;WriteBlockingSlice\;CopyRegister\;LoadConstant\;UnaryNot
+    -DFSIM_FORBID_EFFECT=wide_load\;wide_store\;wide_copy\;wide_const\;wide_alu
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+add_test(
+  NAME fsim.application.inline-ops-four-plane
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=four_plane
+    -DFSIM_LANGUAGE=mixed
+    -DFSIM_TOP=vtop
+    -DFSIM_FORBID_GENERIC=WriteBlockingDynamicSlice\;WriteUpdateDynamicSlice
+    -DFSIM_FORBID_EFFECT=store_slot_dynamic
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+set_tests_properties(
+  fsim.application.inline-ops-vhdl
+  fsim.application.inline-ops-shared-variable
+  fsim.application.inline-ops-wide-host
+  fsim.application.inline-ops-wide-host-unmirrored
+  fsim.application.inline-ops-shared-part
+  fsim.application.inline-ops-wide-dyn-write
+  fsim.application.inline-ops-wide-container
+  fsim.application.inline-ops-systemverilog
+  fsim.application.inline-ops-part-select-wide
+  fsim.application.inline-ops-wide-move
+  fsim.application.inline-ops-concat-logic9
+  fsim.application.inline-ops-assertion-members
+  fsim.application.inline-ops-sampled-glitch
+  fsim.application.inline-ops-concat-logic9-narrow
+  fsim.application.inline-ops-sv-shift-logic9
+  fsim.application.inline-ops-poly-call
+  fsim.application.inline-ops-family-access
+  fsim.application.inline-ops-part-slice-resolved
+  fsim.application.inline-ops-net-dynamic-write
+  fsim.application.inline-ops-part-slice-vhdl
+  fsim.application.inline-ops-wide-thread
+  fsim.application.inline-ops-four-plane
+  fsim.application.inline-ops-mem-part PROPERTIES
+  LABELS "application;vhdl;positive"
+  TIMEOUT 600)
+
 # Weak std_logic values made at run time without a constant of their own:
 # std_ulogic'val of a signal and a TEXTIO read.
 add_test(
@@ -6756,6 +7135,81 @@ add_test(
 )
 set_tests_properties(fsim.application.vhdl-weak-sources PROPERTIES
   LABELS "application;vhdl;positive"
+  TIMEOUT 600)
+
+# Arithmetic, logic, shifts, reductions, comparisons and conditionals on 65,
+# 128, 200 and 256 bit values, with x and z elements, in a thread and in
+# combinational members of the v4 kernel (KOp::wide_alu), against bit-by-bit
+# oracles; also under FSIM_KERNEL_VERIFY.
+add_test(
+  NAME fsim.application.systemverilog-wide-alu
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/systemverilog/wide_alu"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/systemverilog/wide_alu/run_wide_alu.cmake"
+)
+set_tests_properties(fsim.application.systemverilog-wide-alu PROPERTIES
+  LABELS "application;systemverilog;static-kernel;positive"
+  TIMEOUT 900)
+
+# The same for std_logic_vectors of all nine values and bit_vector shifts
+# and rotations in VHDL.
+add_test(
+  NAME fsim.application.vhdl-wide-alu
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/wide_alu"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/wide_alu/run_wide_alu.cmake"
+)
+set_tests_properties(fsim.application.vhdl-wide-alu PROPERTIES
+  LABELS "application;vhdl;static-kernel;positive"
+  TIMEOUT 600)
+
+# Field reads and writes on 65 to 272 bit values (KOp::wide_alu extract,
+# insert and dynamic_insert) in a thread and in combinational members, with
+# x and z elements, against bit-by-bit oracles; also under
+# FSIM_KERNEL_VERIFY.
+add_test(
+  NAME fsim.application.systemverilog-wide-fields
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/systemverilog/wide_fields"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/systemverilog/wide_fields/run_wide_fields.cmake"
+)
+set_tests_properties(fsim.application.systemverilog-wide-fields PROPERTIES
+  LABELS "application;systemverilog;static-kernel;positive"
+  TIMEOUT 900)
+
+# The same for slices and elements of std_logic_vectors of all nine values.
+add_test(
+  NAME fsim.application.vhdl-wide-fields
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/wide_fields"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/wide_fields/run_wide_fields.cmake"
+)
+set_tests_properties(fsim.application.vhdl-wide-fields PROPERTIES
+  LABELS "application;vhdl;static-kernel;positive"
+  TIMEOUT 600)
+
+# The matching equality "?=" of std_logic_vectors of 65 to 256 elements
+# holding all nine values (KOp::wide_alu vhdl_match_equal, with the 'U' of the
+# result), against an element-by-element oracle and hand-derived results,
+# compiled inline (no operation helper) and under FSIM_KERNEL_VERIFY.
+add_test(
+  NAME fsim.application.vhdl-wide-match
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/wide_match"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/wide_match/run_wide_match.cmake"
+)
+set_tests_properties(fsim.application.vhdl-wide-match PROPERTIES
+  LABELS "application;vhdl;static-kernel;positive"
   TIMEOUT 600)
 
 # The TEXTIO subprograms of IEEE.STD_LOGIC_1164 for STD_ULOGIC and
@@ -6979,6 +7433,52 @@ foreach(FSIM_ENGINE IN ITEMS v4 interpreter)
     fsim.sdf-vital.example-mixed.${FSIM_ENGINE}
     PROPERTIES LABELS "fast;sdf;vital;conformance")
 endforeach()
+
+# Verilog/SystemVerilog units compiled under different standards mix in one
+# design (IEEE 1800-2023 Annex C keeps each compilation under its own
+# revision): a package's members are analyzed and lowered under the package's
+# own standard, and only a differing compatibility profile is refused with
+# FSIM-FE-STANDARD-003. Each fixture derives its expected line in a comment.
+set(FSIM_MIXED_STANDARD_FIXTURES
+  "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/systemverilog/mixed_standard")
+function(fsim_add_mixed_standard_case FSIM_NAME FSIM_STEPS FSIM_TOP
+    FSIM_EXPECTED)
+  cmake_parse_arguments(PARSE_ARGV 4 FSIM_CASE "" "FAIL_MESSAGE" "")
+  foreach(FSIM_ENGINE IN ITEMS v4 interpreter)
+    add_test(
+      NAME fsim.mixed-standard.${FSIM_NAME}.${FSIM_ENGINE}
+      COMMAND
+        "${CMAKE_COMMAND}"
+        "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+        "-DFSIM_SOURCE_DIR=${FSIM_MIXED_STANDARD_FIXTURES}"
+        "-DFSIM_STEPS=${FSIM_STEPS}"
+        "-DFSIM_TOP=${FSIM_TOP}"
+        "-DFSIM_ENGINE=${FSIM_ENGINE}"
+        "-DFSIM_EXPECTED=${FSIM_EXPECTED}"
+        "-DFSIM_FAIL_MESSAGE=${FSIM_CASE_FAIL_MESSAGE}"
+        "-DFSIM_WORK_DIR=${PROJECT_BINARY_DIR}/tests/mixed-standard/${FSIM_NAME}-${FSIM_ENGINE}"
+        -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunMixedStandardCase.cmake")
+    set_tests_properties(
+      fsim.mixed-standard.${FSIM_NAME}.${FSIM_ENGINE}
+      PROPERTIES LABELS "fast;systemverilog;conformance")
+  endforeach()
+endfunction()
+fsim_add_mixed_standard_case(package-2017-import-2023
+  "package_2017.sv@2017|import_2023.sv@2023" tb_import "MIX import 42 5")
+fsim_add_mixed_standard_case(class-2009-extends-2012
+  "package_class_2009.sv@2009|extends_2012.sv@2012" tb_extends
+  "MIX extends 107")
+fsim_add_mixed_standard_case(class-2009-super-2017
+  "package_class_2009.sv@2009|super_2017.sv@2017" tb_super
+  "MIX super 107")
+fsim_add_mixed_standard_case(function-2023-call-2017
+  "package_function_2023.sv@2023|call_2017.sv@2017" tb_call "MIX call 3")
+fsim_add_mixed_standard_case(verilog-2005-top-2023-package-2012
+  "leaf_2005.v@2005|package_2012.sv@2012|top_2023.sv@2023" tb_verilog
+  "MIX verilog 13")
+fsim_add_mixed_standard_case(profile-mismatch
+  "package_sizing.sv@2017@sizing|import_plain.sv@2017" tb_profile "unused"
+  FAIL_MESSAGE "FSIM-FE-STANDARD-003")
 
 # Windows does not search sibling build directories for dependent DLLs. Every
 # build-tree executable links the one process-wide fsim bridge, which in turn

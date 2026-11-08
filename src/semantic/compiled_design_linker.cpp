@@ -1944,7 +1944,14 @@ std::string vhdl_architecture_primary_profile_error(
                 && architecture->compatibility_profile == legacy_profile)
             || (entity->compatibility_profile == legacy_profile
                 && architecture->compatibility_profile == strict_profile);
-        if (architecture->standard == entity->standard
+        // Units of one IEEE package family mix (1987-2002, 2008-2019); the
+        // two families differ in IEEE 1164/numeric_std type relations.
+        const auto family = [](const std::string_view standard) {
+            return standard == "2008" || standard == "2019" ? 2
+                : standard.empty()                       ? 0
+                                                         : 1;
+        };
+        if (family(architecture->standard) == family(entity->standard)
             && compatible_profiles) {
             continue;
         }
@@ -3668,6 +3675,27 @@ CompiledLinkResult extract_compiled_libraries(
             return select_library(unit.library);
         }, select_library,
         "compiled-HIR library-set projection is structurally invalid");
+}
+
+CompiledLinkResult extract_compiled_without_vhdl_packages(
+    const CompiledDesign& design,
+    const std::span<const std::string> packages)
+{
+    const auto omitted = [&](const Unit& unit) {
+        if (unit.language != Language::vhdl
+            || (unit.kind != UnitKind::vhdl_package
+                && unit.kind != UnitKind::vhdl_context)) {
+            return false;
+        }
+        const auto key = support::ascii_lower(
+            std::string { normalized_library(unit.library) } + "."
+            + unit.name);
+        return std::ranges::find(packages, key) != packages.end();
+    };
+    return project_compiled_design(design,
+        [&](const Unit& unit) { return !omitted(unit); },
+        [](const std::string_view) { return true; },
+        "compiled-HIR package-omitting projection is structurally invalid");
 }
 
 CompiledLinkResult extract_compiled_libraries(

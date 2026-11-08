@@ -3,11 +3,17 @@
 #c design vpiAssume name=$assertion$3 full=top.$assertion$3 line=15 scope=top
 #c design vpiAssert name=a_seq full=top.a_seq line=29 scope=top
 #c design vpiCover name=cs_hit full=top.cs_hit line=32 scope=top
+#c design vpiImmediateAssert line=37 deferred=0 final=0
+#c design vpiImmediateAssume line=38 deferred=1 final=0
+#c design vpiImmediateCover line=39 deferred=1 final=1
 #c top vpiAssert name=a_req full=top.a_req line=10 scope=top
 #c top vpiCover name=c_hit full=top.c_hit line=14 scope=top
 #c top vpiAssume name=$assertion$3 full=top.$assertion$3 line=15 scope=top
 #c top vpiAssert name=a_seq full=top.a_seq line=29 scope=top
 #c top vpiCover name=cs_hit full=top.cs_hit line=32 scope=top
+#c top vpiImmediateAssert line=37 deferred=0 final=0
+#c top vpiImmediateAssume line=38 deferred=1 final=0
+#c top vpiImmediateCover line=39 deferred=1 final=1
 #c lookup a_req=vpiAssert c_hit=vpiCover
 #c start-callback=placed
 #c props a_req clock-inferred=0 cover-sequence=0
@@ -15,6 +21,9 @@
 #c props a_seq clock-inferred=0 cover-sequence=0
 #c props cs_hit clock-inferred=0 cover-sequence=1
 #c where c_hit start=14:3 end=14:48
+#c parts a_req stmt=vpiSysTaskCall else=vpiSysTaskCall clock=posedge(clk) disable=rst
+#c parts c_hit stmt=none else=none clock=posedge(clk) disable=none
+#c parts a_seq stmt=none else=vpiSysTaskCall clock=posedge(clk) disable=none
 #c 0 sys-initialized
 #c 0 sys-on
 #c 5 start a_req info=yes

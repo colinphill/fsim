@@ -402,20 +402,23 @@ bool Lowerer::lower_hir_vhdl_vital_delay_call(
                 && named->vhdl->kind
                     == semantic::vhdl::ExpressionKind::index
                 && named->vhdl->operands.size() == 2U) {
-                operation.wire_index = hir_constant_integer(
+                const auto wire_index = hir_constant_integer(
                     named->vhdl->operands.back());
                 named = specialized_hir_unit_->find_expression(
                     named->vhdl->operands.front());
-                if (!operation.wire_index) {
+                if (wire_index) {
+                    operation.wire.edit().wire_index = wire_index;
+                } else {
                     named.reset();
                 }
             }
             if (named && named->vhdl != nullptr
                 && named->vhdl->kind
                     == semantic::vhdl::ExpressionKind::name) {
-                operation.wire_generic = std::string { named->vhdl->text };
-                std::ranges::transform(operation.wire_generic,
-                    operation.wire_generic.begin(), [](const char c) {
+                auto& generic = operation.wire.edit().wire_generic;
+                generic = std::string { named->vhdl->text };
+                std::ranges::transform(generic,
+                    generic.begin(), [](const char c) {
                         return static_cast<char>(std::tolower(
                             static_cast<unsigned char>(c)));
                     });
@@ -456,8 +459,8 @@ bool Lowerer::lower_hir_vhdl_vital_delay_call(
                 process_.operations.emplace_back(ReadSignal { bus, *input });
                 process_.operations.emplace_back(
                     Extract { operation.source, bus, *input_element, 1U });
-                operation.input_offset = input_element;
-                operation.output_offset = output_element;
+                operation.wire.edit().input_offset = input_element;
+                operation.wire.edit().output_offset = output_element;
             } else {
                 process_.operations.emplace_back(
                     ReadSignal { operation.source, *input });

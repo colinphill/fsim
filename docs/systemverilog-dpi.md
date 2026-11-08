@@ -23,7 +23,7 @@ governed clause, arbitrary-width, engine, artifact, and public-API evidence.
 | Scalars and vectors | Two-/four-state `svBit`/`svLogic` and packed `svBitVecVal`/`svLogicVecVal` planes, shortreal/real, strings, chandles; bit-vector function results rejected (35.5.5) | `fsim.foreign.dpi-types`, `fsim.foreign.dpi-strings`, `fsim.foreign.dpi-result-vector` |
 | Composites | Unpacked structures, fixed arrays and enumerations in the Annex H normalized layout | `fsim.foreign.dpi-aggregates`, `fsim.foreign.dpi-types` |
 | Open arrays | Declared ranges, multidimensional indices, element pointers, direction-aware mutation, dynamic-array and queue actuals | `fsim.foreign.dpi-aggregates` |
-| Scope and exports | `svScope` set/get, caller and time services, exported functions and tasks in module, `$unit` and generate scopes | `fsim.foreign.dpi-scope-*`, `fsim.foreign.dpi-time-scope`, `fsim.foreign.dpi-unit-export`, `fsim.foreign.dpi-generate-export` |
+| Scope and exports | `svScope` set/get, caller and time services, exported functions and tasks in module, `$unit` and generate scopes | `fsim.foreign.dpi-scope-*`, `fsim.foreign.dpi-time-scope`, `fsim.foreign.dpi-unit-export`, `fsim.foreign.dpi-generate-export`, `fsim.foreign.dpi-export-order`, `fsim.foreign.dpi-export-same-name` |
 | Imported tasks | `context` tasks that suspend in exported tasks, disable with `svIsDisabledState`/`svAckDisabledState` | `fsim.foreign.dpi-disable`, `fsim.foreign.dpi-disable-export` |
 | Libraries | C and C++ shared libraries given with `--sv-lib`, resolved by C name at elaboration and called through libffi | `fsim.foreign.dpi-*` |
 

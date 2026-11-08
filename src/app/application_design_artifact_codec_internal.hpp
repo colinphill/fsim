@@ -915,7 +915,7 @@ namespace codec_detail {
             value.language_standard, value.compatibility_profile,
             value.register_count, value.string_register_count,
             value.container_register_count, value.debug_locals,
-            value.debug_string_locals, value.debug_container_locals,
+            value.call_results, value.debug_string_locals, value.debug_container_locals,
             value.container_register_types, value.static_trigger_regions,
             value.register_value_kinds, value.expression_profiles,
             value.scheduling_domain);
@@ -1298,6 +1298,10 @@ namespace codec_detail {
             return result;
         } else if constexpr (IsSharedPtr<Value>::value) {
             return add_serialization_capacity(1U, sizeof(Value));
+        } else if constexpr (
+            std::is_same_v<Value, runtime::simir::VitalWireCallBox>) {
+            return add_serialization_capacity(1U,
+                value.has_value() ? serialization_capacity_hint(*value) : 0U);
         } else if constexpr (StorageWrapper<Value>) {
             return serialization_capacity_hint(value.storage);
         } else if constexpr (requires { archive_fields(value); }) {
@@ -1669,6 +1673,12 @@ namespace codec_detail {
             } else if constexpr (IsSharedPtr<Value>::value) {
                 write(static_cast<bool>(value));
                 if (value) {
+                    write(*value);
+                }
+            } else if constexpr (
+                std::is_same_v<Value, runtime::simir::VitalWireCallBox>) {
+                write(value.has_value());
+                if (value.has_value()) {
                     write(*value);
                 }
             } else if constexpr (StorageWrapper<Value>) {
@@ -2522,6 +2532,21 @@ namespace codec_detail {
                     }
                     value = std::move(decoded);
                     return true;
+                } else if constexpr (
+                    std::is_same_v<Value, runtime::simir::VitalWireCallBox>) {
+                    bool present { };
+                    if (!read(present)) {
+                        return false;
+                    }
+                    if (!present) {
+                        value = {};
+                        return true;
+                    }
+                    if (!consume_allocation(1U,
+                            sizeof(runtime::simir::VitalWireCall))) {
+                        return false;
+                    }
+                    return read(value.edit());
                 } else if constexpr (StorageWrapper<Value>) {
                     return read(value.storage);
                 } else if constexpr (requires { archive_fields(value); }) {

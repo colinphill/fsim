@@ -254,6 +254,15 @@ public:
     [[nodiscard]] std::optional<std::size_t> vhdl_analysis_rank(
         std::string_view content_digest) const noexcept;
 
+    /// Whether STD.STANDARD.INTEGER, and every type derived from its range,
+    /// is 64 bits wide in this design: true when any VHDL unit in it was
+    /// analyzed as VHDL-2019. IEEE 1076-2019 5.2.3.1 makes INTEGER's range
+    /// implementation dependent and requires it to include +-2**63; IEEE
+    /// 1076-2008 5.2.3.1 sets only the minimum +-(2**31-1), so a VHDL-2008
+    /// unit may see a 64-bit INTEGER too. One INTEGER serves the whole
+    /// design: units of different standards share the STD package types.
+    [[nodiscard]] bool vhdl_wide_integer() const noexcept;
+
     /// The VHDL units that own a scope and its enclosing scopes, innermost
     /// first and without repeats; null unless the lookup indexes are current.
     [[nodiscard]] const std::vector<const vhdl::Unit*>* vhdl_scope_units(
@@ -450,6 +459,7 @@ private:
         // By scope identity: see vhdl_scope_units.
         std::vector<std::vector<const vhdl::Unit*>> vhdl_scope_units;
         std::vector<const vhdl::Unit*> vhdl_primary_units;
+        bool vhdl_wide_integer { };
         RecordPositions declarations;
         RecordPositions types;
         RecordPositions expressions;

@@ -1155,7 +1155,10 @@ namespace {
                 input.signal,
                 expression(input.expression, scope, parent),
                 source(input.span),
-                input.systemverilog_source_order
+                input.systemverilog_source_order,
+                input.guard
+                    ? expression(*input.guard, scope, parent)
+                    : std::optional<semantic::ExpressionId> { }
             };
         }
 
@@ -1974,6 +1977,7 @@ namespace {
                 output.foreach_body_source = source(input.foreach_body_span);
             }
             output.immediate_final = input.immediate_final;
+            output.immediate_label = input.immediate_label;
             output.output_text = input.output_text;
             output.output_generated_text = static_cast<sv::GeneratedTextKind>(
                 input.output_generated_text);
@@ -2014,6 +2018,12 @@ namespace {
                 }
             }
             output.output_trailing_text = input.output_trailing_text;
+            for (const auto& argument : input.output_arguments) {
+                if (const auto value = expression(
+                        argument, child_scope, statement_origin)) {
+                    output.output_arguments.push_back(*value);
+                }
+            }
             output.output_source.assign(
                 input.output_source.begin(), input.output_source.end());
             const auto transfer_type = !input.target.nominal_type.empty()
@@ -2435,6 +2445,116 @@ namespace {
             }
         }
 
+        // A property or sequence expression tree with its expressions
+        // resolved in `scope` (IEEE 1800-2023 37.50-37.54).
+        sv::AssertionTree assertion_tree(
+            const frontend::SystemVerilogAssertionTree& declared,
+            const semantic::ScopeId scope, const semantic::OriginId origin)
+        {
+            sv::AssertionTree tree;
+            const auto operand
+                = [&](const frontend::SystemVerilogAssertionTreeOperand& input) {
+                      sv::AssertionTreeOperand output;
+                      output.node = input.node;
+                      if (input.expression) {
+                          output.expression
+                              = expression(*input.expression, scope, origin);
+                      }
+                      return output;
+                  };
+            for (const auto& input : declared.nodes) {
+                sv::AssertionTreeNode output;
+                output.kind = static_cast<sv::AssertionTreeNode::Kind>(input.kind);
+                output.op = static_cast<sv::AssertionOperator>(input.op);
+                output.strong = input.strong;
+                output.sequence = input.sequence;
+                output.instance = input.instance;
+                output.default_item = input.default_item;
+                for (const auto& item : input.clock_events) {
+                    output.clock_events.push_back(
+                        sensitivity(item, scope, origin));
+                }
+                output.source = source(input.span);
+                for (const auto& item : input.operands) {
+                    output.operands.push_back(operand(item));
+                }
+                tree.nodes.push_back(std::move(output));
+            }
+            tree.root = operand(declared.root);
+            for (const auto& value : declared.formal_defaults) {
+                tree.formal_defaults.push_back(value
+                        ? expression(*value, scope, origin)
+                        : std::optional<semantic::ExpressionId> { });
+            }
+            return tree;
+        }
+
+        // The clocking events and the disable condition of a property or
+        // sequence declaration (IEEE 1800-2023 37.50).
+        void fill_assertion_declaration(
+            const frontend::SystemVerilogAssertionDeclaration& declared,
+            sv::AssertionDeclaration& converted,
+            const semantic::ScopeId scope)
+        {
+            if (declared.clock && converted.clock) {
+                for (const auto& item : declared.clock->events) {
+                    converted.clock->events.push_back(sensitivity(
+                        item, scope, converted.origin));
+                }
+            }
+            if (declared.disable && converted.disable
+                && declared.disable->condition) {
+                converted.disable->condition = expression(
+                    *declared.disable->condition, scope, converted.origin);
+            }
+            if (declared.tree) {
+                converted.tree
+                    = assertion_tree(*declared.tree, scope, converted.origin);
+            }
+        }
+
+        // The action statements and the inferred clock events of an
+        // assertion statement (IEEE 1800-2023 37.50).
+        void fill_concurrent_assertion(
+            const frontend::SystemVerilogConcurrentAssertion& declared,
+            sv::ConcurrentAssertion& converted,
+            const semantic::ScopeId scope)
+        {
+            for (const auto& action : declared.pass_action_statements) {
+                converted.pass_statements.push_back(statement(
+                    action, scope, converted.origin));
+            }
+            for (const auto& action : declared.failure_action_statements) {
+                converted.failure_statements.push_back(statement(
+                    action, scope, converted.origin));
+            }
+            for (const auto& item : declared.procedural_clock_events) {
+                converted.inferred_clock_events.push_back(sensitivity(
+                    item, scope, converted.origin));
+            }
+            if (declared.property_instance) {
+                converted.property_instance = assertion_tree(
+                    *declared.property_instance, scope, converted.origin);
+            }
+            // An inline cover sequence holds its own clock and disable
+            // condition (16.14.3).
+            if (declared.inline_sequence) {
+                const auto& inline_sequence = *declared.inline_sequence;
+                if (inline_sequence.clock) {
+                    for (const auto& item : inline_sequence.clock->events) {
+                        converted.inline_clock_events.push_back(sensitivity(
+                            item, scope, converted.origin));
+                    }
+                }
+                if (inline_sequence.disable
+                    && inline_sequence.disable->condition) {
+                    converted.inline_disable_condition = expression(
+                        *inline_sequence.disable->condition, scope,
+                        converted.origin);
+                }
+            }
+        }
+
         void fill_generate_body(
             const frontend::GenerateBody& input,
             sv::GenerateRegion& output)
@@ -2476,6 +2596,22 @@ namespace {
             fill_primitives(
                 input.verilog_primitives, input.instances, output.instances,
                 output.scope, output.origin, output.primitives);
+            for (std::size_t index = 0;
+                index < input.systemverilog_assertion_declarations.size()
+                && index < output.assertion_declarations.size();
+                ++index) {
+                fill_assertion_declaration(
+                    input.systemverilog_assertion_declarations[index],
+                    output.assertion_declarations[index], output.scope);
+            }
+            for (std::size_t index = 0;
+                index < input.published_concurrent_assertions.size()
+                && index < output.concurrent_assertions.size();
+                ++index) {
+                fill_concurrent_assertion(
+                    input.published_concurrent_assertions[index],
+                    output.concurrent_assertions[index], output.scope);
+            }
             for (const auto& nested_input : input.generate_regions) {
                 const auto nested_source = source(nested_input.span);
                 const auto nested = std::ranges::find_if(
@@ -2656,6 +2792,27 @@ namespace {
                 && index < output.generates.size();
                 ++index) {
                 fill_generate(input.generate_regions[index], output.generates[index]);
+            }
+            // Assertion parts the VPI publishes (IEEE 1800-2023 37.50):
+            // clocking events, disable conditions and action statements.
+            // Done last so the process statements claim their expressions
+            // first.
+            for (std::size_t index = 0;
+                index < input.systemverilog_assertion_declarations.size()
+                && index < output.assertion_declarations.size();
+                ++index) {
+                fill_assertion_declaration(
+                    input.systemverilog_assertion_declarations[index],
+                    output.assertion_declarations[index], output.scope);
+            }
+            for (std::size_t index = 0;
+                index < input.systemverilog_concurrent_assertions.size()
+                && index < output.concurrent_assertions.size();
+                ++index) {
+                const auto& declared
+                    = input.systemverilog_concurrent_assertions[index];
+                fill_concurrent_assertion(
+                    declared, output.concurrent_assertions[index], output.scope);
             }
         }
 

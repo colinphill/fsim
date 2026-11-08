@@ -159,6 +159,95 @@ endmodule
         && has_diagnostic(
             rejected_ref_literal, "FSIM-ELAB-SVTASK-013"));
 
+    // IEEE 1800-2023 16.4: an automatic variable cannot be the actual of a
+    // ref formal of a deferred assertion action.
+    const auto deferred_automatic_ref = fsim::frontend::parse_text(
+        "deferred_automatic_ref.sv",
+        R"(
+module deferred_automatic_ref;
+  task automatic note(ref int target);
+    $display("%0d", target);
+  endtask
+  initial begin
+    automatic int local_value = 3;
+    assert #0 (1'b0) else note(local_value);
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(deferred_automatic_ref.ok());
+    const auto rejected_deferred_automatic_ref = compile_and_elaborate(
+        deferred_automatic_ref.design, "sv:work.deferred_automatic_ref");
+    assert(
+        !rejected_deferred_automatic_ref.ok()
+        && has_diagnostic(
+            rejected_deferred_automatic_ref, "FSIM-ELAB-SVASSERT-003"));
+
+    // A static variable is a legal ref actual of an observed action.
+    const auto deferred_static_ref = fsim::frontend::parse_text(
+        "deferred_static_ref.sv",
+        R"(
+module deferred_static_ref;
+  int shared_value = 3;
+  task automatic note(ref int target);
+    $display("%0d", target);
+  endtask
+  initial assert #0 (1'b0) else note(shared_value);
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(deferred_static_ref.ok());
+    const auto accepted_deferred_static_ref = compile_and_elaborate(
+        deferred_static_ref.design, "sv:work.deferred_static_ref");
+    assert(
+        accepted_deferred_static_ref.ok()
+        && !has_diagnostic(
+            accepted_deferred_static_ref, "FSIM-ELAB-SVASSERT-003"));
+
+    // 4.4.2.9: a final deferred action runs in the Postponed region, where a
+    // task that writes a variable cannot be called.
+    const auto final_writing_task = fsim::frontend::parse_text(
+        "final_writing_task.sv",
+        R"(
+module final_writing_task;
+  int counter;
+  task automatic bump;
+    counter = counter + 1;
+  endtask
+  initial assert final (1'b1) bump();
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(final_writing_task.ok());
+    const auto rejected_final_writing_task = compile_and_elaborate(
+        final_writing_task.design, "sv:work.final_writing_task");
+    assert(
+        !rejected_final_writing_task.ok()
+        && has_diagnostic(
+            rejected_final_writing_task, "FSIM-ELAB-SVASSERT-004"));
+
+    const auto final_reading_task = fsim::frontend::parse_text(
+        "final_reading_task.sv",
+        R"(
+module final_reading_task;
+  int counter = 2;
+  task automatic show;
+    int copy;
+    copy = counter;
+    $display("%0d", copy);
+  endtask
+  initial assert final (1'b1) show();
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(final_reading_task.ok());
+    const auto accepted_final_reading_task = compile_and_elaborate(
+        final_reading_task.design, "sv:work.final_reading_task");
+    assert(
+        accepted_final_reading_task.ok()
+        && !has_diagnostic(
+            accepted_final_reading_task, "FSIM-ELAB-SVASSERT-004"));
+
     const auto static_suspension = fsim::frontend::parse_text(
         "static_task_suspension.sv",
         R"(

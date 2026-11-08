@@ -111,6 +111,12 @@ PackedLogic4 Simulation::read_process_local(
         process, local_index, newer_activations);
 }
 
+PackedLogic4 Simulation::read_process_call_result(
+    const runtime::simir::ProcessId process, const std::size_t slot) const
+{
+    return impl_->interpreter->read_call_result(process, slot);
+}
+
 void Simulation::write_process_local(
     const runtime::simir::ProcessId process,
     const std::size_t local_index,
@@ -160,6 +166,17 @@ void Simulation::schedule_foreign_transaction(
     impl_->refresh_observation_hooks();
 }
 
+bool Simulation::disconnect_foreign_driver(
+    const runtime::simir::ProcessId process,
+    const SignalId signal,
+    const runtime::SimulationTick delay)
+{
+    const bool done
+        = impl_->interpreter->disconnect_host_driver(process, signal, delay);
+    impl_->refresh_observation_hooks();
+    return done;
+}
+
 void Simulation::force_foreign_driver(
     const runtime::simir::ProcessId process,
     const SignalId signal,
@@ -183,6 +200,15 @@ void Simulation::deposit_foreign_driver(
     impl_->refresh_observation_hooks();
 }
 
+std::vector<runtime::simir::DriverTransaction>
+Simulation::foreign_driver_transactions(
+    const runtime::simir::ProcessId process, const SignalId signal,
+    const std::size_t offset, const std::size_t width) const
+{
+    return impl_->interpreter->driver_transactions(
+        process, signal, offset, width);
+}
+
 void Simulation::release_foreign_driver(
     const runtime::simir::ProcessId process,
     const SignalId signal,
@@ -196,12 +222,22 @@ void Simulation::release_foreign_driver(
 runtime::simir::ProcessId Simulation::add_foreign_driver_owner(
     const runtime::simir::ProcessId placeholder)
 {
+    note_foreign_structure("a driver owner process created by a foreign "
+                           "interface");
     return impl_->interpreter->add_foreign_driver_owner(placeholder);
+}
+
+void Simulation::note_foreign_structure(const std::string_view what)
+{
+    if (impl_->foreign_structure.empty()) {
+        impl_->foreign_structure = std::string { what };
+    }
 }
 
 void Simulation::add_foreign_driver(
     const runtime::simir::ProcessId process, const SignalId signal)
 {
+    note_foreign_structure("a driver created by a foreign interface");
     impl_->interpreter->add_host_driver(process, signal);
     impl_->refresh_observation_hooks();
 }

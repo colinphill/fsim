@@ -1,0 +1,4 @@
+#c vpi: start of simulation
+#c vpi: start of save id=1 put=4,4 location=set
+#c vpi: end of save
+#c vpi: end of simulation t=100
