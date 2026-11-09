@@ -1224,6 +1224,22 @@ class DesignIrBuilder final {
         : std::nullopt;
   }
 
+  [[nodiscard]] std::optional<semantic::SourceSpanId> statement_source(
+      const di::SpecializationId specialization,
+      const runtime::simir::ProcessId runtime_process) const {
+    if (specialization.value() >= hdl_specialization_count_) {
+      return std::nullopt;
+    }
+    const auto& sources =
+        elaborated_.specializations()[specialization.value()].statement_sources;
+    const auto found = std::ranges::find(
+        sources, runtime_process,
+        &std::pair<runtime::simir::ProcessId, semantic::SourceSpanId>::first);
+    return found != sources.end()
+        ? std::optional<semantic::SourceSpanId>{found->second}
+        : std::nullopt;
+  }
+
   [[nodiscard]] di::SpecializationId process_specialization(
       const runtime::simir::ProcessId process,
       const std::string_view name) const {
@@ -1310,7 +1326,13 @@ class DesignIrBuilder final {
       output.observed = input.observed();
       output.reactive = input.reactive();
       output.final = input.final();
-      if (source_id) {
+      if (const auto statement = statement_source(specialization, runtime_id)) {
+        // A continuous assignment, net declaration assignment or gate is
+        // lowered from a statement, not a semantic process; its statement's
+        // extent identifies it (the positional process lookup above can name
+        // a process for it too, which would give another extent).
+        output.source = *statement;
+      } else if (source_id) {
         output.source = model_.process_identities()[source_id->value()].source;
       } else {
         const auto named = std::ranges::find_if(

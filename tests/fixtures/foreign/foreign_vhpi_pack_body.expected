@@ -1,5 +1,5 @@
 #c body pk primary=work.pk kind=vhpipackdeclk deps=work.pk
-#c arch t deps=work.top,work.pk uses=c,f
+#c arch t deps=work.top,work.pk uses=c,f standard=346
 #c specs library top vhpientitydeclk:ea
 #c specs library t vhpiarchbodyk:aa
 #c specs root t vhpiarchbodyk:aa

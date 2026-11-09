@@ -6,6 +6,7 @@
 #include "fsim/runtime/uvm_sequence.hpp"
 #include "fsim/runtime/uvm_tlm1.hpp"
 
+#include <limits>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -823,7 +824,7 @@ struct SystemVerilogUvmRegisterModelLimits {
   std::size_t maximum_memories{16'384};
   std::size_t maximum_declarations{524'288};
   std::size_t maximum_declarations_per_block{65'536};
-  std::size_t maximum_block_depth{256};
+  std::size_t maximum_block_depth{std::numeric_limits<std::size_t>::max()};
   std::size_t maximum_name_bytes{4'096};
   std::size_t maximum_full_name_bytes{1U << 20U};
   std::uint32_t maximum_width_bits{1U << 20U};
@@ -839,7 +840,7 @@ struct SystemVerilogUvmRegisterModelLimits {
   std::size_t maximum_materialized_memory_bits{1U << 28U};
   std::size_t maximum_map_registrations{1U << 20U};
   std::size_t maximum_map_registrations_per_map{65'536};
-  std::size_t maximum_submap_depth{256};
+  std::size_t maximum_submap_depth{std::numeric_limits<std::size_t>::max()};
   std::uint32_t maximum_bus_width_bytes{4'096};
   std::size_t maximum_physical_beats{1U << 20U};
   std::size_t maximum_physical_byte_enables{1U << 26U};
@@ -891,6 +892,16 @@ private:
 
 class SystemVerilogUvmRegisterModelService final {
 public:
+  /// True while the service holds no state: a run that never used it has
+  /// nothing to save (#188). Its adapters and callbacks are the embedder's.
+  [[nodiscard]] bool run_state_idle() const noexcept {
+    return blocks_.empty() && maps_.empty() && registers_.empty() && fields_.empty()
+        && memories_.empty() && adapters_.empty() && predictors_.empty()
+        && frontdoors_.empty() && user_frontdoors_.empty() && hdl_paths_.empty()
+        && register_callbacks_.empty() && coverage_models_.empty()
+        && standard_sequences_.empty() && declarations_.empty();
+  }
+
   SystemVerilogUvmRegisterModelService(
       SystemVerilogUvmComponentService &components,
       SystemVerilogUvmRegisterModelLimits limits = {});

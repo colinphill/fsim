@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/uvm_object.hpp"
+#include "fsim/support/stack_growth.hpp"
 
 #include <algorithm>
 #include <exception>
@@ -225,6 +226,14 @@ SystemVerilogUvmCopyResult SystemVerilogUvmObjectService::copy_detailed(
                     const SystemVerilogClassHandle source_handle,
                     const std::size_t depth,
                     const SystemVerilogUvmRecursionPolicy recursion) {
+    // Nested objects continue on a new stack segment when the stack is
+    // nearly used up, so the nesting depth is bounded by memory.
+    if (!support::stack_growth_detail::has_room()) {
+      support::with_stack([&] {
+        copy_object(target_handle, source_handle, depth, recursion);
+      });
+      return;
+    }
     account_object(depth);
     if (heap_->object(target_handle).specialization_identity
         != heap_->object(source_handle).specialization_identity) {

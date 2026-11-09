@@ -19,12 +19,18 @@
 
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
 #include <cstdio>
+#include <functional>
 #include <fstream>
 #include <iostream>
+#include <map>
+#include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
+#include <vector>
 #if defined(_WIN32)
 #  include <io.h>
 #else
@@ -386,10 +392,94 @@ std::unique_ptr<ForeignLibraries> attach_foreign_libraries(
         }
         return result;
     };
+    // The design of one analyzed unit that the elaborated design does not
+    // hold, linked from its library object and the objects it depends on, for
+    // the VHPI library model (IEEE 1076-2019 19.4.5). A VHPI program that
+    // never asks for such a unit never reads these objects.
+    const auto vhpi_library_design = [root = config.base_directory](
+                                         const std::string_view library_name,
+                                         const VhpiCatalogUnit& unit)
+        -> std::shared_ptr<const semantic::CompiledDesign> {
+        const workspace::Store store { root };
+        std::map<std::string, workspace::LibraryCatalog, std::less<>> catalogs;
+        const auto catalog_of = [&](const std::string_view name)
+            -> const workspace::LibraryCatalog* {
+            if (const auto found = catalogs.find(name);
+                found != catalogs.end()) {
+                return &found->second;
+            }
+            std::string failure;
+            auto catalog = store.read_library(name, failure);
+            if (!catalog) {
+                return nullptr;
+            }
+            return &catalogs.emplace(std::string { name }, std::move(*catalog))
+                        .first->second;
+        };
+        const auto same_unit = [](const library::UnitIndexEntry& entry,
+                                   const std::string_view kind,
+                                   const std::string_view name,
+                                   const std::string_view primary) {
+            return entry.language == "vhdl" && entry.kind == kind
+                && entry.name == name && entry.primary_name == primary;
+        };
+        struct Wanted {
+            std::string library;
+            std::string kind;
+            std::string name;
+            std::string primary;
+        };
+        std::vector<std::filesystem::path> objects;
+        std::vector<Wanted> pending { { std::string { library_name }, unit.kind,
+            unit.name, unit.primary_name } };
+        std::set<std::string> seen;
+        while (!pending.empty()) {
+            const auto wanted = std::move(pending.back());
+            pending.pop_back();
+            const auto* const catalog = catalog_of(wanted.library);
+            if (catalog == nullptr) {
+                continue;
+            }
+            for (const auto& artifact : catalog->artifacts) {
+                if (artifact.kind != workspace::ArtifactKind::Hdl
+                    || std::ranges::none_of(artifact.units, [&](const auto& owned) {
+                           return same_unit(owned.unit, wanted.kind,
+                               wanted.name, wanted.primary);
+                       })) {
+                    continue;
+                }
+                if (!seen.insert(wanted.library + "/" + artifact.id).second) {
+                    break;
+                }
+                std::string failure;
+                auto path = store.artifact_path(
+                    catalog->location, artifact, failure);
+                if (!path) {
+                    return nullptr;
+                }
+                objects.push_back(std::move(*path));
+                for (const auto& dependency : artifact.dependencies) {
+                    pending.push_back({ dependency.library,
+                        dependency.unit.kind, dependency.unit.name,
+                        dependency.unit.primary_name });
+                }
+                break;
+            }
+        }
+        if (objects.empty()) {
+            return nullptr;
+        }
+        diagnostic::Engine quiet;
+        auto project = load_objects(objects, quiet);
+        if (!project) {
+            return nullptr;
+        }
+        return std::make_shared<const CheckedProject>(std::move(*project));
+    };
     if (vhpi_wanted && !vhpi_modules) {
         impl.vhpi = attach_vhpi_modules(
             simulation, {}, {}, vhpi_print(), plusargs, diagnostics, {},
-            vhpi_libraries, vhpi_library_units);
+            vhpi_libraries, vhpi_library_units, vhpi_library_design);
         if (!impl.vhpi) {
             return failed();
         }
@@ -445,7 +535,7 @@ std::unique_ptr<ForeignLibraries> attach_foreign_libraries(
             config.run.vhpi_modules, config.run.vhpi_registries, vhpi_print(),
             plusargs, diagnostics,
             impl.vpi ? impl.vpi->calls() : ForeignCompanion {},
-            vhpi_libraries, vhpi_library_units);
+            vhpi_libraries, vhpi_library_units, vhpi_library_design);
         if (!impl.vhpi) {
             return failed();
         }

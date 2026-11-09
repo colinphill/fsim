@@ -1,0 +1,25 @@
+a2=1 @10 ns
+a=2 @15 ns
+b=1 @10 ns
+b=2 @15 ns
+c=2 @15 ns
+d2=2 @15 ns
+d=1 @10 ns
+d=2 @15 ns
+e2=1 @5 ns
+e2=2 @10 ns
+e2=9 @11 ns
+e3=1 @5 ns
+e3=7 @11 ns
+e=1 @5 ns
+e=2 @10 ns
+e=3 @15 ns
+f=5 @0 ns
+g=2 @10 ns
+j=3 @5 ns
+k seen 4 @10 ns
+k=4 @10 ns
+m=1 @4 ns
+m=Z @8 ns
+v=11 @6 ns
+v=3 @5 ns

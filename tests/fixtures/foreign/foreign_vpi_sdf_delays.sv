@@ -22,9 +22,24 @@ module tdrv(input logic a, input logic en, output tri z);
   assign z = en ? a : 1'bz;
 endmodule
 
+module tdrv3(input logic [2:0] a, input logic en, output tri [2:0] z);
+  assign z = en ? a : 3'bz;
+endmodule
+
+module probe3(input wire [2:0] a);
+  always @(a) if ($time >= 20) $display("#c net %m a=%b t=%0d", a, $time);
+endmodule
+
 // A driver that prints nothing, for the net whose delayed copy a probe shows.
 module src(input logic a, output wire z);
   assign z = a;
+endmodule
+
+// A load whose only reader is a function that another instance calls.
+module fl(input wire a);
+  function logic peek();
+    return a;
+  endfunction
 endmodule
 
 module probe(input wire a);
@@ -174,9 +189,75 @@ module top(input wire tin);
     #46 dp = 1'b0;
     #2 dp = 1'b1;
   end
+  // Two records to one vector load: a PORT record names all four bits, an
+  // INTERCONNECT record after it bit 1 alone, both 4 ns (the later record
+  // applies to bit 1, IEEE 1364-2005 16.3). The plug-in puts 9 ns on bit 1
+  // of u15.a at 470 ns: only the bit the INTERCONNECT record owns takes it. Bit 1
+  // rises at 480 and reaches u15 at 489, bit 3 rises at 481 and reaches it
+  // at 485 (the PORT record's 4 ns): u15 prints a=1000 at 485, a=1010 at
+  // 489.
+  logic [3:0] c2 = 4'b0000;
+  wire [3:0] w8, y8;
+  bus u14(.a(c2), .z(w8));
+  bus #(.SHOW(1)) u15(.a(w8), .z(y8));
+  initial begin
+    #480 c2[1] = 1'b1;
+    #1 c2[3] = 1'b1;
+  end
+  // A function of the load instance, called through its name from outside
+  // it, reads the delayed port as the port does (IEEE 1364-2005 16.2.4): dm
+  // rises at 510, so at 511 the net has risen and the port (4 ns) has not, at
+  // 516 both have.
+  logic dm = 1'b0;
+  wire wm;
+  quiet um(.a(dm), .z(wm));
+  fl ul(.a(wm));
+  initial begin
+    #510 dm = 1'b1;
+    #1 $display("#c callee net=%b port=%b peek=%b t=%0d", wm, ul.a, ul.peek(), $time);
+    #5 $display("#c callee net=%b port=%b peek=%b t=%0d", wm, ul.a, ul.peek(), $time);
+  end
+  // A net with two sources whose copies differ (v1 is named by no record, so
+  // its group takes the PORT delay of bit 1 alone and 0 elsewhere; v2 is
+  // named by an INTERCONNECT of 7 ns for all three bits, which a PORT record
+  // of the same 7 ns overrides on bit 1): the copy of v2's group has three
+  // runs, one for each record that owns bits. The plug-in puts 9 ns on the
+  // INTERCONNECT path v2.z to pl.a at 590 ns: the bits it owns (0 and 2)
+  // take 9, bit 1 (the PORT record's) keeps 7. v2 drives 111 at 600, so pl
+  // prints a=010 at 607 and a=111 at 609.
+  logic [2:0] d3 = 3'b000;
+  logic f3 = 1'b0;
+  wire [2:0] w9;
+  tdrv3 v1(.a(3'b000), .en(f3), .z(w9));
+  tdrv3 v2(.a(d3), .en(1'b1), .z(w9));
+  probe3 pl(.a(w9));
+  initial #600 d3 = 3'b111;
+  // Records to one source and load apply in order of occurrence (OVI SDF 3.0,
+  // IEEE 1364-2005 16.3). With ABSOLUTE the later replaces the delay: sa to
+  // la is 3 then 6, so la sees da's rise at 720 at 726. With INCREMENT the
+  // later adds: sb to lb is 3 and then INCREMENT 2, so lb sees db's rise at
+  // 740 at 745. An INCREMENT of one bit adds to that bit's delay only: sc to
+  // lc is 3 for both bits and then INCREMENT 2 on bit 0, so lc sees bit 0
+  // rise at 700 at 705 (3 + 2) and bit 1 rise at 710 at 713.
+  logic da = 1'b0, db = 1'b0;
+  wire wa, wb;
+  src sa(.a(da), .z(wa));
+  probe la(.a(wa));
+  src sb(.a(db), .z(wb));
+  probe lb(.a(wb));
+  logic [3:0] cc = 4'b0000;
+  wire [3:0] wc, yc;
+  bus sc(.a(cc), .z(wc));
+  bus #(.SHOW(1)) lc(.a(wc), .z(yc));
+  initial begin
+    #700 cc[0] = 1'b1;
+    #10 cc[1] = 1'b1;
+    #10 da = 1'b1;
+    #20 db = 1'b1;
+  end
   initial begin
     #20 a = 1'b0;
     #20 a = 1'b1;
-    #450 $finish;
+    #800 $finish;
   end
 endmodule

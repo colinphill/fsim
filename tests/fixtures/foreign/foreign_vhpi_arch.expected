@@ -43,5 +43,5 @@
 #c 34 ns p=56,5503
 #c 35 ns rr=1,01
 #c 36 ns many rr sources=10 schedule=0
-#c 37 ns rr=11,01
-#c 39 ns rr=56,11
+#c 37 ns rr=10,01
+#c 39 ns rr=55,11

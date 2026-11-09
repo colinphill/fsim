@@ -410,6 +410,47 @@ endmodule
     assert(cold.compiled_processes == 0);
     assert(warm.compiled_processes == 0);
   }
+  // A class of the generate alternative that elaboration selects is checked
+  // (IEEE 1800-2023 27.5): `Dropped` extends a class that does not exist, so
+  // the class specializer drops it and elaboration says so. The same class
+  // in the alternative that is not selected (`Inactive` above) is not built
+  // and raises nothing.
+  {
+    const auto selected_drop_source = directory.path / "selected_drop.sv";
+    {
+      std::ofstream output(selected_drop_source, std::ios::binary);
+      output << R"(module generated_class_revision;
+  if (1) begin
+    class Dropped extends Missing;
+    endclass
+  end else begin
+    class Inactive extends Missing;
+    endclass
+  end
+  initial #1 $finish;
+endmodule
+)";
+      assert(output.good());
+    }
+    const auto config = make_generated_class_config(
+        directory.path, selected_drop_source,
+        fsim::project::Optimization::o0);
+    fsim::diagnostic::Engine diagnostics;
+    const auto project = fsim::app::build_project(config, diagnostics);
+    assert(!project);
+    bool reported_selected = false;
+    bool reported_inactive = false;
+    for (const auto& diagnostic : diagnostics.diagnostics()) {
+      if (diagnostic.code != "FSIM-SV-CLASS-033") {
+        continue;
+      }
+      reported_selected = reported_selected
+          || diagnostic.message.find("Dropped") != std::string::npos;
+      reported_inactive = reported_inactive
+          || diagnostic.message.find("Inactive") != std::string::npos;
+    }
+    assert(reported_selected && !reported_inactive);
+  }
   std::cout << "SystemVerilog preprocessor/generate application tests passed\n";
   return 0;
 }

@@ -33,6 +33,14 @@
 #c     name x
 #c     name y
 #c     const 1
+#c sequence s_lv full=top.s_lv type=vpiSequenceDecl
+#c variable top.s_lv.v type=vpiIntVar name=v parent=top.s_lv
+#c variable top.s_lv.w type=vpiReg name=w parent=top.s_lv
+#c expr
+#c   op vpiCycleDelayOp strong=0
+#c     name a
+#c     name b
+#c     const 1
 #c by name top.p_imp
 #c top.a1 property type=vpiPropertyInst
 #c   inst vpiPropertyInst p_imp decl=top.p_imp

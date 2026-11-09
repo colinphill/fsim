@@ -80,3 +80,89 @@ module drcm;
     #3 p = 0;
   end
 endmodule
+
+// A continuous assignment in a generate block, among a gate's drivers, is the
+// driver of its own: its change is one call, and the gate's change at 505 is
+// one call, not two (Table 88: "a value change on the driver").
+//   t=502 tf_asynchon, t=505 p=1 (g1 0 -> 1, the net is x: change 13),
+//   t=508 s=1 (the assignment 0 -> 1: change 14), t=511 s=0 (change 15).
+module drcg;
+  reg p, s;
+  wire n;
+  buf g1(n, p);
+  if (1) begin : gb
+    assign n = s;
+  end
+  initial begin
+    p = 0; s = 0;
+    #502 $pli_tf_drc(n);
+    #3 p = 1;
+    #3 s = 1;
+    #3 s = 0;
+  end
+endmodule
+
+// A net declaration assignment, a gate and a concatenation target drive one
+// net: each driver's own change is one call, also when the net stays x.
+//   t=702 tf_asynchon, t=705 p=1 (g1: change 16), t=708 s=1 (the declaration
+//   assignment 0 -> 1: change 17, the net stays x), t=711 e=1 (the
+//   concatenation's bit for n 0 -> 1: change 18), t=714 e=0 (change 19).
+module drcd;
+  reg p, s;
+  reg [1:0] e;
+  wire n = s;
+  wire m;
+  buf g1(n, p);
+  assign {m, n} = e;
+  initial begin
+    p = 0; s = 0; e = 0;
+    #702 $pli_tf_drc(n);
+    #3 p = 1;
+    #3 s = 1;
+    #3 e = 1;
+    #3 e = 0;
+  end
+endmodule
+
+// A continuous assignment inside a child instance whose output port connects
+// the net is a driver of that net (IEEE 1364-2001 Table 88: a value change on
+// the driver of an argument): its change is one call, as the gate's is.
+//   t=902 tf_asynchon, t=905 p=1 (g1: change 20), t=908 s=1 (the child's
+//   assignment 0 -> 1: change 21), t=911 s=0 (change 22).
+module drcpc(input i, output o);
+  assign o = i;
+endmodule
+
+module drcp;
+  reg p, s;
+  wire n;
+  drcpc u(.i(s), .o(n));
+  buf g1(n, p);
+  initial begin
+    p = 0; s = 0;
+    #902 $pli_tf_drc(n);
+    #3 p = 1;
+    #3 s = 1;
+    #3 s = 0;
+  end
+endmodule
+
+// Two instances of one module drive the net: their assignments share a
+// source extent and are told apart by the instance. Each driver's own change
+// is one call.
+//   t=1002 tf_asynchon, t=1005 s=1 (u1: change 23), t=1008 t=1 (u2: change
+//   24), t=1011 s=0 (u1: change 25), t=1014 t=0 (u2: change 26).
+module drcq;
+  reg s, t;
+  wire n;
+  drcpc u1(.i(s), .o(n));
+  drcpc u2(.i(t), .o(n));
+  initial begin
+    s = 0; t = 0;
+    #1002 $pli_tf_drc(n);
+    #3 s = 1;
+    #3 t = 1;
+    #3 s = 0;
+    #3 t = 0;
+  end
+endmodule

@@ -881,7 +881,13 @@ compiled_class_metadata_entry(
     const semantic::sv::ClassDeclaration& declaration,
     std::string_view expected_library);
 
-void install_compiled_class_specializations(CheckedProject& checked);
+/// `report_dropped` is false for a design that is only part of the final one
+/// (a single object loaded to read its references, or the imported
+/// environment of a compile): a class relation to a class of a library not
+/// linked yet is not a drop there.
+void install_compiled_class_specializations(
+    CheckedProject& checked, diagnostic::Engine& diagnostics,
+    bool report_dropped = true);
 
 void report_vhdl_duplicate_design_unit(
     const frontend::DesignUnit& unit,

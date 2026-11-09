@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/uvm_phase.hpp"
+
+#include "run_state_archive.hpp"
+#include "run_state_value_codecs.hpp"
+#include "uvm_run_state.hpp"
 #include "fsim/runtime/scheduler_events.hpp"
 #include "fsim/runtime/uvm_objection.hpp"
 #include "fsim/runtime/uvm_tlm1.hpp"
@@ -1992,6 +1996,46 @@ SystemVerilogUvmPhaseService::topological_order(
     fail(kInvalidGraph, "UVM phase graph contains a cycle");
   }
   return result;
+}
+
+void SystemVerilogUvmPhaseService::run_state_io(RunStateArchive& archive) {
+  // A process scheduled for a delay holds the embedder's callback, which the
+  // scheduler's save refuses while it is pending; the handle of a restored
+  // process is empty.
+  archive.io(domains_);
+  archive.io(domains_by_identity_);
+  archive.io(phases_);
+  archive.io(processes_);
+  archive.io(next_domain_);
+  archive.io(next_phase_);
+  archive.io(next_registration_order_);
+  archive.io(next_process_);
+  archive.io(next_process_registration_order_);
+  archive.io(edges_);
+  archive.io(mutations_);
+  archive.io(standard_schedule_);
+}
+
+void SystemVerilogUvmPhaseService::reset_run_state() {
+  if (scheduler_) {
+    for (const auto& [slot, process] : processes_) {
+      static_cast<void>(slot);
+      scheduler_->cancel(process.task);
+    }
+  }
+  processes_.clear();
+  domains_.clear();
+  domains_by_identity_.clear();
+  phases_.clear();
+  next_domain_ = 1;
+  next_phase_ = 1;
+  next_registration_order_ = 0;
+  next_process_ = 1;
+  next_process_registration_order_ = 0;
+  edges_ = 0;
+  mutations_ = 0;
+  standard_schedule_.reset();
+  static_cast<void>(create_standard_schedule());
 }
 
 }  // namespace fsim::runtime

@@ -5,6 +5,7 @@
 #include "fsim/semantic/compiled_design_resolver.hpp"
 #include "fsim/support/ctype_whitespace.hpp"
 #include "fsim/support/design_library.hpp"
+#include "fsim/support/stack_growth.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
 
 #include "compiled_design_linker_classes.hpp"
@@ -16,12 +17,14 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <functional>
 #include <limits>
 #include <map>
 #include <memory>
 #include <optional>
 #include <ranges>
 #include <set>
+#include <span>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -3358,6 +3361,427 @@ void restore_systemverilog_package_member_uses(CompiledDesign& design)
     }
 }
 
+// Record on each direct entity instantiation the unit its entity reference
+// resolved to, the one binding elaboration and the VHPI library model share
+// (IEEE 1076-2019 11.7.1). The reference is the edge
+// `add_vhdl_entity_instance_references` made for the instance: the same
+// owner, kind, library, entity name and source. A change of any instance
+// restamps the HIR, so the lookup indexes are refreshed only then.
+void link_vhdl_entity_instances(CompiledDesign& design)
+{
+    const auto& references = design.references();
+    const auto key = [](const CompiledReference& reference) {
+        return std::tie(reference.owner, reference.kind, reference.library,
+            reference.name, reference.secondary_name, reference.source,
+            reference.systemverilog_package_member);
+    };
+    const auto& instances = design.vhdl_hir.instances();
+    std::vector<std::pair<std::size_t, std::optional<UnitId>>> changes;
+    for (std::size_t index { }; index < instances.size(); ++index) {
+        const auto& instance = instances[index];
+        std::optional<UnitId> linked;
+        if (!instance.component && !instance.configuration
+            && instance.scope.valid()
+            && instance.scope.value() < design.semantics.scopes().size()) {
+            const auto owner
+                = design.semantics.scopes()[instance.scope.value()].unit;
+            if (owner.valid() && owner.value() < design.units().size()) {
+                const auto& unit = design.units()[owner.value()];
+                const auto [entity, architecture]
+                    = vhdl_entity_aspect(instance.target);
+                (void)architecture;
+                const CompiledReference wanted {
+                    CompiledReferenceKind::entity,
+                    unit.id,
+                    reference_library(entity, unit.library),
+                    reference_name(entity),
+                    {},
+                    instance.source,
+                    std::nullopt,
+                };
+                const auto found = std::ranges::lower_bound(
+                    references, key(wanted), std::less<> { }, key);
+                if (found != references.end()
+                    && key(*found) == key(wanted)) {
+                    linked = found->target;
+                }
+            }
+        }
+        if (linked != instance.linked_entity) {
+            changes.emplace_back(index, linked);
+        }
+    }
+    if (changes.empty()) {
+        return;
+    }
+    auto& mutable_instances = design.vhdl_hir.mutable_instances();
+    for (const auto& [index, linked] : changes) {
+        mutable_instances[index].linked_entity = linked;
+    }
+    design.refresh_lookup_indexes();
+}
+
+// The names of a binding indication's maps are declared elsewhere than the
+// configuration item (IEEE 1076-2019 12.3 k-n): an actual part names the
+// local generics and ports of the component the item applies to, a formal
+// part the formals of the entity the binding names. The HIR builder, which
+// sees one unit, left them unbound; the linked design has the component and
+// the entity, so this pass gives each such name its declaration and the
+// scope it is declared in. A formal part `f(s)` whose `f` is not a formal of
+// the entity converts the port `s` (6.5.7.1): its association is marked.
+void resolve_linked_vhdl_binding_maps(CompiledDesign& design)
+{
+    // Nothing to bind without a binding indication that has a map.
+    const auto has_map = [](const auto& self,
+                            const vhdl::BlockConfiguration& block) -> bool {
+        return std::ranges::any_of(block.components,
+                   [&](const vhdl::ComponentConfiguration& item) {
+                       return !item.binding.generic_map.empty()
+                           || !item.binding.port_map.empty()
+                           || (item.block_configuration
+                               && self(self, *item.block_configuration));
+                   })
+            || std::ranges::any_of(block.blocks,
+                [&](const vhdl::BlockConfiguration& nested) {
+                    return self(self, nested);
+                });
+    };
+    if (std::ranges::none_of(design.vhdl_hir.units(), [&](const vhdl::Unit& unit) {
+            return std::ranges::any_of(unit.component_configurations,
+                       [](const vhdl::ComponentConfiguration& item) {
+                           return !item.binding.generic_map.empty()
+                               || !item.binding.port_map.empty();
+                       })
+                || (unit.configuration && has_map(has_map, *unit.configuration));
+        })) {
+        return;
+    }
+    const auto& references = design.references();
+    const auto reference_key = [](const CompiledReference& reference) {
+        return std::tie(reference.owner, reference.kind, reference.library,
+            reference.name, reference.secondary_name, reference.source,
+            reference.systemverilog_package_member);
+    };
+    auto& units = design.vhdl_hir.mutable_units();
+    auto& expressions = design.vhdl_hir.mutable_expressions();
+    try {
+        design.refresh_lookup_indexes();
+    } catch (...) {
+        return;
+    }
+    std::unordered_map<std::uint32_t, std::size_t> expression_index;
+    expression_index.reserve(expressions.size());
+    for (std::size_t index = 0; index < expressions.size(); ++index) {
+        expression_index.emplace(expressions[index].id.value(), index);
+    }
+    const auto expression_at = [&](const ExpressionId id) -> vhdl::Expression* {
+        const auto found = expression_index.find(id.value());
+        return found == expression_index.end() ? nullptr
+                                               : &expressions[found->second];
+    };
+    const auto declaration_named
+        = [&](const std::span<const DeclarationId> candidates,
+              const std::string_view name)
+        -> std::optional<std::pair<DeclarationId, const vhdl::Declaration*>> {
+        for (const auto id : candidates) {
+            const auto declaration = design.find_declaration(id);
+            if (declaration && declaration->vhdl != nullptr
+                && same_vhdl_identifier(declaration->vhdl->name, name)) {
+                return std::pair { id, declaration->vhdl };
+            }
+        }
+        return std::nullopt;
+    };
+    // The entity a binding indication names, through the linker's
+    // reference of the binding (7.3.2.2).
+    const auto bound_entity = [&](const vhdl::Unit& owner,
+                                  const vhdl::BindingIndication& binding)
+        -> const vhdl::Unit* {
+        if (binding.kind != vhdl::BindingKind::entity
+            || binding.entity.text().empty()) {
+            return nullptr;
+        }
+        const CompiledReference wanted {
+            CompiledReferenceKind::entity,
+            owner.id,
+            reference_library(binding.entity.text(), owner.library),
+            reference_name(binding.entity.text()),
+            {},
+            binding.source,
+            std::nullopt,
+        };
+        const auto found = std::ranges::lower_bound(
+            references, reference_key(wanted), std::less<> { }, reference_key);
+        if (found == references.end()
+            || reference_key(*found) != reference_key(wanted)
+            || !found->target) {
+            return nullptr;
+        }
+        const auto unit = design.find_unit(*found->target);
+        return unit && unit->vhdl != nullptr
+                && unit->vhdl->kind == vhdl::UnitKind::entity
+            ? unit->vhdl
+            : nullptr;
+    };
+    // The component declaration a configuration item names, as visible
+    // where the configured block's declarative part ends (3.4.2, 12.3).
+    const auto bound_component
+        = [&](const vhdl::Unit& block, const vhdl::Name& component)
+        -> const vhdl::Declaration* {
+        const CompiledDesignResolver resolver { design, block.id };
+        const auto resolved = resolver.resolve_vhdl(component, block.scope,
+            [](const CompiledDeclarationView& view) {
+                return view.vhdl != nullptr && view.vhdl->component.has_value();
+            });
+        const auto selected = resolved.unique();
+        if (!selected) {
+            return nullptr;
+        }
+        const auto declaration = design.find_declaration(*selected);
+        return declaration && declaration->vhdl != nullptr
+                && declaration->vhdl->component
+            ? declaration->vhdl
+            : nullptr;
+    };
+    std::vector<DeclarationId> entity_ports;
+    std::vector<DeclarationId> entity_generics;
+    // A simple name in an actual part denoting a local of the component
+    // takes the component's declaration and scope (12.3 k, l); a name in a
+    // formal part a formal of the entity (12.3 m, n).
+    const auto bind_name = [&](vhdl::Expression& expression,
+                               const std::span<const DeclarationId> locals,
+                               const ScopeId scope, const bool actual_part) {
+        if (expression.kind != vhdl::ExpressionKind::name
+            || !expression.referenced_name
+            || expression.text.find('.') != std::string::npos) {
+            return false;
+        }
+        const auto local = declaration_named(locals, expression.text);
+        if (!local) {
+            return false;
+        }
+        expression.referenced_name->selected = local->first;
+        expression.referenced_name->overloads.clear();
+        // An actual part is evaluated in the component's scope; a formal
+        // part keeps its scope and identity, which its conversion is read
+        // from. A configuration declaration is a unit of its own whose
+        // projection does not hold the architecture's scopes, so only an
+        // actual part in the component's own unit (a configuration
+        // specification) takes that scope; elsewhere the selected
+        // declaration alone binds it. The expression's scope and its
+        // semantic identity change together.
+        const auto& identities = design.semantics.expression_identities();
+        const auto& all_scopes = design.semantics.scopes();
+        if (actual_part && scope.valid()
+            && expression.id.value() < identities.size()) {
+            const auto current = identities[expression.id.value()].scope;
+            if (current.valid() && current.value() < all_scopes.size()
+                && scope.value() < all_scopes.size()
+                && all_scopes[current.value()].unit
+                    == all_scopes[scope.value()].unit) {
+                expression.scope = scope;
+                design.semantics.rebind_expression_scope(expression.id, scope);
+            }
+        }
+        return true;
+    };
+    const auto bind_actual = [&](const auto& self, const ExpressionId id,
+                                 const std::span<const DeclarationId> locals,
+                                 const ScopeId local_scope,
+                                 const std::span<const DeclarationId> formals,
+                                 const ScopeId formal_scope) -> void {
+        auto* const expression = expression_at(id);
+        if (expression == nullptr) {
+            return;
+        }
+        if (bind_name(*expression, locals, local_scope, true)) {
+            return;
+        }
+        const bool subelements = expression->kind == vhdl::ExpressionKind::aggregate
+            && expression->text == "@vhdl-formal-subelements";
+        for (const auto operand : expression->operands) {
+            support::with_stack([&] {
+                self(self, operand, locals, local_scope, formals, formal_scope);
+            });
+        }
+        for (const auto& association : expression->associations) {
+            support::with_stack([&] {
+                self(self, association.value, locals, local_scope, formals,
+                    formal_scope);
+            });
+            // The choices of an individual-association group are parts of
+            // the formal (6.5.7.1).
+            for (const auto choice : association.choices) {
+                if (auto* const part = expression_at(choice);
+                    subelements && part != nullptr) {
+                    (void)bind_name(*part, formals, formal_scope, false);
+                }
+            }
+        }
+    };
+    const auto resolve_map = [&](std::vector<vhdl::Association>& map,
+                                 const bool ports,
+                                 const vhdl::Declaration& component,
+                                 const vhdl::Unit& entity) {
+        const std::span<const DeclarationId> locals = ports
+            ? component.component->ports
+            : component.component->generics;
+        const std::span<const DeclarationId> formals
+            = ports ? entity_ports : entity_generics;
+        const auto local_scope = component.nested_scope.value_or(ScopeId { });
+        for (auto& association : map) {
+            association.formal_conversion = false;
+            if (association.formal) {
+                if (const auto formal = declaration_named(
+                        formals, association.formal->text())) {
+                    association.formal->selected = formal->first;
+                    association.formal->overloads.clear();
+                } else if (ports && association.kind
+                        == vhdl::AssociationKind::expression
+                    && association.expression) {
+                    // `f(s) => d`: every choice names a port of mode out,
+                    // inout or buffer, which `f` converts (6.5.7.1).
+                    auto* const group = expression_at(*association.expression);
+                    const bool conversion = group != nullptr
+                        && group->kind == vhdl::ExpressionKind::aggregate
+                        && group->text == "@vhdl-formal-subelements"
+                        && !group->associations.empty()
+                        && association.formal_conversion_calls.size()
+                            == group->associations.size()
+                        && std::ranges::all_of(group->associations,
+                            [&](const vhdl::AggregateAssociation& element) {
+                                if (element.choices.size() != 1U) {
+                                    return false;
+                                }
+                                const auto* const choice
+                                    = expression_at(element.choices.front());
+                                if (choice == nullptr
+                                    || choice->kind != vhdl::ExpressionKind::name) {
+                                    return false;
+                                }
+                                const auto port = declaration_named(
+                                    formals, choice->text);
+                                return port
+                                    && (port->second->direction
+                                            == vhdl::Direction::output
+                                        || port->second->direction
+                                            == vhdl::Direction::inout
+                                        || port->second->direction
+                                            == vhdl::Direction::buffer);
+                            });
+                    if (conversion) {
+                        association.formal_conversion = true;
+                        for (const auto call_id :
+                            association.formal_conversion_calls) {
+                            auto* const call = expression_at(call_id);
+                            if (call == nullptr || call->operands.empty()) {
+                                continue;
+                            }
+                            if (auto* const operand
+                                = expression_at(call->operands.front())) {
+                                (void)bind_name(*operand, formals, entity.scope, false);
+                            }
+                        }
+                    }
+                }
+            }
+            if (association.kind == vhdl::AssociationKind::expression
+                && association.expression) {
+                bind_actual(bind_actual, *association.expression, locals,
+                    local_scope, formals, entity.scope);
+            }
+        }
+    };
+    const auto resolve_binding
+        = [&](const vhdl::Unit& owner, const vhdl::Unit& block,
+              vhdl::ComponentConfiguration& item) {
+              if (item.binding.generic_map.empty()
+                  && item.binding.port_map.empty()) {
+                  return;
+              }
+              const auto* const entity = bound_entity(owner, item.binding);
+              const auto* const component = bound_component(block, item.component);
+              if (entity == nullptr || component == nullptr) {
+                  return;
+              }
+              entity_ports.clear();
+              entity_generics.clear();
+              for (const auto id : entity->declarations) {
+                  const auto declaration = design.find_declaration(id);
+                  if (!declaration || declaration->vhdl == nullptr) {
+                      continue;
+                  }
+                  if (declaration->vhdl->form == vhdl::DeclarationForm::port) {
+                      entity_ports.push_back(id);
+                  } else if (vhdl::is_generic_formal(declaration->vhdl->form)) {
+                      entity_generics.push_back(id);
+                  }
+              }
+              resolve_map(item.binding.generic_map, false, *component, *entity);
+              resolve_map(item.binding.port_map, true, *component, *entity);
+          };
+    const auto resolve_block = [&](const auto& self, const vhdl::Unit& owner,
+                                   const vhdl::Unit& block,
+                                   vhdl::BlockConfiguration& configuration) -> void {
+        for (auto& item : configuration.components) {
+            resolve_binding(owner, block, item);
+            if (item.block_configuration) {
+                // The block configuration of a component configuration
+                // configures the bound design entity (3.4.3): its items
+                // name that entity's architecture, found below by name.
+                const auto* const entity = bound_entity(owner, item.binding);
+                const auto architecture = entity == nullptr
+                    ? units.end()
+                    : std::ranges::find_if(units, [&](const vhdl::Unit& unit) {
+                          return unit.kind == vhdl::UnitKind::architecture
+                              && same_vhdl_identifier(
+                                  unit.library, entity->library)
+                              && same_vhdl_identifier(
+                                  unit.primary_name, entity->name)
+                              && same_vhdl_identifier(unit.name,
+                                  item.block_configuration->block.text());
+                      });
+                if (architecture != units.end()) {
+                    support::with_stack([&] {
+                        self(self, owner, *architecture,
+                            *item.block_configuration);
+                    });
+                }
+            }
+        }
+        for (auto& nested : configuration.blocks) {
+            support::with_stack([&] { self(self, owner, block, nested); });
+        }
+    };
+    for (std::size_t index = 0; index < units.size(); ++index) {
+        auto& unit = units[index];
+        if (unit.kind == vhdl::UnitKind::architecture) {
+            for (auto& item : unit.component_configurations) {
+                resolve_binding(unit, unit, item);
+            }
+        }
+        if (!unit.configuration) {
+            continue;
+        }
+        // The block configuration of a configuration declaration configures
+        // an architecture of the configured entity (3.4.1, 3.4.2).
+        const auto architecture = std::ranges::find_if(units,
+            [&](const vhdl::Unit& candidate) {
+                return candidate.kind == vhdl::UnitKind::architecture
+                    && same_vhdl_identifier(candidate.library, unit.library)
+                    && same_vhdl_identifier(
+                        candidate.primary_name, unit.primary_name)
+                    && same_vhdl_identifier(
+                        candidate.name, unit.configuration->block.text());
+            });
+        if (architecture == units.end()) {
+            continue;
+        }
+        resolve_block(resolve_block, unit, *architecture, *unit.configuration);
+    }
+    design.refresh_lookup_indexes();
+}
+
 } // namespace
 
 void refresh_compiled_design_metadata(CompiledDesign& design)
@@ -3627,6 +4051,8 @@ void refresh_compiled_design_metadata(CompiledDesign& design)
             : resolve_reference(design, reference);
     }
     link_systemverilog_configurations(design);
+    link_vhdl_entity_instances(design);
+    resolve_linked_vhdl_binding_maps(design);
 }
 
 CompiledLinkResult extract_compiled_library(
@@ -3944,6 +4370,7 @@ static CompiledLinkResult finalize_linked_design(CompiledDesign output)
     }
     resolve_linked_vhdl_architecture_names(output);
     resolve_linked_vhdl_type_marks(output);
+    resolve_linked_vhdl_binding_maps(output);
     if (!normalize_compiled_design(output)) {
         return { std::nullopt,
             "linked compiled-HIR bundle is structurally invalid" };

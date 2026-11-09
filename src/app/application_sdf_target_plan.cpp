@@ -657,7 +657,12 @@ SdfTargetPlanResult build_sdf_annotation_plan(
         auto owner = target_kind_identity(annotation.target_kind);
         append_field(owner, annotation.target_identity);
         append_field(owner, std::to_string(static_cast<unsigned>(annotation.construct_kind)));
-        if (!target_owners.insert(owner).second) {
+        // Net delays (INTERCONNECT) apply in order of occurrence: a later
+        // record to the same source and load replaces the earlier delay
+        // (ABSOLUTE) or adds to it (INCREMENT), as in OVI SDF 3.0 and IEEE
+        // 1364-2005 16.3, so two of them are not a conflict.
+        if (annotation.target_kind != SdfTimingTargetKind::Interconnect
+            && !target_owners.insert(owner).second) {
             diagnose(result.diagnostics, "FSIM-SDF-PLAN-003",
                 "SDF annotation plan contains duplicate ownership of one timing target",
                 span);

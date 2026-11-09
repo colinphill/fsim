@@ -617,7 +617,8 @@ void add_compiler_environment_to_key(
             continue;
         }
         std::unordered_set<std::string> expanded_names;
-        for (std::size_t expansion = 0; expansion < 64; ++expansion) {
+        // Each macro name expands at most once, so the loop ends.
+        for (;;) {
             if (const auto include = parse_include_replacement(replacement)) {
                 result.includes.push_back(*include);
                 replacement.clear();
@@ -643,9 +644,6 @@ void add_compiler_environment_to_key(
                 break;
             }
             replacement = found->second;
-        }
-        if (!replacement.empty()) {
-            result.has_unresolved_macro_include = true;
         }
     }
     return result;

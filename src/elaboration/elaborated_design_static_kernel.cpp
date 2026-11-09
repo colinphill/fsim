@@ -12,6 +12,7 @@
 // can observe it except through ordinary reads, which make it a boundary
 // output. Memories are kernel-owned when every accessor is a member.
 #include "fsim/elaboration/elaborator.hpp"
+#include "fsim/support/stack_growth.hpp"
 #include "fsim/runtime/simir_shared_body_scan.hpp"
 #include "fsim/support/parallel_for.hpp"
 #include "elaborated_design_process_access.hpp"
@@ -174,6 +175,7 @@ runtime::simir::Process host_stub(const runtime::simir::ProcessProgramView& host
     stub.static_sensitivity = std::move(sensitivity);
     stub.debug_locals.clear();
     stub.call_results.clear();
+    stub.frame_locals.clear();
     stub.debug_string_locals.clear();
     stub.debug_container_locals.clear();
     stub.expression_profiles = { };
@@ -235,11 +237,14 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     // host signal, and each SystemC process runs in its process executor.
     const bool systemc = !systemc_processes_.empty() || !systemc_objects_.empty();
     const auto& access = requested_access;
-    // The debugger examines, deposits and forces any signal and stops any
-    // process at any statement: every signal stays a host signal, as for
-    // SystemC. Foreign libraries and traces need no plan of their own: they
-    // observe and write kernel-owned signals at run time (S19).
-    const bool host_all = access.debug || systemc;
+    // The debugger examines, deposits and forces any signal through the
+    // kernel's run-time access, as a foreign library does, so its signals
+    // stay kernel-owned (S19). It stops any process at any statement:
+    // every process is a behavioral thread or hosted, its debug points
+    // executable (below), and dead logic and delta collapse stay off so that
+    // every process runs. Foreign libraries and traces need no plan of their
+    // own: they observe and write kernel-owned signals at run time (S19).
+    const bool host_all = systemc || access.host_signals;
     // The access plan replaces the whole-design coverage, specify and
     // VCD-control gates (docs/engine-v4-semantics.md S19, S21);
     // FSIM_STATIC_KERNEL_ACCESS_PLAN=0 restores them.
@@ -1180,7 +1185,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         });
     // A signal the kernel never mirrors as a sole writer's update
     // (sole_writer_inputs below): the design forces, every signal is a host
-    // signal (host_all), its resolution is not a single driver's value, or
+    // signal (SystemC), its resolution is not a single driver's value, or
     // its drivers are several processes or have a drive strength. Its kernel
     // readers wake when the host commits it, as host readers do.
     const auto never_sole_writer = [&](const SignalId signal) {
@@ -2014,6 +2019,21 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             }
         }
     }
+    // The placeholder process of a foreign architecture runs no statement:
+    // a VHPI program writes its drivers from the host (vhpi_create,
+    // vhpi_schedule_transaction; IEEE 1076-2019 20.4.2, 23.6). It is no
+    // member, so the signals it drives keep the host's driver values and
+    // resolution.
+    for (std::size_t index = 0U; index < process_count; ++index) {
+        if (candidates[index] && views[index].valid()
+            && views[index].name().ends_with(
+                vhdl_foreign_architecture_process_suffix)) {
+            candidates[index].reset();
+            if (census) {
+                rejection[index] = "foreign_architecture";
+            }
+        }
+    }
     if (publish_all && deferred_refusal == nullptr
         && std::ranges::any_of(candidates, [](const auto& candidate) {
                return candidate && candidate->vhdl;
@@ -2405,8 +2425,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             proxy_signal[family.proxy] = 1U;
         }
     }
-    // Every signal and container is a host object for the debugger, SystemC,
-    // a VCD control operation or a VHDL opaque process.
+    // Every signal and container is a host object for SystemC, a VCD control
+    // operation or a VHDL opaque process.
     const bool host_signals = host_all || observe_all;
     std::vector<std::uint8_t> container_shape_ok(object_count, 0U);
     for (std::size_t object = 0U; object < object_count; ++object) {
@@ -3077,14 +3097,37 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             }
             std::ranges::sort(regions);
             std::uint64_t covered = 0U;
-            for (std::size_t index = 0U; index < regions.size(); ++index) {
-                if (index != 0U
-                    && regions[index - 1U].second > regions[index].first) {
-                    return false;
+            std::uint32_t reach = 0U;
+            bool overlapping = false;
+            for (const auto& region : regions) {
+                // Regions of different processes share elements.
+                overlapping = overlapping || region.first < reach;
+                const auto begin = std::max(region.first, reach);
+                if (region.second > begin) {
+                    covered += region.second - begin;
                 }
-                covered += regions[index].second - regions[index].first;
+                reach = std::max(reach, region.second);
             }
-            return resolution != ResolutionKind::std_logic || covered == width;
+            if (!overlapping) {
+                return resolution != ResolutionKind::std_logic || covered == width;
+            }
+            // Several processes drive an element (IEEE 1076-2019 14.7.3.2):
+            // the kernel resolves a std_logic signal over its drivers
+            // (Slot::resolved, StaticKernel::resolve_nine_word) when every
+            // element has one and every driver is a VHDL member. A
+            // resolution function of the design's own, a guarded signal's
+            // variants, conversion drivers and drive strengths keep the
+            // signal on the host.
+            const auto& info = signals_[signal];
+            return resolution == ResolutionKind::std_logic && covered == width
+                && info.value_kind == ValueKind::logic9 && !info.vhdl_resolver
+                && info.vhdl_conversion_drivers.empty()
+                && std::ranges::all_of(node.writers, [&](const auto& writer) {
+                       return candidates[writer.process]
+                           && candidates[writer.process]->vhdl
+                           && views[writer.process].drive_strength()
+                               == DriveStrength { };
+                   });
         }
         if (!vhdl_mode && resolution == ResolutionKind::none) {
             // Combinational members settle in dependency order, so which of
@@ -3968,7 +4011,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     {
         const char* dead_text = std::getenv("FSIM_STATIC_KERNEL_DEAD_LOGIC");
         bool enabled = (dead_text == nullptr || std::string_view { dead_text } != "0")
-            && !host_all && !observe_all && !access.coverage
+            && !host_all && !observe_all && !access.coverage && !access.debug
             && !publish_all && graph.access_inventory_complete()
             && graph_processes.size() == process_count;
         for (std::size_t index = 0U; enabled && index < process_count; ++index) {
@@ -4323,7 +4366,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         const char* collapse_text = std::getenv("FSIM_STATIC_KERNEL_DELTA_COLLAPSE");
         bool enabled = vhdl_mode
             && (collapse_text == nullptr || std::string_view { collapse_text } != "0")
-            && !host_all && !observe_all && !access.coverage
+            && !host_all && !observe_all && !access.coverage && !access.debug
             && !publish_all && graph.access_inventory_complete()
             && graph_processes.size() == process_count;
         // An operation whose accesses are opaque could write anything.
@@ -4547,7 +4590,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                             failed = no_reader;
                             return false;
                         }
-                        if (!self(self, target, visit, failed, depth + 1U)) {
+                        if (!support::with_stack([&] { return self(self, target, visit, failed, depth + 1U); })) {
                             return false;
                         }
                     }

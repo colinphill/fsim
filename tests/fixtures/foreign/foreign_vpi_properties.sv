@@ -19,6 +19,13 @@ module top;
         @(posedge clk) x until y;
     endproperty
 
+    // Local variables are variables of the declaration (37.51, 37.53).
+    sequence s_lv;
+        int v;
+        logic [3:0] w;
+        a ##1 b;
+    endsequence
+
     a1: assert property (p_imp(a, b));
     a2: assert property (p_until(a));
     a3: assert property (@(posedge clk) a |-> ##[1:2] b);

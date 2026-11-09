@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "hierarchy_builder_internal.hpp"
+#include "fsim/support/stack_growth.hpp"
 #include "../runtime/simir_operation_list_sharing.hpp"
 #include "specialization_cache.hpp"
 #include "lowerer_internal.hpp"
@@ -966,8 +967,6 @@ bool HierarchyBuilder::vhdl_statement_iteration_invariant(
             && types[type.value()].id == type
             && !local(types[type.value()].scope);
     };
-    static constexpr std::size_t maximum_depth { 256U };
-    bool exceeded { };
     // Whether a referenced declaration is the same in every iteration, or
     // a signal of the bodies with an iteration-independent subtype.
     const auto declaration_invariant = [&](const semantic::DeclarationId id) {
@@ -999,10 +998,6 @@ bool HierarchyBuilder::vhdl_statement_iteration_invariant(
     const auto expression = [&](const auto& self,
                                 const semantic::ExpressionId id,
                                 const std::size_t depth) -> bool {
-        if (depth > maximum_depth) {
-            exceeded = true;
-            return false;
-        }
         const auto found = specialized.find_expression(id);
         if (!found || found->vhdl == nullptr) {
             return false;
@@ -1025,16 +1020,16 @@ bool HierarchyBuilder::vhdl_statement_iteration_invariant(
             && std::ranges::all_of(dependencies.types, type_invariant)
             && std::ranges::all_of(value.operands,
                 [&](const semantic::ExpressionId operand) {
-                    return self(self, operand, depth + 1U);
+                    return support::with_stack([&] { return self(self, operand, depth + 1U); });
                 })
             && std::ranges::all_of(value.associations,
                 [&](const semantic::vhdl::AggregateAssociation& association) {
                     return !names_variant(association.choice_spelling)
                         && std::ranges::all_of(association.choices,
                             [&](const semantic::ExpressionId choice) {
-                                return self(self, choice, depth + 1U);
+                                return support::with_stack([&] { return self(self, choice, depth + 1U); });
                             })
-                        && self(self, association.value, depth + 1U);
+                        && support::with_stack([&] { return self(self, association.value, depth + 1U); });
                 });
     };
     const auto optional_expression
@@ -1126,10 +1121,6 @@ bool HierarchyBuilder::vhdl_statement_iteration_invariant(
     const auto statement_invariant
         = [&](const auto& self, const semantic::StatementId id,
               const std::size_t depth) -> bool {
-        if (depth > maximum_depth) {
-            exceeded = true;
-            return false;
-        }
         const auto found = specialized.find_statement(id);
         if (!found || found->vhdl == nullptr) {
             return false;
@@ -1139,7 +1130,7 @@ bool HierarchyBuilder::vhdl_statement_iteration_invariant(
                                         ids) {
             return std::ranges::all_of(ids,
                 [&](const semantic::StatementId nested) {
-                    return self(self, nested, depth + 1U);
+                    return support::with_stack([&] { return self(self, nested, depth + 1U); });
                 });
         };
         return value.declarations.empty()
@@ -1187,8 +1178,7 @@ bool HierarchyBuilder::vhdl_statement_iteration_invariant(
                 });
     };
     const bool invariant = !regions.empty()
-        && statement_invariant(statement_invariant, statement_id, 0U)
-        && !exceeded;
+        && statement_invariant(statement_invariant, statement_id, 0U);
     if (vhdl_iteration_trace_enabled) {
         std::cerr << "fsim-iteration-statement: " << statement_id.value()
                   << " regions=" << regions.size()

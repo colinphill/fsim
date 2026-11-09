@@ -236,7 +236,8 @@ HierarchyBuilder::compiled_systemverilog_scoped_parameter(
         std::vector<std::string_view> names;
         bool inside { };
         std::optional<semantic::ScopeId> current { declaration.scope };
-        for (std::size_t depth { }; current && depth < 4096U; ++depth) {
+        // Each step moves to the parent scope, so the walk ends.
+        while (current) {
             if (*current == child.systemverilog->scope) {
                 inside = true;
                 break;

@@ -5,6 +5,7 @@
 #include "fsim/runtime/uvm_activity.hpp"
 #include "fsim/runtime/uvm_phase.hpp"
 
+#include <limits>
 #include <cstddef>
 #include <compare>
 #include <cstdint>
@@ -21,7 +22,10 @@
 
 namespace fsim::runtime {
 
+class RunStateArchive;
+
 class SystemVerilogUvmObjectionService;
+class SystemVerilogUvmRunStateAccess;
 struct SystemVerilogUvmObjectionDrainEvent;
 
 class SystemVerilogUvmObjectionSourceHandle final {
@@ -36,6 +40,7 @@ class SystemVerilogUvmObjectionSourceHandle final {
       const SystemVerilogUvmObjectionSourceHandle&) = default;
 
  private:
+  friend class SystemVerilogUvmRunStateAccess;
   friend class SystemVerilogUvmObjectionService;
   SystemVerilogUvmObjectionSourceHandle(
       std::shared_ptr<const void> owner,
@@ -70,7 +75,7 @@ struct SystemVerilogUvmObjectionLimits {
   std::size_t maximum_entries{262'144};
   std::size_t maximum_description_bytes{4'096};
   std::uint64_t maximum_count{1ULL << 60U};
-  std::size_t maximum_propagation_depth{256};
+  std::size_t maximum_propagation_depth{std::numeric_limits<std::size_t>::max()};
   std::size_t maximum_callbacks_per_operation{512};
   std::size_t maximum_trace_records{1U << 20U};
   std::size_t maximum_trace_output_bytes{16U * 1'024U * 1'024U};
@@ -157,6 +162,20 @@ struct SystemVerilogUvmDrainSnapshot {
 /// update is fully checked before local or propagated state is published.
 class SystemVerilogUvmObjectionService final {
  public:
+  /// Run-state save and restore of the objection counts, the drains and the
+  /// trace (#188); the handles are bound to run_state_owner()
+  /// (uvm_run_state.hpp). reset_run_state returns to no objection. The
+  /// finalization maps are scratch: run_state_idle is false while one is not
+  /// empty.
+  void run_state_io(RunStateArchive& archive);
+  void reset_run_state();
+  [[nodiscard]] bool run_state_idle() const noexcept {
+    return finalization_depth_.empty() && finalization_recheck_.empty();
+  }
+  [[nodiscard]] std::shared_ptr<const void> run_state_owner() const noexcept {
+    return owner_;
+  }
+
   using Callback = std::function<void(
       const SystemVerilogUvmObjectionEvent&)>;
   using AllDroppedCallback = std::function<void(

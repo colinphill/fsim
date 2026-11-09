@@ -619,7 +619,10 @@ application_detail::load_object_workspace(
         checked.mutable_vhdl(), mixed_plan->newest);
     checked.refresh_lookup_indexes();
   }
-  application_detail::install_compiled_class_specializations(checked);
+  // A single object loaded for its references has the libraries its
+  // classes extend still unlinked: only the final design reports drops.
+  application_detail::install_compiled_class_specializations(
+      checked, diagnostics, validate_uvm_surface);
   if (selected_release != project::SystemVerilogUvmRelease::none) {
     const auto has_class = [&](const std::string_view suffix) {
       return std::ranges::any_of(

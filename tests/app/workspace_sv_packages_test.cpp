@@ -114,7 +114,10 @@ void expect_signal(const semantic::CompiledDesign& compiled,
 {
     app::CheckedProject checked;
     static_cast<semantic::CompiledDesign&>(checked) = compiled;
-    app::application_detail::install_compiled_class_specializations(checked);
+    diagnostic::Engine specialization_diagnostics;
+    app::application_detail::install_compiled_class_specializations(
+        checked, specialization_diagnostics);
+    assert(!specialization_diagnostics.has_error());
     const elaboration::Root root { "sv:work.consumer", "dut" };
     auto elaborated = elaboration::elaborate(checked,
         std::span<const elaboration::Root> { &root, 1U }, { }, { }, nullptr, { });

@@ -330,7 +330,7 @@ private:
                                        tokens_.data() + position_ + 2U,
                                        *close - position_ - 2U },
                 unit_, boolean_, local_flow_mode_, local_names_ };
-            inner.depth_ = depth_;
+            inner.path_ = path_;
             auto sequence = inner.parse_sequence_only();
             if (!sequence) {
                 return nullptr;
@@ -349,7 +349,7 @@ private:
                                            tokens_.data() + position_ + 1U,
                                            *close - position_ - 1U },
                     unit_, boolean_, local_flow_mode_, local_names_ };
-                inner.depth_ = depth_;
+                inner.path_ = path_;
                 if (auto property = inner.parse();
                     property && property->kind != PropertyKind::sequence) {
                     position_ = *close + 1U;
@@ -699,7 +699,8 @@ private:
         }
         PropertyParser inner {
             *body, unit_, boolean_, local_flow_mode_, local_names_ };
-        inner.depth_ = depth_ + 1U;
+        inner.path_ = path_;
+        inner.path_.push_back(&declaration);
         return inner.parse_sequence_only();
     }
 
@@ -712,7 +713,8 @@ private:
         if (!declaration.local_variables.empty()) {
             return std::nullopt;
         }
-        if (depth_ >= 16U) {
+        // A declaration that is being expanded is recursive.
+        if (std::ranges::find(path_, &declaration) != path_.end()) {
             return std::nullopt;
         }
         std::vector<std::vector<Token>> actuals;
@@ -797,7 +799,8 @@ private:
         }
         PropertyParser inner {
             *body, unit_, boolean_, local_flow_mode_, local_names_ };
-        inner.depth_ = depth_ + 1U;
+        inner.path_ = path_;
+        inner.path_.push_back(&*declaration);
         auto property = inner.parse_property();
         if (!property || inner.position_ != inner.tokens_.size()) {
             return nullptr;
@@ -978,7 +981,7 @@ private:
                 *close - position_ - 2U };
             if (!local_flow_mode_) {
                 PropertyParser inner { inside, unit_, boolean_ };
-                inner.depth_ = depth_;
+                inner.path_ = path_;
                 auto sequence = inner.parse_sequence_only();
                 if (!sequence) {
                     return nullptr;
@@ -997,7 +1000,7 @@ private:
             PropertyParser inner {
                 elements.front(), unit_, boolean_, local_flow_mode_,
                 local_names_ };
-            inner.depth_ = depth_;
+            inner.path_ = path_;
             auto sequence = inner.parse_sequence_only();
             if (!sequence) {
                 return nullptr;
@@ -1107,7 +1110,7 @@ private:
                 && !boolean_(inside)) {
                 PropertyParser inner {
                     inside, unit_, boolean_, local_flow_mode_, local_names_ };
-                inner.depth_ = depth_;
+                inner.path_ = path_;
                 auto sequence = inner.parse_sequence_only();
                 if (sequence) {
                     position_ = *close + 1U;
@@ -1136,7 +1139,8 @@ private:
     bool local_flow_mode_ { };
     const PropertyLocalNames* local_names_ { };
     std::size_t position_ { };
-    std::size_t depth_ { };
+    // The declarations being expanded on the path to this parser.
+    std::vector<const SystemVerilogAssertionDeclaration*> path_;
 };
 
 // The automaton: consuming transitions carry a guard (true when empty);

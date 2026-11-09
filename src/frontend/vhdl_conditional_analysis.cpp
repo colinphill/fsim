@@ -17,8 +17,6 @@
 namespace fsim::frontend {
 namespace {
 
-    constexpr std::size_t max_conditional_depth = 128U;
-
     enum class ExpressionTokenKind {
         Identifier,
         String,
@@ -675,38 +673,8 @@ namespace {
                 return;
             }
 
-            if (overflow_depth_ != 0U) {
-                if (directive == "if") {
-                    (void)condition(remainder, span);
-                    ++overflow_depth_;
-                } else if (directive == "elsif") {
-                    (void)condition(remainder, span);
-                } else if (directive == "end") {
-                    const auto [ending_word, ending_remainder] = split_word(remainder);
-                    if ((!ending_word.empty()
-                            && detail::ctype_lower_copy(ending_word) != "if")
-                        || !ending_remainder.empty()) {
-                        diagnose("FSIM-VHDL-CA-002",
-                            "a conditional analysis closing directive must be `end or `end if",
-                            span);
-                    } else {
-                        --overflow_depth_;
-                    }
-                } else if (!remainder.empty()) {
-                    diagnose("FSIM-VHDL-CA-002",
-                        "a conditional analysis `else directive takes no operands", span);
-                }
-                return;
-            }
-
             if (directive == "if") {
                 const auto selected = condition(remainder, span);
-                if (stack_.size() == max_conditional_depth) {
-                    diagnose("FSIM-VHDL-CA-004",
-                        "conditional analysis nesting exceeds 128 levels", span);
-                    overflow_depth_ = 1U;
-                    return;
-                }
                 const bool parent = active();
                 const bool branch = selected.value_or(false);
                 stack_.push_back(ConditionalFrame {
@@ -765,7 +733,6 @@ namespace {
         VhdlStandard standard_;
         const VhdlConditionalIdentifiers& identifiers_;
         std::size_t block_comment_depth_ { };
-        std::size_t overflow_depth_ { };
         std::vector<ConditionalFrame> stack_;
         std::optional<ProtectionFrame> protection_;
         std::vector<Diagnostic> diagnostics_;

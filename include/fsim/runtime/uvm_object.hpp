@@ -18,6 +18,8 @@
 
 namespace fsim::runtime {
 
+class RunStateArchive;
+
 enum class SystemVerilogUvmFieldFlag : std::uint16_t {
   None = 0,
   NoCopy = 1U << 0U,
@@ -217,7 +219,7 @@ struct SystemVerilogUvmObjectDescriptor {
 };
 
 struct SystemVerilogUvmObjectLimits {
-  std::size_t maximum_depth{1024};
+  std::size_t maximum_depth{std::numeric_limits<std::size_t>::max()};
   std::size_t maximum_objects{1U << 20U};
   std::size_t maximum_fields{1U << 22U};
   std::size_t maximum_output_bytes{1U << 28U};
@@ -228,6 +230,11 @@ struct SystemVerilogUvmObjectLimits {
 /// cycles, are resource bounded, and publish copy changes transactionally.
 class SystemVerilogUvmObjectService final {
  public:
+  /// Run-state save and restore of the objects' names and instance numbers
+  /// (#188), and the return to the state before the first object.
+  void run_state_io(RunStateArchive& archive);
+  void reset_run_state();
+
   using CreateHook = std::function<SystemVerilogClassHandle(
       std::string_view specialization_identity,
       std::string_view declared_type,

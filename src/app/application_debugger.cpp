@@ -524,6 +524,10 @@ DebuggerSession::DebuggerSession(
       retain_scope(design_path(simulation, instance.path));
     }
     std::ranges::sort(execution_scope_paths_);
+    // The kernel owns the design's signals: its time steps and delta rounds
+    // reach the host's safe points (time, phase and step stops, interrupts)
+    // only when a client opens the boundary, as a foreign library does.
+    simulation_.open_external_observation();
     observer_ = simulation_.add_signal_change_hook(
         [this](
             const SignalId signal,
@@ -1179,6 +1183,12 @@ DebuggerBreakpointInfo DebuggerSession::add_breakpoint(
   } else {
     throw std::invalid_argument(
         "debug break expects time, signal, source, phase, or uvm");
+  }
+  if (breakpoint.kind == DebugBreakpointKind::signal
+      || breakpoint.kind == DebugBreakpointKind::watch) {
+    // A kernel-owned signal reports its changes to the host from now on.
+    const SignalId watched[] { breakpoint.signal };
+    simulation_.watch_signal_changes(watched);
   }
   breakpoint.id = next_breakpoint_++;
   breakpoints_.push_back(breakpoint);
@@ -2555,6 +2565,10 @@ void DebuggerSession::report_execution_point()  {
   }
 
 void DebuggerSession::report_result(const runtime::RunResult& result)  {
+    // A stop inside an activation leaves the kernel's pending outputs
+    // unpublished: the host's copies must show what the earlier statements
+    // wrote before the session examines them.
+    simulation_.publish_kernel_outputs();
     if (hit_) {
       output_ << "hit breakpoint " << hit_->id << ": "
               << hit_->description << '\n';

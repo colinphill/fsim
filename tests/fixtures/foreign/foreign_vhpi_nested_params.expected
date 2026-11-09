@@ -1,0 +1,14 @@
+#c stmt whole.assign vhpiSeqSigAssignStmtK line 17 t=0
+#c   y basics=4 contributors: vhpiDriverK(main=1,:top:sv(0)) vhpiDriverK(main=1,:top:sv(1)) vhpiDriverK(main=1,:top:sv(2)) vhpiDriverK(main=1,:top:sv(3))
+#c stmt elem.assign vhpiSeqSigAssignStmtK line 21 t=0
+#c   y basics=1 contributors: vhpiDriverK(main=1,:top:sv(2))
+#c stmt part.assign vhpiSeqSigAssignStmtK line 25 t=0
+#c   y basics=2 contributors: vhpiDriverK(main=1,:top:sv(0)) vhpiDriverK(main=1,:top:sv(1))
+#c stmt peek.return vhpiReturnStmtK line 29 t=0
+#c   z basics=1 contributors: vhpiDriverK(main=1,:top:sv(2))
+#c stmt elem.assign vhpiSeqSigAssignStmtK line 21 t=0
+#c   y basics=1 contributors: vhpiDriverK(main=1,:top:sv(1))
+#c stmt part.assign vhpiSeqSigAssignStmtK line 25 t=0
+#c   y basics=2 contributors: vhpiDriverK(main=1,:top:sv(1)) vhpiDriverK(main=1,:top:sv(2))
+#c stmt elem.assign vhpiSeqSigAssignStmtK line 21 t=0
+#c   y basics=1 contributors: vhpiDriverK(main=1,:top:sv(2))

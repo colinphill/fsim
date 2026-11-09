@@ -116,6 +116,13 @@ class SystemVerilogUvmPolicyError final : public std::runtime_error {
 
 class SystemVerilogUvmSynchronizationService final {
  public:
+  /// True while the service holds no state: a run that never used it has
+  /// nothing to save (#188). Its waiters and callbacks are the embedder's.
+  [[nodiscard]] bool run_state_idle() const noexcept {
+    return events_.empty() && event_names_.empty() && barriers_.empty()
+        && pools_.empty() && queues_.empty() && heartbeats_.empty();
+  }
+
   explicit SystemVerilogUvmSynchronizationService(
       SystemVerilogUvmObjectService& objects,
       SystemVerilogUvmPolicyLimits limits = {});

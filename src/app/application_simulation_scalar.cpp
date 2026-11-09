@@ -111,6 +111,15 @@ PackedLogic4 Simulation::read_process_local(
         process, local_index, newer_activations);
 }
 
+PackedLogic4 Simulation::read_process_frame_local(
+    const runtime::simir::ProcessId process,
+    const std::size_t local_index,
+    const std::size_t newer_activations) const
+{
+    return impl_->interpreter->read_frame_local(
+        process, local_index, newer_activations);
+}
+
 PackedLogic4 Simulation::read_process_call_result(
     const runtime::simir::ProcessId process, const std::size_t slot) const
 {
@@ -293,9 +302,23 @@ void Simulation::force_scalar_signal(
     impl_->refresh_observation_hooks();
 }
 
+void Simulation::watch_debug_plan_signals()
+{
+    // A debugger plan keeps the signals in the kernel; an observer of signal
+    // changes hears every change of every signal, as it does from the
+    // reference evaluator, so the kernel reports them all (a watch costs
+    // only the watched signals).
+    if (impl_->built.kernel_access.debug) {
+        watch_all_signal_changes();
+    }
+}
+
 void Simulation::set_signal_change_hook(SignalChangeHook hook)
 {
     impl_->signal_change_hook = std::move(hook);
+    if (impl_->signal_change_hook) {
+        watch_debug_plan_signals();
+    }
     impl_->refresh_observation_hooks();
 }
 
@@ -339,6 +362,7 @@ std::uint64_t Simulation::add_signal_change_hook(SignalChangeHook hook)
     observer->callback = std::move(hook);
     observer->visible_from = impl_->signal_observer_generation.next();
     impl_->signal_observers.emplace(token, std::move(observer));
+    watch_debug_plan_signals();
     try {
         impl_->rebuild_signal_observer_snapshot();
     } catch (...) {
@@ -358,6 +382,9 @@ void Simulation::set_scalar_signal_change_hook(
     ScalarSignalChangeHook hook)
 {
     impl_->scalar_signal_change_hook = std::move(hook);
+    if (impl_->scalar_signal_change_hook) {
+        watch_debug_plan_signals();
+    }
     impl_->refresh_observation_hooks();
 }
 
@@ -379,6 +406,7 @@ std::uint64_t Simulation::add_scalar_signal_change_hook(
     observer->callback = std::move(hook);
     observer->visible_from = impl_->scalar_signal_observer_generation.next();
     impl_->scalar_signal_observers.emplace(token, std::move(observer));
+    watch_debug_plan_signals();
     try {
         impl_->rebuild_scalar_signal_observer_snapshot();
     } catch (...) {

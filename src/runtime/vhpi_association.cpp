@@ -67,7 +67,7 @@ bool VhdlVhpiAssociationSystem::class_matches(
 VhdlVhpiAssociationResult<fsim_vhpi_handle_v1>
 VhdlVhpiAssociationSystem::root_of(
     fsim_vhpi_handle_v1 object) const {
-  for (std::uint32_t depth = 0; depth < 1'024; ++depth) {
+  for (;;) {
     const auto metadata = objects_->lookup_object(object);
     if (!metadata) {
       return {{}, object_error(metadata.error)};
@@ -77,7 +77,6 @@ VhdlVhpiAssociationSystem::root_of(
     }
     object = metadata.value.parent;
   }
-  return {{}, VhdlVhpiAssociationError::ResourceLimit};
 }
 
 std::uint64_t VhdlVhpiAssociationSystem::make_identity(

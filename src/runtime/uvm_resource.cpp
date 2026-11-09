@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/uvm_resource.hpp"
 
+#include "run_state_archive.hpp"
+
 #include <algorithm>
 #include <limits>
 #include <sstream>
@@ -661,6 +663,76 @@ void SystemVerilogUvmResourcePoolService::notify(
           accessor, false);
     }
   }
+}
+
+void SystemVerilogUvmResourcePoolService::run_state_io(
+    RunStateArchive& archive) {
+  // The trace switch and callback are the embedder's.
+  // A resource is its record, field by field (the value is a variant); the
+  // callbacks are the embedder's (see run_state_idle).
+  const auto resource_io = [&archive](SystemVerilogUvmResource& resource) {
+    archive.io(resource.handle);
+    archive.io(resource.name);
+    archive.io(resource.scope_pattern);
+    archive.io(resource.type.identity);
+    archive.io(resource.type.kind);
+    archive.io(resource.type.packed_width);
+    archive.io(resource.value);
+    archive.io(resource.precedence);
+    archive.io(resource.priority_order);
+    archive.io(resource.read_only);
+    archive.io(resource.auditing);
+    archive.io(resource.registration_order);
+    archive.io(resource.revision);
+    archive.io(resource.read_count);
+    archive.io(resource.write_count);
+  };
+  const auto count = archive.count(resources_.size());
+  if (archive.saving()) {
+    for (auto& [handle, stored] : resources_) {
+      static_cast<void>(handle);
+      resource_io(stored.resource);
+    }
+  } else {
+    resources_.clear();
+    for (std::uint64_t index = 0; index < count && archive.ok(); ++index) {
+      StoredResource stored;
+      resource_io(stored.resource);
+      if (archive.ok()
+          && !resources_.emplace(stored.resource.handle, std::move(stored))
+                  .second) {
+        archive.fail("duplicate UVM resource");
+      }
+    }
+  }
+  archive.io(audit_records_);
+  archive.io(next_handle_);
+  archive.io(next_callback_token_);
+  archive.io(next_registration_order_);
+  archive.io(next_audit_sequence_);
+  archive.io(dropped_audit_records_);
+  archive.io(next_high_priority_);
+  archive.io(next_low_priority_);
+  archive.io(trace_records_);
+  archive.io(next_trace_sequence_);
+  archive.io(dropped_trace_records_);
+  archive.io(trace_callback_failures_);
+}
+
+void SystemVerilogUvmResourcePoolService::reset_run_state() {
+  resources_.clear();
+  audit_records_.clear();
+  next_handle_ = 1;
+  next_callback_token_ = 1;
+  next_registration_order_ = 0;
+  next_audit_sequence_ = 0;
+  dropped_audit_records_ = 0;
+  next_high_priority_ = 0;
+  next_low_priority_ = 0;
+  trace_records_.clear();
+  next_trace_sequence_ = 0;
+  dropped_trace_records_ = 0;
+  trace_callback_failures_ = 0;
 }
 
 }  // namespace fsim::runtime

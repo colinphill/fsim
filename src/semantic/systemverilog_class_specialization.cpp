@@ -2,6 +2,7 @@
 #include "fsim/semantic/systemverilog_class_specialization.hpp"
 #include "fsim/semantic/systemverilog_structure_image.hpp"
 #include "fsim/support/index_distance.hpp"
+#include "fsim/support/stack_growth.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -1913,12 +1914,6 @@ private:
         const Environment& environment, const std::string_view owner,
         const SourceSpanId source)
     {
-        // A bounded depth stops specializations that grow without end
-        // (`C#(N)` naming `C#(N + 1)`).
-        constexpr std::size_t maximum_nesting = 32U;
-        if (nesting_ >= maximum_nesting) {
-            return std::nullopt;
-        }
         std::vector<ResolvedActual> actuals;
         actuals.reserve(input.interface_parameter_actuals.size());
         for (std::size_t index = 0;
@@ -1988,10 +1983,15 @@ private:
             || active_.contains(bound->specialization_identity)) {
             return bound->specialization_identity;
         }
-        ++nesting_;
-        auto identity = specialize(target, actuals, source);
-        --nesting_;
-        return identity;
+        // Each specialization created is charged to a work budget, which
+        // stops specializations that grow without end (`C#(N)` naming
+        // `C#(N + 1)`); nesting itself has no depth limit.
+        constexpr std::size_t maximum_specializations = 1U << 20U;
+        if (++specializations_created_ > maximum_specializations) {
+            return std::nullopt;
+        }
+        return support::with_stack(
+            [&] { return specialize(target, actuals, source); });
     }
 
     // Materialize the specializations a member type names, without
@@ -2929,7 +2929,7 @@ private:
     std::set<std::string, std::less<>> active_;
     // Each specialization's parameter environment, for later demands.
     std::map<std::string, Environment, std::less<>> environments_;
-    std::size_t nesting_ { };
+    std::size_t specializations_created_ { };
     std::map<std::string, std::map<std::string, std::uint32_t>, std::less<>>
         slot_tables_;
     std::set<std::string, std::less<>> active_slot_tables_;

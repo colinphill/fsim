@@ -2,6 +2,7 @@
 #include "application_internal.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
+#include "fsim/support/uvm_identity.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
 
 #include <algorithm>
@@ -9,8 +10,10 @@
 #include <iterator>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 
@@ -1255,11 +1258,53 @@ bool compiled_class_metadata_matches(
     return expected && entry == *expected;
 }
 
-void install_compiled_class_specializations(CheckedProject& checked)
+void install_compiled_class_specializations(
+    CheckedProject& checked, diagnostic::Engine& diagnostics,
+    const bool report_dropped)
 {
     auto specialized = semantic::sv::specialize_classes(checked);
     checked.compiled_systemverilog_class_specializations
         = std::move(specialized.specializations);
+    // A class of the design (not of the UVM library) whose specialization the
+    // specializer dropped cannot be allocated or extended by the runtime
+    // adapter's rules; saying so beats a later "missing class" failure.
+    // Always on for a complete design (task #188, owner Q17); the specializer
+    // stays strict.
+    if (report_dropped) {
+        for (const auto& declaration : checked.systemverilog_hir.classes()) {
+            const auto identity
+                = semantic::sv::class_declaration_identity(declaration);
+            // A forward declaration has no body to specialize. A class of a
+            // conditional-generate alternative exists only when elaboration
+            // selects that alternative (IEEE 1800-2023 27.5), so an
+            // alternative not taken is not checked.
+            if (support::is_uvm_library_identity(identity)
+                || !declaration.parameters.empty()
+                || declaration.forward_declaration
+                || !declaration.alternative_discriminator.empty()) {
+                continue;
+            }
+            const auto found = std::ranges::find_if(
+                checked.compiled_systemverilog_class_specializations,
+                [&](const auto& specialization) {
+                    return specialization.declaration_identity == identity;
+                });
+            if (found != checked.compiled_systemverilog_class_specializations.end()) {
+                continue;
+            }
+            std::string reason = "the class or one of its bases has a member "
+                                 "the specializer cannot resolve";
+            for (const auto& error : specialized.errors) {
+                if (error.declaration_identity == identity) {
+                    reason = error.message;
+                    break;
+                }
+            }
+            diagnostics.error("FSIM-SV-CLASS-033",
+                "class '" + identity + "' has no specialization: " + reason,
+                compiled_source_span(checked.semantics, declaration.source));
+        }
+    }
     // This inventory is the parser-independent migration seam, not yet the
     // runtime's authority. Keep every specialization the compiled HIR can
     // currently materialize, while the explicit frontend runtime adapter

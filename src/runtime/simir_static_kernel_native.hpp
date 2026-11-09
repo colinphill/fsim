@@ -161,8 +161,17 @@ struct StaticKernelNativeFrame {
     /// Display::inert) calls its helper only then. Set from the kernel at each
     /// activation, so binding takes effect at any time in the run.
     std::uint32_t assertion_starts { };
+    /// Nonzero while a library or $assertoff holds an attempt filter
+    /// (Impl::fork_spawn_filter): the generated tick asks the host whether a
+    /// new attempt may start (fsim_sk_sva_filter; IEEE 1800-2023 20.12).
+    std::uint32_t assertion_filter { };
     /// The concurrent assertion tables (null in a kernel without any).
     const StaticKernelSvaTable* sva { };
+    /// The running body's growable call stack (NativeCallStack of the
+    /// instance body); null for a body that makes no runtime-stack calls.
+    void* call_stack { };
+    /// The same body's growable frame stack (CompiledBody::frame_entries).
+    void* frame_stack { };
 };
 inline constexpr std::uint32_t static_kernel_no_fast_notify = static_kernel_no_fast_notify_value;
 
@@ -215,6 +224,28 @@ struct StaticKernelNativeHelpers {
     /// returns its block base (`fsim_sk_sva_bind`, KOp::sva_outcome on a
     /// null entry); null when no monitor exists yet.
     std::int64_t* (*sva_bind)(StaticKernelNativeFrame*, std::uint32_t at) { };
+    /// The generated attempt automaton's host calls (KOp::sva_tick with a
+    /// plan): `fsim_sk_sva_ensure` creates and binds the monitor and returns
+    /// its block base, `fsim_sk_sva_grow` grows block region `region` to hold
+    /// `needed` rows or words, `fsim_sk_sva_post` runs the attempt-start and
+    /// step reports of a tick, `fsim_sk_sva_filter` asks the attempt filter
+    /// whether a new attempt may start, `fsim_sk_sva_check` is the
+    /// differential check (FSIM_KERNEL_SVA_CHECK).
+    std::int64_t* (*sva_ensure)(StaticKernelNativeFrame*, kernel_word::Word* registers,
+        std::uint32_t at) { };
+    void (*sva_grow)(StaticKernelNativeFrame*, std::uint32_t at,
+        std::uint32_t region, std::uint64_t needed) { };
+    void (*sva_post)(StaticKernelNativeFrame*, std::uint32_t at) { };
+    std::uint32_t (*sva_filter)(StaticKernelNativeFrame*, std::uint32_t at) { };
+    void (*sva_check)(StaticKernelNativeFrame*, kernel_word::Word* registers,
+        std::uint32_t at, std::uint32_t phase) { };
+    /// `fsim_sk_sva_verify`: FSIM_KERNEL_VERIFY records the tick just made.
+    void (*sva_verify)(StaticKernelNativeFrame*, kernel_word::Word* registers,
+        std::uint32_t at) { };
+    /// `fsim_sk_sva_verify_outcome`: FSIM_KERNEL_VERIFY records an outcome pop
+    /// (the code).
+    void (*sva_verify_outcome)(StaticKernelNativeFrame*, std::uint32_t at,
+        std::uint64_t value) { };
     /// Wide-register instructions by kind (`fsim_sk_wide_<op>`): instruction
     /// `at` with the caller's register file, where wide values live, and the
     /// narrow operand words x, y and z; `out` receives a narrow result and

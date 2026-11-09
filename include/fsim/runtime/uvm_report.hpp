@@ -3,6 +3,7 @@
 
 #include "fsim/runtime/uvm_object.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -16,6 +17,8 @@
 #include <vector>
 
 namespace fsim::runtime {
+
+class RunStateArchive;
 
 class SystemVerilogUvmComponentService;
 
@@ -259,6 +262,12 @@ struct SystemVerilogUvmReportExecution {
 /// execution. Sinks receive exactly one newline-terminated record.
 class SystemVerilogUvmReportServer final {
  public:
+  /// Run-state save and restore of the counts and settings (#188); the sinks
+  /// are the embedder's. reset_run_state returns the counts and the quit
+  /// settings to a fresh server's.
+  void run_state_io(RunStateArchive& archive);
+  void reset_run_state() noexcept;
+
   using DisplaySink = std::function<void(std::string_view)>;
   using FileSink =
       std::function<void(std::uint64_t, std::string_view)>;
@@ -361,6 +370,23 @@ struct SystemVerilogUvmReportLimits {
 /// Handler policy and final report-server formatting are deliberately separate.
 class SystemVerilogUvmReportService final {
  public:
+  /// Run-state save and restore of the server and the per-object settings
+  /// (#188), and the return to no setting. A hook or a catcher is the
+  /// embedder's callback, so run_state_idle is false while one is registered
+  /// (or a catcher is running).
+  void run_state_io(RunStateArchive& archive);
+  void reset_run_state();
+  [[nodiscard]] bool run_state_idle() const noexcept {
+    return catchers_.empty() && !in_catcher_
+        && std::ranges::none_of(handlers_, [](const auto& entry) {
+             return static_cast<bool>(entry.second.report_hook)
+                 || std::ranges::any_of(entry.second.severity_hooks,
+                        [](const auto& hook) {
+                          return static_cast<bool>(hook);
+                        });
+           });
+  }
+
   using RouteHook =
       std::function<void(const SystemVerilogUvmReportMessage&)>;
   using ReportHook =

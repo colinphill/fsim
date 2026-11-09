@@ -57,7 +57,8 @@ create_dependency_scratch_directory(
         return std::nullopt;
     }
 
-    for (std::size_t attempt = 0; attempt < 100; ++attempt) {
+    // Each try takes a fresh serial, so the loop ends.
+    for (;;) {
         const auto serial =
             dependency_scan_counter.fetch_add(1, std::memory_order_relaxed);
         const auto name =
@@ -74,8 +75,6 @@ create_dependency_scratch_directory(
             return std::nullopt;
         }
     }
-    error = std::make_error_code(std::errc::file_exists);
-    return std::nullopt;
 }
 
 namespace {

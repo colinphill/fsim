@@ -331,7 +331,7 @@ void Interpreter::Impl::StaticKernel::execute_body(
             execute_sva_outcome(registers, inst, member_index);
             break;
         case KOp::sva_sampled_load:
-            execute_sva_sampled_load(registers, inst, member_index);
+            execute_sva_sampled_load(body, registers, inst, member_index);
             break;
         case KOp::constant:
             registers[inst.d] = { inst.imm_a, inst.imm_b };
@@ -581,10 +581,15 @@ void Interpreter::Impl::StaticKernel::execute_body(
                 fail_at(at, "call-stack pointer is unknown");
             }
             const auto depth = pointer.a & kw::mask(32U);
+            if ((inst.flags & flag_linear) != 0U) {
+                // The body's growable stack.
+                grow_call_stack(body.call_entries, depth, member_index, origin + at);
+                body.call_entries.entries[depth] = inst.imm_a;
+                registers[inst.x] = { depth + 1U, 0U };
+                pc = inst.d;
+                break;
+            }
             if (depth >= inst.z) {
-                if ((inst.flags & flag_linear) != 0U) {
-                    throw KernelDeopt { at, false };
-                }
                 fail_at(at, "call-stack capacity is exhausted");
             }
             registers[inst.y + depth] = { inst.imm_a, 0U };
@@ -605,6 +610,19 @@ void Interpreter::Impl::StaticKernel::execute_body(
                 fail_at(at, "call-stack pointer is unknown");
             }
             const auto depth = pointer.a & kw::mask(32U);
+            if ((inst.flags & flag_linear) != 0U) {
+                if (depth == 0U) {
+                    fail_at(at, "call-stack underflow");
+                }
+                const auto linear_target = body.call_entries.entries[depth - 1U];
+                if (linear_target >= current->operations().size()) {
+                    fail_at(at, "call-stack return target is invalid");
+                }
+                registers[inst.x] = { depth - 1U, 0U };
+                pc = linear_target == current->body_end
+                    ? size : static_cast<std::uint32_t>(linear_target);
+                break;
+            }
             if (depth == 0U || depth > inst.z) {
                 fail_at(at, "call-stack underflow");
             }
@@ -617,6 +635,47 @@ void Interpreter::Impl::StaticKernel::execute_body(
             // is the exit.
             pc = target.a == current->body_end ? size
                                                : static_cast<std::uint32_t>(target.a);
+            break;
+        }
+        case KOp::frame_push: {
+            const auto& save = body.frame_saves[inst.aux];
+            const auto depth = registers[inst.x].a & kw::mask(32U);
+            grow_frame_stack(body.frame_entries, depth, save.pairs, member_index,
+                origin + at);
+            auto* base = body.frame_entries.entries + 2U * depth;
+            base[0] = save.identity;
+            base[1] = 0U;
+            for (auto item = save.item_begin; item < save.item_end; ++item) {
+                const auto& entry = body.frame_items[item];
+                for (std::uint32_t pair = 0U; pair < entry.count; ++pair) {
+                    base[2U * (1U + entry.offset + pair)]
+                        = registers[entry.index + pair].a;
+                    base[2U * (1U + entry.offset + pair) + 1U]
+                        = registers[entry.index + pair].b;
+                }
+            }
+            registers[inst.x] = { depth + save.pairs, 0U };
+            break;
+        }
+        case KOp::frame_pop: {
+            const auto& save = body.frame_saves[inst.aux];
+            const auto depth = registers[inst.x].a & kw::mask(32U);
+            if (depth < save.pairs
+                || body.frame_entries.entries[2U * (depth - save.pairs)]
+                    != save.identity) {
+                fail_at(at, "automatic callable frame stack mismatch");
+            }
+            const auto top = depth - save.pairs;
+            const auto* base = body.frame_entries.entries + 2U * top;
+            for (auto item = save.item_begin; item < save.item_end; ++item) {
+                const auto& entry = body.frame_items[item];
+                for (std::uint32_t pair = 0U; pair < entry.count; ++pair) {
+                    registers[entry.index + pair]
+                        = { base[2U * (1U + entry.offset + pair)],
+                              base[2U * (1U + entry.offset + pair) + 1U] };
+                }
+            }
+            registers[inst.x] = { top, 0U };
             break;
         }
         case KOp::suspend:
@@ -726,12 +785,23 @@ void Interpreter::Impl::StaticKernel::handle_deopt(const std::uint32_t member_in
             width, kind, weak);
     }
     if (body.call_stack_base != 0U) {
-        // The synthetic stack's live entries continue on the runtime stack.
+        // The compiled stack's live entries continue on the runtime stack.
         const auto depth = body.registers[body.call_stack_base].a;
         member.call_stack.clear();
         for (std::uint64_t entry = 0U; entry < depth; ++entry) {
-            member.call_stack.push_back(static_cast<InstructionIndex>(
-                body.registers[body.call_stack_base + 1U + entry].a));
+            member.call_stack.push_back(
+                static_cast<InstructionIndex>(body.call_entries.entries[entry]));
+        }
+        if (body.frame_stack_base != 0U) {
+            // The compiled frames continue as the reference's.
+            const auto pairs = body.registers[body.frame_stack_base].a;
+            export_compiled_frames(member_index, body, body.registers,
+                body.frame_entries.entries, pairs, member.frames);
+            member.frame_bytes = 0U;
+            for (const auto& frame : member.frames) {
+                member.frame_bytes += frame.bytes;
+            }
+            body.registers[body.frame_stack_base] = { };
         }
         body.registers[body.call_stack_base] = { };
     }
@@ -838,12 +908,50 @@ void Interpreter::Impl::StaticKernel::generic_load_operands(CompiledBody& body,
     }
 }
 
+void Interpreter::Impl::StaticKernel::execute_projected_write(
+    const CompiledBody& body, const Word* registers, const KInst& inst,
+    const std::uint32_t member_index)
+{
+    // KOp::net_delay, sub 1: y the operation. The operation's registers
+    // (sources, run-time delays, a dynamic index) are in the register file.
+    projected_operation(member_index, inst.y,
+        [&](const RegisterId reg) {
+            return register_operand(body, registers, member_index, 0U, reg);
+        });
+}
+
+void Interpreter::Impl::StaticKernel::generic_load_written(CompiledBody& body,
+    const Word* registers, const KInst& inst, const std::uint32_t member_index,
+    const std::vector<RegisterId>& reads, const std::vector<WrittenRegister>& writes)
+{
+    // An operation with several results (a file scan's targets and success,
+    // a line read's target) may leave some of them as they are: they take the
+    // compiled register's value first, so that storing every result back
+    // changes nothing it did not write.
+    if (writes.size() < 2U) {
+        return;
+    }
+    auto& member = members_[member_index];
+    for (const auto& written : writes) {
+        if (std::ranges::find(reads, written.reg) != reads.end()) {
+            continue;
+        }
+        member.registers[written.reg]
+            = register_operand(body, registers, member_index, inst.y, written.reg);
+    }
+}
+
 void Interpreter::Impl::StaticKernel::execute_net_delay(
     const CompiledBody& body, const Word* registers, const KInst& inst,
     const std::uint32_t member_index)
 {
     // KOp::net_delay: x the source register, y the operation. The kernel's
     // delayed write holds its pending changes as timers.
+    if (inst.sub == 1U) {
+        // A VHDL projected assignment (IEEE 1076-2019 10.5.2.2).
+        execute_projected_write(body, registers, inst, member_index);
+        return;
+    }
     auto value = register_operand(body, registers, member_index, 0U, inst.x);
     if (auto* const lane = worker_lane_; lane != nullptr) {
         // A worker's write waits for the leader's replay (emit_lane_output),
@@ -908,6 +1016,21 @@ bool Interpreter::Impl::StaticKernel::generic_store_result(CompiledBody& body,
     return two_state_code && (word->value.b != 0U || word->unknown != 0U);
 }
 
+bool Interpreter::Impl::StaticKernel::generic_store_results(CompiledBody& body,
+    Word* registers, const KInst& inst, const std::uint32_t member_index,
+    const std::vector<WrittenRegister>& writes, const bool two_state_code)
+{
+    // Every register the operation wrote (a file operation's count, status
+    // and targets) goes back to the compiled register file.
+    bool stop = false;
+    for (const auto& written : writes) {
+        stop = generic_store_result(body, registers, inst, member_index,
+                   std::optional<RegisterId> { written.reg }, two_state_code)
+            || stop;
+    }
+    return stop;
+}
+
 void Interpreter::Impl::StaticKernel::note_generic_profile(
     const CompiledBody& body, const KInst& inst, const std::uint32_t member_index,
     const char* mangled, const std::vector<RegisterId>& regs,
@@ -945,6 +1068,8 @@ bool Interpreter::Impl::StaticKernel::execute_generic(CompiledBody& body,
     auto& reads = scratch().generic_reads;
     std::optional<RegisterId> write;
     operation_registers(operation, reads, write);
+    auto& writes = scratch().generic_writes;
+    operation_written_registers(operation, writes);
     if (profile_) {
         visit_operation([&](const auto& op) {
             note_generic_profile(body, inst, member_index, typeid(op).name(),
@@ -959,13 +1084,20 @@ bool Interpreter::Impl::StaticKernel::execute_generic(CompiledBody& body,
         return false;
     }
     generic_load_operands(body, registers, inst, member_index, reads);
+    generic_load_written(body, registers, inst, member_index, reads, writes);
+    if (shadow_ != nullptr && !shadow_->reference) {
+        shadow_note_reads(member_index, reads);
+    }
     // Behavioral runtime-library operations (output, strings, plusargs)
     // run on the thread's reference state.
     if (member.kind != StaticKernelMemberKind::behavioral
         || !behavioral_step(member_index, inst.x)) {
         (void)step_generic(member_index, inst.x);
     }
-    return generic_store_result(body, registers, inst, member_index, write,
+    if (shadow_ != nullptr && !shadow_->reference) {
+        shadow_record_generic(member_index, inst.x, writes);
+    }
+    return generic_store_results(body, registers, inst, member_index, writes,
         two_state_code);
 }
 
@@ -980,6 +1112,8 @@ bool Interpreter::Impl::StaticKernel::execute_generic_kind(CompiledBody& body,
     auto& reads = scratch().generic_reads;
     std::optional<RegisterId> write;
     operation_registers_of(op, reads, write);
+    auto& writes = scratch().generic_writes;
+    operation_written_registers_of(op, writes);
     if (profile_) {
         note_generic_profile(body, inst, member_index, typeid(T).name(), reads,
             write);
@@ -992,11 +1126,18 @@ bool Interpreter::Impl::StaticKernel::execute_generic_kind(CompiledBody& body,
         }
     }
     generic_load_operands(body, registers, inst, member_index, reads);
+    generic_load_written(body, registers, inst, member_index, reads, writes);
+    if (shadow_ != nullptr && !shadow_->reference) {
+        shadow_note_reads(member_index, reads);
+    }
     if (member.kind != StaticKernelMemberKind::behavioral
         || !(this->*behavioral_operation_steps()[K])(member_index, inst.x)) {
         (void)(this->*operation_steps()[K])(member_index, inst.x);
     }
-    return generic_store_result(body, registers, inst, member_index, write,
+    if (shadow_ != nullptr && !shadow_->reference) {
+        shadow_record_generic(member_index, inst.x, writes);
+    }
+    return generic_store_results(body, registers, inst, member_index, writes,
         two_state_code);
 }
 
@@ -1036,13 +1177,28 @@ void Interpreter::Impl::StaticKernel::plan_sva_table()
     sva_member_base_.assign(members_.size(), 0U);
     std::uint32_t total = 0U;
     std::vector<std::uint32_t> sites;
+    Operation scratch;
+    const auto note = [&](const Operation& operation) {
+        if (const auto* sva = operation_get_if<SvaOperation>(&operation);
+            sva != nullptr && std::ranges::find(sites, sva->site) == sites.end()) {
+            sites.push_back(sva->site);
+        }
+    };
     for (std::size_t index = 0U; index < members_.size(); ++index) {
         sva_member_base_[index] = total;
         sites.clear();
-        for (const auto& operation : members_[index].operations()) {
-            if (const auto* sva = operation_get_if<SvaOperation>(&operation);
-                sva != nullptr && std::ranges::find(sites, sva->site) == sites.end()) {
-                sites.push_back(sva->site);
+        const auto& member = members_[index];
+        if (member.operations_source != nullptr) {
+            // A member restored from the image keeps reading its program's
+            // operations: the scan does not copy them (operations()).
+            const auto& operations = member.operations_source->processes
+                .program_view(member.process).operations();
+            for (std::size_t op = 0U; op < operations.size(); ++op) {
+                note(operations.expanded_ref(op, scratch));
+            }
+        } else {
+            for (const auto& operation : member.operations()) {
+                note(operation);
             }
         }
         total += static_cast<std::uint32_t>(sites.size());
@@ -1080,8 +1236,16 @@ void Interpreter::Impl::StaticKernel::execute_sva_outcome(Word* registers,
     // header for the host's callback (39.4.2).
     using namespace sva::layout;
     auto* const block = sva_block(inst, member_index);
+    const auto record = [&] {
+        if (shadow_ != nullptr && !shadow_->reference) {
+            shadow_->sva_outcomes.emplace_back(inst.x,
+                PackedLogic4::from_aval_bval(32,
+                    static_cast<std::uint32_t>(registers[inst.d].a), 0U));
+        }
+    };
     if (block == nullptr || block[h_outcomes_count] == 0) {
         registers[inst.d] = { };
+        record();
         return;
     }
     const auto head = static_cast<std::uint64_t>(block[h_outcomes_head]);
@@ -1095,6 +1259,7 @@ void Interpreter::Impl::StaticKernel::execute_sva_outcome(Word* registers,
     block[h_outcomes_head] = static_cast<std::int64_t>((head + 1U) & (capacity - 1U));
     block[h_outcomes_count] -= 1;
     block[h_pop_serial] = ++impl_.sva_pop_serial;
+    record();
 }
 
 void Interpreter::Impl::StaticKernel::note_sva_code(
@@ -1110,11 +1275,69 @@ void Interpreter::Impl::StaticKernel::note_sva_code(
     }
 }
 
-void Interpreter::Impl::StaticKernel::execute_sva_sampled_load(Word* registers,
-    const KInst& inst, const std::uint32_t member_index)
+namespace {
+
+/// The planes of a history ring entry (Impl::SampledRing) or of a signal's
+/// default (an empty history) as a reader of words: plane `plane`, chunk
+/// `chunk`. A ring entry holds two planes per 64 bit chunk for a Logic4
+/// signal and four for a Logic9 one, plane after plane; the default is the
+/// same words in the body's wide constants, two to a pair.
+struct SampledEntryReader {
+    // The words of Impl::SampledRing the entries are addressed by.
+    static constexpr std::size_t capacity_word { 0U };
+    static constexpr std::size_t first_word { 1U };
+    static constexpr std::size_t value_words_word { 3U };
+    static constexpr std::size_t header_words { 12U };
+
+    const std::uint64_t* ring;
+    const kernel_word::Word* defaults;
+    std::uint64_t chunks;
+    std::uint64_t planes;
+
+    [[nodiscard]] std::uint64_t entry(const std::uint64_t index,
+        const std::uint64_t plane, const std::uint64_t chunk) const
+    {
+        const auto slot = (ring[first_word] + index) % ring[capacity_word];
+        return ring[header_words + slot * ring[value_words_word]
+            + plane * chunks + chunk];
+    }
+    [[nodiscard]] std::uint64_t fallback(const std::uint64_t plane,
+        const std::uint64_t chunk) const
+    {
+        const auto flat = plane * chunks + chunk;
+        return (flat & 1U) != 0U ? defaults[flat / 2U].b : defaults[flat / 2U].a;
+    }
+    [[nodiscard]] std::uint64_t word(const bool have, const std::uint64_t index,
+        const std::uint64_t plane, const std::uint64_t chunk) const
+    {
+        return have ? entry(index, plane, chunk) : fallback(plane, chunk);
+    }
+    /// The value of a chunk of `bits` elements as Logic4 words: a Logic9
+    /// entry reads through the Logic9 to Logic4 mapping (kernel_word::
+    /// logic9_coerced).
+    [[nodiscard]] kernel_word::Word coerced(const bool have,
+        const std::uint64_t index, const std::uint64_t chunk,
+        const std::uint32_t bits) const
+    {
+        if (planes == 4U) {
+            return kw::logic9_coerced(word(have, index, 0U, chunk),
+                word(have, index, 1U, chunk), word(have, index, 2U, chunk),
+                word(have, index, 3U, chunk), bits);
+        }
+        const auto m = kw::mask(bits);
+        return { word(have, index, 0U, chunk) & m, word(have, index, 1U, chunk) & m };
+    }
+};
+
+} // namespace
+
+void Interpreter::Impl::StaticKernel::execute_sva_sampled_load(
+    const CompiledBody& body, Word* registers, const KInst& inst,
+    const std::uint32_t member_index)
 {
-    // The reads of run_sampled_read over the host's sampled words, for
-    // Logic4 signals of at most 64 bits (the lowering admits no other).
+    // The reads of run_sampled_read over the host's sampled words and rings.
+    // The Logic4 signals of at most 64 bits read their one word pair; a wide
+    // or Logic9 signal's ring (aux bit 1) reads its planes by chunk.
     (void)member_index;
     const auto m = kw::mask(inst.width);
     if (inst.aux == 4U) {
@@ -1136,6 +1359,71 @@ void Interpreter::Impl::StaticKernel::execute_sva_sampled_load(Word* registers,
     }
     using Ring = Impl::SampledRing;
     const auto* const ring = impl_.sampled_ring_words.data() + inst.x;
+    static_assert(SampledEntryReader::capacity_word == Ring::capacity
+        && SampledEntryReader::first_word == Ring::first
+        && SampledEntryReader::value_words_word == Ring::value_words
+        && SampledEntryReader::header_words == Ring::header_words);
+    if ((inst.aux & 2U) != 0U) {
+        const auto chunks = inst.imm_a & 0xffff'ffffU;
+        const SampledEntryReader reader { ring, body.wide_constants.data() + inst.imm_b,
+            chunks, (inst.imm_a >> 32U) != 0U ? 4U : 2U };
+        const auto count_now = ring[Ring::count];
+        const auto kind_now = static_cast<SignalReadKind>(inst.sub);
+        const auto chunk_bits = [&](const std::uint64_t chunk) {
+            return static_cast<std::uint32_t>(
+                std::min<std::uint64_t>(64U, inst.offset - 64U * chunk));
+        };
+        if (kind_now == SignalReadKind::sampled) {
+            registers[inst.d] = reader.coerced(count_now >= 1U, count_now - 1U, 0U,
+                chunk_bits(0U));
+            registers[inst.d].a &= m;
+            registers[inst.d].b &= m;
+            return;
+        }
+        if (kind_now == SignalReadKind::past) {
+            const bool sampled_now = ring[Ring::slot_valid] != 0U
+                && ring[Ring::slot_time] == static_cast<std::uint64_t>(kernel_now())
+                && ring[Ring::slot_process_domain]
+                    == static_cast<std::uint64_t>(ProcessSchedulingDomain::systemverilog);
+            const auto prior = count_now - (sampled_now ? 1U : 0U);
+            registers[inst.d] = reader.coerced(prior >= inst.z, prior - inst.z, 0U,
+                chunk_bits(0U));
+            registers[inst.d].a &= m;
+            registers[inst.d].b &= m;
+            return;
+        }
+        const bool have_current = count_now >= 1U;
+        const bool have_previous = count_now >= 2U;
+        const auto current_index = count_now - 1U;
+        const auto previous_index = count_now - 2U;
+        if (kind_now == SignalReadKind::rose || kind_now == SignalReadKind::fell) {
+            const auto current = reader.coerced(have_current, current_index, 0U,
+                chunk_bits(0U));
+            const auto previous = reader.coerced(have_previous, previous_index, 0U,
+                chunk_bits(0U));
+            const bool rose = kind_now == SignalReadKind::rose;
+            const auto level = [&](const Word word) {
+                return rose ? (word.a & 1U) != 0U && (word.b & 1U) == 0U
+                            : (word.a & 1U) == 0U && (word.b & 1U) == 0U;
+            };
+            registers[inst.d] = { level(current) && !level(previous) ? 1U : 0U, 0U };
+            return;
+        }
+        // $stable and $changed compare every plane (PackedLogic4 equality).
+        bool equal = true;
+        for (std::uint64_t chunk = 0U; chunk < chunks; ++chunk) {
+            const auto bits_mask = kw::mask(chunk_bits(chunk));
+            for (std::uint64_t plane = 0U; plane < reader.planes; ++plane) {
+                equal = equal
+                    && (reader.word(have_current, current_index, plane, chunk) & bits_mask)
+                        == (reader.word(have_previous, previous_index, plane, chunk)
+                            & bits_mask);
+            }
+        }
+        const bool result = kind_now == SignalReadKind::stable ? equal : !equal;
+        registers[inst.d] = { result ? 1U : 0U, 0U };
+        return;
+    }
     const auto capacity = ring[Ring::capacity];
     const auto first = ring[Ring::first];
     const auto count = ring[Ring::count];
@@ -1617,6 +1905,17 @@ Interpreter::Impl::StaticKernel::evaluate_slow_op(const CompiledBody& body,
         const auto offset = kw::dynamic_index(z, body.indices[inst.aux]);
         if (!offset || *offset > inst.width || inst.offset > inst.width - *offset) {
             if ((inst.flags & flag_strict) != 0U) {
+                if (!offset) {
+                    // An index outside the declared range or with unknown
+                    // bits reports the reference's message (simir_logic).
+                    try {
+                        (void)dynamic_index_offset(
+                            PackedLogic4::from_aval_bval(32U, z.a, z.b),
+                            body.indices[inst.aux]);
+                    } catch (const std::invalid_argument& error) {
+                        fail_at(error.what());
+                    }
+                }
                 fail_at("dynamic packed index is invalid");
             }
             return x;
@@ -1664,6 +1963,39 @@ Interpreter::Impl::StaticKernel::evaluate_slow_op(const CompiledBody& body,
     }
     fail_at("static kernel instruction has no slow evaluation");
     return { };
+}
+
+void Interpreter::Impl::StaticKernel::grow_frame_stack(NativeCallStack& stack,
+    const std::uint64_t depth, const std::uint64_t pairs,
+    const std::uint32_t member, const std::uint32_t instruction)
+{
+    // Capacity growth only: room for `pairs` more register-file pairs (two
+    // entries each) at `depth`, within the owning-storage budget.
+    const auto needed = 2U * (depth + pairs);
+    if (needed <= stack.capacity) {
+        return;
+    }
+    if (needed > maximum_container_storage_bytes / sizeof(std::uint64_t)) {
+        fail(member, instruction,
+            "automatic callable frames exceed their owning-storage budget");
+    }
+    stack.reserve(needed);
+}
+
+void Interpreter::Impl::StaticKernel::grow_call_stack(NativeCallStack& stack,
+    const std::uint64_t depth, const std::uint32_t member,
+    const std::uint32_t instruction)
+{
+    // Capacity growth only: room for one more entry. The reference's
+    // owning-storage budget applies to the depth.
+    if (depth < stack.capacity) {
+        return;
+    }
+    if (depth >= maximum_container_storage_bytes / sizeof(InstructionIndex)) {
+        fail(member, instruction,
+            "dynamic call stack exceeds its owning-storage budget");
+    }
+    stack.reserve(depth + 1U);
 }
 
 template <KOp Op>
@@ -1812,6 +2144,11 @@ void Interpreter::Impl::StaticKernel::effect_slow_op(const CompiledBody& body,
         reference(op, op.source, x);
         return;
     }
+    case KOp::frame_push:
+    case KOp::frame_pop:
+        // Native code reports a frame stack without the frame here.
+        fail_at("automatic callable frame stack mismatch");
+        return;
     case KOp::call:
     case KOp::ret: {
         if (inst.op == KOp::call && inst.z == 0U) {
@@ -1824,11 +2161,7 @@ void Interpreter::Impl::StaticKernel::effect_slow_op(const CompiledBody& body,
                 static_cast<InstructionIndex>(inst.imm_a));
             return;
         }
-        // Native code reports a failed call or return here. The synthetic
-        // stack's overflow continues on the runtime-owned stack instead.
-        if (inst.op == KOp::call && (inst.flags & flag_linear) != 0U) {
-            throw KernelDeopt { at, false };
-        }
+        // Native code reports a failed call or return here.
         if ((x.b & kw::mask(32U)) != 0U) {
             fail_at("call-stack pointer is unknown");
         }
@@ -1836,7 +2169,8 @@ void Interpreter::Impl::StaticKernel::effect_slow_op(const CompiledBody& body,
         if (inst.op == KOp::call) {
             fail_at("call-stack capacity is exhausted");
         }
-        if (depth == 0U || depth > inst.z) {
+        if (depth == 0U
+            || ((inst.flags & flag_linear) == 0U && depth > inst.z)) {
             fail_at("call-stack underflow");
         }
         fail_at("call-stack return target is invalid");
@@ -2058,7 +2392,7 @@ constexpr std::array evaluate_kinds { KOp::load_field9, KOp::branch, KOp::ret,
     KOp::dynamic_part_select, KOp::dynamic_insert, KOp::dynamic_part_insert,
     KOp::mem_read };
 constexpr std::array effect_kinds { KOp::store_vhdl, KOp::integer_check,
-    KOp::call, KOp::ret, KOp::assert_check, KOp::store_slot,
+    KOp::call, KOp::ret, KOp::frame_push, KOp::frame_pop, KOp::assert_check, KOp::store_slot,
     KOp::store_slot_nba, KOp::store_slot_dynamic, KOp::store_slot_part,
     KOp::store_host, KOp::mem_copy, KOp::wide_move, KOp::mem_write };
 
@@ -2191,6 +2525,25 @@ void Interpreter::Impl::StaticKernel::native_effect(
     try {
         const auto& body = *static_cast<const CompiledBody*>(frame->program);
         const auto inst = with_bound_offset(body.code[at], frame->bindings);
+        if constexpr (Op == KOp::frame_push) {
+            if (za != 0U) {
+                // Capacity growth of the body's frame stack: xa is the
+                // depth, ya the pairs the frame needs.
+                auto& instance = *static_cast<CompiledBody*>(frame->instance);
+                kernel.grow_frame_stack(instance.frame_entries,
+                    xa & kw::mask(32U), ya, frame->member, at);
+                return;
+            }
+        }
+        if constexpr (Op == KOp::call) {
+            if ((inst.flags & flag_linear) != 0U && za != 0U) {
+                // Capacity growth of the body's call stack: xa is the depth.
+                auto& instance = *static_cast<CompiledBody*>(frame->instance);
+                kernel.grow_call_stack(instance.call_entries,
+                    xa & kw::mask(32U), frame->member, at);
+                return;
+            }
+        }
         if (kernel.profile_) {
             static const bool who = std::getenv("FSIM_PROFILE_KERNEL_WHO") != nullptr;
             std::string member;
@@ -2265,7 +2618,14 @@ void Interpreter::Impl::StaticKernel::set_instruction_helpers(
     }(std::make_index_sequence<wide_kinds.size()>());
     helpers.net_delay = &StaticKernel::native_net_delay;
     helpers.sva_tick = &StaticKernel::native_sva_tick;
+    helpers.sva_ensure = &StaticKernel::native_sva_ensure;
+    helpers.sva_grow = &StaticKernel::native_sva_grow;
+    helpers.sva_post = &StaticKernel::native_sva_post;
+    helpers.sva_filter = &StaticKernel::native_sva_filter;
+    helpers.sva_check = &StaticKernel::native_sva_check;
+    helpers.sva_verify = &StaticKernel::native_sva_verify;
     helpers.sva_bind = &StaticKernel::native_sva_bind;
+    helpers.sva_verify_outcome = &StaticKernel::native_sva_verify_outcome;
     [&]<std::size_t... K>(std::index_sequence<K...>) {
         ((helpers.generic_ops[K] = &StaticKernel::native_generic_kind<K>), ...);
         ((helpers.step_ops[K] = &StaticKernel::native_step_kind<K>), ...);
@@ -2607,6 +2967,20 @@ const char* Interpreter::Impl::StaticKernel::execute_wide_alu(const CompiledBody
         result = operand(1U, inst.x, inst.width);
         if (!offset || *offset > inst.width || y_width > inst.width - *offset) {
             if ((inst.flags & flag_strict) != 0U) {
+                if (!offset) {
+                    // The reference's message for an index outside the
+                    // declared range or with unknown bits.
+                    static thread_local std::string reference_message;
+                    try {
+                        (void)dynamic_index_offset(
+                            PackedLogic4::from_aval_bval(32U, registers[inst.z].a,
+                                registers[inst.z].b),
+                            body.indices[inst.imm_b]);
+                    } catch (const std::invalid_argument& error) {
+                        reference_message = error.what();
+                        return reference_message.c_str();
+                    }
+                }
                 return "dynamic packed index is invalid";
             }
         } else {
@@ -2656,6 +3030,50 @@ void Interpreter::Impl::StaticKernel::execute_wide(const CompiledBody& body,
     };
     switch (inst.op) {
     case KOp::wide_load: {
+        if (inst.sub >= 4U) {
+            // A wide $sampled or $past (IEEE 1800-2023 16.5.1, 16.9.3): the
+            // chunks of the Preponed value (sub 4) or of a ring entry (sub
+            // 5), read as the narrow KOp::sva_sampled_load reads them. A
+            // register with masks gets them cleared (Logic4 values).
+            if (inst.sub == 4U) {
+                const auto* const words = impl_.sampled_value_words.data() + inst.x;
+                for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
+                    const auto m = kw::mask(chunk_width(chunk));
+                    registers[inst.d + chunk] = { words[chunk] & m,
+                        words[chunks + chunk] & m };
+                }
+            } else {
+                using Ring = Impl::SampledRing;
+                const auto* const ring = impl_.sampled_ring_words.data() + inst.x;
+                const SampledEntryReader reader { ring,
+                    body.wide_constants.data() + inst.imm_b, chunks,
+                    (inst.imm_a >> 32U) != 0U ? 4U : 2U };
+                const auto count_now = ring[Ring::count];
+                std::uint64_t index = count_now - 1U;
+                bool have = count_now >= 1U;
+                if (inst.offset == 1U) {
+                    const bool sampled_now = ring[Ring::slot_valid] != 0U
+                        && ring[Ring::slot_time]
+                            == static_cast<std::uint64_t>(kernel_now())
+                        && ring[Ring::slot_process_domain]
+                            == static_cast<std::uint64_t>(
+                                ProcessSchedulingDomain::systemverilog);
+                    const auto prior = count_now - (sampled_now ? 1U : 0U);
+                    index = prior - inst.z;
+                    have = prior >= inst.z;
+                }
+                for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
+                    registers[inst.d + chunk]
+                        = reader.coerced(have, index, chunk, chunk_width(chunk));
+                }
+            }
+            if (inst.aux != 0U) {
+                for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
+                    registers[inst.d + chunks + chunk] = { };
+                }
+            }
+            return;
+        }
         if (inst.sub == 3U) {
             // A host signal that has no mirror (resolved: the signal): its
             // chunks, with the masks of the nine values in a register that
@@ -3042,7 +3460,9 @@ void Interpreter::Impl::StaticKernel::native_wide(StaticKernelNativeFrame* frame
             std::uint32_t resolved = 0U;
             if constexpr (Op == KOp::wide_load) {
                 // Sub 3 reads a host signal: its binding is the signal.
-                resolved = inst.sub == 3U
+                // Sub 4 and 5 read the sampled words and rings: no binding.
+                resolved = inst.sub >= 4U ? 0U
+                    : inst.sub == 3U
                     ? frame->bindings[2U * inst.x]
                     : frame->bindings[2U * inst.x + 1U] & ~partition_tag;
             } else if constexpr (Op == KOp::wide_store) {

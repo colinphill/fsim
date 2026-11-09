@@ -4,6 +4,7 @@
 #include "fsim/systemc/kernel_backend_inventory.hpp"
 #include "fsim/systemc/kernel_backend_synchronization.hpp"
 
+#include <limits>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -38,7 +39,7 @@ enum class SystemCKernelBindingCode : std::uint16_t {
 struct SystemCKernelBindingLimits {
     std::size_t max_bindings { 1U << 20U };
     std::size_t max_targets_per_binding { 4096U };
-    std::size_t max_chain_depth { 1024U };
+    std::size_t max_chain_depth { std::numeric_limits<std::size_t>::max() };
     std::size_t max_path_bytes { 4096U };
     std::size_t max_interface_name_bytes { 4096U };
     std::size_t max_encoded_bytes { 64U * 1024U * 1024U };

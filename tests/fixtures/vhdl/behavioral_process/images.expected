@@ -1,0 +1,5 @@
+a=1 @10 ns
+a=2 @15 ns
+tick1 @7 ns
+tick2 @14 ns
+tick3 @21 ns

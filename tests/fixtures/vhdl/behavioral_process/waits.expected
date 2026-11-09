@@ -1,0 +1,19 @@
+CLK4 @35 ns
+DL @30 ns
+DONE hits=4 @35 ns
+DYN1 @6 ns
+DYN2 @10 ns
+DYN3 @25 ns
+F1 @7 ns
+F2 @14 ns
+ON1 a=1 @10 ns
+ON2 a=2 @15 ns
+ON3 a=3 @35 ns
+T1 @3 ns
+T2 b=1 @15 ns
+T3 b=2 @15 ns
+TU1 timeout @20 ns
+TU2 event @35 ns
+UA2 a=2 @15 ns
+UG @25 ns
+WO @35 ns

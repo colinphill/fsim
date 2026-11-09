@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/elaboration/dpi_c_type.hpp"
+#include "fsim/support/stack_growth.hpp"
 #include "fsim/semantic/compiled_design_normalization.hpp"
 #include "fsim/semantic/systemverilog_class_specialization.hpp"
 #include "fsim/semantic/systemverilog_structure_image.hpp"
@@ -86,7 +87,6 @@ namespace {
         = 32U * 1024U * 1024U;
     constexpr std::size_t maximum_effective_subtype_cache_bytes
         = 8U * 1024U * 1024U;
-    constexpr std::size_t maximum_effective_subtype_cache_type_depth = 16U;
 
     bool profile_expression_resolution_cache() noexcept
     {
@@ -283,8 +283,7 @@ namespace {
         const std::size_t limit,
         const std::size_t depth)
     {
-        if (depth > maximum_effective_subtype_cache_type_depth
-            || !add_effective_subtype_cache_bytes(
+        if (!add_effective_subtype_cache_bytes(
                 bytes, sizeof(type), limit)
             || !add_effective_subtype_cache_string(
                 bytes, type.target.spelling, limit)
@@ -322,8 +321,8 @@ namespace {
                 return false;
             }
             if (actual.type
-                && !add_effective_subtype_cache_sv_type(
-                    bytes, *actual.type, limit, depth + 1U)) {
+                && !support::with_stack([&] { return add_effective_subtype_cache_sv_type(
+                    bytes, *actual.type, limit, depth + 1U); })) {
                 return false;
             }
         }
@@ -333,8 +332,8 @@ namespace {
             return false;
         }
         for (const auto& element_type : type.container_element_types) {
-            if (!add_effective_subtype_cache_sv_type(
-                    bytes, element_type, limit, depth + 1U)) {
+            if (!support::with_stack([&] { return add_effective_subtype_cache_sv_type(
+                    bytes, element_type, limit, depth + 1U); })) {
                 return false;
             }
         }
@@ -1603,6 +1602,14 @@ Lowerer::lower_hir_static_container_value(
                 place->receiver, place->identity)) {
             return access->container;
         }
+        // A queue or array of class handles held by an object (IEEE 1800-2017
+        // 7.4, 8.4): an actual a library method fills reads the property.
+        if (hir_class_handle_container_type(place->identity)) {
+            if (const auto access = lower_hir_class_handle_container(
+                    place->receiver, place->identity)) {
+                return access->container;
+            }
+        }
     }
     if (expression && expression->vhdl != nullptr) {
         const auto value
@@ -2369,8 +2376,12 @@ bool Lowerer::lower_hir_container_copy_out(
         // An array property of a class object (`obj.r = v`, IEEE 1800-2023
         // 8.5, 7.6).
         if (const auto place = hir_class_container_place(target)) {
-            const auto access = lower_hir_class_value_container(
-                place->receiver, place->identity);
+            // A queue or array of class handles is a handle container.
+            const auto access = hir_class_value_container_type(place->identity)
+                ? lower_hir_class_value_container(
+                      place->receiver, place->identity)
+                : lower_hir_class_handle_container(
+                      place->receiver, place->identity);
             if (!access || access->container.type != source_type) {
                 return false;
             }
@@ -3053,7 +3064,7 @@ Lowerer::hir_class_property_member(
     constexpr std::string_view selected_prefix { "@sv-select:" };
     std::string path;
     auto current = expression_id;
-    for (std::size_t depth { }; depth < 16U; ++depth) {
+    for (;;) {
         const auto expression = specialized_hir_unit_->find_expression(
             current);
         if (!expression || expression->systemverilog == nullptr) {
@@ -3446,7 +3457,7 @@ Lowerer::hir_inline_constraints(
         }
         const auto a = specialized_hir_unit_->find_expression(left);
         const auto b = specialized_hir_unit_->find_expression(right);
-        if (depth > 32U || !a || !b || a->systemverilog == nullptr
+        if (!a || !b || a->systemverilog == nullptr
             || b->systemverilog == nullptr) {
             return false;
         }
@@ -3476,10 +3487,10 @@ Lowerer::hir_inline_constraints(
                         element_prefix.size())) {
                 return false;
             }
-            return self(self, base->systemverilog->operands.front(),
-                       lowered.operands.front(), depth + 1U)
-                && self(self, raw.operands.back(), lowered.operands.back(),
-                    depth + 1U);
+            return support::with_stack([&] { return self(self, base->systemverilog->operands.front(),
+                       lowered.operands.front(), depth + 1U); })
+                && support::with_stack([&] { return self(self, raw.operands.back(), lowered.operands.back(),
+                    depth + 1U); });
         };
         if (const auto matched = property_element(x, y)) {
             return *matched;
@@ -3500,8 +3511,8 @@ Lowerer::hir_inline_constraints(
             return false;
         }
         for (std::size_t index { }; index < x.operands.size(); ++index) {
-            if (!self(self, x.operands[index], y.operands[index],
-                    depth + 1U)) {
+            if (!support::with_stack([&] { return self(self, x.operands[index], y.operands[index],
+                    depth + 1U); })) {
                 return false;
             }
         }
@@ -3575,7 +3586,7 @@ Lowerer::hir_inline_constraints(
                                        const semantic::ExpressionId id,
                                        const std::size_t depth) -> bool {
         const auto node = specialized_hir_unit_->find_expression(id);
-        if (!node || node->systemverilog == nullptr || depth > 64U) {
+        if (!node || node->systemverilog == nullptr) {
             return false;
         }
         const auto& value = *node->systemverilog;
@@ -3586,7 +3597,7 @@ Lowerer::hir_inline_constraints(
         }
         return std::ranges::any_of(value.operands,
             [&](const semantic::ExpressionId operand) {
-                return self(self, operand, depth + 1U);
+                return support::with_stack([&] { return self(self, operand, depth + 1U); });
             });
     };
     // The array an index selects from; an object's randomize reads such an
@@ -3642,7 +3653,7 @@ Lowerer::hir_inline_constraints(
                     return false;
                 }
                 auto current = source.operands.front();
-                for (std::size_t depth { }; depth < 64U; ++depth) {
+                for (;;) {
                     if (same_lvalue(same_lvalue, current, *randomized_object,
                             0U)) {
                         return true;
@@ -3659,7 +3670,6 @@ Lowerer::hir_inline_constraints(
                     }
                     current = next->systemverilog->operands.front();
                 }
-                return true;
             };
             if (array_value && !own_array()
                 && (!randomized_object || indexed_array != id)) {
@@ -3708,7 +3718,7 @@ Lowerer::hir_inline_constraints(
         // value of the calling scope (IEEE 1800-2017 18.7).
         const auto rooted_in_randomized_object = [&] {
             auto current = source.operands.front();
-            for (std::size_t depth { }; depth < 64U; ++depth) {
+            for (;;) {
                 if (same_lvalue(same_lvalue, current, *randomized_object, 0U)) {
                     return true;
                 }
@@ -3724,7 +3734,6 @@ Lowerer::hir_inline_constraints(
                 }
                 current = next->systemverilog->operands.front();
             }
-            return true;
         };
         // `a[i].m`: a member of an element of an array of the randomized
         // object is a solver variable of that element (IEEE 1800-2017 18.4,
@@ -3738,7 +3747,7 @@ Lowerer::hir_inline_constraints(
                 return false;
             }
             auto current = source.operands.front();
-            for (std::size_t depth { }; depth < 64U; ++depth) {
+            for (;;) {
                 if (randomized_object
                     && same_lvalue(same_lvalue, current, *randomized_object, 0U)) {
                     return true;
@@ -3764,7 +3773,6 @@ Lowerer::hir_inline_constraints(
                 }
                 current = node.operands.front();
             }
-            return false;
         };
         // `a[i].m` of an array the calling scope does not declare keeps the
         // member path in the selection's text (`index.m`).
@@ -3814,7 +3822,7 @@ Lowerer::hir_inline_constraints(
                 return output;
             }
             auto root = element.operands.front();
-            for (std::size_t depth { }; depth < 64U; ++depth) {
+            for (;;) {
                 const auto node = specialized_hir_unit_->find_expression(root);
                 if (!node || node->systemverilog == nullptr
                     || node->systemverilog->kind
@@ -3856,7 +3864,7 @@ Lowerer::hir_inline_constraints(
                 return output;
             }
             auto root = source.operands.front();
-            for (std::size_t depth { }; depth < 64U; ++depth) {
+            for (;;) {
                 const auto node = specialized_hir_unit_->find_expression(root);
                 if (!node || node->systemverilog == nullptr
                     || node->systemverilog->kind
@@ -3956,7 +3964,7 @@ Lowerer::hir_inline_constraints(
                     -> std::optional<std::string> {
                     const auto node = specialized_hir_unit_->find_expression(
                         handle);
-                    if (!node || node->systemverilog == nullptr || depth > 16U) {
+                    if (!node || node->systemverilog == nullptr) {
                         return std::nullopt;
                     }
                     const auto& value = *node->systemverilog;
@@ -3967,8 +3975,8 @@ Lowerer::hir_inline_constraints(
                             == semantic::sv::ExpressionKind::class_property
                         && value.text.starts_with(property_prefix)
                         && value.operands.size() == 1U) {
-                        const auto receiver = self(self,
-                            value.operands.front(), depth + 1U);
+                        const auto receiver = support::with_stack([&] { return self(self,
+                            value.operands.front(), depth + 1U); });
                         const auto separator = value.text.rfind("::");
                         if (!receiver || separator == std::string::npos) {
                             return std::nullopt;
@@ -4123,7 +4131,7 @@ Lowerer::hir_inline_constraints(
                                          const semantic::ExpressionId call,
                                          const std::size_t depth) -> bool {
                 const auto node = specialized_hir_unit_->find_expression(call);
-                if (!node || node->systemverilog == nullptr || depth > 16U) {
+                if (!node || node->systemverilog == nullptr) {
                     return false;
                 }
                 const auto& value = *node->systemverilog;
@@ -4131,7 +4139,7 @@ Lowerer::hir_inline_constraints(
                 // such a call (IEEE 1800-2017 18.5.12).
                 const auto state = [&](const semantic::ExpressionId argument) {
                     return hir_constant_integer(argument).has_value()
-                        || self(self, argument, depth + 1U);
+                        || support::with_stack([&] { return self(self, argument, depth + 1U); });
                 };
                 if (value.kind == semantic::sv::ExpressionKind::call) {
                     return !value.text.starts_with('@')
@@ -4193,7 +4201,7 @@ Lowerer::hir_inline_constraints(
         const auto enclosing_iterators = foreach_iterators.size();
         if (output.kind == TemplateKind::Foreach && !source.operands.empty()) {
             auto selection = source.operands.front();
-            for (std::size_t depth { }; depth < 16U; ++depth) {
+            for (;;) {
                 const auto node = specialized_hir_unit_->find_expression(
                     selection);
                 if (!node || node->systemverilog == nullptr
@@ -4717,6 +4725,7 @@ Lowerer::hir_class_method_profile(
                   && identity != "@uvm-run-test-ended")
                 || identity.starts_with("@uvm-registry-create:")
                 || identity == "@uvm-report-object"
+                || identity.starts_with("@uvm-singleton:")
             ? 64U
             : 1U;
         result.result_signed = count;
@@ -5316,7 +5325,8 @@ Lowerer::hir_uvm_database_actuals(const std::string_view identity,
     // value actual.
     const auto report = identity.starts_with("@uvm-report-");
     const auto run_test = identity.starts_with("@uvm-run-test-")
-        || identity.starts_with("@uvm-registry-create:") || report;
+        || identity.starts_with("@uvm-registry-create:") || report
+        || identity.starts_with("@uvm-singleton:");
     if (!config && !run_test && !identity.starts_with("@uvm-resource-db-")) {
         return std::nullopt;
     }
@@ -7370,11 +7380,24 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
     // Do not reinterpret them as packed scalar registers in the runtime-call
     // fallback if that path declined the call; a container result has no
     // runtime-call slot either.
+    // The one exception is a queue or dynamic array of class handles a
+    // method of the UVM library fills (`uvm_root::find_all`, `get_children`;
+    // IEEE 1800.2-2020 13.1.5, 13.2.3): the runtime-call route carries it as
+    // an actual of kind 6 (in) or 7 (in and out), the handles encoded as one
+    // string, and the native service writes it back (copy-out below).
+    const auto handle_queue_actual = [&](const HirClassMethodActual& actual) {
+        return actual.container && !actual.string && actual.width == 64U
+            && hir_uvm_library_identity(profile->identity);
+    };
     if (profile->container_result
         || std::ranges::any_of(profile->actuals,
-            &HirClassMethodActual::container)) {
+            [&](const HirClassMethodActual& actual) {
+                return actual.container && !handle_queue_actual(actual);
+            })) {
         return std::nullopt;
     }
+    std::vector<std::optional<ContainerRegisterId>> handle_queues(
+        profile->actuals.size());
     std::vector<RegisterId> actuals;
     std::vector<std::uint8_t> actual_kinds;
     std::vector<std::string> actual_names;
@@ -7384,7 +7407,23 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
     actual_names.reserve(profile->actuals.size());
     actual_directions.reserve(profile->actuals.size());
     for (const auto& actual : profile->actuals) {
-        if (actual.string) {
+        if (actual.container) {
+            const auto value
+                = lower_hir_static_container_value(actual.expression);
+            if (!value
+                || value->type.element_kind != ContainerElementKind::Packed
+                || value->type.element_width != 64U
+                || value->type.associative || value->type.fixed) {
+                return std::nullopt;
+            }
+            const auto copy = allocate_container_register(value->type);
+            process_.operations.emplace_back(CopyContainerRegister {
+                copy, value->value });
+            handle_queues[actual_kinds.size()] = copy;
+            actuals.push_back(copy);
+            actual_kinds.push_back(
+                class_method_copy_out(actual.direction) ? 7U : 6U);
+        } else if (actual.string) {
             const auto lowered = lower_hir_string_expression(
                 actual.expression);
             if (!lowered) {
@@ -7523,7 +7562,10 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
         if (!class_method_copy_out(actual.direction)) {
             continue;
         }
-        const auto copied = actual.string
+        const auto copied = handle_queues[index]
+            ? lower_hir_container_copy_out(
+                  actual.expression, *handle_queues[index])
+            : actual.string
             ? lower_hir_string_copy_out(
                   actual.expression, actuals[index])
             : lower_hir_packed_copy_out(
@@ -8548,6 +8590,8 @@ bool Lowerer::lower_hir_class_task_call(
         return false;
     }
     if (native_uvm) {
+        std::vector<std::optional<ContainerRegisterId>> handle_queues(
+            profile->actuals.size());
         std::vector<RegisterId> actuals;
         std::vector<std::uint8_t> actual_kinds;
         std::vector<std::string> actual_names;
@@ -8557,7 +8601,27 @@ bool Lowerer::lower_hir_class_task_call(
         actual_names.reserve(profile->actuals.size());
         actual_directions.reserve(profile->actuals.size());
         for (const auto& actual : profile->actuals) {
-            if (actual.string) {
+            if (actual.container) {
+                // A queue or dynamic array of class handles a library method
+                // fills (`uvm_root::find_all`, `get_children`): kind 6 in,
+                // kind 7 in and out (see lower_hir_class_method_call).
+                const auto value
+                    = lower_hir_static_container_value(actual.expression);
+                if (actual.string || actual.width != 64U || !value
+                    || value->type.element_kind
+                        != ContainerElementKind::Packed
+                    || value->type.element_width != 64U
+                    || value->type.associative || value->type.fixed) {
+                    return false;
+                }
+                const auto copy = allocate_container_register(value->type);
+                process_.operations.emplace_back(CopyContainerRegister {
+                    copy, value->value });
+                handle_queues[actual_kinds.size()] = copy;
+                actuals.push_back(copy);
+                actual_kinds.push_back(
+                    class_method_copy_out(actual.direction) ? 7U : 6U);
+            } else if (actual.string) {
                 const auto lowered = lower_hir_string_expression(
                     actual.expression);
                 if (!lowered) {
@@ -8620,7 +8684,10 @@ bool Lowerer::lower_hir_class_task_call(
             if (!class_method_copy_out(actual.direction)) {
                 continue;
             }
-            const auto copied = actual.string
+            const auto copied = handle_queues[index]
+                ? lower_hir_container_copy_out(
+                      actual.expression, *handle_queues[index])
+                : actual.string
                 ? lower_hir_string_copy_out(
                       actual.expression, actuals[index])
                 : lower_hir_packed_copy_out(
@@ -8993,14 +9060,13 @@ Lowerer::hir_class_receiver_instance_specialization(
     // A property or element of a handle (`top.u.h.next`, `top.u.hs[1]`)
     // starts at the handle's variable.
     auto record = specialized_hir_unit_->find_expression(*receiver);
-    for (std::size_t depth { }; depth < 64U && record
+    while (record
          && record->systemverilog != nullptr
          && (record->systemverilog->kind
                  == semantic::sv::ExpressionKind::class_property
              || record->systemverilog->kind
                  == semantic::sv::ExpressionKind::index)
-         && !record->systemverilog->operands.empty();
-         ++depth) {
+         && !record->systemverilog->operands.empty()) {
         record = specialized_hir_unit_->find_expression(
             record->systemverilog->operands.front());
     }
@@ -11005,15 +11071,11 @@ std::vector<semantic::DeclarationId> inactive_generate_declarations(
 }
 
 // Whether `statement_id` is, or nests, a return statement. An unknown
-// statement or one nested deeper than `depth_limit` counts as returning.
+// statement counts as returning.
 [[nodiscard]] bool vhdl_statement_may_return(
     const semantic::SpecializedHirUnit& unit,
-    const semantic::StatementId statement_id, const std::size_t depth,
-    const std::size_t depth_limit)
+    const semantic::StatementId statement_id)
 {
-    if (depth > depth_limit) {
-        return true;
-    }
     const auto statement = unit.find_statement(statement_id);
     if (!statement || statement->vhdl == nullptr) {
         return true;
@@ -11026,8 +11088,7 @@ std::vector<semantic::DeclarationId> inactive_generate_declarations(
         = [&](const std::vector<semantic::StatementId>& statements) {
               return std::ranges::any_of(statements,
                   [&](const semantic::StatementId nested) {
-                      return vhdl_statement_may_return(
-                          unit, nested, depth + 1U, depth_limit);
+                      return vhdl_statement_may_return(unit, nested);
                   });
           };
     return nested_returns(source.statements)
@@ -11511,7 +11572,8 @@ Lowerer::hir_instance_callable(const std::string_view receiver,
     const auto in_generate_chain = [&](const semantic::Scope& scope) {
         std::vector<std::string_view> names;
         const auto* current = &scope;
-        for (std::size_t depth = 0; depth < 64U && current->parent; ++depth) {
+        // Each step moves to the parent scope, so the walk ends.
+        while (current->parent) {
             names.insert(names.begin(), current->name);
             if (current->parent->value() >= scopes.size()) {
                 return false;
@@ -12795,9 +12857,6 @@ Lowerer::hir_vhdl_function_result_proof(
         const auto evaluate_bound = [&](const auto& self,
             const semantic::ExpressionId expression_id,
             const std::size_t depth) -> std::optional<std::int64_t> {
-            if (depth > 32U) {
-                return std::nullopt;
-            }
             const auto expression = specialized_hir_unit_->find_expression(
                 expression_id);
             if (!expression || expression->vhdl == nullptr) {
@@ -12867,8 +12926,8 @@ Lowerer::hir_vhdl_function_result_proof(
                     specialized_hir_unit_->design(), source.text)) {
                 return std::nullopt;
             }
-            const auto left = self(self, source.operands[0], depth + 1U);
-            const auto right = self(self, source.operands[1], depth + 1U);
+            const auto left = support::with_stack([&] { return self(self, source.operands[0], depth + 1U); });
+            const auto right = support::with_stack([&] { return self(self, source.operands[1], depth + 1U); });
             if (!left || !right
                 || (*right > 0
                     && *left > std::numeric_limits<std::int64_t>::max()
@@ -12887,9 +12946,6 @@ Lowerer::hir_vhdl_function_result_proof(
         const auto evaluate_alias_bound = [&](const auto& self,
             const semantic::ExpressionId expression_id,
             const std::size_t depth) -> std::optional<std::int64_t> {
-            if (depth > 32U) {
-                return std::nullopt;
-            }
             const auto expression = specialized_hir_unit_->find_expression(
                 expression_id);
             if (!expression || expression->vhdl == nullptr) {
@@ -12943,8 +12999,8 @@ Lowerer::hir_vhdl_function_result_proof(
                     specialized_hir_unit_->design(), source.text)) {
                 return std::nullopt;
             }
-            const auto left = self(self, source.operands[0], depth + 1U);
-            const auto right = self(self, source.operands[1], depth + 1U);
+            const auto left = support::with_stack([&] { return self(self, source.operands[0], depth + 1U); });
+            const auto right = support::with_stack([&] { return self(self, source.operands[1], depth + 1U); });
             if (!left || !right
                 || (*right > 0
                     && *left > std::numeric_limits<std::int64_t>::max()
@@ -12971,7 +13027,7 @@ Lowerer::hir_vhdl_function_result_proof(
         for (std::size_t index { };
              index + 1U < declaration->vhdl->statements.size(); ++index) {
             if (vhdl_statement_may_return(*specialized_hir_unit_,
-                    declaration->vhdl->statements[index], 0U, 64U)) {
+                    declaration->vhdl->statements[index])) {
                 return std::nullopt;
             }
         }
@@ -13306,7 +13362,7 @@ Lowerer::hir_vhdl_function_result_proof(
         for (std::size_t index { };
              index + 1U < declaration->vhdl->statements.size(); ++index) {
             if (vhdl_statement_may_return(*specialized_hir_unit_,
-                    declaration->vhdl->statements[index], 0U, 63U)) {
+                    declaration->vhdl->statements[index])) {
                 return std::nullopt;
             }
         }
@@ -14421,9 +14477,6 @@ Lowerer::hir_vhdl_function_result_proof(
                 = [&](const auto& self,
                       const semantic::ExpressionId expression_id,
                       const std::size_t depth) -> bool {
-                if (depth > 16U) {
-                    return false;
-                }
                 const auto expression
                     = specialized_hir_unit_->find_expression(
                         expression_id);
@@ -14453,7 +14506,7 @@ Lowerer::hir_vhdl_function_result_proof(
                     && !semantic::vhdl_operator_overloaded_by_design(
                         specialized_hir_unit_->design(), source.text)) {
                     return is_universal_integer_unary_literal(source)
-                        || self(self, source.operands.front(), depth + 1U);
+                        || support::with_stack([&] { return self(self, source.operands.front(), depth + 1U); });
                 }
                 if (source.kind
                         == semantic::vhdl::ExpressionKind::name
@@ -14502,8 +14555,8 @@ Lowerer::hir_vhdl_function_result_proof(
                     && source.referenced_name->overloads.empty()
                     && !semantic::vhdl_operator_overloaded_by_design(
                         specialized_hir_unit_->design(), source.text)) {
-                    return self(self, source.operands[0], depth + 1U)
-                        && self(self, source.operands[1], depth + 1U);
+                    return support::with_stack([&] { return self(self, source.operands[0], depth + 1U); })
+                        && support::with_stack([&] { return self(self, source.operands[1], depth + 1U); });
                 }
                 return false;
             };
@@ -15081,7 +15134,7 @@ Lowerer::hir_vhdl_returned_result_shape(
         for (const auto statement_id : list) {
             const auto statement
                 = specialized_hir_unit_->find_statement(statement_id);
-            if (!statement || statement->vhdl == nullptr || depth > 64U) {
+            if (!statement || statement->vhdl == nullptr) {
                 complete = false;
                 return;
             }
@@ -15102,17 +15155,17 @@ Lowerer::hir_vhdl_returned_result_shape(
                 && source.condition && source.alternatives.empty()) {
                 if (const auto folded
                     = hir_constant_integer(*source.condition)) {
-                    self(self,
+                    support::with_stack([&] { return self(self,
                         *folded != 0 ? source.statements
                                      : source.else_statements,
-                        depth + 1U);
+                        depth + 1U); });
                     continue;
                 }
             }
-            self(self, source.statements, depth + 1U);
-            self(self, source.else_statements, depth + 1U);
+            support::with_stack([&] { return self(self, source.statements, depth + 1U); });
+            support::with_stack([&] { return self(self, source.else_statements, depth + 1U); });
             for (const auto& alternative : source.alternatives) {
-                self(self, alternative.statements, depth + 1U);
+                support::with_stack([&] { return self(self, alternative.statements, depth + 1U); });
             }
         }
     };
@@ -15968,8 +16021,10 @@ bool Lowerer::hir_vhdl_actual_matches_formal(
         bool bound_once { };
         // An actual that is itself a generic type (`t => t` in a generic
         // body, or an enclosing instance's formal) denotes what binds that.
-        for (std::size_t depth { }; depth < 8U && generic_type(current);
-             ++depth) {
+        // A formal bound to a formal can close a cycle: stop on a type seen.
+        std::set<std::uint32_t> visited_generic_types;
+        while (generic_type(current)
+               && visited_generic_types.insert(current.value()).second) {
             const auto definition = specialized_hir_unit_->find_type(current);
             if (!definition || definition->vhdl == nullptr) {
                 break;
@@ -21738,7 +21793,8 @@ bool Lowerer::lower_hir_dpi_block_exports_foreign()
         std::vector<std::string_view> chain;
         const auto* current = &scopes[hook.scope.value()];
         const auto unit = current->unit;
-        for (std::size_t depth = 0; depth < 64U && current->parent; ++depth) {
+        // Each step moves to the parent scope, so the walk ends.
+        while (current->parent) {
             chain.insert(chain.begin(), current->name);
             if (current->parent->value() >= scopes.size()) {
                 break;
@@ -25295,7 +25351,8 @@ std::optional<std::string> Lowerer::hir_vhdl_foreign_model(
     // The nearest enclosing declarative region with a specification of the
     // subprogram's FOREIGN attribute.
     auto scope = callable.scope;
-    for (std::size_t depth { }; scope.valid() && depth < 64U; ++depth) {
+    // Each step moves to the parent scope, so the walk ends.
+    while (scope.valid()) {
         for (const auto& candidate : design.vhdl_hir.declarations()) {
             if (candidate.form != Form::attribute_specification
                 || candidate.scope != scope || !candidate.attribute
@@ -25753,7 +25810,7 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
         const auto& scopes = specialized_hir_unit_->design().semantics.scopes();
         std::set<std::uint32_t> enclosing;
         auto scope = initial_frame->scope;
-        for (std::size_t depth { }; scope.valid() && depth < 64U; ++depth) {
+        while (scope.valid()) {
             if (scope.value() >= scopes.size()
                 || !scopes[scope.value()].parent) {
                 break;
@@ -25932,6 +25989,15 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
                 { },
                 frontend::SystemVerilogScalarKind::None,
             });
+        } else if (record->vhdl != nullptr && initial_frame->function) {
+            // A VHDL function cannot suspend, so its formals are no debug
+            // locals; a running call reads them from the frame-local table
+            // (IEEE 1076-2019 14.6 b).
+            add_hir_frame_local(callable_index, name,
+                record->vhdl->subtype
+                    ? record->vhdl->subtype->type_mark.spelling
+                    : std::string { },
+                initial_frame->arguments[index], record->vhdl->source);
         }
     }
 
@@ -26630,10 +26696,7 @@ Lowerer::hir_vhdl_generic_environment(
     const auto names_bound_generic_in = [&](const auto& self,
                                             const semantic::ExpressionId id,
                                             const std::size_t depth) -> bool {
-        constexpr std::size_t maximum_depth = 32U;
-        const auto expression = depth < maximum_depth
-            ? specialized_hir_unit_->find_expression(id)
-            : std::nullopt;
+        const auto expression = specialized_hir_unit_->find_expression(id);
         if (!expression || expression->vhdl == nullptr) {
             return false;
         }
@@ -26644,7 +26707,7 @@ Lowerer::hir_vhdl_generic_environment(
         }
         return std::ranges::any_of(expression->vhdl->operands,
             [&](const semantic::ExpressionId operand) {
-                return self(self, operand, depth + 1U);
+                return support::with_stack([&] { return self(self, operand, depth + 1U); });
             });
     };
     const auto names_bound_generic = [&](const HirGenericBinding& binding) {
@@ -26697,8 +26760,7 @@ Lowerer::hir_vhdl_signal_part_binding(const semantic::DeclarationId formal,
                            const std::size_t base,
                            const std::size_t depth) -> void {
         for (const auto& association : associations.associations) {
-            const auto field = depth <= 16U
-                    && !association.choice_spelling.empty()
+            const auto field = !association.choice_spelling.empty()
                     && association.choice_spelling != "@array"
                 ? hir_vhdl_record_field(owner, association.choice_spelling)
                 : std::nullopt;
@@ -26712,8 +26774,8 @@ Lowerer::hir_vhdl_signal_part_binding(const semantic::DeclarationId formal,
             }
             if (value->vhdl->kind == semantic::vhdl::ExpressionKind::aggregate
                 && value->vhdl->text == "@vhdl-formal-subelements") {
-                self(self, *value->vhdl, field->subtype, base + field->offset,
-                    depth + 1U);
+                support::with_stack([&] { return self(self, *value->vhdl, field->subtype, base + field->offset,
+                    depth + 1U); });
                 if (!valid) {
                     return;
                 }

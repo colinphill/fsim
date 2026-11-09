@@ -86,6 +86,7 @@ static void start(const vhpiCbDataT* data)
         vhpiHandleT uses;
         vhpiHandleT used;
         const char* separator = "";
+        int standard = 0;
         if (vhpi_get(vhpiKindP, item) != vhpiArchBodyK) {
             continue;
         }
@@ -94,10 +95,18 @@ static void start(const vhpiCbDataT* data)
         printf(" uses=");
         uses = vhpi_iterator(vhpiUses, item);
         while (uses != NULL && (used = vhpi_scan(uses)) != NULL) {
+            // The implicit `use STD.STANDARD.all` (12.4) makes the declarations
+            // of STANDARD visible to every unit; they are counted apart (see
+            // vhpi-standard-catalog).
+            if (strncmp(text_property(used, vhpiFullNameP), "@std:standard", 13U)
+                == 0) {
+                ++standard;
+                continue;
+            }
             printf("%s%s", separator, text_property(used, vhpiNameP));
             separator = ",";
         }
-        printf("\n");
+        printf(" standard=%d\n", standard);
     }
     // The attribute specifications of a design unit belong to the unit whose
     // declarative part holds them (7.2, Figure 33): the entity's to the

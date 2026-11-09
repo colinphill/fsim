@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/uvm_tlm1.hpp"
+#include "fsim/support/stack_growth.hpp"
 
 #include <algorithm>
 #include <set>
@@ -396,6 +397,14 @@ void SystemVerilogUvmTlm1Service::collect_implementations(
   }
   if (depth > limits_.maximum_depth) {
     fail(kResourceLimit, "UVM TLM1 binding depth ceiling exceeded");
+  }
+  // Nested bindings continue on a new stack segment when the stack is nearly
+  // used up, so the nesting depth is bounded by memory.
+  if (!support::stack_growth_detail::has_room()) {
+    --work;  // the re-entered call counts it again
+    support::with_stack(
+        [&] { collect_implementations(slot, depth, work, result, path); });
+    return;
   }
   if (std::ranges::find(path, slot) != path.end()) {
     fail(kInvalidConnection, "UVM TLM1 binding graph contains a cycle");

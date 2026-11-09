@@ -15,7 +15,6 @@
 // one is refused (FSIM-SAVE-0009), and so is an image that lacks a registered
 // section (FSIM-SAVE-0008) or fails to decode (FSIM-SAVE-0010).
 
-#include "fsim/runtime/run_state_archive.hpp"
 #include "fsim/runtime/run_state_image.hpp"
 
 #include <cstdint>
@@ -33,6 +32,8 @@
 #endif
 
 namespace fsim::runtime {
+
+class RunStateArchive;
 
 struct RunStateSectionOwner {
     /// Unique name, "<subsystem>.<part>".

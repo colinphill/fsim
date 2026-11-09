@@ -14,6 +14,8 @@
 
 namespace fsim::runtime {
 
+class RunStateArchive;
+
 enum class SystemVerilogUvmOverrideKind : std::uint8_t {
   Instance,
   Type,
@@ -65,6 +67,11 @@ struct SystemVerilogUvmFactoryTraceRecord {
 
 class SystemVerilogUvmFactoryService final {
  public:
+  /// Run-state save and restore of the overrides and the trace (#188), and the
+  /// return to no override.
+  void run_state_io(RunStateArchive& archive);
+  void reset_run_state();
+
   using TraceCallback =
       std::function<void(const SystemVerilogUvmFactoryTraceRecord&)>;
 

@@ -96,7 +96,7 @@ foreach(FSIM_TOKEN IN ITEMS
     "runtime 107"
     "C++ SDK consumers must"
     "VhdlBindingIndication"
-    "DesignIR 6"
+    "DesignIR 7"
     "FSIMHPT1"
     "state/hierarchy-paths.bin"
     "cache schema 1"

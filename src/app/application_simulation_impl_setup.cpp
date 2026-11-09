@@ -292,13 +292,18 @@ std::unique_ptr<runtime::simir::Interpreter> create_simulation_interpreter(
 #endif
     // A simulation built without a run's access plan (the library API, an
     // embedding client) may read, write or observe any object through the
-    // Simulation interface at any time: the kernel runs with every signal a
-    // host object (docs/engine-v4-semantics.md S19).
+    // Simulation interface at any time, and its change hooks hear every
+    // write of every signal in the reference evaluator's order, which the
+    // kernel's member order and per-activation publication cannot give: every
+    // signal stays a host signal (StaticKernelAccessPlan::host_signals,
+    // docs/engine-v4-semantics.md S19). The debugger's own plan
+    // (--engine debug) keeps the signals in the kernel.
     // Such a client may also install execution-point hooks, read process
     // locals and request stops, so the plan is the debugger's: every member
     // a stoppable thread with its debug points and registers retained.
     if (kernel && !built.cone_fusion && !built.kernel_access.admit) {
         application_detail::plan_kernel_access(built, engine, true);
+        built.kernel_access.host_signals = true;
     }
     // FSIM_V4_STRICT=1: a kernel run that would leave any process to the
     // reference interpreter fails instead, naming the gate, so the tests
@@ -841,8 +846,15 @@ Simulation::Impl::Impl(
             if (class_heap.contains(handle)) {
                 std::string identity
                     = class_heap.object(handle).specialization_identity;
-                for (std::size_t depth = 0U;
-                    depth < 64U && !identity.empty(); ++depth) {
+                std::vector<std::string> followed;
+                while (!identity.empty()) {
+                    // A specialization chain that returns to one already
+                    // followed ends the walk.
+                    if (std::ranges::find(followed, identity)
+                        != followed.end()) {
+                        break;
+                    }
+                    followed.push_back(identity);
                     const auto found = std::ranges::find(
                         built.compiled_systemverilog_class_specializations,
                         identity,
@@ -1105,6 +1117,38 @@ Simulation::Impl::Impl(
             }
             storage.handle_container->set(
                 class_heap, std::string { key }, value);
+        });
+    class_hir_execution.set_class_handle_queue_write_service(
+        [this](const auto owner, const auto property, const auto values) {
+            auto& storage = class_heap.property(owner, property);
+            if (!storage.handle_container
+                || storage.handle_container->kind()
+                    != runtime::SystemVerilogClassContainerKind::Queue) {
+                throw std::invalid_argument {
+                    "class property is not a class-handle queue"
+                };
+            }
+            // The library's find_all and get_children push_back onto the
+            // queue (uvm_root.svh m_find_all_recurse, uvm_component.svh
+            // get_children): the matches follow what the queue holds.
+            for (const auto component : values) {
+                storage.handle_container->push_back(class_heap, component);
+            }
+        });
+    // `uvm_top.find_all` and `uvm_top.get_children` answer from the native
+    // hierarchy and write the class property queue the call names.
+    class_hir_execution.set_root_container_method_service(
+        [this](const auto handle) { return is_uvm_root_handle(handle); },
+        [this](const auto receiver, const std::string_view method,
+            const std::string_view pattern, const auto start)
+            -> std::optional<std::vector<runtime::SystemVerilogClassHandle>> {
+            if (!is_uvm_root_handle(receiver)) {
+                return std::nullopt;
+            }
+            if (method == "get_children") {
+                return uvm_root_top_components();
+            }
+            return uvm_find_all(pattern, start);
         });
     class_hir_execution.set_class_handle_fixed_array_write_service(
         [this](const auto owner, const auto property, const auto index,

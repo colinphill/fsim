@@ -463,8 +463,10 @@ empty for a design without a hierarchical read, is persisted in the artifact
 (runtime schema 102), and so a load applied at simulate time to a loaded
 artifact (`simulate --sdf`) finds the same records. Only a whole-name read in an
 expression is recorded: an event control on the name (`@(top.u1.a)`), a
-select of it, a write or a force of it, and a read inside a memoized callable
-keep the net.
+select of it, a write or a force of it keep the net. A read inside the body of
+a callable that the load's instance defines and another instance's process
+calls (`u1.peek()` from `top`) is recorded as a hierarchical read of the load's
+instance (`mark_callee_instance_read`), so it takes the copy too.
 They reject other planned target kinds with `FSIM-SDF-SESSION-003` before
 publication or live commit. The broader interconnect, drive, pulse, VITAL and mixed-language
 APIs described above retain their separate source-tree contracts and tests;

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "lowerer_internal.hpp"
+#include "fsim/support/stack_growth.hpp"
 #include "hierarchy_sv_type_layout_internal.hpp"
 #include "hir_output_conversion.hpp"
 #include "vhdl_hir_type_validation.hpp"
@@ -105,11 +106,7 @@ namespace {
             specialization, binding_frames
         }.effective_systemverilog_type(*source.type, source.scope)
                         .value_or(*source.type);
-        std::size_t depth { };
         while (type.container_form) {
-            if (++depth > 32U) {
-                return std::nullopt;
-            }
             if (type.container_element_types.size() > 1U) {
                 return std::nullopt;
             }
@@ -1521,7 +1518,7 @@ void Lowerer::emit_hir_vhdl_initializer_length_checks(
     const frontend::SourceSpan& span,
     const std::size_t depth)
 {
-    if (specialized_hir_unit_ == nullptr || depth > 16U) {
+    if (specialized_hir_unit_ == nullptr) {
         return;
     }
     auto expression = specialized_hir_unit_->find_expression(value);
@@ -1596,11 +1593,11 @@ void Lowerer::emit_hir_vhdl_initializer_length_checks(
                 }
                 for (const auto index : targets) {
                     covered[index] = true;
-                    emit_hir_vhdl_initializer_length_checks(association.value,
+                    support::with_stack([&] { return emit_hir_vhdl_initializer_length_checks(association.value,
                         semantic::vhdl::constrained_element_subtype(
                             *effective, elements[index].name,
                             elements[index].subtype),
-                        span, depth + 1U);
+                        span, depth + 1U); });
                 }
             }
             return;
@@ -1612,8 +1609,8 @@ void Lowerer::emit_hir_vhdl_initializer_length_checks(
             const auto element = semantic::vhdl::constrained_element_subtype(
                 *effective, "", *definition->element_subtype);
             for (const auto& association : source.associations) {
-                emit_hir_vhdl_initializer_length_checks(
-                    association.value, element, span, depth + 1U);
+                support::with_stack([&] { return emit_hir_vhdl_initializer_length_checks(
+                    association.value, element, span, depth + 1U); });
             }
         }
         return;
@@ -4082,7 +4079,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
         target = input.target;
         // An assignment to an alias of an element or slice assigns that
         // part of the aliased object (IEEE 1076-2008 6.6.2).
-        for (std::size_t depth = 0; target && depth < 16U; ++depth) {
+        while (target) {
             const auto aliased = hir_vhdl_alias_target_expression(*target);
             if (!aliased) {
                 break;
@@ -4754,15 +4751,13 @@ bool Lowerer::lower_hir_statement_unsuspended(
                                              const std::size_t depth)
         -> bool {
         const auto& design = specialized_hir_unit_->design();
-        const auto ternary = depth < 64U
-            ? coverage_ternary(id,
-                  [&](const semantic::ExpressionId expression) {
-                      return design.find_expression(expression);
-                  },
-                  [&](const semantic::DeclarationId declaration) {
-                      return design.find_declaration(declaration);
-                  })
-            : std::nullopt;
+        const auto ternary = coverage_ternary(id,
+            [&](const semantic::ExpressionId expression) {
+                return design.find_expression(expression);
+            },
+            [&](const semantic::DeclarationId declaration) {
+                return design.find_declaration(declaration);
+            });
         if (!ternary) {
             return true;
         }
@@ -4788,7 +4783,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 && emit_coverage_hit(
                     hir_source_span(found->systemverilog->source),
                     runtime::CodeCoverageMetric::Branch, kind)
-                && self(self, operand, depth + 1U);
+                && support::with_stack([&] { return self(self, operand, depth + 1U); });
         };
         const auto start_true = static_cast<InstructionIndex>(
             process_.operations.size());
@@ -5016,7 +5011,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
             const auto body_scope = *callee->vhdl->nested_scope;
             const auto& design = specialized_hir_unit_->design();
             const auto within_body = [&](semantic::ScopeId scope) {
-                for (std::size_t depth { }; depth < 64U; ++depth) {
+                // Each step moves to the parent scope, so the walk ends.
+                for (;;) {
                     if (scope == body_scope) {
                         return true;
                     }
@@ -5026,7 +5022,6 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     }
                     scope = *record->parent;
                 }
-                return false;
             };
             using Kind = semantic::vhdl::StatementKind;
             const auto quiet = [&](const auto& self,
@@ -5082,7 +5077,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                                            const semantic::ExpressionId id,
                                            const std::size_t depth) -> bool {
             const auto expression = specialized_hir_unit_->find_expression(id);
-            if (!expression || expression->vhdl == nullptr || depth > 32U) {
+            if (!expression || expression->vhdl == nullptr) {
                 return false;
             }
             const auto& source = *expression->vhdl;
@@ -5110,7 +5105,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
             }
             return std::ranges::all_of(source.operands,
                 [&](const semantic::ExpressionId operand) {
-                    return self(self, operand, depth + 1U);
+                    return support::with_stack([&] { return self(self, operand, depth + 1U); });
                 });
         };
         // A slice whose bounds this elaboration knows: a null slice names no
@@ -5987,8 +5982,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
             // selects.
             std::optional<semantic::DeclarationId> target_declaration;
             auto root = *target;
-            for (std::size_t depth { }; depth < 8U && !target_declaration;
-                ++depth) {
+            while (!target_declaration) {
                 target_declaration = hir_target_declaration(root);
                 if (!target_declaration) {
                     if (const auto element
@@ -10637,9 +10631,6 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         = [&](const auto& self,
                               const semantic::ExpressionId id,
                               const std::size_t depth) -> bool {
-                        if (depth >= 64U) {
-                            return false;
-                        }
                         const auto expression
                             = specialized_hir_unit_->find_expression(id);
                         if (!expression || expression->vhdl == nullptr) {
@@ -10658,8 +10649,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                             && source.text.starts_with(
                                 semantic::vhdl::qualified_expression_prefix)
                             && source.operands.size() == 1U) {
-                            return self(
-                                self, source.operands.front(), depth + 1U);
+                            return support::with_stack([&] { return self(
+                                self, source.operands.front(), depth + 1U); });
                         }
                         if (source.kind != Kind::aggregate) {
                             return false;
@@ -10702,8 +10693,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                                             static_choice);
                                 }();
                                 return choices_are_static
-                                    && self(
-                                        self, association.value, depth + 1U);
+                                    && support::with_stack([&] { return self(
+                                        self, association.value, depth + 1U); });
                             });
                     };
                     if (aggregate.associations.size() == 1U) {
@@ -10813,9 +10804,6 @@ bool Lowerer::lower_hir_statement_unsuspended(
                             const semantic::vhdl::SubtypeIndication& input,
                             const std::size_t depth)
                         -> std::optional<std::uint64_t> {
-                        if (depth >= 64U) {
-                            return std::nullopt;
-                        }
                         const auto effective
                             = hir_effective_vhdl_subtype(input);
                         if (!effective) {
@@ -10920,7 +10908,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         const auto element =
                             semantic::vhdl::constrained_element_subtype(
                                 *effective, "", *array->element_subtype);
-                        const auto element_width = self(self, element, depth + 1U);
+                        const auto element_width = support::with_stack([&] { return self(self, element, depth + 1U); });
                         if (!element_width) {
                             return std::nullopt;
                         }
@@ -15417,7 +15405,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 -> std::optional<std::string> {
                 // A locally static constant choice stands for its value
                 // (IEEE 1076-2008 10.9).
-                for (std::size_t depth { }; depth < 8U; ++depth) {
+                for (;;) {
                     const auto declaration = hir_referenced_declaration(choice);
                     const auto initializer = declaration
                         ? hir_constant_initializer(*declaration)
@@ -18858,7 +18846,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                                                 const semantic::ExpressionId bound,
                                                 const std::size_t depth)
             -> std::optional<std::int64_t> {
-            if (specialized_hir_unit_ == nullptr || depth > 64U) {
+            if (specialized_hir_unit_ == nullptr) {
                 return std::nullopt;
             }
             const auto bound_expression
@@ -18889,7 +18877,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
             if (!profile->value || !profile->lower_bound || !profile->upper_bound) {
                 return std::nullopt;
             }
-            const auto operand = self(self, *profile->value, depth + 1U);
+            const auto operand = support::with_stack([&] { return self(self, *profile->value, depth + 1U); });
             if (!operand || *operand < *profile->lower_bound
                 || *operand > *profile->upper_bound) {
                 return std::nullopt;
@@ -19539,8 +19527,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                                                          const semantic::ExpressionId expression_id,
                                                          const std::size_t depth,
                                                          std::unordered_set<std::uint32_t>& visiting) -> bool {
-                    if (depth > 64U
-                        || !visiting.insert(expression_id.value()).second) {
+                    if (!visiting.insert(expression_id.value()).second) {
                         return false;
                     }
                     const auto expression
@@ -19599,8 +19586,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                             stable = std::ranges::all_of(
                                 source.operands,
                                 [&](const semantic::ExpressionId operand) {
-                                    return self(
-                                        self, operand, depth + 1U, visiting);
+                                    return support::with_stack([&] { return self(
+                                        self, operand, depth + 1U, visiting); });
                                 });
                         }
                     }
@@ -26420,15 +26407,14 @@ bool Lowerer::hir_update_expression_pure(
         return true;
     }
     const auto expression = specialized_hir_unit_->find_expression(id);
-    if (!expression || expression->systemverilog == nullptr
-        || depth > 64U) {
+    if (!expression || expression->systemverilog == nullptr) {
         return false;
     }
     const auto& source = *expression->systemverilog;
     if (semantic::sv::is_expression_size_cast(source)) {
         // The size is elaboration-time constant; runtime purity depends
         // only on the value expression.
-        return hir_update_expression_pure(source.operands.back(), depth + 1U);
+        return support::with_stack([&] { return hir_update_expression_pure(source.operands.back(), depth + 1U); });
     }
     switch (source.kind) {
     case Kind::name:
@@ -26459,7 +26445,7 @@ bool Lowerer::hir_update_expression_pure(
     }
     return std::ranges::all_of(source.operands,
         [&](const semantic::ExpressionId operand) {
-            return hir_update_expression_pure(operand, depth + 1U);
+            return support::with_stack([&] { return hir_update_expression_pure(operand, depth + 1U); });
         });
 }
 
@@ -26504,7 +26490,7 @@ bool Lowerer::capture_hir_update_target_indices(
     // Walk the select chain from the target to its root, capturing each
     // impure index; anything else impure cannot be captured.
     auto current = *statement.target;
-    for (std::size_t depth = 0U; depth < 64U; ++depth) {
+    for (;;) {
         const auto expression = specialized_hir_unit_->find_expression(
             current);
         if (!expression || expression->systemverilog == nullptr) {
@@ -26555,7 +26541,6 @@ bool Lowerer::capture_hir_update_target_indices(
                 : std::nullopt;
         }
     }
-    return false;
 }
 
 std::string Lowerer::hir_library_cell() const
@@ -27587,8 +27572,7 @@ void Lowerer::hir_local_event_notifiers(
 {
     std::vector<semantic::ExpressionId> pending { expression };
     bool class_heap = false;
-    for (std::size_t visited { }; !pending.empty() && visited < 1024U;
-         ++visited) {
+    while (!pending.empty()) {
         const auto id = pending.back();
         pending.pop_back();
         // A class property is no signal: its object's changes are

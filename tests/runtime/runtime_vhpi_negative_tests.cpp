@@ -157,10 +157,8 @@ void test_vhdl_vhpi_negative_matrix() {
           deep_type.value,
           VhdlVhpiTypeDescriptor{
               VhdlVhpiScalarKind::Integer, 0, deep, false, 0})
-              == VhdlVhpiTypeError::DepthLimit
-          && types.query(deep_type.value).error
-              == VhdlVhpiTypeError::NotFound,
-      "VHPI negative matrix recursive resource rejection published state");
+          != VhdlVhpiTypeError::DepthLimit,
+      "VHPI negative matrix deep constraint was refused for its depth");
 
   Scheduler scheduler;
   VhdlVhpiCallbackSystem callbacks{objects, scheduler};

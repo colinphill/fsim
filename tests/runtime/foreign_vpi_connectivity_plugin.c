@@ -210,6 +210,27 @@ static void dpi_typespec(char* name)
     }
 }
 
+// The typespec of a formal and of the result declared with a typedef is the
+// typedef's (IEEE 1800-2023 37.41, 37.25).
+static void typedef_typespec(char* name)
+{
+    vpiHandle const callable = vpi_handle_by_name(name, NULL);
+    vpiHandle const items = vpi_iterate(vpiIODecl, callable);
+    vpiHandle item;
+    vpiHandle typespec;
+    while (items != NULL && (item = vpi_scan(items)) != NULL) {
+        typespec = vpi_handle(vpiTypespec, item);
+        vpi_printf("#c %s: formal %s typespec=%s name=%s\n", name,
+            text(vpiName, item),
+            typespec != NULL ? text(vpiType, typespec) : "none",
+            typespec != NULL ? text(vpiName, typespec) : "none");
+    }
+    typespec = vpi_handle(vpiTypespec, vpi_handle(vpiReturn, callable));
+    vpi_printf("#c %s: result typespec=%s name=%s\n", name,
+        typespec != NULL ? text(vpiType, typespec) : "none",
+        typespec != NULL ? text(vpiName, typespec) : "none");
+}
+
 // The calls to a DPI import: the statement's task, or the function of the
 // call an assignment reads (IEEE 1800-2023 37.40, 37.42, 37.43).
 static void dpi_calls(vpiHandle top)
@@ -394,6 +415,8 @@ static PLI_INT32 start(p_cb_data data)
     dpi_signature("top.dpi_exp");
     dpi_typespec("top.dpi_twice");
     dpi_typespec("top.dpi_note");
+    typedef_typespec("top.named");
+    typedef_typespec("cp::nibble");
     dpi_calls(top);
     assignment_bits("top.w");
     assignment_bits("top.nd");

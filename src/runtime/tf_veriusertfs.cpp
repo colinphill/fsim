@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <cstring>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -659,7 +660,7 @@ bool acc_scope(const vpiHandle object) {
 template <typename Accept>
 vpiHandle enclosing(const vpiHandle object, const Accept accepted) {
   auto current = vpi_handle(vpiScope, object);
-  for (int depth = 0; current != nullptr && depth < 256; ++depth) {
+  while (current != nullptr) {
     if (accepted(current)) {
       return current;
     }
@@ -837,7 +838,7 @@ uint32_t FSIM_NATIVE_PLUGIN_CALL acc_resolve(void* /*user_data*/,
 // is tried in the scope, then in each enclosing scope, then from the tops.
 vpiHandle find_by_upward_name(const std::string& path, vpiHandle scope) {
   auto* const name = const_cast<PLI_BYTE8*>(path.c_str());
-  for (int depth = 0; scope != nullptr && depth < 256; ++depth) {
+  while (scope != nullptr) {
     if (const auto found = vpi_handle_by_name(name, scope)) {
       return found;
     }
@@ -2667,7 +2668,8 @@ void run(Instance& instance, const uint32_t phase, const PLI_INT32 reason,
               reinterpret_cast<PLI_BYTE8*>(&driver_watch);
           return vpi_register_cb(&driver_callback);
         };
-        for (const auto driver : members(vpiDriver, handle)) {
+        std::function<void(vpiHandle)> visit_driver;
+        visit_driver = [&](const vpiHandle driver) {
           const auto driver_type = vpi_get(vpiType, driver);
           if (driver_type == vpiContAssign) {
             if (const auto registered = watch_driver(driver)) {
@@ -2675,7 +2677,7 @@ void run(Instance& instance, const uint32_t phase, const PLI_INT32 reason,
             } else {
               unwatched_driver = true;
             }
-            continue;
+            return;
           }
           if (driver_type == vpiContAssignBit) {
             // A bit of a concatenation target is its assignment's driver.
@@ -2684,14 +2686,14 @@ void run(Instance& instance, const uint32_t phase, const PLI_INT32 reason,
             } else {
               unwatched_driver = true;
             }
-            continue;
+            return;
           }
           if (driver_type == vpiAssignStmt || driver_type == vpiForce) {
             // Each statement kind of the argument is watched once; its
             // execution and its release are the driver's changes.
             const bool forced = driver_type == vpiForce;
             if (forced ? force_seen : assign_seen) {
-              continue;
+              return;
             }
             (forced ? force_seen : assign_seen) = true;
             auto& driver_watch = instance.force_watches.emplace_back(
@@ -2721,12 +2723,31 @@ void run(Instance& instance, const uint32_t phase, const PLI_INT32 reason,
               follow.user_data = reinterpret_cast<PLI_BYTE8*>(&driver_watch);
               (void)vpi_register_cb(&follow);
             }
-            continue;
+            return;
+          }
+          if (driver_type == vpiPort) {
+            // The output port of a child instance drives the net its high
+            // connection is: the drivers of the net behind the port inside
+            // the child (a continuous assignment, a gate) are drivers of the
+            // argument (IEEE 1364-2001 Table 88). Each step enters a child
+            // instance, so the walk ends.
+            if (const auto low = vpi_handle(vpiLowConn, driver)) {
+              const auto inner = members(vpiDriver, low);
+              if (!inner.empty()) {
+                for (const auto each : inner) {
+                  visit_driver(each);
+                }
+                return;
+              }
+            }
           }
           if (type != vpiNet && type != vpiNetBit) {
-            continue;
+            return;
           }
           (void)watch_driver(driver);
+        };
+        for (const auto driver : members(vpiDriver, handle)) {
+          visit_driver(driver);
         }
         if (unwatched_driver) {
           // One watch for all of them, so none of the per-driver ones also

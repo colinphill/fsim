@@ -993,6 +993,12 @@ struct SpecializationInfo {
     // aggregate descriptions.
     std::vector<std::pair<runtime::simir::ProcessId, semantic::ProcessId>>
         semantic_processes;
+    // The source extent of the continuous assignment, net declaration
+    // assignment or gate each concurrent SystemVerilog process was lowered
+    // from, so that the VPI driver of a net finds the statement that made it
+    // (IEEE 1800-2023 37.21).
+    std::vector<std::pair<runtime::simir::ProcessId, semantic::SourceSpanId>>
+        statement_sources;
     // Objects whose toggles generated monitor processes count, under code
     // coverage.
     std::vector<CoverageToggleObject> coverage_toggle_objects;
@@ -1004,6 +1010,10 @@ struct SpecializationInfo {
     std::vector<semantic::StatementId> coverage_concurrent_statements;
     // The typedefs the instance declares, in declaration order.
     std::vector<VpiTypedefInfo> vpi_typedefs;
+    // The typespecs of named formal and result types of the instance's
+    // tasks and functions, keyed "<callable>/<formal>" ("<callable>/" for
+    // the result) (37.41).
+    std::vector<VpiTypedefInfo> vpi_formal_typespecs;
     // The typespec of each value parameter whose declared type names a
     // typedef, by parameter name (IEEE 1800-2023 37.28 vpiTypespec).
     std::vector<VpiTypedefInfo> vpi_parameter_typespecs;
@@ -1024,6 +1034,12 @@ struct SpecializationInfo {
     // The typedefs of the design's packages and `$unit`, recorded once with
     // the parameters above (IEEE 1800-2023 3.12.1, 37.10).
     std::vector<VpiPackageTypedefInfo> vpi_package_typedefs;
+    // The same for the tasks and functions of the design's packages.
+    std::vector<VpiPackageTypedefInfo> vpi_package_formal_typespecs;
+    // The typespec of each class property that is an array or a container:
+    // `package` holds the class's declaration identity (IEEE 1800-2023
+    // 37.17, 37.20, 37.25), recorded once with the packages.
+    std::vector<VpiPackageTypedefInfo> vpi_class_property_typespecs;
 };
 
 using UdpTableId = std::uint32_t;
@@ -1293,6 +1309,23 @@ struct SdfNetDelayInfo {
     bool delayed { };
     runtime::simir::SignalId load_signal { };
     runtime::simir::ProcessId driver { };
+    /// The copy drivers of every run of bits the record is the effective
+    /// record of (a later record that names some of its bits splits the runs,
+    /// IEEE 1364-2005 16.3); empty when the record owns no run, which then
+    /// keeps `driver` alone. `driver` is the run of the record's first bit.
+    std::vector<runtime::simir::ProcessId> run_drivers;
+    /// An INCREMENT record that names bits of a load an earlier record of the
+    /// same source and port also names, with other terminals: the split adds
+    /// its delays to the bits' current ones (IEEE 1364-2005 16.3). An
+    /// INCREMENT of the same terminals is added to the earlier record when
+    /// the records are made.
+    bool increment { };
+    /// The drivers a put on the record retimes: its runs, else `driver`.
+    [[nodiscard]] std::vector<runtime::simir::ProcessId> drivers() const
+    {
+        return run_drivers.empty()
+            ? std::vector<runtime::simir::ProcessId> { driver } : run_drivers;
+    }
 };
 
 /// A read of a signal that a process wrote with a hierarchical name
@@ -1412,10 +1445,17 @@ struct StaticKernelAccessPlan {
     /// evaluate: processes with such operations stay host processes.
     bool coverage { };
     /// The source-level debugger (or a client that may stop and examine
-    /// any process) drives the run: every signal is a host signal and every
-    /// process is a behavioral thread or a hosted process, so each can stop
-    /// at a statement, and the members' debug points are executable.
+    /// any process) drives the run: every process is a behavioral thread or
+    /// a hosted process, so each can stop at a statement, and the members'
+    /// debug points are executable. Signals stay kernel-owned: the debugger
+    /// examines, deposits, forces and watches them at run time, as a foreign
+    /// library does.
     bool debug { };
+    /// Every signal stays a host signal, for a client that must hear every
+    /// write of every signal in the reference evaluator's order (the library
+    /// API's change hooks, an embedding client): the kernel's own order of
+    /// members and its publication per activation cannot give that.
+    bool host_signals { };
     /// A VPI or PLI library is loaded: the primitive drivers' delayed writes
     /// are slotted WriteDelayed operations (bind_primitive_delay_slots), so
     /// the kernel plan differs from the default one.
@@ -1429,12 +1469,14 @@ struct StaticKernelAccessPlan {
     /// Key text for persisted plans; empty for the default plan.
     [[nodiscard]] std::string identity() const
     {
-        if (!coverage && !debug && !delay_slots && !weak_sources) {
+        if (!coverage && !debug && !host_signals && !delay_slots
+            && !weak_sources) {
             return { };
         }
         std::string text { "access" };
         text += coverage ? ";coverage" : "";
         text += debug ? ";debug" : "";
+        text += host_signals ? ";host-signals" : "";
         text += delay_slots ? ";delay-slots" : "";
         text += weak_sources ? ";weak-sources" : "";
         return text;

@@ -49,8 +49,10 @@ static PLI_INT32 calltf_names(PLI_INT32 data, PLI_INT32 reason)
     acc_configure(accDefaultAttr0, "true");
     io_printf("#c attribute zero=%.1f\n", acc_fetch_attribute(w3, "Nosuch$"));
     acc_configure(accDefaultAttr0, "false");
-    /* An intermodule path joins an output port to an input port; one exists
-       where a delay annotation made it (23.55), and none here. */
+    /* An intermodule path is a net path that connects an output port of one
+       module to an input port of another (23.50): u1.y drives w2, which u2.a
+       loads, so the path exists with no annotation; u2.y and u1.a lie on
+       different nets, and an input port is no source. */
     u1 = acc_handle_by_name("u1", NULL);
     u2 = acc_handle_by_name("u2", NULL);
     first = acc_next_port(u1, NULL);
@@ -58,6 +60,12 @@ static PLI_INT32 calltf_names(PLI_INT32 data, PLI_INT32 reason)
     input = acc_next_port(u2, NULL);
     io_printf("#c path %s\n",
         acc_handle_path(output, input) == NULL ? "none" : "found");
+    io_printf("#c path reversed %s\n",
+        acc_handle_path(input, output) == NULL ? "none" : "found");
+    io_printf("#c path other net %s\n",
+        acc_handle_path(acc_next_port(u2, input), first) == NULL
+            ? "none"
+            : "found");
     acc_close();
     return 0;
 }

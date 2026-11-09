@@ -341,6 +341,7 @@ private:
 
   void parse_vhdl_generic_map(Instance &instance, const Token &start);
 
+  void parse_vhdl_port_associations(std::vector<PortConnection> &connections);
   void parse_vhdl_port_map(std::vector<PortConnection> &connections,
                            const Token &start);
 

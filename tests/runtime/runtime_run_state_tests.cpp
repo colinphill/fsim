@@ -10,15 +10,20 @@
 
 #include "fsim/runtime/class_heap.hpp"
 #include "fsim/runtime/class_static.hpp"
-#include "fsim/runtime/run_state_archive.hpp"
+#include "../../src/runtime/run_state_archive.hpp"
 #include "fsim/runtime/run_state_image.hpp"
 #include "fsim/runtime/run_state_sections.hpp"
-#include "fsim/runtime/run_state_value_codecs.hpp"
+#include "../../src/runtime/run_state_value_codecs.hpp"
 #include "fsim/runtime/scheduler.hpp"
 #include "fsim/runtime/scheduler_events.hpp"
 #include "fsim/runtime/simir.hpp"
 #include "fsim/runtime/simir_coverage.hpp"
+#include "fsim/runtime/uvm_component.hpp"
+#include "fsim/runtime/uvm_object.hpp"
+#include "fsim/runtime/uvm_phase.hpp"
+#include "../../src/runtime/uvm_run_state.hpp"
 
+#include <array>
 #include <cstdint>
 #include <limits>
 #include <map>
@@ -29,6 +34,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <variant>
 #include <vector>
 
 namespace fsim::tests::runtime {
@@ -480,6 +486,22 @@ void test_interpreter_round_trip()
             && !refusal.messages.empty()
             && refusal.messages.front().starts_with("FSIM-SAVE-0009"),
         "a section of another version is refused with FSIM-SAVE-0009");
+
+    // An image saved before the attempt block's layout 4 (host version 2 of
+    // the host sections) is refused up front by the version, not at the
+    // assertion block.
+    RunStateImage layout_three { "run-state-test" };
+    for (const auto& section : first.sections()) {
+        layout_three.put(section.name,
+            section.name.starts_with("host.") ? 2U : section.version, section.bytes);
+    }
+    CounterRun older;
+    older.interpreter.start();
+    RunStateReport older_refusal;
+    require(!older.interpreter.restore_run_state(layout_three, older_refusal)
+            && !older_refusal.messages.empty()
+            && older_refusal.messages.front().starts_with("FSIM-SAVE-0009"),
+        "an image of the previous host section version is refused with FSIM-SAVE-0009");
 }
 
 
@@ -794,6 +816,113 @@ void test_scheduler_rest_state()
     require(probe.ok, why.c_str());
 }
 
+
+struct UvmServices {
+    SystemVerilogClassHeap heap { { 64, 1'024 } };
+    SystemVerilogUvmObjectService objects { heap,
+        [](const std::string_view, const std::string_view,
+            const std::string_view) { return SystemVerilogClassHandle { }; } };
+    SystemVerilogUvmComponentService components { heap, objects };
+    SystemVerilogUvmPhaseService phases { components };
+};
+
+// The archive reads and writes a variant by its index, and the UVM services
+// (#188) write their state with handles that a restore binds to the services
+// of the restoring run: a second set of services that took the same setup
+// holds the saved roots, domains and phases, saves the same bytes, and a
+// reset returns it to the standard schedule and no root.
+void test_uvm_service_run_state()
+{
+    using Value = std::variant<std::string, double, std::uint64_t>;
+    std::vector<Value> values { std::string { "text" }, 2.5, std::uint64_t { 9 } };
+    std::string value_bytes;
+    auto value_writer = RunStateArchive::writer(value_bytes);
+    value_writer.io(values);
+    require(value_writer.ok(), "a variant is written");
+    std::vector<Value> loaded_values;
+    auto value_reader = RunStateArchive::reader(value_bytes);
+    value_reader.io(loaded_values);
+    require(value_reader.finished() && loaded_values == values,
+        "a variant round-trips");
+    std::string bad_bytes;
+    auto bad_writer = RunStateArchive::writer(bad_bytes);
+    std::uint64_t one = 1U;
+    std::uint32_t bad_index = 7U;
+    bad_writer.io(one);
+    bad_writer.io(bad_index);
+    std::vector<Value> bad_values;
+    auto bad_reader = RunStateArchive::reader(bad_bytes);
+    bad_reader.io(bad_values);
+    require(!bad_reader.ok(), "a variant index past the alternatives is refused");
+
+    UvmServices saved;
+    const auto root = saved.components.create_root("top");
+    static_cast<void>(saved.phases.create_standard_schedule(
+        std::array<SystemVerilogUvmRootHandle, 1U> { root }));
+    const auto extra = saved.phases.create_domain(
+        "extra", SystemVerilogUvmDomainKind::Custom);
+    static_cast<void>(saved.phases.create_custom_phase(
+        extra, "custom", SystemVerilogUvmPhaseExecutionKind::Task));
+    const auto write = [](UvmServices& services) {
+        std::string bytes;
+        auto writer = RunStateArchive::writer(bytes);
+        const SystemVerilogUvmRunStateOwners owners {
+            services.phases.run_state_owner(), nullptr
+        };
+        writer.set_context(&owners);
+        writer.io(services.components);
+        writer.io(services.phases);
+        require(writer.ok(), "the UVM services are written");
+        return bytes;
+    };
+    const auto bytes = write(saved);
+
+    // The setup every run makes before a restore replaces its state.
+    UvmServices restored;
+    static_cast<void>(restored.phases.create_standard_schedule());
+    {
+        auto reader = RunStateArchive::reader(bytes);
+        const SystemVerilogUvmRunStateOwners owners {
+            restored.phases.run_state_owner(), nullptr
+        };
+        reader.set_context(&owners);
+        reader.io(restored.components);
+        reader.io(restored.phases);
+        require(reader.finished(), "the UVM services are read back whole");
+    }
+    require(restored.components.roots() == saved.components.roots()
+            && restored.components.root_identity(root) == "top",
+        "the root comes back");
+    require(restored.phases.standard_schedule().has_value(),
+        "the standard schedule comes back");
+    const auto run = restored.phases.standard_schedule()->phase(
+        SystemVerilogUvmPhaseKind::Run);
+    require(restored.phases.contains(run)
+            && restored.phases.snapshot(run).identity
+                == systemverilog_uvm_phase_identity(SystemVerilogUvmPhaseKind::Run),
+        "a restored phase handle is bound to the restoring service");
+    require(!saved.phases.contains(run),
+        "a handle of the saving run is not a handle of the restored one");
+    bool found_custom = false;
+    for (const auto& domain : restored.phases.domains()) {
+        const auto snapshot = restored.phases.snapshot(domain);
+        if (snapshot.identity == "extra") {
+            found_custom = snapshot.phases.size() == 1U
+                && restored.phases.snapshot(snapshot.phases.front()).identity
+                    == "custom";
+        }
+    }
+    require(found_custom, "a custom domain and its phase come back");
+    require(write(restored) == bytes, "a restored state saves the same bytes");
+
+    restored.phases.reset_run_state();
+    restored.components.reset_run_state();
+    require(restored.components.roots().empty()
+            && restored.phases.domains().size() == 2U
+            && restored.phases.standard_schedule().has_value(),
+        "a reset returns to the standard schedule and no root");
+}
+
 }  // namespace
 
 void test_run_state()
@@ -808,6 +937,7 @@ void test_run_state()
     test_executor_refusal();
     test_activity_tables_round_trip();
     test_scheduler_rest_state();
+    test_uvm_service_run_state();
 }
 
 }  // namespace fsim::tests::runtime

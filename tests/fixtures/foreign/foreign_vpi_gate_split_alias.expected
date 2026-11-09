@@ -1,0 +1,6 @@
+#c put top.gl rise/fall 3,5
+#c put top.gl2 rise/fall 3,5
+#c 22 al=zz00 lq=00
+#c 23 al=zz11 lq=11
+#c 44 al=zz11 lq=11
+#c 45 al=zz00 lq=00

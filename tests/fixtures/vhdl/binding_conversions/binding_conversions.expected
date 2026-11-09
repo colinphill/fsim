@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+bc1 5 ns sd=1
+bc1 15 ns sd=0
+bc1 25 ns sd=1
+bc2 5 ns sd=1
+bc2 15 ns sd=0
+bc2 25 ns sd=1
+bc3 5 ns sd=0
+bc3 15 ns sd=1
+bc3 25 ns sd=0
+bc4 5 ns sd=0
+bc4 15 ns sd=1
+bc4 25 ns sd=0
+bc5 5 ns sd=1
+bc5 15 ns sd=0
+bc5 25 ns sd=1

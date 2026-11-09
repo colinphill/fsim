@@ -18,6 +18,11 @@ struct HirInstanceIdentity {
     std::string_view target;
     semantic::CompiledReferenceKind reference_kind;
     bool linkable { true };
+    // A direct VHDL entity instantiation: the linker recorded the entity it
+    // binds on the instance (`vhdl::Instance::linked_entity`), which is the
+    // binding; the reference list is not searched by name again.
+    bool entity_binding { };
+    std::optional<semantic::UnitId> linked_entity;
 };
 
 std::optional<HirInstanceIdentity> hir_instance_identity(
@@ -37,6 +42,8 @@ std::optional<HirInstanceIdentity> hir_instance_identity(
             record.target.spelling,
             semantic::CompiledReferenceKind::module,
             !record.udp,
+            false,
+            std::nullopt,
         };
     }
     const auto& record = *instance.vhdl;
@@ -51,6 +58,8 @@ std::optional<HirInstanceIdentity> hir_instance_identity(
             ? semantic::CompiledReferenceKind::configuration
             : semantic::CompiledReferenceKind::entity,
         true,
+        !record.component && !record.configuration,
+        record.linked_entity,
     };
 }
 
@@ -146,7 +155,11 @@ std::optional<HierarchyCompiledOccurrence> resolve_compiled_occurrence(
 
     const semantic::CompiledReference* reference = nullptr;
     std::optional<semantic::CompiledUnitView> linked_target;
-    if (hir->linkable) {
+    if (hir->entity_binding) {
+        if (hir->linked_entity) {
+            linked_target = design.find_unit(*hir->linked_entity);
+        }
+    } else if (hir->linkable) {
         reference = find_instance_reference(
             design, *hir, semantic_scope.unit);
         if (reference != nullptr && reference->target) {

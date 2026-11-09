@@ -3,12 +3,14 @@
 
 #include "fsim/support/index_distance.hpp"
 
+#include <algorithm>
 #include <array>
 #include <charconv>
 #include <limits>
 #include <system_error>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace fsim::semantic::sv {
 namespace {
@@ -177,14 +179,17 @@ const TypeDefinition* systemverilog_type_definition(
     const auto* definition = named_definition(hir, type);
     // An alias names the type it renames; an enumeration is its own type
     // even though its base names an integer type (6.19).
-    for (std::size_t depth = 0; depth < 16U && definition != nullptr
+    std::vector<const TypeDefinition*> visited;
+    while (definition != nullptr
          && definition->members.empty()
          && definition->form != TypeForm::enumeration
          && (definition->base.target.target.valid()
-             || !definition->base.target.spelling.empty());
-         ++depth) {
+             || !definition->base.target.spelling.empty())) {
+        // A typedef that names itself again ends the walk.
+        visited.push_back(definition);
         const auto* next = named_definition(hir, definition->base);
-        if (next == nullptr) {
+        if (next == nullptr
+            || std::ranges::find(visited, next) != visited.end()) {
             break;
         }
         definition = next;
@@ -196,16 +201,19 @@ const TypeReference& systemverilog_array_alias_type(
     const Hir& hir, const TypeReference& type)
 {
     const auto* current = &type;
-    for (std::size_t depth = 0; depth < 16U; ++depth) {
+    std::vector<const TypeDefinition*> visited;
+    for (;;) {
         if (current->container_form || !current->unpacked_dimensions.empty()) {
             return *current;
         }
         const auto* definition = named_definition(hir, *current);
         if (definition == nullptr || !definition->members.empty()
             || definition->form == TypeForm::enumeration
-            || &definition->base == current) {
+            || &definition->base == current
+            || std::ranges::find(visited, definition) != visited.end()) {
             break;
         }
+        visited.push_back(definition);
         current = &definition->base;
     }
     return type;

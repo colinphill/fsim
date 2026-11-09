@@ -245,6 +245,14 @@ void SystemVerilogHirBuilder::apply_named_type_dimensions(
     if (!input.systemverilog_named_type_dimensions.empty()) {
         apply_named_type_dimensions(output, input, fallback, scope, parent);
     }
+    // The typedef the parser composed packed dimensions over (7.4.1).
+    if (!input.systemverilog_packed_over.empty()) {
+        output.composed_over = {
+            find_type(scope, input.systemverilog_packed_over, std::nullopt,
+                input.systemverilog_source_order),
+            source(fallback), input.systemverilog_packed_over
+        };
+    }
     // An interface port array keeps its dimensions without a container
     // form: its elements are interface bindings, not stored values.
     for (const auto& dimension :

@@ -166,6 +166,28 @@ void test_systemverilog_uvm_config_db() {
       "unsupported backtracking regex constructs must reject before entry "
       "or resource publication");
 
+  // A context deeper than default_precedence gets zero or negative
+  // precedence (IEEE 1800.2); it is not an error, and the order still follows
+  // the signed precedence.
+  SystemVerilogUvmResourcePoolService deep_resources{&heap};
+  SystemVerilogUvmConfigDbLimits deep_limits;
+  deep_limits.default_precedence = 2;
+  SystemVerilogUvmConfigDbService deep{deep_resources, deep_limits};
+  const SystemVerilogUvmConfigContext deep_context{
+      "uvm_test_top.a.b.c.d", 5};
+  (void)deep.set(
+      root, "uvm_test_top.a.b.c.d.*", "w", packed_type(), packed(1),
+      SystemVerilogUvmConfigPhase::Build);
+  (void)deep.set(
+      deep_context, "*", "w", packed_type(), packed(2),
+      SystemVerilogUvmConfigPhase::Build);
+  require(
+      packed_value(deep.get(
+          deep_context, "x", "w", packed_type().identity,
+          "uvm_test_top.a.b.c.d.x")) == 1,
+      "a config context deeper than the default precedence must get "
+      "negative precedence and still order below shallower settings");
+
   SystemVerilogUvmResourcePoolService tiny_resources{&heap};
   SystemVerilogUvmConfigDbLimits tiny_limits;
   tiny_limits.max_entries = 1;

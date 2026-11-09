@@ -1,0 +1,12 @@
+#c libraries work,std
+#c libraries work,std
+#c entity leaf generics= ports=x decls=x stmts= deps=std.standard
+#c arch l decls= stmts= deps=std.standard,work.leaf
+#c entity top generics=g ports=a,q decls=g,a,q,ec stmts=chk deps=std.standard
+#c arch t decls=s,ac,leaf stmts=p1,_p0,u1,u3,b1 deps=std.standard,work.top
+#c instance u1 ports=x=s
+#c instance u3 ports=x=s
+#c block b1 instances=u2 blocks= internal=u2
+#c instance u2 ports=x=s
+#c package pk decls=c,color deps=std.standard
+#c std standard decls=346 deps=

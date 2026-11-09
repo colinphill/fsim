@@ -243,31 +243,19 @@ class Lexer {
         }
         advance();
         advance();
-        std::size_t depth = 1;
-        bool nesting_reported = false;
-        while (!at_end() && depth != 0) {
-          if (is_vhdl() && peek() == '/' && peek(1) == '*') {
-            advance();
-            advance();
-            ++depth;
-            if (depth > 64 && !nesting_reported) {
-              diagnose(
-                  "FSIM-FE-LEX-007",
-                  "VHDL block-comment nesting exceeds 64 levels",
-                  begin);
-              nesting_reported = true;
-            }
-            continue;
-          }
+        // A delimited comment, in VHDL too, ends at the first `*/`; a `/*`
+        // inside it does not nest (IEEE 1076-2019 15.9).
+        bool closed = false;
+        while (!at_end()) {
           if (peek() == '*' && peek(1) == '/') {
             advance();
             advance();
-            --depth;
-            continue;
+            closed = true;
+            break;
           }
           advance();
         }
-        if (depth != 0) {
+        if (!closed) {
           diagnose("FSIM-FE-LEX-002", "unterminated block comment", begin);
           return;
         }

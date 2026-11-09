@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "tcl_completion.hpp"
 
+#include "fsim/support/stack_growth.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -17,7 +19,6 @@ namespace {
     constexpr std::size_t kMaximumProviderItems = 65536U;
     constexpr std::size_t kMaximumSpans = 4096U;
     constexpr std::size_t kMaximumCandidates = 256U;
-    constexpr std::size_t kMaximumNesting = 128U;
 
     enum class QuoteKind : std::uint8_t {
         bare,
@@ -270,10 +271,12 @@ namespace {
             const bool bracketed,
             const std::size_t opener)
         {
-            if (nesting > kMaximumNesting) {
-                m_complexity_limited = true;
-                position = m_input.size();
-                return false;
+            // Nested substitutions continue on a new stack segment when the
+            // stack is nearly used up, so nesting is bounded by memory.
+            if (!support::stack_growth_detail::has_room()) {
+                return support::with_stack([&] {
+                    return parse_script(position, nesting, bracketed, opener);
+                });
             }
 
             std::vector<Word> words;

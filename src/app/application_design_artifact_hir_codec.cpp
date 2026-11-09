@@ -48,11 +48,13 @@ namespace codec_detail {
     template <typename T>
     bool valid_vhdl_hir_links(
         const T& value,
-        const semantic::Model& semantics,
-        const std::size_t depth = 0)
+        const semantic::Model& semantics)
     {
-        if (depth > kMaximumNesting) {
-            return false;
+        // Nested values continue on a new stack segment when the stack is
+        // nearly used up, so the nesting depth is bounded by memory.
+        if (!support::stack_growth_detail::has_room()) {
+            return support::with_stack(
+                [&] { return valid_vhdl_hir_links(value, semantics); });
         }
         using Value = std::remove_cv_t<T>;
         if constexpr (requires { value.generated_text; }) {
@@ -91,32 +93,32 @@ namespace codec_detail {
         } else if constexpr (IsVector<Value>::value
             || IsSpan<Value>::value || IsArray<Value>::value) {
             return std::ranges::all_of(value, [&](const auto& item) {
-                return valid_vhdl_hir_links(item, semantics, depth + 1U);
+                return valid_vhdl_hir_links(item, semantics);
             });
         } else if constexpr (IsOptional<Value>::value) {
             return !value
-                || valid_vhdl_hir_links(*value, semantics, depth + 1U);
+                || valid_vhdl_hir_links(*value, semantics);
         } else if constexpr (IsVariant<Value>::value) {
             return std::visit(
                 [&](const auto& item) {
-                    return valid_vhdl_hir_links(item, semantics, depth + 1U);
+                    return valid_vhdl_hir_links(item, semantics);
                 },
                 value);
         } else if constexpr (IsPair<Value>::value) {
-            return valid_vhdl_hir_links(value.first, semantics, depth + 1U)
-                && valid_vhdl_hir_links(value.second, semantics, depth + 1U);
+            return valid_vhdl_hir_links(value.first, semantics)
+                && valid_vhdl_hir_links(value.second, semantics);
         } else if constexpr (IsSharedPtr<Value>::value) {
             return !value
-                || valid_vhdl_hir_links(*value, semantics, depth + 1U);
+                || valid_vhdl_hir_links(*value, semantics);
         } else if constexpr (StorageWrapper<Value>) {
-            return valid_vhdl_hir_links(value.storage, semantics, depth + 1U);
+            return valid_vhdl_hir_links(value.storage, semantics);
         } else if constexpr (requires { archive_fields(value); }) {
             bool valid = true;
             std::apply(
                 [&](const auto&... fields) {
                     ((valid = valid
                              && valid_vhdl_hir_links(
-                                 fields, semantics, depth + 1U)),
+                                 fields, semantics)),
                         ...);
                 },
                 archive_fields(value));
@@ -125,7 +127,7 @@ namespace codec_detail {
             bool valid = true;
             boost::pfr::for_each_field(value, [&](const auto& field) {
                 valid = valid
-                    && valid_vhdl_hir_links(field, semantics, depth + 1U);
+                    && valid_vhdl_hir_links(field, semantics);
             });
             return valid;
         } else {
@@ -202,7 +204,7 @@ namespace codec_detail {
                             records[index], [&](const auto& field) {
                                 if (!invalid_field
                                     && !valid_vhdl_hir_links(
-                                        field, semantics, 1U)) {
+                                        field, semantics)) {
                                     invalid_field = field_index;
                                 }
                                 ++field_index;

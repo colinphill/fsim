@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <functional>
 #include <unordered_map>
 
 namespace fsim::frontend {
@@ -1158,6 +1159,16 @@ void VhdlParser::parse_vhdl_port_map(
       TokenKind::LeftParen,
       "'(' after port map",
       "FSIM-VHDL-PARSE-041");
+  parse_vhdl_port_associations(connections);
+  expect(TokenKind::RightParen, "')' after port map",
+         "FSIM-VHDL-PARSE-042");
+  (void)start;
+}
+
+// The association list of a port map, up to its closing parenthesis, also
+// for the port map of a binding indication (IEEE 1076-2019 7.3.2.3, 6.5.7.1).
+void VhdlParser::parse_vhdl_port_associations(
+    std::vector<PortConnection>& connections) {
   bool saw_named_port = false;
   // Individual association of formal subelements (IEEE 1076-2008 6.5.7.1):
   // `d(7) => x, d(6 downto 0) => y` or `p.field => z`. The parts of one
@@ -1168,34 +1179,41 @@ void VhdlParser::parse_vhdl_port_map(
     std::string port;
   };
   std::vector<SubelementGroup> subelement_groups;
+  // A formal part that selects subelements: a port name followed by a chain
+  // of record elements `.f` and parenthesized indexes or slices `(1)`,
+  // `(7 downto 0)`, then `=>` (IEEE 1076-2019 6.5.7.1, 6.5.7.3), as in
+  // `p.b.x =>`, `d(7) =>`, `m(0)(1) =>` or `r.f(1) =>`. A parenthesized group
+  // with a top-level comma is a call, not an index.
   const auto subelement_formal = [&]() -> std::optional<std::size_t> {
     if (!at(TokenKind::Identifier)) {
       return std::nullopt;
     }
-    // `p.b.x =>` selects a nested record element.
-    std::size_t selected = 1U;
-    while (at(TokenKind::Dot, selected)
-        && at(TokenKind::Identifier, selected + 1U)) {
-      selected += 2U;
-    }
-    if (selected > 1U && at(TokenKind::Arrow, selected)) {
-      return selected;
-    }
-    if (!at(TokenKind::LeftParen, 1)) {
-      return std::nullopt;
-    }
-    std::size_t depth { };
-    for (std::size_t offset = 1U; !at(TokenKind::EndOfFile, offset);
-         ++offset) {
-      if (at(TokenKind::LeftParen, offset)) {
-        ++depth;
-      } else if (at(TokenKind::RightParen, offset) && --depth == 0U) {
-        return at(TokenKind::Arrow, offset + 1U)
-            ? std::optional { offset + 1U }
-            : std::nullopt;
-      } else if (depth == 1U && at(TokenKind::Comma, offset)) {
-        return std::nullopt;
+    std::size_t offset = 1U;
+    while (!at(TokenKind::EndOfFile, offset)) {
+      if (at(TokenKind::Dot, offset)
+          && at(TokenKind::Identifier, offset + 1U)) {
+        offset += 2U;
+      } else if (at(TokenKind::LeftParen, offset)) {
+        std::size_t depth { };
+        for (;; ++offset) {
+          if (at(TokenKind::EndOfFile, offset)) {
+            return std::nullopt;
+          }
+          if (at(TokenKind::LeftParen, offset)) {
+            ++depth;
+          } else if (at(TokenKind::RightParen, offset) && --depth == 0U) {
+            ++offset;
+            break;
+          } else if (depth == 1U && at(TokenKind::Comma, offset)) {
+            return std::nullopt;
+          }
+        }
+      } else {
+        break;
       }
+    }
+    if (offset > 1U && at(TokenKind::Arrow, offset)) {
+      return offset;
     }
     return std::nullopt;
   };
@@ -1204,31 +1222,38 @@ void VhdlParser::parse_vhdl_port_map(
     if (subelement_formal()) {
       saw_named_port = true;
       const auto port = vhdl_name(advance().text);
-      Expression choice;
-      // The record elements between the port and the selected one.
-      std::vector<Token> outer_elements;
-      if (match(TokenKind::Dot)) {
-        auto element = advance();
-        while (match(TokenKind::Dot)) {
-          outer_elements.push_back(element);
-          element = advance();
-        }
-        choice = Expression { ExpressionKind::Identifier,
-            vhdl_name(element.text), { }, element.span };
-      } else {
-        advance();
-        auto left = parse_expression();
-        if (match_keyword("to", true) || match_keyword("downto", true)) {
-          const auto direction = detail::ascii_lower(previous().text);
-          auto right = parse_expression();
-          const auto span = cover(left.span, right.span);
-          choice = Expression { ExpressionKind::Binary, direction,
-              { std::move(left), std::move(right) }, span };
+      // The selectors after the port name, in order: a record element
+      // (`element`) or an index or slice (`choice`).
+      struct Selector {
+        bool element { };
+        Token token;
+        Expression choice;
+      };
+      std::vector<Selector> path;
+      while (!at(TokenKind::Arrow)) {
+        if (match(TokenKind::Dot)) {
+          auto element = advance();
+          path.push_back({ true, element,
+              Expression { ExpressionKind::Identifier, vhdl_name(element.text),
+                  { }, element.span } });
+        } else if (match(TokenKind::LeftParen)) {
+          auto left = parse_expression();
+          Expression choice;
+          if (match_keyword("to", true) || match_keyword("downto", true)) {
+            const auto direction = detail::ascii_lower(previous().text);
+            auto right = parse_expression();
+            const auto span = cover(left.span, right.span);
+            choice = Expression { ExpressionKind::Binary, direction,
+                { std::move(left), std::move(right) }, span };
+          } else {
+            choice = std::move(left);
+          }
+          expect(TokenKind::RightParen, "')' after formal subelement",
+              "FSIM-VHDL-PARSE-042");
+          path.push_back({ false, Token { }, std::move(choice) });
         } else {
-          choice = std::move(left);
+          break;
         }
-        expect(TokenKind::RightParen, "')' after formal subelement",
-            "FSIM-VHDL-PARSE-042");
       }
       expect(TokenKind::Arrow, "'=>' after formal subelement",
           "FSIM-VHDL-PARSE-042");
@@ -1264,27 +1289,45 @@ void VhdlParser::parse_vhdl_port_map(
         group = std::prev(subelement_groups.end());
       }
       auto* nested = &connections[group->connection].value;
-      // A nested element is a choice of the aggregate for its enclosing
-      // element (IEEE 1076-2008 6.5.7.1).
-      for (const auto& outer : outer_elements) {
-        const auto name = vhdl_name(outer.text);
+      // Every selector but the last is a choice of the aggregate for the
+      // element or slice it selects (IEEE 1076-2008 6.5.7.1); the parts of
+      // one formal that share a selector share its aggregate.
+      const std::function<bool(const Expression&, const Expression&)>
+          same_choice = [&](const Expression& left, const Expression& right) {
+            if (left.kind != right.kind || left.text != right.text
+                || left.operands.size() != right.operands.size()) {
+              return false;
+            }
+            for (std::size_t index { }; index < left.operands.size(); ++index) {
+              if (!same_choice(left.operands[index], right.operands[index])) {
+                return false;
+              }
+            }
+            return true;
+          };
+      for (std::size_t step { }; step + 1U < path.size(); ++step) {
+        const auto& outer = path[step];
+        const auto name = outer.element ? vhdl_name(outer.token.text)
+                                        : std::string { "@array" };
         std::optional<std::size_t> existing;
         for (std::size_t index { }; index < nested->operands.size();
              ++index) {
           if (index < nested->aggregate_choices.size()
               && nested->aggregate_choices[index] == name
               && nested->operands[index].kind == ExpressionKind::Aggregate
-              && nested->operands[index].text
-                  == "@vhdl-formal-subelements") {
+              && nested->operands[index].text == "@vhdl-formal-subelements"
+              && index < nested->aggregate_choice_expressions.size()
+              && !nested->aggregate_choice_expressions[index].empty()
+              && same_choice(nested->aggregate_choice_expressions[index].front(),
+                  outer.choice)) {
             existing = index;
           }
         }
         if (!existing) {
           Expression inner { ExpressionKind::Aggregate,
-              "@vhdl-formal-subelements", { }, outer.span };
+              "@vhdl-formal-subelements", { }, outer.choice.span };
           nested->aggregate_choices.push_back(name);
-          nested->aggregate_choice_expressions.push_back({ Expression {
-              ExpressionKind::Identifier, name, { }, outer.span } });
+          nested->aggregate_choice_expressions.push_back({ outer.choice });
           nested->operands.push_back(std::move(inner));
           existing = nested->operands.size() - 1U;
         }
@@ -1292,7 +1335,8 @@ void VhdlParser::parse_vhdl_port_map(
         nested->span = cover(nested->span, previous().span);
       }
       auto& aggregate = *nested;
-      const bool element_choice = choice.kind == ExpressionKind::Identifier;
+      auto choice = std::move(path.back().choice);
+      const bool element_choice = path.back().element;
       aggregate.aggregate_choices.push_back(
           element_choice ? choice.text : std::string { "@array" });
       aggregate.aggregate_choice_expressions.push_back({ std::move(choice) });
@@ -1331,9 +1375,6 @@ void VhdlParser::parse_vhdl_port_map(
       break;
     }
   }
-  expect(TokenKind::RightParen, "')' after port map",
-         "FSIM-VHDL-PARSE-042");
-  (void)start;
 }
 
 void VhdlParser::parse_vhdl_generic_map(

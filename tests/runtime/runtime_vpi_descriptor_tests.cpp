@@ -341,15 +341,16 @@ void test_systemverilog_vpi_recursive_type_descriptors()
                 == SystemVerilogVpiDescriptorError::ArithmeticOverflow,
         "VPI descriptors reject duplicate or ill-typed enum identity, composite keys, dynamic packed elements, and overflowing ranges");
 
-    auto too_deep = scalar();
+    // A deeply nested descriptor is valid; nesting has no fixed limit.
+    auto deep = scalar();
     for (std::size_t depth = 0; depth < 65; ++depth) {
-        too_deep = aggregate(
+        deep = aggregate(
             SystemVerilogVpiDescriptorKind::DynamicArray,
-            { std::move(too_deep) });
+            { std::move(deep) });
     }
     require_vpi_descriptor(
-        validate_systemverilog_vpi_descriptor(too_deep).error
-                == SystemVerilogVpiDescriptorError::DepthLimit
+        validate_systemverilog_vpi_descriptor(deep).error
+                != SystemVerilogVpiDescriptorError::DepthLimit
             && registry.create(SystemVerilogVpiObjectDescriptor {
                                    SystemVerilogVpiObjectKind::Memory,
                                    root.value,
@@ -366,7 +367,7 @@ void test_systemverilog_vpi_recursive_type_descriptors()
                                    descriptor_type(record) })
                     .error
                 == SystemVerilogVpiObjectError::InvalidType,
-        "VPI descriptors reject excessive recursion and object-kind mismatches");
+        "VPI descriptors accept deep nesting and reject object-kind mismatches");
     // An associative array is a memory whose words follow its keys (IEEE
     // 1800-2023 37.17, 37.25 detail 2).
     require_vpi_descriptor(

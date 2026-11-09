@@ -4,6 +4,7 @@
 #include "fsim/frontend/token.hpp"
 
 #include <cstddef>
+#include <limits>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -22,8 +23,11 @@ struct PreprocessorOptions {
   // compilation unit, for the design elements no `timescale applies to.
   std::string default_timescale;
   std::optional<StandardRevision> standard_revision;
-  std::size_t maximum_include_depth{64};
-  std::size_t maximum_macro_expansion_depth{256};
+  // Optional ceilings; by default nesting is bounded only by memory, and a
+  // file or macro that includes or expands itself is still refused.
+  std::size_t maximum_include_depth{std::numeric_limits<std::size_t>::max()};
+  std::size_t maximum_macro_expansion_depth{
+      std::numeric_limits<std::size_t>::max()};
 };
 
 // Exact source snapshots consumed by one preprocessing run. The root is first;

@@ -341,6 +341,37 @@ namespace fsim::app::tcl_detail {
         return true;
     }
 
+    // The engine `--engine` names, else the simulate.engine key as the
+    // session's configuration holds it now (a script of the session may set
+    // it at any time, and a snapshot load restores the start-up options), else
+    // the compiled one; the command line wins, as for `fsim simulate`.
+    SimulationEngine session_engine(const TclContext& context)
+    {
+        std::optional<std::string> name = context.invocation.engine;
+        if (!name && context.configuration.configuration) {
+            if (const auto* setting
+                = context.configuration.configuration->find(
+                    "simulate.engine");
+                setting != nullptr && !setting->values.empty()
+                && !setting->values.front().empty()) {
+                name = setting->values.front();
+            }
+        }
+        if (!name) {
+            name = context.config.run.engine;
+        }
+        if (name == "interpreter") {
+            return SimulationEngine::interpreter;
+        }
+        if (name == "debug") {
+            return SimulationEngine::debug;
+        }
+        if (name == "v4") {
+            return SimulationEngine::v4;
+        }
+        return SimulationEngine::compiled;
+    }
+
     bool ensure_simulation(
         TclContext& context,
         Tcl_Interp* interpreter,
@@ -357,7 +388,10 @@ namespace fsim::app::tcl_detail {
             }
             return true;
         }
-        const auto engine = requested_engine.value_or(SimulationEngine::compiled);
+        // The engine of the session is the one --engine names, as for
+        // `fsim simulate`; the debugger commands ask for the debug engine.
+        const auto engine = requested_engine.value_or(
+            session_engine(context));
         if (!ensure_built(context, interpreter)) {
             return false;
         }

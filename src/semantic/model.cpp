@@ -429,6 +429,14 @@ ExpressionId Model::add_expression_identity(
     return id;
 }
 
+void Model::rebind_expression_scope(
+    const ExpressionId id, const ScopeId scope) {
+    require_id(id, expression_identities_,
+        "expression identity rebind has an invalid ID");
+    require_id(scope, scopes_, "expression has an invalid scope");
+    expression_identities_[id.value()].scope = scope;
+}
+
 StatementId Model::add_statement_identity(
     const ScopeId scope,
     const SourceSpanId source,

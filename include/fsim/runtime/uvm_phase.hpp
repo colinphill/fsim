@@ -5,6 +5,7 @@
 #include "fsim/runtime/uvm_activity.hpp"
 #include "fsim/runtime/uvm_component.hpp"
 
+#include <limits>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -21,7 +22,10 @@
 
 namespace fsim::runtime {
 
+class RunStateArchive;
+
 class SystemVerilogUvmPhaseService;
+class SystemVerilogUvmRunStateAccess;
 class SystemVerilogUvmObjectionService;
 class SystemVerilogUvmTlm1Service;
 
@@ -37,6 +41,7 @@ class SystemVerilogUvmDomainHandle final {
       const SystemVerilogUvmDomainHandle&) = default;
 
  private:
+  friend class SystemVerilogUvmRunStateAccess;
   friend class SystemVerilogUvmPhaseService;
   SystemVerilogUvmDomainHandle(
       std::shared_ptr<const void> owner,
@@ -61,6 +66,7 @@ class SystemVerilogUvmPhaseHandle final {
       const SystemVerilogUvmPhaseHandle&) = default;
 
  private:
+  friend class SystemVerilogUvmRunStateAccess;
   friend class SystemVerilogUvmPhaseService;
   friend class SystemVerilogUvmObjectionService;
   SystemVerilogUvmPhaseHandle(
@@ -86,6 +92,7 @@ class SystemVerilogUvmPhaseProcessHandle final {
       const SystemVerilogUvmPhaseProcessHandle&) = default;
 
  private:
+  friend class SystemVerilogUvmRunStateAccess;
   friend class SystemVerilogUvmPhaseService;
   SystemVerilogUvmPhaseProcessHandle(
       std::shared_ptr<const void> owner,
@@ -194,12 +201,12 @@ struct SystemVerilogUvmPhaseLimits {
   std::size_t maximum_phases_per_domain{512};
   std::size_t maximum_edges{16'384};
   std::size_t maximum_roots_per_domain{64};
-  std::size_t maximum_depth{256};
+  std::size_t maximum_depth{std::numeric_limits<std::size_t>::max()};
   std::size_t maximum_identity_bytes{1'024};
   std::size_t maximum_traversal_work{65'536};
   std::size_t maximum_mutations{65'536};
   std::size_t maximum_phase_processes{65'536};
-  std::size_t maximum_process_depth{256};
+  std::size_t maximum_process_depth{std::numeric_limits<std::size_t>::max()};
   std::size_t maximum_scheduled_processes{65'536};
   std::size_t maximum_ready_to_end_reentries{256};
   std::size_t maximum_quiescence_iterations{4'096};
@@ -377,6 +384,16 @@ struct SystemVerilogUvmPhasePlacement {
 /// later Batch 160 execution changes.
 class SystemVerilogUvmPhaseService final {
  public:
+  /// Run-state save and restore of the phase graph, its states and its
+  /// processes (#188); the handles are bound to run_state_owner()
+  /// (uvm_run_state.hpp). reset_run_state returns to the standard schedule of
+  /// a fresh run.
+  void run_state_io(RunStateArchive& archive);
+  void reset_run_state();
+  [[nodiscard]] std::shared_ptr<const void> run_state_owner() const noexcept {
+    return owner_;
+  }
+
   using FunctionPhaseCallback = std::function<void(
       SystemVerilogClassHandle,
       SystemVerilogUvmPhaseHandle,

@@ -34,6 +34,23 @@ using runtime::PackedLogic4;
 using namespace runtime::simir;
 using namespace elaboration_detail;
 
+/// A package class-handle initializer that runs as a startup process, in
+/// declaration order (IEEE 1800-2023 6.21, 8.7): a `new`, a call of a native
+/// UVM singleton getter (`uvm_root::get()`, which the native services answer)
+/// or another variable's handle. Any other initializer of a class handle is
+/// an error, never a null handle.
+[[nodiscard]] inline bool package_class_handle_startup_initializer(
+    const semantic::sv::Expression& expression) noexcept
+{
+    using Kind = semantic::sv::ExpressionKind;
+    return expression.kind == Kind::class_allocation
+        || expression.kind == Kind::name
+        || ((expression.kind == Kind::call
+                || expression.kind == Kind::class_static_method_call)
+            && expression.class_member_identity.starts_with(
+                "@uvm-singleton:"));
+}
+
 enum class CompiledVhdlResolutionIssue : std::uint8_t {
     none,
     missing_body,
@@ -128,6 +145,9 @@ private:
     using ReadOnlyContainerSet
         = elaboration_detail::ReadOnlyContainerBindings;
     using ObjectMap = std::unordered_map<std::uint64_t, SignalId>;
+    // Lowerer::VhdlDeclarationSignals.
+    using VhdlDeclarationSignals
+        = std::unordered_map<std::uint32_t, SignalId>;
 
     // Per-call inputs for synchronous compiled-HIR hierarchy recursion.
     // These contexts own their path, actuals, child-local port aliases, and
@@ -278,7 +298,32 @@ private:
         std::size_t specialization_id { };
         std::size_t& concurrent_order;
         SignalMap& child_aliases;
+        // The signals the component's local ports denote when the instance
+        // is bound with a port map (compiled_vhdl_component_port_signals).
+        const VhdlDeclarationSignals* component_port_signals { };
     };
+
+    // The formal conversions of a binding indication's port map
+    // (`f(s) => d`, IEEE 1076-2019 6.5.7.1) of one component instance,
+    // lowered once the bound design entity's ports exist.
+    struct CompiledVhdlBindingConversionContext {
+        const semantic::vhdl::Instance& record;
+        std::span<const semantic::vhdl::Association* const> conversions;
+        const VhdlDeclarationSignals& component_port_signals;
+        const std::string& child_path;
+        std::string_view working_path;
+        const semantic::vhdl::Unit& architecture;
+        const semantic::SpecializedHirUnit& working_specialization;
+        const SignalMap& working_signals;
+        const ReadOnlySignalSet& working_read_only_signals;
+        StringMap& string_objects;
+        ReadOnlyStringSet& read_only_strings;
+        ContainerMap& container_objects;
+        ReadOnlyContainerSet& read_only_containers;
+        std::size_t specialization_id { };
+    };
+    bool lower_compiled_vhdl_binding_formal_conversions(
+        CompiledVhdlBindingConversionContext context);
 
     struct CompiledVhdlPortActual {
         SignalId signal { };
@@ -607,6 +652,8 @@ private:
 
     bool instantiate_compiled_vhdl_unit(
         CompiledVhdlInstantiationContext context);
+    bool instantiate_compiled_vhdl_unit_in_stack(
+        CompiledVhdlInstantiationContext context);
 
     bool instantiate_compiled_vhdl_child(
         CompiledVhdlChildActivationContext context);
@@ -872,7 +919,12 @@ private:
         ContainerMap& container_objects,
         ReadOnlyContainerSet& read_only_containers,
         std::size_t specialization_id,
-        std::size_t& concurrent_order);
+        std::size_t& concurrent_order,
+        const VhdlDeclarationSignals* component_port_signals = nullptr,
+        // The name of the implicit signal of an expression actual, after
+        // the instance path: `$actual_<formal>`, or `$local_<port>` for a
+        // local port of the implied block of a bound component instance.
+        std::string_view implicit_signal_prefix = ".$actual_");
 
     // Returned declaration pointers borrow from compiled HIR.
     std::vector<const semantic::vhdl::Declaration*>
@@ -928,6 +980,21 @@ private:
     bool lower_compiled_vhdl_formal_conversion(Lowerer& lowerer,
         semantic::StatementId statement, std::string_view path,
         const semantic::vhdl::Unit& owner);
+    // Installs a lowered conversion of a formal's value as its
+    // destination's conversion program: the resolver of an unresolved
+    // destination, or one conversion driver (a halted stub) of a resolved
+    // destination or of a subelement (`slice`) of either.
+    // `process`, `input`, `output` and `sources` are the lowered
+    // conversion program (Lowerer::HirVhdlConversionProgram).
+    void install_compiled_vhdl_formal_conversion(Process&& process,
+        RegisterId input, RegisterId output, std::vector<SignalId>&& sources,
+        SignalId destination,
+        const std::optional<std::pair<std::uint32_t, std::uint32_t>>& slice,
+        bool resolved, const semantic::vhdl::Unit& owner);
+    // Whether a conversion's destination resolves its sources (IEEE
+    // 1076-2008 14.7.3.2): the converted value is then one of them.
+    [[nodiscard]] bool vhdl_conversion_destination_resolved(
+        SignalId destination);
     // Splits an inout formal that has a resolver program for its effective
     // value: a new mirror signal holds its driving value.
     SignalId add_vhdl_formal_driving_mirror(SignalId formal);
@@ -1003,13 +1070,56 @@ private:
         const ReadOnlySignalSet* read_only_signals = nullptr,
         const ContainerMap* container_objects = nullptr);
 
+    // `binding_formal_conversions` receives the formal conversions of the
+    // binding indication's port map, which are no associations of the
+    // entity (lower_compiled_vhdl_binding_formal_conversions).
     std::vector<semantic::SourceSpanId>
     prepare_compiled_vhdl_component_associations(
         const semantic::vhdl::Instance& record,
         const semantic::vhdl::ComponentConfiguration* selected_rule,
         const semantic::vhdl::Declaration* component,
         const semantic::vhdl::Unit* target_entity,
-        semantic::vhdl::Instance& effective_instance);
+        semantic::vhdl::Instance& effective_instance,
+        std::vector<const semantic::vhdl::Association*>*
+            binding_formal_conversions = nullptr);
+    // The local ports of a component instance bound with a port map: the
+    // implied block's ports (IEEE 1076-2019 14.5.4).
+    struct CompiledVhdlLocalPortContext {
+        const semantic::vhdl::Instance& record;
+        const semantic::vhdl::Declaration& component;
+        const semantic::vhdl::Unit& architecture;
+        const semantic::SpecializedHirUnit& working_specialization;
+        const std::string& child_path;
+        std::string_view working_path;
+        const SignalMap& working_signals;
+        const ReadOnlySignalSet& working_read_only_signals;
+        StringMap& string_objects;
+        ReadOnlyStringSet& read_only_strings;
+        ContainerMap& container_objects;
+        ReadOnlyContainerSet& read_only_containers;
+        std::size_t specialization_id { };
+        std::size_t& concurrent_order;
+    };
+    // The signal each local port denotes: the instance's signal-name
+    // actual, or an implied-block signal connected to any other actual by
+    // the expression-actual adapters. `failed` is set when such a signal
+    // could not be made (reported).
+    [[nodiscard]] VhdlDeclarationSignals compiled_vhdl_component_port_signals(
+        CompiledVhdlLocalPortContext context, bool& failed);
+    // Every local port is an actual of the binding indication's port map
+    // (IEEE 1076-2019 6.5.7.3); reports FSIM-ELAB-VHCOMP-017 otherwise.
+    [[nodiscard]] bool check_compiled_vhdl_binding_local_ports(
+        const semantic::vhdl::Instance& record,
+        const semantic::vhdl::ComponentConfiguration& rule,
+        const semantic::vhdl::Declaration& component);
+    // Every formal of a component instance's own maps is a local of the
+    // component (IEEE 1076-2019 6.5.6.2, 6.5.6.3); reports
+    // FSIM-ELAB-VHCOMP-008 otherwise. A binding indication with a map
+    // associates the entity by that map alone, so this is where such a
+    // formal is caught.
+    [[nodiscard]] bool check_compiled_vhdl_instance_formals(
+        const semantic::vhdl::Instance& record,
+        const semantic::vhdl::Declaration& component);
 
     bool compiled_vhdl_component_subtype_compatible(
         const semantic::vhdl::Declaration& candidate,
@@ -1193,6 +1303,8 @@ private:
         const std::unordered_map<SignalId, std::vector<ProcessId>>& drivers);
 
     bool instantiate_compiled_systemverilog_unit(
+        CompiledSystemVerilogInstantiationContext context);
+    bool instantiate_compiled_systemverilog_unit_in_stack(
         CompiledSystemVerilogInstantiationContext context);
     bool compiled_systemverilog_concurrent_assertions_materialized(
         const semantic::sv::Unit& unit) const;
@@ -1910,7 +2022,8 @@ private:
         SystemVerilogConcurrentProcessOccurrence& lowered,
         const semantic::sv::Unit& unit,
         SpecializationInfo& specialization,
-        std::optional<std::uint32_t> program_owner);
+        std::optional<std::uint32_t> program_owner,
+        semantic::SourceSpanId statement_source);
     // Append a lowered SystemVerilog process; concurrent assertions run in
     // the observed region. Canonicalization is skipped for a process
     // remembered as a template, which must keep the prototype's body.
@@ -2259,6 +2372,9 @@ private:
     // without parameters of their own), by unit id.
     std::optional<std::unordered_map<std::uint32_t, std::vector<std::string>>>
         systemverilog_unit_classes_;
+    // The classes of selected generate alternatives already reported as
+    // dropped by the class specializer (FSIM-SV-CLASS-033).
+    std::unordered_set<std::string> dropped_generated_classes_reported_;
     // The last name component of every SystemVerilog disable target, and
     // the labels of named blocks and tasks it may name.
     struct SystemVerilogDisableLabels {
@@ -2283,9 +2399,11 @@ private:
         systemverilog_read_only_interface_member_paths_;
 
     std::vector<std::string> stack_;
-    // Bounds hierarchy depth so a recursion whose actuals change on every
-    // level still stops.
-    static constexpr std::size_t maximum_instance_depth = 1024;
+    // Every instantiation is charged to this budget, so a recursion whose
+    // actuals change on every level still stops.
+    static constexpr std::uint64_t maximum_instance_work_units
+        = 64U * 1024U * 1024U;
+    std::uint64_t instance_work_units_used_ { };
     std::unordered_map<SignalId, std::vector<std::string>>
         boundary_driver_paths_;
     std::unordered_set<SignalId> vhdl_unprotected_shared_signals_;

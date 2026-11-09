@@ -169,11 +169,12 @@ struct ParseContext {
 class TreeParser {
 public:
     TreeParser(std::vector<Node>& nodes, std::vector<Token> tokens,
-        ParseContext& context, const std::size_t depth)
+        ParseContext& context,
+        std::vector<const SystemVerilogAssertionDeclaration*> path)
         : nodes_(nodes)
         , tokens_(std::move(tokens))
         , context_(context)
-        , depth_(depth)
+        , path_(std::move(path))
     {
     }
 
@@ -629,7 +630,7 @@ private:
             if (end == tokens_.size()) {
                 return fail("a property case item has no ';'");
             }
-            TreeParser inner { nodes_, slice(position_, end), context_, depth_ };
+            TreeParser inner { nodes_, slice(position_, end), context_, path_ };
             auto property = inner.parse();
             if (!property) {
                 return property;
@@ -1037,7 +1038,7 @@ private:
             return fail("sequence match items are not yet evaluated by the "
                         "concurrent-property monitor");
         }
-        TreeParser inner { nodes_, inside, context_, depth_ };
+        TreeParser inner { nodes_, inside, context_, path_ };
         auto result = inner.parse();
         position_ = close + 1U;
         return result;
@@ -1163,8 +1164,10 @@ private:
             }
             return add(std::move(node));
         }
-        if (depth_ >= 16U) {
-            return fail("sequence and property instances nest too deeply");
+        // An instance of a declaration that is being expanded is recursive.
+        if (std::ranges::find(path_, &declaration) != path_.end()) {
+            return fail("recursive sequence and property instances are not "
+                        "yet evaluated by the concurrent-property monitor");
         }
         if (!declaration.local_variables.empty()) {
             return fail("assertion local variables are not yet evaluated by "
@@ -1205,7 +1208,7 @@ private:
         TreeParser inner { nodes_,
             inferred(std::move(*body), context_.clocks[clock],
                 context_.inferred_disable),
-            context_, depth_ + 1U };
+            context_, expanded_path(declaration) };
         auto operand = inner.parse();
         context_.current_clock = enclosing;
         if (clock == enclosing) {
@@ -1327,8 +1330,17 @@ private:
     std::vector<Node>& nodes_;
     std::vector<Token> tokens_;
     ParseContext& context_;
-    std::size_t depth_ { };
+    // The declarations being expanded on the path to this parser.
+    std::vector<const SystemVerilogAssertionDeclaration*> path_;
     std::size_t position_ { };
+
+    [[nodiscard]] std::vector<const SystemVerilogAssertionDeclaration*>
+    expanded_path(const SystemVerilogAssertionDeclaration& declaration) const
+    {
+        auto path = path_;
+        path.push_back(&declaration);
+        return path;
+    }
 };
 
 // Compiles a property tree into a plan whose guards and bounds are the
@@ -1461,12 +1473,10 @@ private:
             return { static_cast<std::uint32_t>(at.line),
                 static_cast<std::uint32_t>(at.column) };
         }
-        if (depth < 64U) {
-            for (const auto operand : node.operands) {
-                const auto found = first_position(operand, depth + 1U);
-                if (found.first != 0U) {
-                    return found;
-                }
+        for (const auto operand : node.operands) {
+            const auto found = first_position(operand, depth + 1U);
+            if (found.first != 0U) {
+                return found;
             }
         }
         return { 0U, 0U };
@@ -2176,7 +2186,7 @@ using TreeOperand = SystemVerilogAssertionTreeOperand;
     const SystemVerilogAssertionTree& tree, const TreeOperand& operand,
     const unsigned depth = 0U)
 {
-    if (operand.node < 0 || depth > 256U) {
+    if (operand.node < 0) {
         return false;
     }
     const auto& node = tree.nodes[static_cast<std::size_t>(operand.node)];
@@ -2211,7 +2221,7 @@ void VerilogParser::wrap_multiclock_sequences(
         unsigned)>
         components = [&](const TreeOperand& operand,
                          std::vector<TreeOperand>& out, const unsigned depth) {
-            if (operand.node < 0 || depth > 256U) {
+            if (operand.node < 0) {
                 return;
             }
             const auto index = static_cast<std::size_t>(operand.node);
@@ -2353,7 +2363,7 @@ std::optional<SystemVerilogAssertionTree> VerilogParser::build_assertion_tree(
     if (declaration != nullptr && declaration->clock) {
         context.clocks.push_back(declaration->clock->event_tokens);
     }
-    TreeParser parser { nodes, std::move(tokens), context, 0U };
+    TreeParser parser { nodes, std::move(tokens), context, { } };
     const auto parsed = parser.parse();
     if (!parsed) {
         return std::nullopt;
@@ -2676,7 +2686,7 @@ std::optional<SystemVerilogAssertionTree> VerilogParser::build_assertion_tree(
                         // A sequence or property actual is a tree of its
                         // own.
                         // The shared node store keeps the indexes valid.
-                        TreeParser shared { nodes, written, context, 1U };
+                        TreeParser shared { nodes, written, context, { } };
                         if (const auto actual_root = shared.parse()) {
                             operand = convert(*actual_root);
                         } else {
@@ -2808,10 +2818,17 @@ std::optional<VerilogParser::SvaPrepared> VerilogParser::prepare_sva_property(
     strip_semicolons(tokens);
     // A property that is one instance of a declaration takes that
     // declaration's clock and disable condition (16.12, 16.13).
-    for (std::size_t depth = 0; depth < 16U && !tokens.empty(); ++depth) {
+    std::vector<std::string> inlined;
+    while (!tokens.empty()) {
         if (tokens.front().kind != TokenKind::Identifier) {
             break;
         }
+        // A declaration already inlined on this path is recursive; it is
+        // left to the recursive-property handling (16.12.17).
+        if (std::ranges::find(inlined, tokens.front().text) != inlined.end()) {
+            break;
+        }
+        inlined.push_back(std::string { tokens.front().text });
         const auto declaration = std::ranges::find_if(
             unit.systemverilog_assertion_declarations,
             [&](const SystemVerilogAssertionDeclaration& entry) {
@@ -2997,7 +3014,7 @@ std::optional<VerilogParser::SvaPrepared> VerilogParser::prepare_sva_property(
         0U,
     };
     std::vector<Node> nodes;
-    TreeParser parser { nodes, tokens, context, 0U };
+    TreeParser parser { nodes, tokens, context, { } };
     const auto root = parser.parse();
     if (!root) {
         return fail(context.failure);

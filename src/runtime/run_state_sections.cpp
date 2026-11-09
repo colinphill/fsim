@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/run_state_sections.hpp"
+#include "run_state_archive.hpp"
 
 #include <algorithm>
 #include <stdexcept>

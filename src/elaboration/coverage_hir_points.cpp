@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/elaboration/coverage_hir_points.hpp"
+#include "fsim/support/stack_growth.hpp"
 
 #include "fsim/elaboration/elaborator.hpp"
 
@@ -266,7 +267,7 @@ namespace {
         const CoverageDeclarationLookup& declarations, const std::size_t depth)
     {
         const auto view = expressions(id);
-        if (!view || view->vhdl == nullptr || depth > 64U) {
+        if (!view || view->vhdl == nullptr) {
             return false;
         }
         const auto& expression = *view->vhdl;
@@ -290,8 +291,8 @@ namespace {
             return logical_text(text)
                 && std::ranges::any_of(expression.operands,
                     [&](const semantic::ExpressionId operand) {
-                        return scalar_logic_operand(operand, expressions,
-                            declarations, depth + 1U);
+                        return support::with_stack([&] { return scalar_logic_operand(operand, expressions,
+                            declarations, depth + 1U); });
                     });
         default:
             return false;
@@ -375,9 +376,6 @@ namespace {
         const CoverageExpressionLookup& expressions,
         const CoverageDeclarationLookup& declarations, const std::size_t depth)
     {
-        if (depth > 256U) {
-            return false;
-        }
         const auto view = expressions(id);
         if (!view) {
             return false;
@@ -419,8 +417,8 @@ namespace {
         }
         return std::ranges::all_of(operands,
             [&](const semantic::ExpressionId operand) {
-                return repeatable(operand, expressions, declarations,
-                    depth + 1U);
+                return support::with_stack([&] { return repeatable(operand, expressions, declarations,
+                    depth + 1U); });
             });
     }
 
@@ -439,7 +437,7 @@ std::optional<CoverageConditionTree> coverage_condition_tree(
         const auto view = expressions(id);
         const auto index = static_cast<std::uint32_t>(tree.nodes.size());
         tree.nodes.push_back({ Operator::atom, id });
-        const auto op = view && depth < 64U
+        const auto op = view
             ? logical_operator(*view, expressions, declarations)
             : std::nullopt;
         if (!op) {
@@ -457,10 +455,10 @@ std::optional<CoverageConditionTree> coverage_condition_tree(
             ? view->systemverilog->operands
             : view->vhdl->operands;
         tree.nodes[index].op = *op;
-        const auto left = self(self, operands.front(), depth + 1U);
+        const auto left = support::with_stack([&] { return self(self, operands.front(), depth + 1U); });
         tree.nodes[index].left = left;
         if (*op != Operator::logical_not) {
-            const auto right = self(self, operands.back(), depth + 1U);
+            const auto right = support::with_stack([&] { return self(self, operands.back(), depth + 1U); });
             tree.nodes[index].right = right;
         }
         return index;
@@ -900,14 +898,13 @@ CoverageHirPointResult discover_hir_module_coverage_points(
                 // Each outcome of a conditional operator in a continuous
                 // assignment's value, named by its operand.
                 if (parsed && statement->continuous_value) {
-                    std::vector<std::pair<semantic::ExpressionId, std::size_t>>
-                        values { { *statement->continuous_value, 0U } };
+                    std::vector<semantic::ExpressionId> values {
+                        *statement->continuous_value };
                     while (!values.empty()) {
-                        const auto [value, depth] = values.back();
+                        const auto value = values.back();
                         values.pop_back();
-                        const auto ternary = depth < 64U
-                            ? coverage_ternary(value, expressions, declarations)
-                            : std::nullopt;
+                        const auto ternary = coverage_ternary(
+                            value, expressions, declarations);
                         if (!ternary) {
                             continue;
                         }
@@ -932,7 +929,7 @@ CoverageHirPointResult discover_hir_module_coverage_points(
                             if (error != CoverageHirPointError::None) {
                                 return reject(error);
                             }
-                            values.emplace_back(operand, depth + 1U);
+                            values.push_back(operand);
                         }
                     }
                 }

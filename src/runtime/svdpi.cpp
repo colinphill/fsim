@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <vector>
 #include <atomic>
 #include <cstdarg>
 #include <cstddef>
@@ -12,10 +13,10 @@
 namespace {
 
 constexpr int word_bits = 32;
-constexpr std::size_t maximum_context_depth = 64U;
 
-thread_local std::array<fsim_svdpi_call_context_v3*, maximum_context_depth>
-    context_stack{};
+// The contexts entered on this thread, innermost last; it grows with the
+// nesting.
+thread_local std::vector<fsim_svdpi_call_context_v3*> context_stack{};
 thread_local std::size_t context_depth{};
 std::atomic<fsim_svdpi_export_dispatcher_v3> export_dispatcher{};
 std::atomic<void*> export_user_data{};
@@ -799,8 +800,15 @@ DPI_DLLESPEC int svGetTimePrecision(
 FSIM_SVDPI_BRIDGE_API int FSIM_SVDPI_CALL
 fsim_svdpi_call_context_enter_v3(
     fsim_svdpi_call_context_v3* const context) {
-  if (!valid_context(context) || context_depth >= context_stack.size()) {
+  if (!valid_context(context)) {
     return -1;
+  }
+  if (context_depth == context_stack.size()) {
+    try {
+      context_stack.push_back(nullptr);
+    } catch (...) {
+      return -1;
+    }
   }
   context_stack[context_depth++] = context;
   return 0;

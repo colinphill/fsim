@@ -1329,7 +1329,6 @@ Resolver::selected_parameter_actuals(const std::string_view spelling) {
 }
 void Resolver::resolve_class_scope_constants(
     Expression& expression, const Scope& scope, const std::size_t depth) {
-  if (depth > 64U) return;
   // $bits of a class-scoped data type is its width (IEEE 1800-2017 20.6.2).
   const auto* type_operand = expression.systemverilog_type_operand.get();
   if (expression.kind == ExpressionKind::Call && expression.text == "$bits"
@@ -1537,8 +1536,10 @@ void Resolver::resolve_range_constants(Type& type, const Scope& scope) {
 }
 void Resolver::substitute_class_parameter_references(
     Expression& expression, const Scope& scope,
-    const std::size_t depth) const {
-  if (depth > 16U) return;
+    std::vector<std::string> active) const {
+  // `active` holds the references being replaced on the path to
+  // `expression`; a value that refers back to one of them is a cycle and
+  // stays unreplaced.
   if (expression.kind == ExpressionKind::Identifier
       && expression.text.find('#') != std::string::npos) {
     const auto selected = expression.text.rfind("::");
@@ -1548,10 +1549,15 @@ void Resolver::substitute_class_parameter_references(
       if (owners.size() == 1U) {
         if (auto value = class_specialization_parameter_value(*owners.front(),
                 owner_name, expression.text.substr(selected + 2U), &scope)) {
+          if (std::ranges::find(active, expression.text) != active.end()) {
+            return;
+          }
+          active.push_back(expression.text);
           const auto span = expression.span;
           expression = std::move(*value);
           expression.span = span;
-          substitute_class_parameter_references(expression, scope, depth + 1U);
+          substitute_class_parameter_references(
+              expression, scope, std::move(active));
           return;
         }
       }
@@ -1585,11 +1591,15 @@ void Resolver::substitute_class_parameter_references(
           if (auto value = class_specialization_parameter_value(
                   *owners.front(), *spelling,
                   expression.text.substr(selected + 2U), &scope)) {
+            if (std::ranges::find(active, expression.text) != active.end()) {
+              return;
+            }
+            active.push_back(expression.text);
             const auto span = expression.span;
             expression = std::move(*value);
             expression.span = span;
             substitute_class_parameter_references(
-                expression, scope, depth + 1U);
+                expression, scope, std::move(active));
             return;
           }
         }
@@ -1597,7 +1607,7 @@ void Resolver::substitute_class_parameter_references(
     }
   }
   for (auto& operand : expression.operands) {
-    substitute_class_parameter_references(operand, scope, depth + 1U);
+    substitute_class_parameter_references(operand, scope, active);
   }
 }
 // A class specialization spelled with its positional literal or name
@@ -1723,10 +1733,12 @@ std::optional<Expression> Resolver::class_specialization_parameter_value(
         return parameter.kind == ParameterKind::Value
             && parameter.name == member;
       });
+  // The parameters whose defaults are being substituted on the path; a
+  // default that refers back to one of them has no value.
+  std::vector<std::string> active_parameters;
   const auto substitute = [&](const auto& self, Expression value,
                               const std::size_t depth)
       -> std::optional<Expression> {
-    if (depth > 16U) return std::nullopt;
     // `Inner#(W)::v`: the specialization's literal actuals replace its
     // parameter names inside a nested specialization's actual list.
     if (value.kind == ExpressionKind::Identifier
@@ -1920,7 +1932,14 @@ std::optional<Expression> Resolver::class_specialization_parameter_value(
                 && candidate.name == value.text;
           });
       if (parameter != owner.parameters.end()) {
-        return self(self, parameter->default_value, depth + 1U);
+        if (std::ranges::find(active_parameters, value.text)
+            != active_parameters.end()) {
+          return std::nullopt;
+        }
+        active_parameters.push_back(value.text);
+        auto replaced = self(self, parameter->default_value, depth + 1U);
+        active_parameters.pop_back();
+        return replaced;
       }
       // A sibling local parameter of the class body (8.25).
       const auto sibling = std::ranges::find_if(owner.properties,
@@ -1930,7 +1949,14 @@ std::optional<Expression> Resolver::class_specialization_parameter_value(
                 && candidate.declaration.initializer;
           });
       if (sibling != owner.properties.end()) {
-        return self(self, *sibling->declaration.initializer, depth + 1U);
+        if (std::ranges::find(active_parameters, value.text)
+            != active_parameters.end()) {
+          return std::nullopt;
+        }
+        active_parameters.push_back(value.text);
+        auto replaced = self(self, *sibling->declaration.initializer, depth + 1U);
+        active_parameters.pop_back();
+        return replaced;
       }
       return value;
     }
@@ -2692,6 +2718,20 @@ void Resolver::anchor_alias_actuals(
       && method == "create"
       && type_identity.starts_with("class:")) {
     return "@uvm-registry-create:" + type_identity.substr(6U);
+  }
+  // The singletons the library's package variables hold (`uvm_top`,
+  // `uvm_cmdline_proc`, `uvm_test_done`, `uvm_resources`) are the objects the
+  // native UVM services answer for: the getter returns the handle of the
+  // run's one object of the class (`@uvm-singleton:<class>`).
+  if (support::is_uvm_library_identity(selection.declaration->canonical_identity)
+      && ((selection.declaration->name == "uvm_root" && method == "get")
+          || (selection.declaration->name == "uvm_cmdline_processor"
+              && method == "get_inst")
+          || (selection.declaration->name == "uvm_test_done_objection"
+              && method == "get")
+          || (selection.declaration->name == "uvm_resource_pool"
+              && method == "get"))) {
+    return "@uvm-singleton:" + selection.declaration->canonical_identity;
   }
   // Only the UVM library's own methods, `set(cntxt, inst_name,
   // field_name, value)` and its siblings; a user class of the same name

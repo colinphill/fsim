@@ -170,7 +170,7 @@ fsim_require_foreign_tokens("${FSIM_VPI_BRIDGE_HEADER}"
   "typedef struct fsim_vpi_call_context_v1"
   "fsim_vpi_current_call_context_v1")
 fsim_require_foreign_tokens("${FSIM_VPI_STANDARD_IMPLEMENTATION}"
-  "maximum_context_depth = 64U"
+  "context_stack.push_back(nullptr)"
   "maximum_text_size = 1U << 20U"
   "invoke_extension"
   "fsim_vpi_call_context_enter_v1"

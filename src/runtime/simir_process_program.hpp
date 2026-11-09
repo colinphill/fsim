@@ -30,6 +30,7 @@ struct ProcessProgramTemplate {
     std::size_t container_register_count { };
     std::vector<DebugLocal> debug_locals;
     std::vector<DebugLocal> call_results;
+    std::vector<DebugLocal> frame_locals;
     std::vector<DebugStringLocal> debug_string_locals;
     std::vector<DebugContainerLocal> debug_container_locals;
     CopyOnWriteVector<ContainerType> container_register_types;
@@ -187,6 +188,7 @@ public:
     [[nodiscard]] const std::size_t& container_register_count() const noexcept;
     [[nodiscard]] const std::vector<DebugLocal>& debug_locals() const noexcept;
     [[nodiscard]] const std::vector<DebugLocal>& call_results() const noexcept;
+    [[nodiscard]] const std::vector<DebugLocal>& frame_locals() const noexcept;
     [[nodiscard]] const std::vector<DebugStringLocal>&
         debug_string_locals() const noexcept;
     [[nodiscard]] const std::vector<DebugContainerLocal>&

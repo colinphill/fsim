@@ -70,9 +70,10 @@
 #c ts c.0 type=vpiEnumTypespec name=colors ranges=- alias=vpiEnumTypespec:primary_colors
 #c ts t.0 type=vpiTimeTypespec name=my_time ranges=- alias=vpiTimeTypespec:-
 #c ts arr.0 type=vpiArrayTypespec name=- ranges=[3:0][6:4] alias=-:-
-#c ts arr.1 type=vpiArrayTypespec name=- ranges=[6:4] alias=-:-
-#c ts arr.2 type=vpiBitTypespec name=- ranges=[197:0] alias=-:-
-#c ts arr.3 type=vpiBitTypespec name=- ranges=- alias=-:-
+#c ts arr.1 type=vpiArrayTypespec name=unparrtype ranges=[6:4] alias=-:-
+#c ts arr.2 type=vpiPackedArrayTypespec name=parrtype2 ranges=[2:1][1:3] alias=-:-
+#c ts arr.3 type=vpiPackedArrayTypespec name=parrtype ranges=[1:3] alias=-:-
+#c ts arr.4 type=vpiStructTypespec name=- ranges=- alias=-:-
 #c ts pk.0 type=vpiLogicTypespec name=- ranges=[3:0][7:0] alias=-:-
 #c ts pk.1 type=vpiLogicTypespec name=- ranges=[7:0] alias=-:-
 #c ts pk.2 type=vpiLogicTypespec name=- ranges=- alias=-:-

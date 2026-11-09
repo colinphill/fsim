@@ -2009,6 +2009,13 @@ ProcessId Interpreter::Impl::add_process_program_impl(
                 };
             }
         }
+        for (const auto& slot : process.frame_locals()) {
+            if (slot.name.empty() || slot.register_id >= process.register_count()) {
+                throw std::invalid_argument {
+                    "invalid SimIR frame-local metadata"
+                };
+            }
+        }
         std::set<std::string> string_local_names;
         for (const auto& local : process.debug_string_locals()) {
             if (local.name.empty()
@@ -2085,6 +2092,13 @@ ProcessId Interpreter::Impl::add_process_program_impl(
         const auto signal = outputs[begin].signal;
         const std::span<const Process::DriverRegion> regions {
             outputs.data() + begin, end - begin };
+        // A dormant region (a foreign architecture's placeholder driver,
+        // IEEE 1076-2019 20.4.2) is no source of the signal until a program
+        // creates the driver; add_host_driver registers it then.
+        if (std::ranges::all_of(regions, &Process::DriverRegion::dormant)) {
+            dormant_driver_regions.emplace(id, signal);
+            continue;
+        }
         if (!switch_connection && !startup_initializer) {
             auto& writer_count = signal_writer_counts[signal];
             if (writer_count != std::numeric_limits<std::uint32_t>::max()) {
@@ -4148,6 +4162,13 @@ void Interpreter::start()
         if (!impl_->static_kernel) {
             return false;
         }
+        // A reset's twin runs nothing at its start (D.8: every initial
+        // procedure starts again in the new life, with its output): the
+        // kernel's first activation is queued like any process, and the
+        // image the twin records holds it queued.
+        if (impl_->reset_twin) {
+            return true;
+        }
         if (impl_->static_kernel->debug_points()
             || impl_->static_kernel->queues_first_activation()) {
             return true;
@@ -4439,17 +4460,34 @@ std::vector<DriverTransaction> Interpreter::driver_transactions(
     if (offset + width > current.width()) {
         return result;
     }
-    // The times of the pending transactions of the range's scalars.
-    std::set<SimulationTick> times;
-    for (std::size_t bit = 0U; bit < width; ++bit) {
+    // The pending transactions of a scalar of the range: the host driver's
+    // and those of the v4 kernel's projected output waveform of a signal it
+    // owns (StaticKernel::projected_pending), in time order.
+    const auto kernel_bits = impl_->static_kernel
+        ? impl_->static_kernel->projected_pending(process, signal)
+        : std::vector<std::vector<StaticKernelProjectedPending>> { };
+    const auto pending_of = [&](const std::size_t bit) {
+        std::vector<std::pair<SimulationTick, Logic9>> pending;
         const auto found = impl_->projected_drivers.find(
             Impl::ProjectedDriverKey { process, signal,
                 static_cast<std::uint32_t>(offset + bit) });
-        if (found == impl_->projected_drivers.end()) {
-            continue;
+        if (found != impl_->projected_drivers.end()) {
+            for (const auto& transaction : found->second.transactions) {
+                pending.emplace_back(transaction.time, transaction.value);
+            }
         }
-        for (const auto& transaction : found->second.transactions) {
-            times.insert(transaction.time);
+        if (offset + bit < kernel_bits.size()) {
+            for (const auto& transaction : kernel_bits[offset + bit]) {
+                pending.emplace_back(transaction.time, transaction.value);
+            }
+        }
+        return pending;
+    };
+    // The times of the pending transactions of the range's scalars.
+    std::set<SimulationTick> times;
+    for (std::size_t bit = 0U; bit < width; ++bit) {
+        for (const auto& transaction : pending_of(bit)) {
+            times.insert(transaction.first);
         }
     }
     // Null transactions of the driver (a disconnection of a guarded signal).
@@ -4478,26 +4516,20 @@ std::vector<DriverTransaction> Interpreter::driver_transactions(
             }
         }
         for (std::size_t bit = 0U; bit < width; ++bit) {
-            const auto found = impl_->projected_drivers.find(
-                Impl::ProjectedDriverKey { process, signal,
-                    static_cast<std::uint32_t>(offset + bit) });
-            if (found == impl_->projected_drivers.end()) {
-                continue;
-            }
             // The latest transaction of the bit at or before this time.
-            const Impl::ProjectedTransaction* latest = nullptr;
-            for (const auto& pending : found->second.transactions) {
-                if (pending.time <= time) {
-                    latest = &pending;
+            std::optional<Logic9> latest;
+            for (const auto& pending : pending_of(bit)) {
+                if (pending.first <= time) {
+                    latest = pending.second;
                 }
             }
-            if (latest == nullptr) {
+            if (!latest) {
                 continue;
             }
             if (value.is_logic9()) {
-                value.set_logic9(bit, latest->value);
+                value.set_logic9(bit, *latest);
             } else {
-                value.set(bit, to_logic4(latest->value));
+                value.set(bit, to_logic4(*latest));
             }
         }
         transaction.value = std::move(value);
@@ -4576,6 +4608,63 @@ void Interpreter::add_host_driver(const ProcessId process, const SignalId signal
     }
     (void)impl_->get_signal(signal);
     auto& impl = *impl_;
+    // A dormant region of the placeholder (the foreign architecture's driver
+    // of this signal before a program created it, IEEE 1076-2019 20.4.2,
+    // 23.6): the first created driver that reuses the placeholder makes it a
+    // source, registered as a driver of the design is at start, so the
+    // signal resolves with it from now on (14.7.3.2). Its value is the
+    // driver default until its first transaction (14.7.2).
+    if (const auto dormant = impl.dormant_driver_regions.find({ process, signal });
+        dormant != impl.dormant_driver_regions.end()) {
+        impl.dormant_driver_regions.erase(dormant);
+        const auto program = impl.processes.program_view(process);
+        std::vector<Process::DriverRegion> regions;
+        for (const auto& region : program.driver_regions()) {
+            if (region.signal == signal) {
+                regions.push_back(region);
+            }
+        }
+        auto& writer_count = impl.signal_writer_counts[signal];
+        if (writer_count != std::numeric_limits<std::uint32_t>::max()) {
+            ++writer_count;
+        }
+        // The writer topology changed after registration: no stable single
+        // writer.
+        impl.stable_single_writer_processes[signal]
+            = std::numeric_limits<ProcessId>::max();
+        ++impl.signal_writer_revision;
+        if (impl.signal_writer_revision == 0U) {
+            throw std::overflow_error {
+                "SimIR signal-writer topology revision overflow"
+            };
+        }
+        if (impl.started) {
+            impl.prepare_signal_observation(signal);
+        }
+        impl.register_driver(process, signal, regions, program.drive_strength(),
+            { }, false,
+            program.scheduling_domain() == ProcessSchedulingDomain::generic
+                && !program.language_standard().empty());
+        // A user resolution function now takes the placeholder as a source
+        // (its run-time-count program served the smaller count).
+        if (impl.started && impl.vhdl_resolvers.contains(signal)) {
+            impl.queue_vhdl_conversion(signal);
+        } else if (impl.started) {
+            // Any other resolved signal takes the new source in the cycle's
+            // update phase: the driver's default is its first transaction
+            // (14.7.2), a zero-delay one staged for the regions it drives.
+            const PackedLogic4 initial = impl.driver_slot(process, signal);
+            for (const auto& region : regions) {
+                if (region.whole) {
+                    impl.stage_update(process, signal, initial);
+                } else {
+                    impl.stage_update_slice(process, signal,
+                        initial.extract_bits(region.offset, region.width),
+                        region.offset);
+                }
+            }
+        }
+    }
     const auto resolver = impl.vhdl_resolvers.find(signal);
     const auto created = impl.vhdl_created_drivers.find(signal);
     const std::size_t created_count
@@ -5340,10 +5429,14 @@ template <typename Monitors>
 [[nodiscard]] const sva::Monitor* sva_last_popped(const Monitors& monitors,
     const ProcessId design_process)
 {
+    // The map is ordered by (process, site): only this process's monitors.
     const sva::Monitor* last = nullptr;
-    for (const auto& [key, monitor] : monitors) {
-        if (key.first == design_process && monitor
-            && monitor->last_outcome_serial() != 0
+    for (auto position = monitors.lower_bound(
+             typename Monitors::key_type { design_process, 0U });
+         position != monitors.end() && position->first.first == design_process;
+         ++position) {
+        const auto& monitor = position->second;
+        if (monitor && monitor->last_outcome_serial() != 0
             && (last == nullptr
                 || monitor->last_outcome_serial() > last->last_outcome_serial())) {
             last = monitor.get();
@@ -5421,7 +5514,14 @@ bool Interpreter::set_sva_step(
 PackedLogic4 Interpreter::read_call_result(
     const ProcessId process, const std::size_t slot) const
 {
-    return read_local_register(process, slot, 0U, true);
+    return read_local_register(process, slot, 0U, LocalTable::call_result);
+}
+
+PackedLogic4 Interpreter::read_frame_local(const ProcessId process,
+    const std::size_t local_index, const std::size_t newer_activations) const
+{
+    return read_local_register(
+        process, local_index, newer_activations, LocalTable::frame);
 }
 
 PackedLogic4 Interpreter::read_debug_local(
@@ -5429,14 +5529,15 @@ PackedLogic4 Interpreter::read_debug_local(
     const std::size_t local_index,
     const std::size_t newer_activations) const
 {
-    return read_local_register(process, local_index, newer_activations, false);
+    return read_local_register(
+        process, local_index, newer_activations, LocalTable::debug);
 }
 
 PackedLogic4 Interpreter::read_local_register(
     const ProcessId process,
     const std::size_t local_index,
     const std::size_t newer_activations,
-    const bool call_result) const
+    const LocalTable table) const
 {
     // A kernel thread member, or a fork child of one, owns its registers.
     const auto kernel_owner = impl_->static_kernel
@@ -5447,8 +5548,10 @@ PackedLogic4 Interpreter::read_local_register(
     const auto program = kernel_original != nullptr
         ? ProcessProgramView { *kernel_original }
         : impl_->processes.program_view(kernel_owner.value_or(process));
-    const auto& locals
-        = call_result ? program.call_results() : program.debug_locals();
+    const auto& locals = table == LocalTable::call_result
+        ? program.call_results()
+        : table == LocalTable::frame ? program.frame_locals()
+                                     : program.debug_locals();
     if (local_index >= locals.size()) {
         throw std::out_of_range { "invalid SimIR debug-local index" };
     }

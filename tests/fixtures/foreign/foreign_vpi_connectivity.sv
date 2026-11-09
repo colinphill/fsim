@@ -76,6 +76,14 @@ module top;
     // of its net (10.3.1, 37.46).
     logic [3:0] nsrc;
     wire [1:0] nd = nsrc[3:2];
+
+    // A formal and a result declared with a typedef have that typedef's
+    // typespec (37.41, 37.25).
+    typedef logic [7:0] byte_t;
+    typedef enum logic [1:0] { RED, GREEN } color_t;
+    function automatic byte_t named(input byte_t b, input color_t c);
+        return b;
+    endfunction
 endmodule
 
 // A function and a task of a package are objects named pkg::name (IEEE
@@ -87,4 +95,9 @@ package cp;
     task automatic note(input integer n, output integer m);
         m = n;
     endtask
+    // A formal declared with a typedef of the package (37.41).
+    typedef logic [3:0] nib_t;
+    function automatic nib_t nibble(input nib_t n);
+        return n;
+    endfunction
 endpackage

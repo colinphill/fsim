@@ -209,7 +209,9 @@ VitalWireSourcesResult apply_vital_wire_sources(ElaboratedDesignState& state,
         // instance; its sources are the drivers of that net.
         auto net = *input;
         auto writers = writers_of(net);
-        for (std::size_t depth = 0U; depth < 8U && !writers.empty(); ++depth) {
+        // Port actuals can forward in a ring: stop on a net seen before.
+        std::vector<SignalId> visited_nets { net };
+        while (!writers.empty()) {
             std::optional<SignalId> origin;
             bool forwarded = true;
             for (const auto writer : writers) {
@@ -229,10 +231,13 @@ VitalWireSourcesResult apply_vital_wire_sources(ElaboratedDesignState& state,
                 }
                 origin = process.static_sensitivity.front().signal;
             }
-            if (!forwarded || !origin || *origin >= state.signals.size()) {
+            if (!forwarded || !origin || *origin >= state.signals.size()
+                || std::ranges::find(visited_nets, *origin)
+                    != visited_nets.end()) {
                 break;
             }
             net = *origin;
+            visited_nets.push_back(net);
             writers = writers_of(net);
         }
         if (writers.empty()) {

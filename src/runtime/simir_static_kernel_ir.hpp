@@ -6,13 +6,92 @@
 #pragma once
 
 #include "fsim/runtime/simir.hpp"
+#include "fsim/semantic/sva_plan.hpp"
 #include "simir_kernel_word_ops.hpp"
 
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <new>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace fsim::runtime::simir::static_kernel_detail {
+
+/// The return targets of a compiled VHDL body's call stack (IEEE 1076-2019
+/// 4.3, 10.7: a subprogram calls itself to any depth). Generated code reads
+/// `entries` and `capacity` (offsets 0 and 8, checked in the code generator)
+/// through StaticKernelNativeFrame::call_stack; a call with depth at the
+/// capacity asks the runtime to grow it (`reserve`, the one helper call a
+/// call makes). The depth word stays in the body's register file.
+struct NativeCallStack {
+    std::uint64_t* entries { };
+    std::uint64_t capacity { };
+
+    NativeCallStack() = default;
+    NativeCallStack(const NativeCallStack& other)
+    {
+        copy_from(other);
+    }
+    NativeCallStack(NativeCallStack&& other) noexcept
+        : entries { std::exchange(other.entries, nullptr) },
+          capacity { std::exchange(other.capacity, 0U) }
+    {
+    }
+    NativeCallStack& operator=(const NativeCallStack& other)
+    {
+        if (this != &other) {
+            std::free(entries);
+            entries = nullptr;
+            capacity = 0U;
+            copy_from(other);
+        }
+        return *this;
+    }
+    NativeCallStack& operator=(NativeCallStack&& other) noexcept
+    {
+        if (this != &other) {
+            std::free(entries);
+            entries = std::exchange(other.entries, nullptr);
+            capacity = std::exchange(other.capacity, 0U);
+        }
+        return *this;
+    }
+    ~NativeCallStack()
+    {
+        std::free(entries);
+    }
+
+    /// Room for `needed` entries, kept (capacity doubles).
+    void reserve(const std::uint64_t needed)
+    {
+        if (needed <= capacity) {
+            return;
+        }
+        auto grown = capacity == 0U ? std::uint64_t { 64 } : capacity * 2U;
+        if (grown < needed) {
+            grown = needed;
+        }
+        auto* next = static_cast<std::uint64_t*>(
+            std::realloc(entries, grown * sizeof(std::uint64_t)));
+        if (next == nullptr) {
+            throw std::bad_alloc { };
+        }
+        entries = next;
+        capacity = grown;
+    }
+
+private:
+    void copy_from(const NativeCallStack& other)
+    {
+        if (other.capacity == 0U) {
+            return;
+        }
+        reserve(other.capacity);
+        std::memcpy(entries, other.entries, other.capacity * sizeof(std::uint64_t));
+    }
+};
 
 constexpr std::uint8_t flag_blocking = 1U << 0U;
 constexpr std::uint8_t flag_nba = 1U << 1U;
@@ -96,7 +175,8 @@ enum class KOp : std::uint8_t {
     integer_check,
     /// Fixed-register call: entries register y + pointer x receives imm_a
     /// (the SimIR return target), x is incremented, control goes to d. z is
-    /// the stack capacity.
+    /// the stack capacity. With flag_linear the stack is the body's growable
+    /// `call_entries` (x is its depth word, y = x, z = 1).
     call,
     /// Fixed-register return through pointer x and entries y (capacity z):
     /// control goes to the instruction for the popped SimIR target.
@@ -192,11 +272,20 @@ enum class KOp : std::uint8_t {
     /// offset the signal's width, z the $past depth, imm_a/imm_b the
     /// signal's default (an empty history).
     sva_sampled_load,
+    /// An automatic callable's frame (VHDL, a recursive callable): saves
+    /// the registers of CompiledBody::frame_saves[aux] (a header word pair
+    /// holding the identity, then every saved register-file pair) on the
+    /// body's growable frame stack; the depth word x counts pairs. Only a
+    /// full store asks the runtime to grow it (the capacity helper).
+    frame_push,
+    /// Restores the registers of frame_saves[aux] (the saved pairs, except
+    /// those of the registers the call's results keep) and pops the frame.
+    frame_pop,
 };
 
-/// Number of kernel instruction kinds (KOp values 0 .. sva_sampled_load).
+/// Number of kernel instruction kinds (KOp values 0 .. frame_pop).
 inline constexpr std::size_t kernel_op_count
-    = static_cast<std::size_t>(KOp::sva_sampled_load) + 1U;
+    = static_cast<std::size_t>(KOp::frame_pop) + 1U;
 
 /// KOp::wide_alu operation families (KInst::offset).
 enum class WideFamily : std::uint32_t {
@@ -304,11 +393,34 @@ struct KInst {
 /// resolved); sub 1 imm_b the same (0: not resolved) and imm_a the width;
 /// sub 3 imm_a the width and own << 32, imm_b the constants' index and the
 /// sources << 32. wide_store: imm_a words and width << 32, imm_b as sub 0.
+/// The source count carries net_nine_bit when the slot is a VHDL signal of
+/// nine values (std_logic resolution: its value holds the four code planes,
+/// not the two of a SystemVerilog net).
+inline constexpr std::uint32_t net_nine_bit = 0x80000000U;
+
 struct NetShape {
     std::uint32_t sources { };
     std::uint32_t own { };
     std::uint32_t width { };
+    /// The resolved value has nine states (four code planes), resolved by
+    /// the std_logic_1164 table over the sources that drive each element.
+    bool nine { };
+
+    /// The planes of the slot's value, before its sources' planes.
+    [[nodiscard]] std::uint32_t rows() const noexcept
+    {
+        return nine ? 4U : 2U;
+    }
 };
+
+/// The shape of an immediate's source count (with net_nine_bit), the
+/// member's source and the slot's width.
+[[nodiscard]] constexpr NetShape make_net_shape(const std::uint32_t counted,
+    const std::uint32_t own, const std::uint32_t width) noexcept
+{
+    return NetShape { counted & ~net_nine_bit, own, width,
+        (counted & net_nine_bit) != 0U };
+}
 
 [[nodiscard]] inline std::optional<NetShape> net_shape(const KInst& inst) noexcept
 {
@@ -322,7 +434,7 @@ struct NetShape {
         if (inst.imm_a == 0U || inst.imm_b == 0U) {
             return std::nullopt;
         }
-        return NetShape { low(inst.imm_b), high(inst.imm_b), high(inst.imm_a) };
+        return make_net_shape(low(inst.imm_b), high(inst.imm_b), high(inst.imm_a));
     }
     if (inst.op != KOp::store_vhdl) {
         return std::nullopt;
@@ -333,17 +445,17 @@ struct NetShape {
         if (inst.aux == 0U) {
             return std::nullopt;
         }
-        return NetShape { low(inst.imm_b), high(inst.imm_b), inst.aux };
+        return make_net_shape(low(inst.imm_b), high(inst.imm_b), inst.aux);
     case 1U:
         if (inst.imm_b == 0U) {
             return std::nullopt;
         }
-        return NetShape { low(inst.imm_b), high(inst.imm_b), low(inst.imm_a) };
+        return make_net_shape(low(inst.imm_b), high(inst.imm_b), low(inst.imm_a));
     default:
         if (high(inst.imm_b) == 0U) {
             return std::nullopt;
         }
-        return NetShape { high(inst.imm_b), high(inst.imm_a), low(inst.imm_a) };
+        return make_net_shape(high(inst.imm_b), high(inst.imm_a), low(inst.imm_a));
     }
 }
 
@@ -352,6 +464,73 @@ struct ConcatOperand {
     std::uint32_t width { };
     /// wide_concat: a wide operand (width over 64) with masks.
     std::uint32_t unknown { };
+};
+
+/// The constants of one directive's property plan (sva::CompiledPlan with
+/// its bounds resolved), which generated code specializes the attempt
+/// automaton on (KOp::sva_tick with z != 0; task #186). Only plans of the
+/// shapes sva_native_plan accepts have one.
+struct SvaNativeStep {
+    semantic::sva::Op op { semantic::sva::Op::check };
+    std::uint32_t a { };
+    std::uint32_t b { };
+    std::uint32_t c { };
+    std::int64_t lo { };
+    std::int64_t hi { };
+    std::uint32_t line { };
+    std::uint32_t column { };
+    /// A bound read from the block's bounds region (layout 5): the value is
+    /// bounds[slot] + lo (or hi); -1 for a literal or `$`.
+    std::int32_t lo_slot { -1 };
+    std::int32_t hi_slot { -1 };
+    friend bool operator==(const SvaNativeStep&, const SvaNativeStep&) = default;
+};
+
+struct SvaNativeSequence {
+    std::vector<SvaNativeStep> code;
+    std::uint32_t counters { };
+    /// CompiledPlan::state_base: the first state id of the sequence's
+    /// program counters.
+    std::uint32_t state_base { };
+    friend bool operator==(const SvaNativeSequence&, const SvaNativeSequence&)
+        = default;
+};
+
+struct SvaNativeProperty {
+    semantic::sva::PropertyKind kind { semantic::sva::PropertyKind::sequence };
+    bool overlapped { };
+    std::uint32_t sequence { };
+    /// The one child (-1 when none): the consequent of an implication, the
+    /// operand of a negation.
+    std::int32_t child { -1 };
+    /// All children in order (the operands of and, or, implies, iff; the
+    /// branches of if/else).
+    std::vector<std::int32_t> children;
+    /// The guard of if/else, accept_on and reject_on.
+    std::uint32_t guard { };
+    /// nexttime's offset: lo (+ bounds[lo_slot] when lo_slot >= 0).
+    std::int64_t lo { };
+    std::int32_t lo_slot { -1 };
+    /// always and eventually: the window's end (INT64_MAX for `$`), as lo.
+    std::int64_t hi { };
+    std::int32_t hi_slot { -1 };
+    std::uint32_t line { };
+    std::uint32_t column { };
+    friend bool operator==(const SvaNativeProperty&, const SvaNativeProperty&)
+        = default;
+};
+
+struct SvaNativePlan {
+    std::vector<SvaNativeSequence> sequences;
+    std::vector<SvaNativeProperty> properties;
+    std::uint32_t root { };
+    /// `cover sequence` (16.14.3) of a sequence property.
+    bool every_match { };
+    /// A multiclocked plan (16.13): the guard of each clock's tick.
+    std::vector<std::uint32_t> clock_guards;
+    /// The source position of each guard (step events' matched expression).
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> guard_positions;
+    friend bool operator==(const SvaNativePlan&, const SvaNativePlan&) = default;
 };
 
 struct CompiledBody {
@@ -371,6 +550,9 @@ struct CompiledBody {
     std::vector<std::uint32_t> wide_base;
     /// wide_const values, as registers.
     std::vector<kernel_word::Word> wide_constants;
+    /// The plans of the directives whose tick is generated code
+    /// (KOp::sva_tick, z the index plus one).
+    std::vector<SvaNativePlan> sva_plans;
     /// Return targets (SimIR operation indices) a ret may reach, for the
     /// native dispatch.
     std::vector<std::uint32_t> return_targets;
@@ -400,9 +582,37 @@ struct CompiledBody {
     /// u_operands[u_operand_begin[n] .. u_operand_begin[n + 1]).
     std::vector<std::uint32_t> u_operand_begin;
     std::vector<std::uint32_t> u_operands;
-    /// VHDL: register index of the synthetic call stack pointer (entries
-    /// follow it); 0 when the member makes no runtime-stack calls.
+    /// VHDL: register index of the call stack's depth word (the return
+    /// targets are in `call_entries`); 0 when the member makes no
+    /// runtime-stack calls.
     std::uint32_t call_stack_base { };
+    NativeCallStack call_entries;
+    /// A VHDL body whose recursive callables keep real frames: the register
+    /// index of the frame stack's depth word (register-file pairs saved,
+    /// headers included), and the stack itself (two entries per pair); 0
+    /// when the body has none.
+    std::uint32_t frame_stack_base { };
+    NativeCallStack frame_entries;
+    /// One KOp::frame_push or frame_pop's registers: the identity, the
+    /// items (register-file index, pairs, offset after the header) to
+    /// save or restore, the pairs a frame holds (header included), and the
+    /// SimIR registers it names, for conversion to the reference's frame.
+    struct FrameSave {
+        std::uint32_t identity { };
+        std::uint32_t item_begin { };
+        std::uint32_t item_end { };
+        std::uint32_t pairs { };
+        std::uint32_t register_begin { };
+        std::uint32_t register_end { };
+    };
+    struct FrameItem {
+        std::uint32_t index { };
+        std::uint32_t count { };
+        std::uint32_t offset { };
+    };
+    std::vector<FrameSave> frame_saves;
+    std::vector<FrameItem> frame_items;
+    std::vector<std::uint32_t> frame_registers;
     /// Behavioral bodies: instructions a thread may start at (operation 0,
     /// after each suspension, fork branches), for the native entry switch.
     std::vector<std::uint32_t> resume_entries;
@@ -417,15 +627,12 @@ inline bool has_prologue_entry(const CompiledBody& body, const bool vhdl)
         && !body.code.empty();
 }
 
-/// Entries of a synthetic VHDL call stack (deeper calls deoptimize).
-constexpr std::uint32_t call_stack_depth = 16U;
-
 constexpr std::uint8_t u_check = 1U;
 constexpr std::uint8_t u_clear = 2U;
 constexpr std::uint8_t u_aware = 4U;
 
 /// Thrown by slow paths when compiled execution cannot continue (an error
-/// the reference evaluator reports, a call stack overflow, a 'U' in an
+/// the reference evaluator reports, a 'U' in an
 /// operand of an operation that does not carry it); `resume` is the SimIR
 /// operation at which the reference evaluator takes
 /// over, and `executed` says whether that operation already ran.

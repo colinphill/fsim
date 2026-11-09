@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: Apache-2.0
+vitlit vec3 ok
+vitlit vec2 ok
+vitlit vec1 ok
+vitlit vec0 ok
+vitlit to_bit ok
+vitlit to_x01 Z ok
+vitlit to_x01z Z ok
+vitlit to_stdulogic ok
+vitlit to_x01 H ok
+vitlit tri 1 ok
+vitlit tri Z ok
+vitlit tri eq ok
+vitlit and '0'
+vitlit xor '1'
+vitlit equal false
+vitlit not-equal true
+vitlit rising false
+vitlit not '0'
+vitlit conditional '1'
+vitlit to_x01 and '0'
+vitlit matching 'X'
+vitlit is_x true
+vitlit to_01 '1'
+vitlit case others
+vitlit image 'Z'
+vitlit others ZZZZ
+vitlit concatenation Z10Z
+vitlit add 0010
+vitlit to_x01 std_ulogic '1'
+vitlit to_x01 bit '1'
+vitlit condition true
+vitlit resolved Z1 '1'
+vitlit resolved 01 'X'
+vitlit resolved HL 'W'
+vitlit resolved 0H '0'
+vitlit resolved dash '-'
+vitlit resolved U1 'U'
+vitlit resolved dash-Z 'X'
+vitlit resolved null 'Z'
+vitlit match dash true
+vitlit match 1H true
+vitlit match 01 false
+vitlit match UU false
+vitlit match ZZ false
+vitlit match L0 true
+vitlit match unsigned true
+vitlit match unsigned H true
+vitlit match unsigned X false
+vitlit match unsigned length false
+vitlit match signed true
+vitlit match sulv false
+vitlit match slv false
+vitlit find leftmost 2
+vitlit find rightmost 1
+vitlit find none -1
+vitlit find match 1
+vitlit find dash 0
+vitlit find signed 0
+vitlit find ascending 3
+vitlit find ascending right 4
+vitlit assign 'Z'

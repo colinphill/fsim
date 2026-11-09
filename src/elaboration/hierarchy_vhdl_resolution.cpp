@@ -1,14 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "hierarchy_builder_internal.hpp"
+#include "fsim/support/stack_growth.hpp"
 #include "lowerer_internal.hpp"
+
+#include "fsim/support/vhdl_identifier.hpp"
 
 #include <algorithm>
 #include <cstddef>
 #include <limits>
 #include <map>
+#include <optional>
 #include <ranges>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -283,7 +288,7 @@ bool vhdl_static_signal_name(
     const semantic::ExpressionId actual, const std::size_t depth = 0U)
 {
     const auto expression = specialization.find_expression(actual);
-    if (!expression || expression->vhdl == nullptr || depth > 16U) {
+    if (!expression || expression->vhdl == nullptr) {
         return false;
     }
     const auto& source = *expression->vhdl;
@@ -315,8 +320,8 @@ bool vhdl_static_signal_name(
             return false;
         }
     }
-    return vhdl_static_signal_name(
-        specialization, source.operands.front(), depth + 1U);
+    return support::with_stack([&] { return vhdl_static_signal_name(
+        specialization, source.operands.front(), depth + 1U); });
 }
 
 bool vhdl_conversion_actual(
@@ -334,8 +339,7 @@ bool vhdl_conversion_actual(
     const auto conversion_aggregate = [&](const auto& self,
                                           const semantic::vhdl::Expression& aggregate,
                                           const std::size_t depth) -> bool {
-        return depth <= 16U
-            && aggregate.kind == semantic::vhdl::ExpressionKind::aggregate
+        return aggregate.kind == semantic::vhdl::ExpressionKind::aggregate
             && !aggregate.associations.empty()
             && std::ranges::all_of(aggregate.associations,
             [&](const semantic::vhdl::AggregateAssociation& association) {
@@ -347,7 +351,7 @@ bool vhdl_conversion_actual(
                 const auto kind = value->vhdl->kind;
                 if (kind == semantic::vhdl::ExpressionKind::aggregate
                     && value->vhdl->text == "@vhdl-formal-subelements") {
-                    return self(self, *value->vhdl, depth + 1U);
+                    return support::with_stack([&] { return self(self, *value->vhdl, depth + 1U); });
                 }
                 // An inertial part (`r.y => inertial t`) is an implicit
                 // signal updated a delta after its signal (IEEE 1076-2008
@@ -834,7 +838,7 @@ bool HierarchyBuilder::vhdl_output_port_read(
                               const semantic::ExpressionId id,
                               const std::size_t depth) -> void {
             const auto expression = specialization.find_expression(id);
-            if (!expression || expression->vhdl == nullptr || depth > 64U) {
+            if (!expression || expression->vhdl == nullptr) {
                 return;
             }
             written.insert(id.value());
@@ -844,10 +848,10 @@ bool HierarchyBuilder::vhdl_output_port_read(
                     || (source.kind == vhdl::ExpressionKind::call
                         && source.text.starts_with("@vhdl-member:")))
                 && !source.operands.empty()) {
-                self(self, source.operands.front(), depth + 1U);
+                support::with_stack([&] { return self(self, source.operands.front(), depth + 1U); });
             } else if (source.kind == vhdl::ExpressionKind::aggregate) {
                 for (const auto& association : source.associations) {
-                    self(self, association.value, depth + 1U);
+                    support::with_stack([&] { return self(self, association.value, depth + 1U); });
                 }
             }
         };
@@ -986,29 +990,20 @@ bool HierarchyBuilder::lower_compiled_vhdl_formal_conversion(
     if (design_.signals_[destination].vhdl_resolver) {
         return false;
     }
-    const bool resolved = design_.signals_[destination].resolution
-            != ResolutionKind::none
-        || resolver_by_signal_.contains(destination)
-        || explicit_resolution(destination)
-                .value_or(native_resolution(
-                    design_.signal_info_[destination]))
-            != ResolutionKind::none;
+    const bool resolved = vhdl_conversion_destination_resolved(destination);
     // Only an unresolved inout formal splits its effective value from its
     // driving value; a resolved one keeps its continuous assignments.
     if (conversion->effective && resolved) {
         return false;
     }
     auto& program = conversion->conversion;
-    auto& process = program.program.process;
-    process.language_standard = owner.standard;
-    process.compatibility_profile = owner.compatibility_profile;
-    if (!conversion->effective) {
-        read_vhdl_formal_driving_values(process, &program.sources);
-    }
-    canonicalize_process_operations(process);
-    const auto process_id = process.id;
-    design_.append_process_record(std::move(process));
     if (conversion->effective) {
+        auto& process = program.program.process;
+        process.language_standard = owner.standard;
+        process.compatibility_profile = owner.compatibility_profile;
+        canonicalize_process_operations(process);
+        const auto process_id = process.id;
+        design_.append_process_record(std::move(process));
         VhdlSignalResolver resolver {
             process_id, program.program.input, program.program.output, { } };
         resolver.sources = std::move(program.sources);
@@ -1016,7 +1011,40 @@ bool HierarchyBuilder::lower_compiled_vhdl_formal_conversion(
         add_vhdl_formal_driving_mirror(destination);
         return true;
     }
-    if (resolved || conversion->slice) {
+    install_compiled_vhdl_formal_conversion(
+        std::move(program.program.process), program.program.input,
+        program.program.output, std::move(program.sources), destination,
+        conversion->slice, resolved, owner);
+    return true;
+}
+
+bool HierarchyBuilder::vhdl_conversion_destination_resolved(
+    const SignalId destination)
+{
+    // A resolved actual combines its port's converted value with its other
+    // sources through the resolution function. Its resolution is assigned
+    // after elaboration, so its declared resolver tells (IEEE 1076-2008
+    // 14.7.3.2).
+    return design_.signals_[destination].resolution != ResolutionKind::none
+        || resolver_by_signal_.contains(destination)
+        || explicit_resolution(destination)
+                .value_or(native_resolution(design_.signal_info_[destination]))
+            != ResolutionKind::none;
+}
+
+void HierarchyBuilder::install_compiled_vhdl_formal_conversion(
+    Process&& process, const RegisterId input, const RegisterId output,
+    std::vector<SignalId>&& sources, const SignalId destination,
+    const std::optional<std::pair<std::uint32_t, std::uint32_t>>& slice,
+    const bool resolved, const semantic::vhdl::Unit& owner)
+{
+    process.language_standard = owner.standard;
+    process.compatibility_profile = owner.compatibility_profile;
+    read_vhdl_formal_driving_values(process, &sources);
+    canonicalize_process_operations(process);
+    const auto process_id = process.id;
+    design_.append_process_record(std::move(process));
+    if (resolved || slice) {
         // The converted value is one driver of the resolved actual, or of a
         // subelement of the actual: a halted stub owns that driver, and the
         // runtime assigns it the program's result in the cycle a source
@@ -1033,27 +1061,161 @@ bool HierarchyBuilder::lower_compiled_vhdl_formal_conversion(
         stub.language_standard = owner.standard;
         stub.compatibility_profile = owner.compatibility_profile;
         stub.initialize = false;
-        stub.driver_regions.push_back(conversion->slice
-                ? Process::DriverRegion { destination,
-                      conversion->slice->first, conversion->slice->second,
-                      false }
+        stub.driver_regions.push_back(slice
+                ? Process::DriverRegion { destination, slice->first,
+                      slice->second, false }
                 : Process::DriverRegion { destination, 0U, 0U, true });
         stub.operations.emplace_back(Halt { });
         design_.append_process_record(std::move(stub));
         VhdlConversionDriver driver { static_cast<ProcessId>(stub_index),
-            process_id, program.program.output, std::move(program.sources) };
-        if (conversion->slice) {
-            driver.offset = conversion->slice->first;
+            process_id, output, std::move(sources) };
+        if (slice) {
+            driver.offset = slice->first;
         }
         design_.signals_[destination].vhdl_conversion_drivers.push_back(
             std::move(driver));
-        return true;
+        return;
     }
-    VhdlSignalResolver resolver {
-        process_id, program.program.input, program.program.output, { } };
-    resolver.sources = std::move(program.sources);
-    design_.signals_[conversion->destination].vhdl_resolver
-        = std::move(resolver);
+    VhdlSignalResolver resolver { process_id, input, output, { } };
+    resolver.sources = std::move(sources);
+    design_.signals_[destination].vhdl_resolver = std::move(resolver);
+}
+
+bool HierarchyBuilder::lower_compiled_vhdl_binding_formal_conversions(
+    CompiledVhdlBindingConversionContext context)
+{
+    // `f(s) => d` in the port map of the binding indication: the entity's
+    // port `s` is left unassociated, so it has its own signal in the bound
+    // design entity, and the implied block drives the component's local
+    // port `d` (the instance's actual for it, 14.5.4) with `f(s)` in the
+    // same simulation cycle as `s` changes (IEEE 1076-2019 6.5.7.1,
+    // 14.7.3.3), as a formal conversion of an instance's port map does.
+    const auto& record = context.record;
+    const auto& specialization = context.working_specialization;
+    const auto source_of = [&](const semantic::vhdl::Association& association) {
+        return compiled_source_span(*compiled_,
+            association.source.valid() ? association.source : record.source);
+    };
+    const auto child_signal = [&](const std::string_view name)
+        -> std::optional<SignalId> {
+        const auto path = context.child_path + "." + std::string { name };
+        if (const auto found = design_.signal_by_name_.find(path);
+            found != design_.signal_by_name_.end()) {
+            return found->second;
+        }
+        for (const auto& info : design_.signal_info_) {
+            if (support::equal_ignoring_ascii_case(info.name, path)) {
+                return info.id;
+            }
+        }
+        return std::nullopt;
+    };
+    for (const auto* const association : context.conversions) {
+        const auto group = association->expression
+            ? specialization.find_expression(*association->expression)
+            : std::nullopt;
+        if (!group || group->vhdl == nullptr
+            || group->vhdl->associations.size()
+                != association->formal_conversion_calls.size()) {
+            report("FSIM-ELAB-VHCOMP-009",
+                "binding port map conversion for '" + record.name
+                    + "' has no conversion call",
+                source_of(*association));
+            return false;
+        }
+        for (std::size_t index = 0U; index < group->vhdl->associations.size();
+             ++index) {
+            const auto& element = group->vhdl->associations[index];
+            const auto call = association->formal_conversion_calls[index];
+            // The converted port of the entity: the element's choice.
+            const auto choice = element.choices.size() == 1U
+                ? specialization.find_expression(element.choices.front())
+                : std::nullopt;
+            const auto port = choice && choice->vhdl != nullptr
+                    && choice->vhdl->referenced_name
+                    && choice->vhdl->referenced_name->selected
+                ? specialization.find_declaration(
+                      *choice->vhdl->referenced_name->selected)
+                : std::nullopt;
+            const auto formal = port && port->vhdl != nullptr
+                ? child_signal(port->vhdl->name)
+                : std::nullopt;
+            // The local port the conversion drives: the element's value.
+            const auto value = specialization.find_expression(element.value);
+            const auto local = value && value->vhdl != nullptr
+                    && value->vhdl->kind == semantic::vhdl::ExpressionKind::name
+                    && value->vhdl->referenced_name
+                    && value->vhdl->referenced_name->selected
+                ? specialization.find_declaration(
+                      *value->vhdl->referenced_name->selected)
+                : std::nullopt;
+            const auto destination = local
+                ? context.component_port_signals.find(
+                      value->vhdl->referenced_name->selected->value())
+                : context.component_port_signals.end();
+            if (!port || !formal || !local || local->vhdl == nullptr
+                || destination == context.component_port_signals.end()) {
+                report("FSIM-ELAB-VHCOMP-009",
+                    "binding port map conversion for '" + record.name
+                        + "' must drive a local port whose actual is a "
+                          "signal name from a port of the bound entity",
+                    source_of(*association));
+                return false;
+            }
+            if (design_.signals_[destination->second].vhdl_resolver) {
+                report("FSIM-ELAB-VHCOMP-009",
+                    "binding port map conversion for '" + record.name
+                        + "' drives a signal that has a conversion already",
+                    source_of(*association));
+                return false;
+            }
+            Lowerer lowerer {
+                design_,
+                context.working_signals,
+                context.working_read_only_signals,
+                context.string_objects,
+                context.read_only_strings,
+                context.container_objects,
+                context.read_only_containers,
+                diagnostics_,
+            };
+            lowerer.set_specialized_hir_unit(&specialization);
+            lowerer.set_package_constant_signal(
+                [&](const semantic::DeclarationId constant) {
+                    return compiled_vhdl_package_constant_signal(
+                        specialization, constant);
+                });
+            auto signals = context.component_port_signals;
+            signals.insert_or_assign(port->vhdl->id.value(), *formal);
+            lowerer.set_hir_vhdl_declaration_signals(&signals);
+            auto program = lowerer.lower_hir_vhdl_conversion_program(
+                call, destination->second, context.working_path,
+                local->vhdl->subtype);
+            if (!program) {
+                report("FSIM-ELAB-VHCOMP-009",
+                    "binding port map conversion for '" + record.name
+                        + "' could not be lowered"
+                        + hir_lowering_rejection_detail(lowerer),
+                    source_of(*association));
+                return false;
+            }
+            for (auto& generated : lowerer.take_generated_processes()) {
+                generated.language_standard = context.architecture.standard;
+                generated.compatibility_profile
+                    = context.architecture.compatibility_profile;
+                canonicalize_process_operations(generated);
+                design_.specializations_[context.specialization_id]
+                    .processes.push_back(generated.id);
+                design_.append_process_record(std::move(generated));
+            }
+            install_compiled_vhdl_formal_conversion(
+                std::move(program->program.process), program->program.input,
+                program->program.output, std::move(program->sources),
+                destination->second, std::nullopt,
+                vhdl_conversion_destination_resolved(destination->second),
+                context.architecture);
+        }
+    }
     return true;
 }
 

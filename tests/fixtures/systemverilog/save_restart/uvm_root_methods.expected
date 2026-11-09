@@ -1,0 +1,29 @@
+children=1
+name=__top__ full=[] type=uvm_root
+has=10
+found=uvm_test_top.e.b.c
+UVM_WARNING @ 1: reporter [CMPNFD] Component matching '*.nomatch' was not found in the list of uvm_components
+nomatch=null
+UVM_INFO @ 1: reporter [UVMTOP] UVM testbench topology:
+---------------------------------
+Name          Type    Size  Value
+---------------------------------
+uvm_test_top  mytest  -     @N
+  e           env     -     @N
+    a         leaf    -     @N
+    b         mid     -     @N
+      c       leaf    -     @N
+---------------------------------
+
+
+--- UVM Report Summary ---
+
+** Report counts by severity
+UVM_INFO :    1
+UVM_WARNING :    1
+UVM_ERROR :    0
+UVM_FATAL :    0
+** Report counts by id
+[CMPNFD]     1
+[UVMTOP]     1
+

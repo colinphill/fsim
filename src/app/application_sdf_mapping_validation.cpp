@@ -677,9 +677,16 @@ namespace {
                 state.elaborated, state.diagnostics, span)) {
             return false;
         }
+        // INTERCONNECT records to one source and load apply in order of
+        // occurrence (OVI SDF 3.0, IEEE 1364-2005 16.3): a later one replaces
+        // the earlier delay, or with INCREMENT adds to it, so repeating one
+        // is not a duplicate or a conflict.
+        const bool sequential
+            = mapping.construct_kind == SdfConstructKind::Interconnect;
         const auto application = application_identity(mapping, *node, state.ir);
-        const auto [prior, inserted] = state.applications.emplace(
-            application, node->canonical_identity);
+        const auto [prior, inserted] = sequential
+            ? std::pair { state.applications.end(), true }
+            : state.applications.emplace(application, node->canonical_identity);
         if (!inserted) {
             const bool duplicate = prior->second == node->canonical_identity;
             diagnose(state.diagnostics,

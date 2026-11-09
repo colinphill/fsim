@@ -1,0 +1,5 @@
+#c formal vhpiportdeclk r size=1 actual vhpiconvfunck inv
+#c formal vhpiconvfunck inv size=- actual vhpiportdeclk d
+#c 5 ns sc=0 sd=0 u.r=1 u.s=1
+#c 15 ns sc=1 sd=1 u.r=0 u.s=0
+#c 25 ns sc=0 sd=0 u.r=1 u.s=1

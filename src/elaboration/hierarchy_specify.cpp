@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "hierarchy_builder_internal.hpp"
+#include "fsim/support/stack_growth.hpp"
+#include "fsim/support/active_set.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
 #include "fsim/frontend/systemverilog_scalar_folding.hpp"
 
@@ -241,8 +243,8 @@ namespace {
             return declaration
                     && declaration->systemverilog != nullptr
                     && declaration->systemverilog->initializer
-                ? resolve(
-                      *declaration->systemverilog->initializer, depth + 1U)
+                ? support::with_stack([&] { return resolve(
+                      *declaration->systemverilog->initializer, depth + 1U); })
                 : std::nullopt;
         };
         if (const auto identity = resolve(expression, 0U)) {
@@ -660,12 +662,13 @@ void HierarchyBuilder::validate_verilog_specify(
     const auto real_specparam_value = [&](const semantic::ExpressionId root)
         -> std::optional<double> {
         bool saw_real { };
+        support::ActiveSet<std::uint32_t> active_declarations;
         std::function<std::optional<double>(semantic::ExpressionId,
             std::size_t)> evaluate;
         evaluate = [&](const semantic::ExpressionId expression,
                        const std::size_t depth) -> std::optional<double> {
             const auto view = current_working().find_expression(expression);
-            if (depth > 64U || !view || view->systemverilog == nullptr) {
+            if (!view || view->systemverilog == nullptr) {
                 return std::nullopt;
             }
             const auto& item = *view->systemverilog;
@@ -712,24 +715,30 @@ void HierarchyBuilder::validate_verilog_specify(
                                         .spelling.ends_with("real")
                                 || declaration->systemverilog->type->target
                                         .spelling == "realtime")))) {
-                    return evaluate(
+                    // A specparam whose value names itself has no value.
+                    if (!active_declarations.enter(selected->value())) {
+                        return std::nullopt;
+                    }
+                    const support::ActiveSet<std::uint32_t>::Entry
+                        declaration_entry { active_declarations };
+                    return support::with_stack([&] { return evaluate(
                         *declaration->systemverilog->initializer,
-                        depth + 1U);
+                        depth + 1U); });
                 }
             }
             if (item.kind == semantic::sv::ExpressionKind::unary
                 && item.operands.size() == 1U
                 && (item.text == "-" || item.text == "+")) {
-                const auto operand = evaluate(item.operands.front(),
-                    depth + 1U);
+                const auto operand = support::with_stack([&] { return evaluate(item.operands.front(),
+                    depth + 1U); });
                 return operand && item.text == "-" ? -*operand : operand;
             }
             if (item.kind == semantic::sv::ExpressionKind::binary
                 && item.operands.size() == 2U
                 && (item.text == "+" || item.text == "-"
                     || item.text == "*" || item.text == "/")) {
-                const auto left = evaluate(item.operands[0], depth + 1U);
-                const auto right = evaluate(item.operands[1], depth + 1U);
+                const auto left = support::with_stack([&] { return evaluate(item.operands[0], depth + 1U); });
+                const auto right = support::with_stack([&] { return evaluate(item.operands[1], depth + 1U); });
                 if (!left || !right) {
                     return std::nullopt;
                 }
@@ -758,7 +767,7 @@ void HierarchyBuilder::validate_verilog_specify(
                                      const std::size_t depth)
         -> std::optional<std::int64_t> {
         const auto view = current_working().find_expression(expression);
-        if (depth > 64U || !view || view->systemverilog == nullptr) {
+        if (!view || view->systemverilog == nullptr) {
             return std::nullopt;
         }
         const auto& item = *view->systemverilog;
@@ -776,8 +785,8 @@ void HierarchyBuilder::validate_verilog_specify(
         } else if (item.kind == semantic::sv::ExpressionKind::unary
             && item.operands.size() == 1U
             && (item.text == "-" || item.text == "+")) {
-            const auto operand = bounded_specparam_integral(
-                item.operands.front(), depth + 1U);
+            const auto operand = support::with_stack([&] { return bounded_specparam_integral(
+                item.operands.front(), depth + 1U); });
             if (!operand) {
                 return std::nullopt;
             }
@@ -786,10 +795,10 @@ void HierarchyBuilder::validate_verilog_specify(
             && item.operands.size() == 2U
             && (item.text == "+" || item.text == "-" || item.text == "*"
                 || item.text == "/" || item.text == "%")) {
-            const auto left = bounded_specparam_integral(
-                item.operands[0], depth + 1U);
-            const auto right = bounded_specparam_integral(
-                item.operands[1], depth + 1U);
+            const auto left = support::with_stack([&] { return bounded_specparam_integral(
+                item.operands[0], depth + 1U); });
+            const auto right = support::with_stack([&] { return bounded_specparam_integral(
+                item.operands[1], depth + 1U); });
             if (!left || !right) {
                 return std::nullopt;
             }

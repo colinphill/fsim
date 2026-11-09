@@ -316,7 +316,13 @@ private:
 /// live slot.
 class PackedLogic4 {
 public:
-    explicit PackedLogic4(std::size_t width = 0,
+    // Not explicit, so an aggregate holding one is value-initializable with
+    // `{}` (Boost.PFR's field count relies on it in run_state_archive.hpp).
+    PackedLogic4()
+        : PackedLogic4(std::size_t { 0 })
+    {
+    }
+    explicit PackedLogic4(std::size_t width,
         Logic4 initial = Logic4::x);
     PackedLogic4(const PackedLogic4&);
     PackedLogic4(PackedLogic4&&) noexcept;

@@ -89,6 +89,10 @@ void Kernel::audit_run_state(std::vector<std::string>& messages) const
     // work. The same holds for the capacity buffers.
     FSIM_RS_IDLE("kernel.impl", conversion_queue_);
     busy(!conversion_queue_.empty(), "conversion queue");
+    // The FSIM_KERNEL_SVA_CHECK reference monitors live within one generated
+    // tick.
+    FSIM_RS_IDLE("kernel.impl", sva_check_refs_);
+    busy(!sva_check_refs_.empty(), "assertion check reference");
     FSIM_RS_IDLE("kernel.impl", pending_dissolves_);
     busy(!pending_dissolves_.empty(), "pending dissolve list");
     FSIM_RS_IDLE("kernel.impl", yield_wakes_);
@@ -288,6 +292,9 @@ void Kernel::run_state_io(RunStateArchive& ar)
         }
     }
 
+    if (ar.saving()) {
+        save_thread_registers();
+    }
     FSIM_RS_TABLE("kernel.impl", members_, ar, *this, [&](Member& member) {
         FSIM_RS_IO("kernel.member", root_thread, ar, member);
         FSIM_RS_IO("kernel.member", program_ended, ar, member);
@@ -445,6 +452,7 @@ void Kernel::run_state_io(RunStateArchive& ar)
     FSIM_RS_CUSTOM("kernel.timer", thread);
     FSIM_RS_CUSTOM("kernel.timer", epoch);
     FSIM_RS_CUSTOM("kernel.timer", net_delay);
+    FSIM_RS_CUSTOM("kernel.timer", projected);
     FSIM_RS_IO("kernel.impl", vhdl_timers_released_, ar, *this);
     FSIM_RS_CUSTOM("kernel.impl", hosted_timers_);
     queue_io(ar, hosted_timers_);
@@ -474,6 +482,10 @@ void Kernel::run_state_io(RunStateArchive& ar)
     FSIM_RS_CUSTOM("kernel.net_delay_site", offset);
     FSIM_RS_CUSTOM("kernel.net_delay_site", width);
     FSIM_RS_CUSTOM("kernel.net_delay_site", pending);
+
+    // Projected output waveforms of the members' drivers of kernel signals
+    // (IEEE 1076-2019 10.5.2.2, 14.7.2): the transactions not yet matured.
+    FSIM_RS_IO("kernel.impl", projected_sites_, ar, *this);
 
     FSIM_RS_IO("kernel.impl", stopped_, ar, *this);
     FSIM_RS_IO("kernel.impl", paused_thread_, ar, *this);
@@ -519,12 +531,20 @@ void Kernel::run_state_io(RunStateArchive& ar)
     static_cast<void>(kernel_version);
 
     if (ar.loading() && ar.ok()) {
+        restore_thread_registers();
         // The lookup from a net-delay operation to its site.
         net_delay_site_of_.clear();
         for (std::size_t index = 0U; index < net_delay_sites_.size(); ++index) {
             const auto& site = net_delay_sites_[index];
             net_delay_site_of_.emplace(
                 net_delay_site_key(site.member, site.pc, site.part),
+                static_cast<std::uint32_t>(index));
+        }
+        projected_site_of_.clear();
+        for (std::size_t index = 0U; index < projected_sites_.size(); ++index) {
+            const auto& site = projected_sites_[index];
+            projected_site_of_.emplace(
+                (std::uint64_t { site.member } << 32U) | site.slot,
                 static_cast<std::uint32_t>(index));
         }
         // Dissolve again, then put the saved gating state back.

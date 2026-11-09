@@ -378,8 +378,9 @@ static void show_rr(const vhpiCbDataT* data)
 }
 
 // Ten more sources of rr in the simulation phase, each a created process that
-// drives the three basic signals of the record: with the declared one, eleven
-// sources, more than the resolver programs built for a fixed driver count
+// drives the three basic signals of the record: ten sources (the architecture's
+// placeholder driver is no source until a program creates it, 20.4.2,
+// 14.7.3.1), more than the resolver programs built for a fixed driver count
 // serve (IEEE 1076-2019 23.6, 14.7.3.2). Each holds the default (1, "01")
 // until its transaction; source k then drives lo = k, and source 3 also
 // drives hi(1) = '1'.

@@ -3,6 +3,7 @@
 
 #include "fsim/runtime/uvm_resource.hpp"
 
+#include <limits>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -15,6 +16,8 @@
 #include <vector>
 
 namespace fsim::runtime {
+
+class RunStateArchive;
 
 using SystemVerilogUvmConfigWaiterToken = std::uint64_t;
 
@@ -64,7 +67,7 @@ struct SystemVerilogUvmConfigDbLimits {
   std::size_t max_context_bytes{16'384};
   std::size_t max_instance_pattern_bytes{16'384};
   std::size_t max_field_pattern_bytes{4'096};
-  std::size_t max_context_depth{999};
+  std::size_t max_context_depth{std::numeric_limits<std::size_t>::max()};
   std::size_t max_regex_states{16'384};
   std::size_t max_wake_callbacks_per_set{65'536};
   std::size_t max_report_bytes{16U * 1'024U * 1'024U};
@@ -78,6 +81,15 @@ struct SystemVerilogUvmConfigDbLimits {
 /// the matching value and precedence are fully published.
 class SystemVerilogUvmConfigDbService final {
  public:
+  /// Run-state save and restore of the entries and the trace (#188) and the
+  /// return to no entry. A waiter holds the embedder's callback, so
+  /// run_state_idle is false while one is registered.
+  void run_state_io(RunStateArchive& archive);
+  void reset_run_state();
+  [[nodiscard]] bool run_state_idle() const noexcept {
+    return waiters_.empty();
+  }
+
   using WaiterCallback = std::function<void(
       SystemVerilogUvmConfigWaiterToken,
       const SystemVerilogUvmConfigEntry&)>;

@@ -464,6 +464,15 @@ void Interpreter::Impl::run_sampled_read(
         storage.fail("sampled signal state is unavailable");
     }
     const auto& slot_value = sampled_values[operation.signal];
+    // A SystemVerilog reader sees a std_logic value through the Logic4
+    // mapping (IEEE 1800-2023 21.2.1.3): 'H' is 1, 'L' is 0, 'U', 'W' and '-'
+    // are x. The history keeps the nine codes ($stable compares them).
+    const auto reader_value = [&](const PackedLogic4& value) {
+        return value.is_logic9()
+                && storage.domain() == ProcessSchedulingDomain::systemverilog
+            ? coerce_value_kind(value, ValueKind::logic4)
+            : value;
+    };
     if (operation.kind == SignalReadKind::future
         || operation.kind == SignalReadKind::rising
         || operation.kind == SignalReadKind::falling
@@ -471,7 +480,7 @@ void Interpreter::Impl::run_sampled_read(
         || operation.kind == SignalReadKind::changing) {
         const auto& future = logical_signal_value(operation.signal);
         if (operation.kind == SignalReadKind::future) {
-            storage.write(operation.destination, future);
+            storage.write(operation.destination, reader_value(future));
             return;
         }
         const auto equal = future == slot_value;
@@ -489,7 +498,7 @@ void Interpreter::Impl::run_sampled_read(
         return;
     }
     if (operation.kind == SignalReadKind::sampled && !operation.clock) {
-        storage.write(operation.destination, slot_value);
+        storage.write(operation.destination, reader_value(slot_value));
         return;
     }
     if (operation.ticks == 0U) {
@@ -571,7 +580,7 @@ void Interpreter::Impl::run_sampled_read(
         ? sampled_defaults[operation.signal]
         : sampled_ring_value(ring, count - 1U);
     if (operation.kind == SignalReadKind::sampled) {
-        storage.write(operation.destination, current);
+        storage.write(operation.destination, reader_value(current));
         return;
     }
     const PackedLogic4 previous = count < 2U
@@ -600,7 +609,7 @@ void Interpreter::Impl::run_sampled_read(
             : !equal;
         result = PackedLogic4(1U, value ? Logic4::one : Logic4::zero);
     }
-    storage.write(operation.destination, result);
+    storage.write(operation.destination, reader_value(result));
 }
 
 } // namespace fsim::runtime::simir

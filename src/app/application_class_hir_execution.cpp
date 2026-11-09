@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_class_hir_execution.hpp"
 #include "fsim/support/index_distance.hpp"
+#include "fsim/support/stack_growth.hpp"
 #include "fsim/support/uvm_identity.hpp"
 #include "../elaboration/hir_output_conversion.hpp"
 
@@ -23,7 +24,6 @@
 namespace fsim::app::application_detail {
 namespace {
 
-constexpr std::size_t maximum_class_call_depth = 1024U;
 constexpr std::size_t maximum_literal_width = 16U * 1024U * 1024U;
 
 [[nodiscard]] std::optional<std::uint64_t> decimal(
@@ -346,7 +346,7 @@ static_class_property(
     };
     auto target = index_type.target;
     std::vector<semantic::TypeId> visited;
-    for (std::size_t depth = 0U; depth < 64U; ++depth) {
+    for (;;) {
         if (std::ranges::find(integral_names, target.spelling)
             != integral_names.end()) {
             return true;
@@ -369,7 +369,6 @@ static_class_property(
             return false;
         target = definition->base.target;
     }
-    return false;
 }
 
 // Points `slot` at `value` for one scope and restores it on exit.
@@ -1226,9 +1225,6 @@ SystemVerilogClassHirExecution::evaluate_string(
                     std::vector<semantic::DeclarationId>& active_constants,
                     const std::size_t depth)
                     -> std::optional<std::string> {
-                    if (depth >= 64U) {
-                        return std::nullopt;
-                    }
                     const auto* initializer = expression(expression_id);
                     if (initializer == nullptr) {
                         return std::nullopt;
@@ -1618,6 +1614,118 @@ SystemVerilogClassHirExecution::invoke_package_function(
     return result;
 }
 
+std::vector<runtime::SystemVerilogClassHandle>*
+SystemVerilogClassHirExecution::local_handle_queue(
+    const semantic::sv::Expression* const source,
+    const PackedEnvironment& environment)
+{
+    if (source == nullptr || source->kind != semantic::sv::ExpressionKind::name
+        || !source->referenced_name || !source->referenced_name->selected) {
+        return nullptr;
+    }
+    const auto found = local_handle_queues_.find({ &environment,
+        source->referenced_name->selected->value() });
+    return found == local_handle_queues_.end() ? nullptr : &found->second;
+}
+
+std::vector<runtime::SystemVerilogClassHandle>*
+SystemVerilogClassHirExecution::local_handle_queue(
+    const semantic::ExpressionId expression_id,
+    const PackedEnvironment& environment)
+{
+    return local_handle_queue(expression(expression_id), environment);
+}
+
+std::optional<runtime::PackedLogic4>
+SystemVerilogClassHirExecution::evaluate_root_container_call(
+    const semantic::sv::Expression& call,
+    const runtime::SystemVerilogClassHandle caller,
+    const runtime::SystemVerilogClassHandle receiver,
+    const std::string_view method_name,
+    PackedEnvironment& environment)
+{
+    using semantic::sv::ExpressionKind;
+    constexpr std::string_view property_prefix { "@sv-property:" };
+    const bool find_all = method_name == "find_all";
+    // Operand 0 is the receiver; find_all(comp_match, comps[, comp]) and
+    // get_children(children) (IEEE 1800.2-2020 13.2.4).
+    const std::size_t queue_position = find_all ? 2U : 1U;
+    if (call.operands.size() <= queue_position
+        || call.operands.size() > (find_all ? 4U : 2U)) {
+        throw std::invalid_argument {
+            "uvm_root method call has the wrong number of actuals"
+        };
+    }
+    std::string pattern;
+    runtime::SystemVerilogClassHandle start { };
+    if (find_all) {
+        StringEnvironment empty_strings;
+        auto& current_strings = strings_ != nullptr
+            ? *strings_ : empty_strings;
+        const auto text = evaluate_string(
+            call.operands[1U], current_strings, caller);
+        if (!text) {
+            throw std::invalid_argument {
+                "uvm_root::find_all pattern is not executable"
+            };
+        }
+        pattern = *text;
+        if (call.operands.size() == 4U) {
+            const auto from = evaluate_packed(
+                call.operands[3U], caller, environment, 64U);
+            if (!from || from->low_word().bval != 0U) {
+                throw std::invalid_argument {
+                    "uvm_root::find_all start component is not a handle"
+                };
+            }
+            start = from->low_word().aval;
+        }
+    }
+    const auto* target = expression(call.operands[queue_position]);
+    if (auto* local = local_handle_queue(target, environment)) {
+        // A queue declared in the method body (13.1.5: the `ref` queue
+        // takes the matches).
+        const auto components
+            = root_container_method_(receiver, method_name, pattern, start);
+        if (!components) {
+            return std::nullopt;
+        }
+        // The library appends (push_back) to the queue.
+        local->insert(local->end(), components->begin(), components->end());
+        return runtime::PackedLogic4::from_aval_bval(1U, 0U, 0U);
+    }
+    if (target == nullptr
+        || (target->kind != ExpressionKind::class_property
+            && !target->text.starts_with(property_prefix))
+        || !write_class_handle_queue_) {
+        throw std::invalid_argument {
+            "uvm_root::" + std::string { method_name }
+            + " on the native root writes a class property queue or a "
+              "queue of class handles declared in the method; an array or "
+              "a queue of another form is not supported"
+        };
+    }
+    auto owner = caller;
+    if (!target->operands.empty()) {
+        const auto holder = evaluate_packed(
+            target->operands.front(), caller, environment);
+        if (!holder || holder->low_word().bval != 0U) {
+            throw std::invalid_argument {
+                "class HIR queue property receiver is not a handle"
+            };
+        }
+        owner = holder->low_word().aval;
+    }
+    const auto components
+        = root_container_method_(receiver, method_name, pattern, start);
+    if (!components) {
+        return std::nullopt;
+    }
+    write_class_handle_queue_(
+        owner, marker_payload(*target, property_prefix), *components);
+    return runtime::PackedLogic4::from_aval_bval(1U, 0U, 0U);
+}
+
 std::optional<runtime::PackedLogic4>
 SystemVerilogClassHirExecution::evaluate_class_array_query(
     const semantic::ExpressionId array_id,
@@ -1691,7 +1799,7 @@ SystemVerilogClassHirExecution::evaluate_class_array_query(
                 -> std::optional<ResolvedQueryType> {
                 auto current = type;
                 std::vector<semantic::TypeId> alias_path;
-                for (std::size_t depth { }; depth < 64U; ++depth) {
+                for (;;) {
                     if (!current.target.target.valid()) {
                         return ResolvedQueryType { nullptr,
                             std::move(current) };
@@ -1710,14 +1818,11 @@ SystemVerilogClassHirExecution::evaluate_class_array_query(
                     }
                     current = found->base;
                 }
-                return std::nullopt;
             };
             const auto append_type_dimensions = [&](auto&& self,
                                                         const semantic::sv::TypeReference& type,
                                                         const bool captured_outer,
                                                         const std::size_t depth) -> bool {
-                if (depth >= 64U)
-                    return false;
                 const auto resolved = resolve_query_type(type);
                 if (!resolved)
                     return false;
@@ -2960,7 +3065,7 @@ SystemVerilogClassHirExecution::call_aggregate_definition(
 {
     auto current = type;
     std::vector<semantic::TypeId> visited;
-    for (std::size_t depth = 0U; depth < 64U; ++depth) {
+    for (;;) {
         if (!current.target.target.valid()
             || std::ranges::find(visited, current.target.target)
                 != visited.end()) {
@@ -2974,7 +3079,6 @@ SystemVerilogClassHirExecution::call_aggregate_definition(
             return found;
         current = found->base;
     }
-    return nullptr;
 }
 
 std::optional<semantic::sv::TypeReference>
@@ -3055,7 +3159,7 @@ bool SystemVerilogClassHirExecution::scalar_call_type_compatible(
                              semantic::sv::TypeReference type)
         -> std::optional<semantic::sv::TypeReference> {
         std::vector<semantic::TypeId> visited;
-        for (std::size_t depth = 0U; depth < 64U; ++depth) {
+        for (;;) {
             if (!type.target.target.valid())
                 return type;
             const auto* definition = type_definition(type.target.target);
@@ -3068,7 +3172,6 @@ bool SystemVerilogClassHirExecution::scalar_call_type_compatible(
             visited.push_back(definition->id);
             type = retain_declarator(definition->base, type);
         }
-        return std::nullopt;
     };
     const auto actual_type = unalias(actual);
     const auto formal_type = unalias(formal);
@@ -3213,8 +3316,6 @@ void SystemVerilogClassHirExecution::validate_typed_actual(
                                          const semantic::sv::TypeReference& source,
                                          const semantic::sv::TypeReference& target,
                                          const std::size_t depth) -> bool {
-            if (depth >= 64U)
-                return false;
             const auto source_form = array_form(source);
             const auto target_form = array_form(target);
             if (source_form || target_form) {
@@ -3399,7 +3500,7 @@ SystemVerilogClassHirExecution::evaluate_typed_actual(
                                  const semantic::sv::TypeReference& type) {
         auto current = type;
         std::vector<semantic::TypeId> visited;
-        for (std::size_t depth { }; depth < 64U; ++depth) {
+        for (;;) {
             using Scalar = runtime::SystemVerilogScalarKind;
             if (const auto kind = frontend::systemverilog_scalar_kind(
                     current.target.spelling);
@@ -3419,7 +3520,6 @@ SystemVerilogClassHirExecution::evaluate_typed_actual(
             }
             current = definition->base;
         }
-        return runtime::SystemVerilogScalarKind::None;
     };
     const auto effective_scalar_type = [this](
         const semantic::sv::TypeReference& type)
@@ -3444,7 +3544,7 @@ SystemVerilogClassHirExecution::evaluate_typed_actual(
         };
         auto current = type;
         std::vector<semantic::TypeId> visited;
-        for (std::size_t depth { }; depth < 64U; ++depth) {
+        for (;;) {
             if (!current.class_identity.empty()
                 || current.value_form == TypeForm::class_handle) {
                 return current;
@@ -3463,7 +3563,6 @@ SystemVerilogClassHirExecution::evaluate_typed_actual(
                 return current;
             current = retain_declarator(definition->base, current);
         }
-        return std::nullopt;
     };
     std::function<bool(const runtime::simir::ContainerType&,
         const semantic::sv::TypeReference&, std::size_t)>
@@ -3475,8 +3574,6 @@ SystemVerilogClassHirExecution::evaluate_typed_actual(
         const runtime::simir::ContainerType& profile,
         const semantic::sv::TypeReference& type,
         const std::size_t depth) {
-        if (depth >= 64U)
-            return false;
         const auto form = array_form(type);
         if (!form || *form == TypeForm::associative_array)
             return false;
@@ -3498,8 +3595,6 @@ SystemVerilogClassHirExecution::evaluate_typed_actual(
         const semantic::sv::TypeReference& type,
         const std::size_t depth) {
         using ElementKind = runtime::simir::ContainerElementKind;
-        if (depth >= 64U)
-            return false;
         if (array_form(type)) {
             return profile.element_kind == ElementKind::Container
                 && profile.element_types.size() == 1U
@@ -3597,8 +3692,6 @@ SystemVerilogClassHirExecution::evaluate_typed_actual(
         const semantic::sv::TypeReference& type,
         const std::size_t depth) -> std::optional<CallValue> {
         using ElementKind = runtime::simir::ContainerElementKind;
-        if (depth >= 64U)
-            return std::nullopt;
         if (const auto form = array_form(type)) {
             if (*form == TypeForm::associative_array
                 || !profile_matches_container(value.type, type, depth)
@@ -4267,6 +4360,21 @@ SystemVerilogClassHirExecution::evaluate_packed(
         }
         return apply_context(*converted, target_signed);
     }
+    if (value->kind == ExpressionKind::index && value->operands.size() == 2U) {
+        if (const auto* local = local_handle_queue(
+                value->operands.front(), environment)) {
+            const auto position = evaluate_packed(
+                value->operands.back(), handle, environment);
+            const auto known = position ? position->known_signed_value()
+                                        : std::nullopt;
+            if (!known || *known < 0
+                || static_cast<std::uint64_t>(*known) >= local->size()) {
+                return std::nullopt;
+            }
+            return runtime::PackedLogic4::from_aval_bval(
+                64U, (*local)[static_cast<std::size_t>(*known)], 0U);
+        }
+    }
     if (value->kind == ExpressionKind::index) {
         const auto indexed = evaluate_class_handle_index(
             *value, handle, environment);
@@ -4396,17 +4504,19 @@ SystemVerilogClassHirExecution::evaluate_packed(
                 } else {
                     if (constant == nullptr || !constant->initializer
                         || *constant->initializer == id
-                        || constant_depth_ >= 64U) {
+                        || constant_initializer_active(
+                            *constant->initializer)) {
                         return std::nullopt;
                     }
-                    ++constant_depth_;
+                    active_constant_initializers_.push_back(
+                        *constant->initializer);
                     const auto result = evaluate_packed(
                         *constant->initializer, handle, environment,
                         constant->type
                             ? std::optional<std::size_t> {
                                   width(*constant->type, 0U) }
                             : std::nullopt);
-                    --constant_depth_;
+                    active_constant_initializers_.pop_back();
                     return result
                         ? apply_context(*result, selected_signed, true)
                         : std::nullopt;
@@ -4470,22 +4580,22 @@ SystemVerilogClassHirExecution::evaluate_packed(
                 || constant->form == semantic::sv::DeclarationForm::parameter
                 || constant->form
                     == semantic::sv::DeclarationForm::enumeration_literal)
-            && constant_depth_ < 64U) {
-            ++constant_depth_;
+            && !constant_initializer_active(*constant->initializer)) {
+            active_constant_initializers_.push_back(*constant->initializer);
             auto result = evaluate_packed(
                 *constant->initializer, handle, environment,
                 constant->type
                     ? std::optional<std::size_t> {
                           width(*constant->type, 0U) }
                     : std::nullopt);
-            --constant_depth_;
+            active_constant_initializers_.pop_back();
             return result ? apply_context(*result, selected_signed, true)
                           : std::nullopt;
         }
         // A hierarchical instance reference such as `test.A` must belong to
         // this object's exact owning module occurrence. A same-named module
         // definition elsewhere in the design is not enough.
-        if (constant_depth_ < 64U) {
+        {
             std::optional<semantic::DeclarationId>
                 qualified_literal_declaration;
             std::string_view literal_name { value->text };
@@ -4589,10 +4699,14 @@ SystemVerilogClassHirExecution::evaluate_packed(
                 for (const auto& literal : definition.enumeration_literals) {
                     std::optional<runtime::PackedLogic4> current;
                     if (literal.value) {
-                        ++constant_depth_;
-                        PackedEnvironment none;
-                        current = evaluate_packed(*literal.value, handle, none);
-                        --constant_depth_;
+                        if (!constant_initializer_active(*literal.value)) {
+                            active_constant_initializers_.push_back(
+                                *literal.value);
+                            PackedEnvironment none;
+                            current = evaluate_packed(
+                                *literal.value, handle, none);
+                            active_constant_initializers_.pop_back();
+                        }
                     } else if (!previous) {
                         current = runtime::PackedLogic4::from_aval_bval(
                             64U, 0U, 0U);
@@ -4718,6 +4832,19 @@ SystemVerilogClassHirExecution::evaluate_packed(
             return std::nullopt;
         }
         const auto receiver_handle = receiver->low_word().aval;
+        if (is_native_root_ && root_container_method_
+            && is_native_root_(receiver_handle)) {
+            const auto separator = identity.rfind("::");
+            const auto method_name = separator == std::string_view::npos
+                ? identity
+                : identity.substr(separator + 2U);
+            if (method_name == "find_all" || method_name == "get_children") {
+                if (auto written = evaluate_root_container_call(*value, handle,
+                        receiver_handle, method_name, environment)) {
+                    return written;
+                }
+            }
+        }
         const auto* selected_method = method(
             receiver_handle, identity, virtual_dispatch);
         const auto actual_count = value->operands.size() - 1U;
@@ -4948,6 +5075,15 @@ SystemVerilogClassHirExecution::evaluate_packed(
             }
             return std::nullopt;
         }
+        // size() of a local queue of class handles (IEEE 1800-2017 7.10.2.1).
+        if (!declaration_id && method_name == "size"
+            && value->operands.size() == 1U) {
+            if (const auto* local = local_handle_queue(
+                    value->operands.front(), environment)) {
+                return apply_context(runtime::PackedLogic4::from_aval_bval(
+                    32U, local->size(), 0U), true, true);
+            }
+        }
         // size() and reductions without a with-clause of an object's array
         // of values (IEEE 1800-2017 7.5.1, 7.12.3).
         if (!declaration_id && separator != std::string_view::npos
@@ -5090,8 +5226,6 @@ SystemVerilogClassHirExecution::evaluate_packed(
                                      const semantic::ExpressionId expression_id,
                                      const std::size_t depth)
         -> std::optional<semantic::sv::TypeReference> {
-        if (depth >= 64U)
-            return std::nullopt;
         const auto* selected_expression = expression(expression_id);
         if (selected_expression == nullptr)
             return std::nullopt;
@@ -5253,8 +5387,6 @@ SystemVerilogClassHirExecution::evaluate_packed(
                                       const semantic::ExpressionId expression_id,
                                       const std::size_t depth)
         -> std::optional<ExpressionShape> {
-        if (depth >= 64U)
-            return std::nullopt;
         const auto* current = expression(expression_id);
         if (current == nullptr)
             return std::nullopt;
@@ -5740,8 +5872,6 @@ SystemVerilogClassHirExecution::evaluate_packed(
                                          const semantic::ExpressionId operand_id,
                                          const std::size_t depth)
             -> std::optional<semantic::sv::TypeReference> {
-            if (depth >= 64U)
-                return std::nullopt;
             const auto* operand = expression(operand_id);
             if (operand == nullptr)
                 return std::nullopt;
@@ -5819,8 +5949,6 @@ SystemVerilogClassHirExecution::evaluate_packed(
                                            const semantic::ExpressionId operand_id,
                                            const std::size_t depth)
             -> std::optional<bool> {
-            if (depth >= 64U)
-                return std::nullopt;
             const auto* operand = expression(operand_id);
             if (operand == nullptr)
                 return std::nullopt;
@@ -6178,8 +6306,6 @@ SystemVerilogClassHirExecution::execute(
                                       const semantic::ExpressionId expression_id,
                                       const std::size_t depth)
             -> std::optional<semantic::sv::TypeReference> {
-            if (depth >= 64U)
-                return std::nullopt;
             const auto* value = expression(expression_id);
             if (value == nullptr)
                 return std::nullopt;
@@ -6822,6 +6948,24 @@ SystemVerilogClassHirExecution::execute(
                 const auto* local = declaration(declaration_id);
                 if (local == nullptr || !local->type)
                     continue;
+                if ((local->type->container_form == semantic::sv::TypeForm::queue
+                        || local->type->container_form
+                            == semantic::sv::TypeForm::dynamic_array)
+                    && !local->type->class_identity.empty()
+                    && !semantic::sv::nested_class_handle_container(
+                        *local->type)) {
+                    // A queue or dynamic array of class handles starts
+                    // empty on each execution of its declaration (7.10).
+                    if (local->initializer) {
+                        throw std::invalid_argument {
+                            "class HIR local handle queue initializer is not "
+                            "executable"
+                        };
+                    }
+                    local_handle_queues_[{ &environment,
+                        declaration_id.value() }].clear();
+                    continue;
+                }
                 if (is_string(*local->type)) {
                     const auto value = local->initializer
                         ? evaluate_string(
@@ -7178,6 +7322,40 @@ SystemVerilogClassHirExecution::execute(
                     throw std::invalid_argument {
                         "class HIR foreach collection is absent"
                     };
+                }
+                if (const auto* local = local_handle_queue(
+                        loop_condition->operands.front(), environment)) {
+                    // foreach over a local queue of class handles (12.7.3):
+                    // the index runs over the elements present at the
+                    // start.
+                    auto name = item->loop_variable;
+                    if (name.empty() && loop_condition->operands.size() > 1U) {
+                        const auto* index_expression = expression(
+                            loop_condition->operands[1U]);
+                        if (index_expression != nullptr)
+                            name = index_expression->text;
+                    }
+                    if (name.empty()) {
+                        throw std::invalid_argument {
+                            "class HIR foreach index variable is absent"
+                        };
+                    }
+                    const ScopedMapEntry guard { environment, name };
+                    const auto count = local->size();
+                    for (std::size_t position = 0U; position < count;
+                        ++position) {
+                        environment.insert_or_assign(name,
+                            runtime::PackedLogic4::from_aval_bval(
+                                32U, static_cast<std::uint32_t>(position), 0U));
+                        auto result = execute(item->statements, handle,
+                            environment, string_environment, constructor,
+                            return_context_width);
+                        if (result.returned)
+                            return result;
+                        if (result.broke)
+                            break;
+                    }
+                    continue;
                 }
                 auto collection = evaluate_bound_call_value(
                     loop_condition->operands.front(), handle, environment);
@@ -8094,6 +8272,23 @@ runtime::PackedLogic4 SystemVerilogClassHirExecution::invoke_function_impl(
     const std::span<const std::optional<VariableReference>> actual_references,
     std::vector<std::size_t>* const actual_formals_output)
 {
+    return support::with_stack([&] {
+        return invoke_function_body(method, handle, actuals, string_actuals,
+            actual_names_view, actual_directions_view, actual_references,
+            actual_formals_output);
+    });
+}
+
+runtime::PackedLogic4 SystemVerilogClassHirExecution::invoke_function_body(
+    const semantic::sv::SpecializedClassMethod& method,
+    const runtime::SystemVerilogClassHandle handle,
+    std::vector<runtime::PackedLogic4>& actuals,
+    std::vector<std::string>& string_actuals,
+    const std::span<const std::string> actual_names_view,
+    const std::span<const std::uint8_t> actual_directions_view,
+    const std::span<const std::optional<VariableReference>> actual_references,
+    std::vector<std::size_t>* const actual_formals_output)
+{
     // A string result travels in a trailing hidden string actual, which the
     // caller copies back like an output string argument.
     constexpr std::string_view result_name { "@result-string" };
@@ -8117,13 +8312,6 @@ runtime::PackedLogic4 SystemVerilogClassHirExecution::invoke_function_impl(
     const ScopedValue string_return_guard { string_return_,
         method.return_type && is_string(*method.return_type) };
 
-    if (depth_ >= maximum_class_call_depth)
-        throw std::overflow_error { "SystemVerilog HIR class call depth exhausted" };
-    ++depth_;
-    struct Guard {
-        std::size_t& depth;
-        ~Guard() { --depth; }
-    } guard { depth_ };
     if (method.kind != semantic::sv::ClassMethodKind::function) {
         throw std::invalid_argument {
             "HIR instance function invocation selected an incompatible method"

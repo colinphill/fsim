@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/uvm_report.hpp"
 
+#include "run_state_archive.hpp"
+
 #include <algorithm>
 #include <array>
 #include <limits>
@@ -596,6 +598,82 @@ std::int32_t SystemVerilogUvmReportService::effective_verbosity(
 std::string SystemVerilogUvmReportService::object_name(
     const SystemVerilogClassHandle object) const {
   return object == 0 ? std::string{} : objects_->full_name(object);
+}
+
+void SystemVerilogUvmReportService::run_state_io(RunStateArchive& archive) {
+  archive.io(server_);
+  // The hooks of a handler are the embedder's callbacks (see run_state_idle).
+  const auto handler_io = [&archive](HandlerState& handler) {
+    archive.io(handler.verbosity);
+    archive.io(handler.severity_actions);
+    archive.io(handler.severity_files);
+    archive.io(handler.severity_overrides);
+    archive.io(handler.id_verbosities);
+    archive.io(handler.severity_id_verbosities);
+    archive.io(handler.id_actions);
+    archive.io(handler.severity_id_actions);
+    archive.io(handler.default_file);
+    archive.io(handler.id_files);
+    archive.io(handler.severity_id_files);
+    archive.io(handler.severity_id_overrides);
+  };
+  const auto size = archive.count(handlers_.size());
+  if (archive.saving()) {
+    for (auto& [object, handler] : handlers_) {
+      SystemVerilogClassHandle key = object;
+      archive.io(key);
+      handler_io(handler);
+    }
+  } else {
+    handlers_.clear();
+    for (std::uint64_t index = 0; index < size && archive.ok(); ++index) {
+      SystemVerilogClassHandle key{};
+      HandlerState handler;
+      archive.io(key);
+      handler_io(handler);
+      if (archive.ok() && !handlers_.emplace(key, std::move(handler)).second) {
+        archive.fail("duplicate UVM report handler");
+      }
+    }
+  }
+  archive.io(default_verbosity_);
+  archive.io(setting_count_);
+  archive.io(next_sequence_);
+  archive.io(routed_count_);
+  archive.io(filtered_count_);
+  archive.io(route_failures_);
+  archive.io(hook_filtered_count_);
+  archive.io(hook_failures_);
+  archive.io(action_filtered_count_);
+  archive.io(next_catcher_);
+  archive.io(caught_counts_);
+  archive.io(demoted_counts_);
+  archive.io(catcher_invocations_);
+  archive.io(catcher_failures_);
+  archive.io(catcher_reentry_bypasses_);
+}
+
+void SystemVerilogUvmReportService::reset_run_state() {
+  server_.reset_run_state();
+  handlers_.clear();
+  catchers_.clear();
+  catcher_order_.clear();
+  default_verbosity_ = 200;
+  setting_count_ = 0;
+  next_sequence_ = 1;
+  routed_count_ = 0;
+  filtered_count_ = 0;
+  route_failures_ = 0;
+  hook_filtered_count_ = 0;
+  hook_failures_ = 0;
+  action_filtered_count_ = 0;
+  next_catcher_ = 1;
+  caught_counts_.fill(0);
+  demoted_counts_.fill(0);
+  catcher_invocations_ = 0;
+  catcher_failures_ = 0;
+  catcher_reentry_bypasses_ = 0;
+  in_catcher_ = false;
 }
 
 }  // namespace fsim::runtime

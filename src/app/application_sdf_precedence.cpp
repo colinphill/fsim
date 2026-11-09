@@ -293,9 +293,22 @@ namespace {
                     { });
                 return false;
             }
-            for (const auto& step : delays.application->steps()) {
+            // A target the file annotates more than once (an INTERCONNECT
+            // repeated, a DEVICE and an IOPATH of one path) has a step for
+            // each occurrence, in order; the last step holds the value in
+            // effect, so only it is recorded (a value index occurs once).
+            const auto steps = delays.application->steps();
+            for (std::size_t index = 0U; index < steps.size(); ++index) {
+                const auto& step = steps[index];
                 annotated_targets.insert(step.target_identity);
-                record_delay_step(step, state);
+                const bool superseded = std::any_of(
+                    steps.begin() + static_cast<std::ptrdiff_t>(index) + 1,
+                    steps.end(), [&](const SdfAppliedDelayModeStep& later) {
+                        return later.target_kind == step.target_kind
+                            && later.target_identity == step.target_identity;
+                    });
+                if (!superseded)
+                    record_delay_step(step, state);
             }
         }
         for (const auto& path : elaborated.verilog_specify_paths()) {

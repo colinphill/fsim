@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // PLI 1.0 attributes (IEEE 1364-2001 23.10-23.12): specparams and parameters
-// named as attributes of nets, and an intermodule path between ports.
+// named as attributes of nets, and an intermodule path between ports (23.50).
 `timescale 1ns / 1ns
 module leaf(input a, output y);
   assign y = a;

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/uvm_factory.hpp"
+
+#include "run_state_archive.hpp"
 #include "fsim/support/glob_match.hpp"
 
 #include <algorithm>
@@ -483,6 +485,28 @@ std::string SystemVerilogUvmFactoryService::report(const bool all_types) const {
     append(" uses=" + std::to_string(entry.uses) + "\n");
   }
   return result;
+}
+
+void SystemVerilogUvmFactoryService::run_state_io(RunStateArchive& archive) {
+  // The registry the overrides name is the design's; the trace switch and
+  // callback are the embedder's.
+  archive.io(type_overrides_);
+  archive.io(instance_overrides_);
+  archive.io(next_registration_order_);
+  archive.io(trace_records_);
+  archive.io(next_trace_sequence_);
+  archive.io(dropped_trace_records_);
+  archive.io(trace_callback_failures_);
+}
+
+void SystemVerilogUvmFactoryService::reset_run_state() {
+  type_overrides_.clear();
+  instance_overrides_.clear();
+  next_registration_order_ = 0;
+  trace_records_.clear();
+  next_trace_sequence_ = 0;
+  dropped_trace_records_ = 0;
+  trace_callback_failures_ = 0;
 }
 
 }

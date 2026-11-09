@@ -1767,10 +1767,14 @@ PackedLogic4 Interpreter::Impl::run_vhdl_resolver(const SignalId signal_id)
     const auto width = signal.initial_value.width();
     // Disconnected drivers of a guarded signal do not take part (IEEE
     // 1076-2008 14.7.3.2).
+    // A dormant driver (a foreign architecture's placeholder before a
+    // program created the driver, 20.4.2) is no source either (14.7.3.1).
     std::vector<ProcessId> connected;
     connected.reserve(resolver.drivers.size());
     for (const auto driver : resolver.drivers) {
-        if (!vhdl_disconnected_drivers.contains({ signal_id, driver })) {
+        if (!vhdl_disconnected_drivers.contains({ signal_id, driver })
+            && (dormant_driver_regions.empty()
+                || !dormant_driver_regions.contains({ driver, signal_id }))) {
             connected.push_back(driver);
         }
     }
@@ -1791,9 +1795,11 @@ PackedLogic4 Interpreter::Impl::run_vhdl_resolver(const SignalId signal_id)
     auto program_output = resolver.output;
     bool dynamic_count { };
     if (count != resolver.drivers.size()) {
-        // A register keeps its value while every driver is disconnected.
+        // A register keeps its value while every driver is disconnected,
+        // and a signal with no source (its drivers dormant) its default;
+        // only a bus calls the function with a null array (14.7.3.2).
         if (count == 0U
-            && (resolver.guarded_kind == 2U
+            && (resolver.guarded_kind != 1U
                 || (!resolver.variants.empty()
                     && resolver.variants.front().process
                         == std::numeric_limits<ProcessId>::max()))) {
@@ -1811,8 +1817,11 @@ PackedLogic4 Interpreter::Impl::run_vhdl_resolver(const SignalId signal_id)
             // More created drivers than the fixed programs serve: the last
             // program takes the count at run time (VhdlResolverVariant).
             variant = resolver.dynamic_variant();
-            dynamic_count = variant != nullptr;
         }
+        // The program at the dynamic entry takes the count whichever way it
+        // was chosen: a count equal to its index selects it directly.
+        dynamic_count = variant != nullptr
+            && variant == resolver.dynamic_variant();
         if (variant == nullptr) {
             throw std::invalid_argument {
                 "VHDL resolved signal has no resolver for its connected "

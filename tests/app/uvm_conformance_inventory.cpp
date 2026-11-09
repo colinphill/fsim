@@ -54,7 +54,29 @@ void require_class(const fsim::app::BuiltProject &project,
       [&](const auto &specialization) {
         return specialization.declaration_identity.ends_with(suffix);
       });
-  if (found == project.compiled_systemverilog_class_specializations.end()) {
+  if (found != project.compiled_systemverilog_class_specializations.end())
+    return;
+  // A governed name may be a typedef of a specialization (uvm_event_pool is
+  // uvm_object_string_pool#(uvm_event#(uvm_object)), IEEE 1800.2-2020
+  // 10.4.2); the specialization it denotes is then the retained class.
+  const auto denoted = [&](const auto &declaration) {
+    if (declaration.form !=
+            fsim::semantic::sv::DeclarationForm::typedef_declaration ||
+        declaration.name != class_name || !declaration.type ||
+        declaration.type->class_identity.empty())
+      return false;
+    const auto &type = *declaration.type;
+    return std::ranges::any_of(
+        project.compiled_systemverilog_class_specializations,
+        [&](const auto &specialization) {
+          return specialization.declaration_identity == type.class_identity &&
+                 (type.class_specialization.empty() ||
+                  specialization.specialization_identity ==
+                      type.class_specialization);
+        });
+  };
+  if (!std::ranges::any_of(project.systemverilog_hir.declarations(),
+                           denoted)) {
     fail("supported family " + std::string{family} +
          " is missing retained class " + std::string{class_name});
   }

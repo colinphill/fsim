@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaboration_vhdl_configuration_hir.hpp"
+#include "fsim/support/stack_growth.hpp"
+#include "fsim/support/active_set.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -452,10 +454,9 @@ std::optional<std::int64_t> static_range_bound(
             if (type->vhdl->scalar_range) {
                 range = &*type->vhdl->scalar_range;
             } else if (type->vhdl->form
-                    == semantic::vhdl::TypeForm::subtype
-                && depth < 16U) {
-                return static_range_bound(
-                    compiled, type->vhdl->base, attribute, depth + 1U);
+                    == semantic::vhdl::TypeForm::subtype) {
+                return support::with_stack([&] { return static_range_bound(
+                    compiled, type->vhdl->base, attribute, depth + 1U); });
             }
         }
     }
@@ -468,7 +469,7 @@ std::optional<std::int64_t> static_range_bound(
         if (value) {
             return value;
         }
-        return expression ? static_integer(compiled, *expression, depth + 1U)
+        return expression ? support::with_stack([&] { return static_integer(compiled, *expression, depth + 1U); })
                           : std::nullopt;
     };
     const auto left = bound(range->left, range->left_expression);
@@ -497,7 +498,7 @@ std::optional<std::int64_t> static_integer(
     const std::size_t depth)
 {
     const auto* expression = expression_for(compiled, id);
-    if (expression == nullptr || depth > 32U) {
+    if (expression == nullptr) {
         return std::nullopt;
     }
     using Kind = semantic::vhdl::ExpressionKind;
@@ -516,7 +517,14 @@ std::optional<std::int64_t> static_integer(
             || !declaration->initializer) {
             return std::nullopt;
         }
-        return static_integer(compiled, *declaration->initializer, depth + 1U);
+        // A constant whose initializer names it again has no value.
+        thread_local support::ActiveSet<decltype(declaration)> active;
+        if (!active.enter(declaration)) {
+            return std::nullopt;
+        }
+        const support::ActiveSet<decltype(declaration)>::Entry entry {
+            active };
+        return support::with_stack([&] { return static_integer(compiled, *declaration->initializer, depth + 1U); });
     }
     if (expression->kind == Kind::call && expression->operands.size() == 1U
         && (semantic::vhdl::is_scalar_bound_attribute(expression->text))) {
@@ -528,6 +536,13 @@ std::optional<std::int64_t> static_integer(
         if (declaration == nullptr) {
             return std::nullopt;
         }
+        // A range bound that is its own object's attribute has no value.
+        thread_local support::ActiveSet<decltype(declaration)> bound_active;
+        if (!bound_active.enter(declaration)) {
+            return std::nullopt;
+        }
+        const support::ActiveSet<decltype(declaration)>::Entry bound_entry {
+            bound_active };
         if (declaration->subtype) {
             return static_range_bound(
                 compiled, *declaration->subtype, expression->text, depth);
@@ -544,10 +559,10 @@ std::optional<std::int64_t> static_integer(
     if (expression->kind == Kind::binary
         && expression->operands.size() == 2U
         && (expression->text == "+" || expression->text == "-")) {
-        const auto left = static_integer(
-            compiled, expression->operands[0], depth + 1U);
-        const auto right = static_integer(
-            compiled, expression->operands[1], depth + 1U);
+        const auto left = support::with_stack([&] { return static_integer(
+            compiled, expression->operands[0], depth + 1U); });
+        const auto right = support::with_stack([&] { return static_integer(
+            compiled, expression->operands[1], depth + 1U); });
         std::int64_t result { };
         if (!left || !right
             || (expression->text == "+"
@@ -559,8 +574,8 @@ std::optional<std::int64_t> static_integer(
     }
     if (expression->kind == Kind::unary
         && expression->operands.size() == 1U) {
-        const auto operand = static_integer(
-            compiled, expression->operands.front(), depth + 1U);
+        const auto operand = support::with_stack([&] { return static_integer(
+            compiled, expression->operands.front(), depth + 1U); });
         if (!operand) {
             return std::nullopt;
         }

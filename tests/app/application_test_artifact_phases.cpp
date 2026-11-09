@@ -33,12 +33,12 @@ void ApplicationTestFixture::test_artifact_phase_semantics()
     const ScopedCurrentDirectory source_root { directory / "work" };
     static_assert(app::kRuntimeStateSchema == 107);
     static_assert(app::kSemanticStateSchema == 5);
-    static_assert(app::kDesignIrStateSchema == 6);
+    static_assert(app::kDesignIrStateSchema == 8);
     static_assert(app::kCompiledHirBundleSchema == 3);
-    static_assert(app::kSystemVerilogConstraintHirStateSchema == 22);
+    static_assert(app::kSystemVerilogConstraintHirStateSchema == 24);
     static_assert(app::kSystemVerilogCoverageStateSchema == 7);
     static_assert(app::kSystemVerilogUvmStateSchema == 3);
-    static_assert(app::kVhdlHirStateSchema == 11);
+    static_assert(app::kVhdlHirStateSchema == 13);
     const auto copy_artifact_tree = [](
                                         const std::filesystem::path& source_root,
                                         const std::filesystem::path& destination) {
@@ -588,7 +588,7 @@ end architecture;
         [](const auto& diagnostic) {
             return diagnostic.code == "FSIM-ART-0013"
                 && diagnostic.message.find(
-                       "found schema 5; required schema 6")
+                       "found schema 7; required schema 8")
                     != std::string::npos
                 && diagnostic.message.find("regenerate .fsimdesign")
                     != std::string::npos;
@@ -603,7 +603,7 @@ end architecture;
         [](const auto& diagnostic) {
             return diagnostic.code == "FSIM-ART-0013"
                 && diagnostic.message.find(
-                       "found schema 3; required schema 6")
+                       "found schema 3; required schema 8")
                     != std::string::npos
                 && diagnostic.message.find("regenerate .fsimdesign")
                     != std::string::npos;

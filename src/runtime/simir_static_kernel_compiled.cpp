@@ -36,7 +36,7 @@ namespace kw = kernel_word;
 
 namespace {
 
-constexpr std::string_view bodies_magic { "fsim-static-kernel-bodies-v10" };
+constexpr std::string_view bodies_magic { "fsim-static-kernel-bodies-v11" };
 
 } // namespace
 
@@ -122,14 +122,10 @@ void Interpreter::Impl::StaticKernel::compile_members()
             not_compiled_reason_[index] = "once";
             continue;
         }
-        // VHDL behavioral threads (IEEE 1076-2019 11.3) run on the
-        // interpreter tier: neither specialization nor the compiled
-        // behavioral bodies know VHDL waits, timeouts or delta commits.
-        if (members_[index].kind == StaticKernelMemberKind::behavioral
-            && members_[index].vhdl) {
-            not_compiled_reason_[index] = "vhdl_behavioral";
-            continue;
-        }
+        // VHDL behavioral threads (IEEE 1076-2019 11.3) compile like
+        // SystemVerilog ones; compile_once carries the design note that maps
+        // each VHDL construct to the kernel's machinery. They are not
+        // specialized (specialize_member leaves a behavioral member alone).
         // SystemVerilog members with nine-valued registers (a member reading
         // a VHDL-driven net) compile like VHDL ones: the words hold the
         // four-state value of each element and 'U' and weak masks follow
@@ -321,8 +317,9 @@ void Interpreter::Impl::StaticKernel::compile_members()
             }
             if (members_[index].compiled) {
                 // compile() admits frames only when they are no-ops.
-                members_[index].frames_elided = members_[index].vhdl
-                    || members_[index].kind == StaticKernelMemberKind::behavioral;
+                members_[index].frames_elided = (members_[index].vhdl
+                    || members_[index].kind == StaticKernelMemberKind::behavioral)
+                    && members_[index].compiled->frame_stack_base == 0U;
                 // Generic instructions read memories through the static
                 // container-register bindings.
                 for (std::size_t reg = 0U;
@@ -465,7 +462,8 @@ void Interpreter::Impl::StaticKernel::report_interpreted_sites() const
             && member.native.lazy_template == static_kernel_detail::no_slot) {
             note("bytecode", index);
         }
-        if (member.vhdl && !first_run_is_activation(member)
+        if (member.vhdl && member.kind != StaticKernelMemberKind::behavioral
+            && !first_run_is_activation(member)
             && (member.native.entry == nullptr
                 || !has_prologue_entry(*member.compiled, member.vhdl))) {
             note("tier:vhdl_prologue", index);
@@ -585,6 +583,325 @@ Interpreter::Impl::StaticKernel::compile_family(const std::uint32_t member_index
     }
 }
 
+namespace {
+
+/// The plan constants generated code specializes a directive's attempt
+/// automaton on (KOp::sva_tick, task #186), or nullopt with the profile
+/// reason the tick stays the host monitor's (Monitor::tick on the same attempt
+/// block). Supported: a single clocked plan with literal bounds whose root
+/// property is
+///   - a sequence (`assert`, `cover`, `cover sequence`),
+///   - `not` of a sequence, or
+///   - `|->`, `|=>`, `#-#` or `#=#` with a sequence antecedent and a sequence
+///     (or vacuous) consequent,
+/// and whose sequences use only the delay, fork, jump, repetition counter and
+/// match programs (no throughout, first_match, and, intersect or clock
+/// switch: their threads carry joins and groups). Everything else keeps the
+/// host call: `reason` names the first unsupported feature.
+std::optional<SvaNativePlan> sva_native_plan(const SvaOperation& operation,
+    std::string& reason)
+{
+    namespace sv = semantic::sva;
+    const auto decoded = sv::decode(operation.plan);
+    if (!decoded) {
+        reason = "plan";
+        return std::nullopt;
+    }
+    const auto& plan = *decoded;
+    if (plan.root >= plan.properties.size()) {
+        reason = "plan";
+        return std::nullopt;
+    }
+    // A multiclocked plan must be a sequence (the host refuses others).
+    if (plan.clock_guards.size() > 1U
+        && plan.properties[plan.root].kind != sv::PropertyKind::sequence) {
+        reason = "plan";
+        return std::nullopt;
+    }
+    const auto kind_name = [](const sv::PropertyKind kind) {
+        switch (kind) {
+        case sv::PropertyKind::sequence:
+            return "sequence";
+        case sv::PropertyKind::negation:
+            return "negation";
+        case sv::PropertyKind::conjunction:
+            return "conjunction";
+        case sv::PropertyKind::disjunction:
+            return "disjunction";
+        case sv::PropertyKind::equivalence:
+            return "equivalence";
+        case sv::PropertyKind::implies:
+            return "implies";
+        case sv::PropertyKind::implication:
+            return "implication";
+        case sv::PropertyKind::followed_by:
+            return "followed_by";
+        case sv::PropertyKind::conditional:
+            return "conditional";
+        case sv::PropertyKind::nexttime:
+            return "nexttime";
+        case sv::PropertyKind::always:
+            return "always";
+        case sv::PropertyKind::eventually:
+            return "eventually";
+        case sv::PropertyKind::until:
+            return "until";
+        case sv::PropertyKind::accept:
+            return "accept_on";
+        case sv::PropertyKind::reject:
+            return "reject_on";
+        case sv::PropertyKind::vacuous:
+            return "vacuous";
+        }
+        return "property";
+    };
+    const auto& root = plan.properties[plan.root];
+    const auto child_kind = [&](const std::size_t index) -> std::optional<sv::PropertyKind> {
+        if (index >= root.children.size()
+            || root.children[index] >= plan.properties.size()) {
+            return std::nullopt;
+        }
+        return plan.properties[root.children[index]].kind;
+    };
+    std::vector<std::uint32_t> used;
+    // A property tree of fixed operands: sequences and vacuous leaves under
+    // not, and, or, implies, iff, if/else, nexttime, accept_on and reject_on.
+    // Each node is one instance in an attempt; the lists of started
+    // instances (always, eventually, until, implication consequents that are
+    // not sequences) are not part of it.
+    const auto tree_ok = [&](const auto& self, const std::uint32_t node) -> bool {
+        if (node >= plan.properties.size()) {
+            reason = "plan";
+            return false;
+        }
+        const auto& property = plan.properties[node];
+        std::size_t children = 0U;
+        switch (property.kind) {
+        case sv::PropertyKind::sequence:
+            used.push_back(property.sequence);
+            return true;
+        case sv::PropertyKind::vacuous:
+            return true;
+        case sv::PropertyKind::negation:
+        case sv::PropertyKind::nexttime:
+        case sv::PropertyKind::accept:
+        case sv::PropertyKind::reject:
+        case sv::PropertyKind::always:
+        case sv::PropertyKind::eventually:
+            children = 1U;
+            break;
+        case sv::PropertyKind::implication:
+        case sv::PropertyKind::followed_by:
+            if (property.sequence >= plan.sequences.size()) {
+                reason = "plan";
+                return false;
+            }
+            used.push_back(property.sequence);
+            children = 1U;
+            break;
+        case sv::PropertyKind::conjunction:
+        case sv::PropertyKind::disjunction:
+        case sv::PropertyKind::equivalence:
+        case sv::PropertyKind::implies:
+        case sv::PropertyKind::until:
+            children = 2U;
+            break;
+        case sv::PropertyKind::conditional:
+            children = property.children.size() == 1U ? 1U : 2U;
+            break;
+        default:
+            reason = std::string { "property_" } + kind_name(property.kind);
+            return false;
+        }
+        if (property.children.size() != children) {
+            reason = "plan";
+            return false;
+        }
+        if ((property.kind == sv::PropertyKind::conditional
+                || property.kind == sv::PropertyKind::accept
+                || property.kind == sv::PropertyKind::reject)
+            && property.guard >= plan.guards) {
+            reason = "plan";
+            return false;
+        }
+        for (const auto child : property.children) {
+            if (!self(self, child)) {
+                return false;
+            }
+        }
+        return true;
+    };
+    switch (root.kind) {
+    case sv::PropertyKind::sequence:
+        used.push_back(root.sequence);
+        break;
+    case sv::PropertyKind::negation:
+        if (child_kind(0U) != sv::PropertyKind::sequence) {
+            if (!tree_ok(tree_ok, plan.root)) {
+                return std::nullopt;
+            }
+            break;
+        }
+        used.push_back(plan.properties[root.children[0]].sequence);
+        break;
+    case sv::PropertyKind::implication:
+    case sv::PropertyKind::followed_by: {
+        const auto consequent = child_kind(0U);
+        if (!consequent) {
+            reason = "plan";
+            return std::nullopt;
+        }
+        if (*consequent != sv::PropertyKind::sequence
+            && *consequent != sv::PropertyKind::vacuous) {
+            if (!tree_ok(tree_ok, plan.root)) {
+                return std::nullopt;
+            }
+            break;
+        }
+        used.push_back(root.sequence);
+        if (*consequent == sv::PropertyKind::sequence) {
+            used.push_back(plan.properties[root.children[0]].sequence);
+        }
+        break;
+    }
+    default:
+        if (!tree_ok(tree_ok, plan.root)) {
+            return std::nullopt;
+        }
+        break;
+    }
+    const auto resolved = [&](const sv::Bound& bound, std::int64_t& out,
+                              std::int32_t& slot) {
+        switch (bound.mode) {
+        case sv::Bound::Mode::literal:
+            out = bound.value + bound.offset;
+            return true;
+        case sv::Bound::Mode::unbounded:
+            out = std::numeric_limits<std::int64_t>::max();
+            return true;
+        case sv::Bound::Mode::slot:
+            // Read from the block's bounds region (per-instance constants).
+            out = bound.offset;
+            slot = static_cast<std::int32_t>(bound.value);
+            return bound.value >= 0
+                && static_cast<std::size_t>(bound.value) < operation.bounds.size();
+        }
+        return false;
+    };
+    SvaNativePlan native;
+    std::uint32_t base = 0U;
+    for (std::size_t index = 0U; index < plan.sequences.size(); ++index) {
+        const auto& sequence = plan.sequences[index];
+        SvaNativeSequence compiled;
+        compiled.state_base = base;
+        base += static_cast<std::uint32_t>(sequence.code.size());
+        if (std::ranges::find(used, static_cast<std::uint32_t>(index)) == used.end()) {
+            native.sequences.push_back(std::move(compiled));
+            continue;
+        }
+        compiled.counters = sequence.counters;
+        for (const auto& instruction : sequence.code) {
+            switch (instruction.op) {
+            case sv::Op::check:
+            case sv::Op::delay:
+            case sv::Op::fork:
+            case sv::Op::jump:
+            case sv::Op::counter_set:
+            case sv::Op::counter_branch:
+            case sv::Op::counter_increment:
+            case sv::Op::match:
+                break;
+            case sv::Op::throughout_begin:
+            case sv::Op::throughout_end:
+                break;
+            case sv::Op::first_match_begin:
+            case sv::Op::first_match_end:
+                break;
+            case sv::Op::join_begin:
+            case sv::Op::join_end:
+                break;
+            case sv::Op::clock:
+                if (plan.clock_guards.size() <= 1U || instruction.a >= plan.clock_guards.size()) {
+                    reason = "plan";
+                    return std::nullopt;
+                }
+                break;
+            }
+            SvaNativeStep step { instruction.op, instruction.a, instruction.b,
+                instruction.c, 0, 0, instruction.line, instruction.column };
+            if (!resolved(instruction.lo, step.lo, step.lo_slot)
+                || !resolved(instruction.hi, step.hi, step.hi_slot)) {
+                reason = "plan";
+                return std::nullopt;
+            }
+            if (instruction.op == sv::Op::join_begin
+                && (instruction.b > sequence.code.size() || instruction.c > sequence.code.size()
+                    || instruction.a > 1U)) {
+                reason = "plan";
+                return std::nullopt;
+            }
+            if (instruction.op == sv::Op::throughout_begin
+                && instruction.a >= plan.guards) {
+                reason = "plan";
+                return std::nullopt;
+            }
+            if ((instruction.op == sv::Op::check && instruction.a >= plan.guards)
+                || ((instruction.op == sv::Op::fork || instruction.op == sv::Op::jump)
+                    && instruction.a > sequence.code.size())
+                || (instruction.op == sv::Op::counter_branch
+                    && (instruction.b > sequence.code.size()
+                        || instruction.a >= sequence.counters))
+                || ((instruction.op == sv::Op::counter_set
+                        || instruction.op == sv::Op::counter_increment)
+                    && instruction.a >= sequence.counters)) {
+                reason = "plan";
+                return std::nullopt;
+            }
+            compiled.code.push_back(step);
+        }
+        native.sequences.push_back(std::move(compiled));
+    }
+    for (const auto& property : plan.properties) {
+        SvaNativeProperty compiled;
+        compiled.kind = property.kind;
+        compiled.overlapped = property.overlapped;
+        compiled.sequence = property.sequence;
+        compiled.child = property.children.empty()
+            ? -1 : static_cast<std::int32_t>(property.children[0]);
+        for (const auto child : property.children) {
+            compiled.children.push_back(static_cast<std::int32_t>(child));
+        }
+        compiled.guard = property.guard;
+        if ((property.kind == sv::PropertyKind::nexttime
+                || property.kind == sv::PropertyKind::always
+                || property.kind == sv::PropertyKind::eventually)
+            && !resolved(property.lo, compiled.lo, compiled.lo_slot)) {
+            reason = "plan";
+            return std::nullopt;
+        }
+        if ((property.kind == sv::PropertyKind::always
+                || property.kind == sv::PropertyKind::eventually)
+            && !resolved(property.hi, compiled.hi, compiled.hi_slot)) {
+            reason = "plan";
+            return std::nullopt;
+        }
+        compiled.line = property.line;
+        compiled.column = property.column;
+        native.properties.push_back(compiled);
+    }
+    native.root = plan.root;
+    native.every_match = plan.every_match && root.kind == sv::PropertyKind::sequence;
+    if (plan.clock_guards.size() > 1U) {
+        native.clock_guards = plan.clock_guards;
+    }
+    for (const auto& span : plan.guard_spans) {
+        native.guard_positions.emplace_back(span.line, span.column);
+    }
+    return native;
+}
+
+} // namespace
+
 std::optional<Interpreter::Impl::StaticKernel::CompiledBody>
 Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
 {
@@ -598,6 +915,41 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
     // A VHDL member (delta semantics); a mixed kernel holds both languages.
     const bool vhdl = member.vhdl;
     const bool whole = vhdl || behavioral;
+    // Design note: VHDL behavioral processes (IEEE 1076-2019 11.3) on the
+    // kernel's thread machinery. A process is one thread of a behavioral
+    // member whose compiled body holds all of its operations; every wait is
+    // a KOp::suspend that returns to the thread runner (run_thread), which
+    // registers it in behavioral_boundary_op and resumes the body at the next
+    // operation (body.resume_entries).
+    //  - wait on S (10.2): WaitOn registers the signals' any-change
+    //    sensitivity (wait_on); the wake lands in the next delta cycle
+    //    (14.7.5.3) through vhdl_ready_threads_.
+    //  - wait for T (10.2): WaitFor puts a deadline in vhdl_timers_, which
+    //    expires in the update phase of its time (vhdl_timer_due); T = 0
+    //    resumes in the next delta cycle.
+    //  - wait until C / combined forms (10.2): WaitOn with a timeout
+    //    (thread.deadline; timeout_origin keeps the first wait's deadline on
+    //    a re-wait) and the loop back to the condition are ordinary branches
+    //    in compiled code; a timeout's result register is written by
+    //    run_thread when the thread resumes (set_thread_register).
+    //  - zero-delay signal assignment (10.5.2.2): the store (KOp::store_vhdl,
+    //    store_host) queues the transaction for the round's update phase
+    //    (14.7.5.2, commit_round); a variable assignment is a register move.
+    //  - delayed, transport, reject ... inertial and multi-element
+    //    assignments (10.5.2.2, edit rules of the projected output waveform
+    //    in 14.7.2): KOp::net_delay with sub 1 (execute_projected_write):
+    //    the driver's waveform is kernel state (projected_sites_, a list of
+    //    transactions per bit), edited by projected_edit; a transaction
+    //    matures through a timer in vhdl_timers_ in the update phase of its
+    //    time and writes the slot before the processes of that cycle run
+    //    (collect_timers). A driver that has any such assignment sends all
+    //    of its assignments of the signal through the waveform (a later one
+    //    preempts the pending transactions); a host signal's assignment
+    //    goes to the host's driver (write_host_projected).
+    // Registers survive every suspension (one register file per member), so
+    // no liveness is computed (live_at_entry stays empty), there is no
+    // prologue entry and no specialization, and the first-run (fresh) path of
+    // activation-style members does not apply.
     // A member that is not compiled whole runs [body_begin, body_end) and
     // the operations a family expansion appended (expand_family_accesses),
     // which the body reaches by jumps; the operations between are left out,
@@ -617,6 +969,11 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
         return reg < member.register_kinds.size() ? member.register_kinds[reg]
                                                   : ValueKind::logic4;
     };
+    // A recursive VHDL callable keeps real frames: its packed registers go
+    // on the body's growable frame stack at each call (KOp::frame_push,
+    // frame_pop); the lists are the pushes' (a pop names only what it keeps).
+    bool recursive_frames = false;
+    std::map<std::uint32_t, std::vector<RegisterId>> frame_lists;
     if (whole) {
         // Automatic frames compile to nothing when each callable owns its
         // registers (native_isolated) and no call chain recurses.
@@ -631,6 +988,8 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                     if (!op.native_isolated) {
                         throw reject("frame_not_isolated");
                     }
+                    frame_lists.try_emplace(op.identity,
+                        op.packed.begin(), op.packed.end());
                 } else if constexpr (std::is_same_v<T, Call>) {
                     if (op.target >= end || op.return_target >= end) {
                         throw reject("call_target");
@@ -706,7 +1065,24 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             };
             for (std::uint32_t entry = 0U; entry < end; ++entry) {
                 if (is_function[entry] != 0U && cyclic(cyclic, entry)) {
+                    recursive_frames = true;
+                    break;
+                }
+            }
+            if (recursive_frames) {
+                // Strings, containers and private arrays in a frame, and any
+                // other language, have no compiled frame yet.
+                if (!vhdl) {
                     throw reject("recursive_call");
+                }
+                for (std::uint32_t pc = 0U; pc < end; ++pc) {
+                    if (const auto* push = operation_get_if<CallableFramePush>(
+                            &member.operations()[pc]);
+                        push != nullptr
+                        && (!push->strings.empty() || !push->containers.empty()
+                            || member.private_frame(push->identity))) {
+                        throw reject("recursive_frame_storage");
+                    }
                 }
             }
         }
@@ -722,7 +1098,7 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
         }
     }
     std::vector<std::uint64_t> live_at_entry;
-    if (vhdl) {
+    if (vhdl && !behavioral) {
         if (member.body_identity != nullptr) {
             const std::tuple key { member.body_identity, member.body_begin,
                 member.body_end };
@@ -777,44 +1153,6 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
         }
         return unit / resolution;
     };
-    // A sampled-value read the kernel loads inline (KOp::sva_sampled_load):
-    // $sampled of the Preponed value (a signal with sampled words), or a
-    // clocked history read ($rose, $fell, $stable, $changed, $past with a
-    // clock) of a signal of at most 64 bits whose ring the plan lays out.
-    // The global-clocking future forms read the current value (host).
-    const auto inline_sampled_read = [&](const ReadSignal& op) {
-        if (!sampled_read(op) || op.signal >= impl_.signals.size()
-            || signal_width(op.signal) > 64U || signal_width(op.signal) == 0U
-            || impl_.get_signal(op.signal).initial_value.is_logic9()) {
-            // A VHDL signal's sampled value needs the Logic9 to Logic4
-            // mapping of the host read.
-            return false;
-        }
-        switch (op.kind) {
-        case SignalReadKind::sampled:
-            if (!op.clock) {
-                impl_.ensure_sampled_value_word_layout();
-                return op.signal < impl_.sampled_value_word_offsets.size()
-                    && impl_.sampled_value_word_offsets[op.signal]
-                        != Impl::no_sampled_value_words;
-            }
-            [[fallthrough]];
-        case SignalReadKind::rose:
-        case SignalReadKind::fell:
-        case SignalReadKind::stable:
-        case SignalReadKind::changed:
-        case SignalReadKind::past:
-            if (!op.clock || op.ticks == 0U) {
-                return false;
-            }
-            return impl_.planned_sampled_ring_offset(Impl::SampledHistoryKey {
-                           op.signal, op.clock, op.clock_edge, op.gate,
-                           ProcessSchedulingDomain::systemverilog })
-                .has_value();
-        default:
-            return false;
-        }
-    };
     // The ordinal of a directive among the member's SvaOperation sites: its
     // entry in the kernel's block table (sva_member_base_[member] + ordinal).
     const auto sva_site_ordinal = [&](const std::uint32_t site) {
@@ -837,10 +1175,9 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
         member.container_registers.begin(), member.container_registers.end());
     bool changed = true;
     std::uint32_t defining = 0U;
-    for (std::size_t pass = 0U; changed; ++pass) {
-        if (pass > 64U) {
-            throw reject("width_fixpoint");
-        }
+    // A register's width only moves from unknown to a width to polymorphic,
+    // so the passes end.
+    while (changed) {
         changed = false;
         const auto define = [&](const RegisterId reg, const std::uint32_t value) {
             if (reg >= register_count) {
@@ -895,9 +1232,26 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                     define(op.destination, of(op.source));
                 } else if constexpr (std::is_same_v<T, ReadSignal>) {
                     define(op.destination, sampled_read_width(op, signal_width(op.signal)));
+                } else if constexpr (std::is_same_v<T, SignalEvent>
+                    || std::is_same_v<T, SignalActive>) {
+                    define(op.destination, 1U);
+                } else if constexpr (std::is_same_v<T, SignalLastEvent>
+                    || std::is_same_v<T, SignalLastActive>) {
+                    // Elapsed ticks (IEEE 1076-2019 16.2.4).
+                    define(op.destination, 64U);
+                } else if constexpr (std::is_same_v<T, SignalLastValue>) {
+                    define(op.destination, op.selection
+                        ? op.selection->width : signal_width(op.signal));
                 } else if constexpr (std::is_same_v<T, SvaOperation>) {
                     // The outcome count or outcome code (run_sva).
                     define(op.result, 32U);
+                } else if constexpr (std::is_same_v<T, WaitOn>) {
+                    // A VHDL wait with a timeout (IEEE 1076-2019 10.2): the
+                    // thread runner writes the one-bit timed-out flag when
+                    // the thread resumes (run_thread).
+                    if (op.timeout_result) {
+                        define(*op.timeout_result, 1U);
+                    }
                 } else if constexpr (std::is_same_v<T, Binary>) {
                     define(op.destination,
                         comparison(op.operation) ? 1U : of(op.lhs));
@@ -968,9 +1322,44 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                         define(op.destination, payload(op.result_kind));
                     }
                 } else if constexpr (std::is_same_v<T, StringMethod>) {
-                    // Operand registers depend on the method; the member
-                    // runs uncompiled on the reference operation semantics.
-                    throw reject("string_method");
+                    // The integer results of the methods (execute_string_
+                    // method): 32 bits, or the 64-bit payload of a real or a
+                    // VHDL T'VALUE.
+                    using M = StringMethodOperator;
+                    const auto method = op.operation;
+                    if (method == M::getc || method == M::compare
+                        || method == M::icompare || method == M::atoi
+                        || method == M::atohex || method == M::atooct
+                        || method == M::atobin) {
+                        define(op.destination, 32U);
+                    } else if (method == M::atoreal
+                        || method == M::vhdl_enumeration_value
+                        || method == M::vhdl_physical_value
+                        || method == M::vhdl_integer_value) {
+                        define(op.destination, 64U);
+                    }
+                } else if constexpr (std::is_same_v<T, StringLength>
+                    || std::is_same_v<T, StringIndex>) {
+                    define(op.destination, 32U);
+                } else if constexpr (std::is_same_v<T, CompareStrings>) {
+                    define(op.destination, 1U);
+                } else if constexpr (std::is_same_v<T, FileOpen>
+                    || std::is_same_v<T, FileClose>
+                    || std::is_same_v<T, FileEndOfFile>
+                    || std::is_same_v<T, FileReadLine>
+                    || std::is_same_v<T, FileErrorStatus>
+                    || std::is_same_v<T, FileScan>
+                    || std::is_same_v<T, FilePosition>
+                    || std::is_same_v<T, FileBinaryRead>) {
+                    // The count, status and target registers the reference's
+                    // run_file stores, with the widths of their values.
+                    std::vector<WrittenRegister> written;
+                    operation_written_registers_of(op, written);
+                    for (const auto& result : written) {
+                        if (result.width != 0U) {
+                            define(result.reg, result.width);
+                        }
+                    }
                 } else if constexpr (std::is_same_v<T, Call>) {
                     if (op.stack.capacity != 0U) {
                         define(op.stack.pointer, 32U);
@@ -1098,14 +1487,18 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
     // 2. Translate.
     CompiledBody body;
     body.weak = design_may_hold_weak() ? 1U : 0U;
-    // VHDL calls on the runtime-owned stack use a synthetic fixed stack in
-    // the register file: a pointer and call_stack_depth entries.
+    // VHDL calls on the runtime-owned stack use a growable stack in the
+    // body (NativeCallStack); the register file holds its depth word.
     if (whole && std::ranges::any_of(member.operations(), [](const Operation& op) {
             const auto* call = operation_get_if<Call>(&op);
             return call != nullptr && call->stack.capacity == 0U;
         })) {
         body.call_stack_base = static_cast<std::uint32_t>(width.size());
-        width.resize(width.size() + 1U + call_stack_depth, 32U);
+        width.resize(width.size() + 1U, 32U);
+    }
+    if (recursive_frames) {
+        body.frame_stack_base = static_cast<std::uint32_t>(width.size());
+        width.resize(width.size() + 1U, 32U);
     }
     body.registers.assign(width.size(), { });
     body.register_widths = width;
@@ -1125,8 +1518,39 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
         return reg;
     };
     const auto w = [&](const RegisterId reg) { return width[narrow(reg)]; };
+    // A frame operation of a recursive callable (body.frame_stack_base):
+    // the registers its identity's pushes list, those a pop keeps marked.
+    // The items (register-file indices) follow the wide storage's
+    // assignment, at the end of the translation.
+    const auto lower_frame = [&](KInst& inst, const std::uint32_t identity,
+                                 const bool push,
+                                 const std::vector<RegisterId>& preserve) {
+        const auto found = frame_lists.find(identity);
+        if (found == frame_lists.end()) {
+            throw reject("frame_identity");
+        }
+        CompiledBody::FrameSave save;
+        save.identity = identity;
+        save.register_begin = static_cast<std::uint32_t>(body.frame_registers.size());
+        for (const auto id : found->second) {
+            if (id >= register_count) {
+                throw reject("register_width");
+            }
+            const bool keep = !push
+                && std::ranges::find(preserve, id) != preserve.end();
+            body.frame_registers.push_back(id | (keep ? 0x80000000U : 0U));
+        }
+        save.register_end = static_cast<std::uint32_t>(body.frame_registers.size());
+        inst.op = push ? KOp::frame_push : KOp::frame_pop;
+        inst.x = body.frame_stack_base;
+        inst.aux = static_cast<std::uint32_t>(body.frame_saves.size());
+        body.frame_saves.push_back(save);
+    };
+    // A jump to an activation's exit operation (body_end) ends the body. A
+    // behavioral thread has no such exit: its family accesses are expanded
+    // from body_end on (expand_family_accesses), so a jump there enters them.
     const auto map_target = [&](const InstructionIndex target) -> std::uint32_t {
-        if ((vhdl || expanded) && target == stop) {
+        if ((vhdl || expanded) && !behavioral && target == stop) {
             return end - begin;
         }
         return target >= begin && target < end ? target - begin : end - begin;
@@ -1203,6 +1627,85 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
     const auto has_unknowns = [&](const RegisterId reg) {
         return vhdl || kind_of(reg) == ValueKind::logic9;
     };
+    // A sampled-value read the kernel loads inline (KOp::sva_sampled_load;
+    // KOp::wide_load sub 4 and 5 for a wide result): $sampled of the Preponed
+    // value (a signal with sampled words), or a clocked history read
+    // ($rose, $fell, $stable, $changed, $past, $sampled with a clock) of a
+    // signal whose ring the plan lays out, of any width and any value kind
+    // (a Logic9 signal reads through the Logic9 to Logic4 mapping of the
+    // host read, IEEE 1800-2023 21.2.1.3). The global-clocking forms are
+    // inline only for $future_gclk, which is the signal's current value (a
+    // plain read, 16.9.4); $rising_gclk, $falling_gclk, $steady_gclk and
+    // $changing_gclk compare it with the sampled value and read the host.
+    const auto inline_sampled_read = [&](const ReadSignal& op) {
+        if (!sampled_read(op) || op.signal >= impl_.signals.size()
+            || signal_width(op.signal) == 0U) {
+            return false;
+        }
+        const bool wide_result = signal_width(op.signal) > 64U
+            && (op.kind == SignalReadKind::sampled
+                || op.kind == SignalReadKind::past);
+        // A Logic9 signal reads through the Logic4 mapping (21.2.1.3; 'H' is
+        // 1, 'L' is 0, 'U', 'W' and '-' are x) into any register.
+        if (wide_result
+            && (!chunked(op.destination) || (wide_mask & 1U) == 0U
+                || width[op.destination] != signal_width(op.signal))) {
+            return false;
+        }
+        switch (op.kind) {
+        case SignalReadKind::sampled:
+            if (!op.clock) {
+                impl_.ensure_sampled_value_word_layout();
+                return op.signal < impl_.sampled_value_word_offsets.size()
+                    && impl_.sampled_value_word_offsets[op.signal]
+                        != Impl::no_sampled_value_words;
+            }
+            [[fallthrough]];
+        case SignalReadKind::rose:
+        case SignalReadKind::fell:
+        case SignalReadKind::stable:
+        case SignalReadKind::changed:
+        case SignalReadKind::past:
+            if (!op.clock || op.ticks == 0U) {
+                return false;
+            }
+            return impl_.planned_sampled_ring_offset(Impl::SampledHistoryKey {
+                           op.signal, op.clock, op.clock_edge, op.gate,
+                           ProcessSchedulingDomain::systemverilog })
+                .has_value();
+        default:
+            return false;
+        }
+    };
+    // The words of a signal's default (an empty history read, the signal's
+    // value at the start of simulation) in the layout of a ring entry: its
+    // planes of ceil(width / 64) words each (two for a Logic4 signal, four
+    // for a Logic9 one), appended to the body's wide constants two to a
+    // word pair. Returns the index of the first pair.
+    const auto sampled_default_constants = [&](const SignalId signal) {
+        const auto& value = impl_.get_signal(signal).initial_value;
+        const auto chunks = wide_chunks(static_cast<std::uint32_t>(value.width()));
+        std::vector<std::uint64_t> words;
+        const auto plane = [&](const std::span<const std::uint64_t> source) {
+            for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
+                words.push_back(chunk < source.size() ? source[chunk] : 0U);
+            }
+        };
+        if (value.is_logic9()) {
+            for (std::size_t index = 0U; index < 4U; ++index) {
+                plane(value.logic9_plane_words(index));
+            }
+        } else {
+            plane(value.aval_words());
+            plane(value.bval_words());
+        }
+        const auto first = body.wide_constants.size();
+        for (std::size_t at = 0U; at < words.size(); at += 2U) {
+            body.wide_constants.push_back(
+                { words[at], at + 1U < words.size() ? words[at + 1U] : 0U });
+        }
+        return first;
+    };
     // A write through a dynamic index (IEEE 1800-2023 11.5.1: an unknown or
     // out-of-range one writes nothing; 1076-2019 8.4: a checked one) or a
     // dynamic part select (11.5.1) to a host signal, the host applying it as
@@ -1249,7 +1752,11 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
     // assignment maps 'H', 'L', 'W' and '-' to four states, so a constant
     // with those codes loads as its four-state value instead of leaving
     // compiled execution.
-    std::vector<std::uint8_t> four_state_sink(vhdl ? register_count : 0U, 1U);
+    // A behavioral member's registers persist across its suspensions and are
+    // observable (a process variable read by the embedder or the debugger), so
+    // none is a sink: a nine-value constant keeps its codes.
+    std::vector<std::uint8_t> four_state_sink(
+        vhdl ? register_count : 0U, behavioral ? 0U : 1U);
     // A VHDL register that only carries a constant into assignments to
     // resolved slots (a SystemVerilog net with several sources), each
     // directly after the constant's load: such an assignment takes the
@@ -1363,9 +1870,15 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
     // A store to a resolved slot (store_slot sub 2 and 3) carries the
     // slot's shape for generated code: imm_b its source count and, from bit
     // 32, the member's source; aux its width.
+    // The source count of a resolved slot as generated code takes it, with
+    // net_nine_bit for a slot of nine states (detail::NetShape).
+    const auto net_source_count = [&](const std::uint32_t slot) {
+        return std::uint64_t { slots_[slot].net_processes.size() }
+            | (slots_[slot].nine() ? std::uint64_t { net_nine_bit } : 0U);
+    };
     const auto net_store = [&](KInst& inst, const std::uint32_t slot) {
         if (slots_[slot].resolved) {
-            inst.imm_b = slots_[slot].net_processes.size()
+            inst.imm_b = net_source_count(slot)
                 | std::uint64_t { net_source_index(slot, member.process) } << 32U;
             inst.aux = slots_[slot].width;
         }
@@ -1848,6 +2361,59 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                 continue;
             }
         }
+        if (vhdl) {
+            // A projected assignment (IEEE 1076-2019 10.5.2.2): the kernel's
+            // instruction, which reads its registers (sources, run-time
+            // delays, a dynamic index) from the register file.
+            std::vector<RegisterId> sources;
+            bool projected = false;
+            visit_operation([&](const auto& op) {
+                using T = std::decay_t<decltype(op)>;
+                if constexpr (std::is_same_v<T, WriteProjected>
+                    || std::is_same_v<T, WriteProjectedSlice>
+                    || std::is_same_v<T, WriteProjectedDynamicSlice>) {
+                    if (op.delay != 0U || op.rejection != 0U
+                        || op.mode != ProjectedDelayMode::inertial
+                        || member_projects(member_index, op.signal)) {
+                        projected = true;
+                        sources.push_back(op.source);
+                        if constexpr (std::is_same_v<T, WriteProjectedDynamicSlice>) {
+                            sources.push_back(op.selection.index);
+                        }
+                    }
+                } else if constexpr (std::is_same_v<T, WriteProjectedWaveform>
+                    || std::is_same_v<T, WriteProjectedWaveformSlice>
+                    || std::is_same_v<T, WriteProjectedWaveformDynamicSlice>) {
+                    projected = true;
+                    for (const auto& element : op.elements) {
+                        sources.push_back(element.source);
+                        if (element.delay_source) {
+                            sources.push_back(*element.delay_source);
+                        }
+                    }
+                    if constexpr (std::is_same_v<T, WriteProjectedWaveformDynamicSlice>) {
+                        sources.push_back(op.selection.index);
+                    }
+                }
+            }, member.operations()[pc]);
+            if (projected) {
+                for (const auto source : sources) {
+                    if (source >= register_count || width[source] == 0U
+                        || width[source] == polymorphic) {
+                        throw reject("projected_source");
+                    }
+                    has_wide = has_wide || width[source] > 64U;
+                }
+                inst.op = KOp::net_delay;
+                inst.sub = 1U;
+                inst.x = sources.front();
+                inst.y = pc;
+                inst.width = width[sources.front()];
+                inst.aux = has_unknowns(sources.front()) ? 1U : 0U;
+                body.code.push_back(inst);
+                continue;
+            }
+        }
         if (const auto* delayed = operation_get_if<WriteNetDelay>(
                 &member.operations()[pc])) {
             // An interconnect delay (IEEE 1364-2005 16.2.4) is the kernel's
@@ -1928,6 +2494,49 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                         }
                         has_wide = has_wide || width[op.source] > 64U;
                     }
+                } else if constexpr (std::is_same_v<T, StringMethod>
+                    || std::is_same_v<T, StringLength>
+                    || std::is_same_v<T, StringIndex>
+                    || std::is_same_v<T, CompareStrings>
+                    || std::is_same_v<T, StringReplaceByte>
+                    || std::is_same_v<T, StringReport>
+                    || std::is_same_v<T, ReadStringObject>
+                    || std::is_same_v<T, WriteStringObject>
+                    || std::is_same_v<T, FileOpen>
+                    || std::is_same_v<T, FileClose>
+                    || std::is_same_v<T, FileWriteLiteral>
+                    || std::is_same_v<T, FileWriteFormatted>
+                    || std::is_same_v<T, FileWriteString>
+                    || std::is_same_v<T, FileFlush>
+                    || std::is_same_v<T, FileEndOfFile>
+                    || std::is_same_v<T, FileReadLine>
+                    || std::is_same_v<T, FileErrorStatus>
+                    || std::is_same_v<T, FileScan>
+                    || std::is_same_v<T, FilePosition>
+                    || std::is_same_v<T, FileBinaryRead>) {
+                    // String and file operations run through the generic
+                    // bridge on the thread's reference state (strings and the
+                    // file table are the host's): their numeric registers
+                    // must have a known width, those a file operation
+                    // writes besides its result included.
+                    std::vector<RegisterId> operands;
+                    std::optional<RegisterId> result;
+                    operation_registers_of(op, operands, result);
+                    std::vector<WrittenRegister> written;
+                    operation_written_registers_of(op, written);
+                    for (const auto& output : written) {
+                        operands.push_back(output.reg);
+                    }
+                    for (const auto operand : operands) {
+                        if (operand >= register_count || width[operand] == 0U
+                            || width[operand] == polymorphic) {
+                            throw reject("generic_operand");
+                        }
+                        has_wide = has_wide || width[operand] > 64U;
+                    }
+                    inst.op = KOp::generic;
+                    inst.x = pc;
+                    inst.y = 0U;
                 } else if constexpr (std::is_same_v<T, DebugPoint>) {
                     // Debugger plan: a statement, call, wait, assertion or
                     // entry point returns to the thread runner like a
@@ -1944,12 +2553,21 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                     }
                 } else if constexpr (std::is_same_v<T, CallableFramePush>
                     || std::is_same_v<T, CallableFramePop>) {
-                    // Isolated and nonrecursive (checked above); frames that
-                    // save private arrays run through the generic bridge.
+                    // Isolated; frames that save private arrays run through the
+                    // generic bridge, and a recursive callable's frames are
+                    // real (frame_push, frame_pop).
                     if (member.private_frame(op.identity)) {
                         inst.op = KOp::generic;
                         inst.x = pc;
                         inst.y = 0U;
+                    } else if (body.frame_stack_base != 0U) {
+                        if constexpr (std::is_same_v<T, CallableFramePush>) {
+                            lower_frame(inst, op.identity, true, { });
+                        } else {
+                            lower_frame(inst, op.identity, false,
+                                std::vector<RegisterId>(op.preserve_packed.begin(),
+                                    op.preserve_packed.end()));
+                        }
                     } else {
                         inst.op = KOp::nop;
                     }
@@ -1957,10 +2575,10 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                     inst.op = KOp::call;
                     inst.d = map_target(op.target);
                     if (op.stack.capacity == 0U) {
-                        // The synthetic stack; overflow deoptimizes.
+                        // The body's growable stack: x is the depth word.
                         inst.x = body.call_stack_base;
-                        inst.y = body.call_stack_base + 1U;
-                        inst.z = call_stack_depth;
+                        inst.y = body.call_stack_base;
+                        inst.z = 1U;
                         inst.flags = flag_linear;
                     } else {
                         inst.x = narrow(op.stack.pointer);
@@ -1973,8 +2591,8 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                     inst.op = KOp::ret;
                     if (op.stack.capacity == 0U) {
                         inst.x = body.call_stack_base;
-                        inst.y = body.call_stack_base + 1U;
-                        inst.z = call_stack_depth;
+                        inst.y = body.call_stack_base;
+                        inst.z = 1U;
                         inst.flags = flag_linear;
                     } else {
                         inst.x = narrow(op.stack.pointer);
@@ -2051,9 +2669,48 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             visit_operation([&](const auto& op) {
                 using T = std::decay_t<decltype(op)>;
                 if constexpr (std::is_same_v<T, ReadSignal>) {
+                    if (enabled(0U) && chunked(op.destination)
+                        && sampled_read(op) && inline_sampled_read(op)) {
+                        // A wide $sampled or $past (IEEE 1800-2023 16.5.1,
+                        // 16.9.3): the chunks of the Preponed value (sub 4,
+                        // x its words in Impl::sampled_value_words) or of a
+                        // history ring entry (sub 5, x the ring's start,
+                        // offset the read kind, z the $past depth, imm_a the
+                        // chunks and, from bit 32, 1 for a Logic9 ring,
+                        // imm_b the default's constants), coerced to Logic4.
+                        sva_table_used_ = true;
+                        inst.op = KOp::wide_load;
+                        inst.d = op.destination;
+                        inst.width = width[op.destination];
+                        inst.aux = has_unknowns(op.destination) ? 1U : 0U;
+                        inst.imm_a = wide_chunks(inst.width);
+                        if (op.kind == SignalReadKind::sampled && !op.clock) {
+                            inst.sub = 4U;
+                            inst.x = impl_.sampled_value_word_offsets[op.signal];
+                            lowered = true;
+                            return;
+                        }
+                        const auto ring = impl_.planned_sampled_ring_offset(
+                            Impl::SampledHistoryKey { op.signal, op.clock,
+                                op.clock_edge, op.gate,
+                                ProcessSchedulingDomain::systemverilog });
+                        if (!ring) {
+                            throw reject("sampled_ring");
+                        }
+                        impl_.sampled_ring_layout_baked = true;
+                        inst.sub = 5U;
+                        inst.x = static_cast<std::uint32_t>(*ring);
+                        inst.offset = op.kind == SignalReadKind::past ? 1U : 0U;
+                        inst.z = op.ticks;
+                        if (impl_.get_signal(op.signal).initial_value.is_logic9()) {
+                            inst.imm_a |= std::uint64_t { 1 } << 32U;
+                        }
+                        inst.imm_b = sampled_default_constants(op.signal);
+                        lowered = true;
+                        return;
+                    }
                     if (!enabled(0U) || !chunked(op.destination)
-                        || op.kind != SignalReadKind::current || op.ticks != 1U
-                        || op.clock || op.gate) {
+                        || sampled_read(op)) {
                         return;
                     }
                     const auto slot = plain_slot(op.signal, 0U,
@@ -2705,6 +3362,14 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                         && !owned(op.signal) && chunked(op.source)) {
                         wide_source = op.source;
                     }
+                } else if constexpr (std::is_same_v<T, SvaOperation>) {
+                    // A tick reads more than 64 guards from the chunks of
+                    // one wide register (KOp::sva_tick; IEEE 1800-2023
+                    // 16.14).
+                    if (op.kind == SvaKind::tick && op.guard_count > 64U
+                        && chunked(op.guards)) {
+                        wide_source = op.guards;
+                    }
                 }
             }, operation);
             // A concatenation's null-range operands contribute no bits
@@ -2862,6 +3527,16 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                     // query reads the kernel's time, a real-number operation
                     // runs the shared scalar library, and a coverage hit
                     // bumps its host counter, through the kernel's operation
+                    // step.
+                    generic = true;
+                } else if constexpr (std::is_same_v<T, SignalEvent>
+                    || std::is_same_v<T, SignalActive>
+                    || std::is_same_v<T, SignalLastValue>
+                    || std::is_same_v<T, SignalLastEvent>
+                    || std::is_same_v<T, SignalLastActive>) {
+                    // 'EVENT, 'ACTIVE, 'LAST_VALUE, 'LAST_EVENT and
+                    // 'LAST_ACTIVE of a host signal (IEEE 1076-2019 16.2.4)
+                    // read the host's history through the kernel's operation
                     // step.
                     generic = true;
                 } else if constexpr (std::is_same_v<T, FormatDisplay>) {
@@ -3058,8 +3733,7 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                         // source count and the member's source; sub 3 the
                         // source count above the codes' index in imm_b and
                         // the member's source above the width in imm_a.
-                        const auto sources = std::uint64_t {
-                            slots_[*slot].net_processes.size() };
+                        const auto sources = net_source_count(*slot);
                         const auto own = std::uint64_t {
                             net_source_index(*slot, member.process) };
                         if (inst.sub == 3U) {
@@ -3099,10 +3773,10 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                     inst.op = KOp::call;
                     inst.d = map_target(op.target);
                     if (op.stack.capacity == 0U) {
-                        // The synthetic stack; overflow deoptimizes.
+                        // The body's growable stack: x is the depth word.
                         inst.x = body.call_stack_base;
-                        inst.y = body.call_stack_base + 1U;
-                        inst.z = call_stack_depth;
+                        inst.y = body.call_stack_base;
+                        inst.z = 1U;
                         inst.flags = flag_linear;
                     } else {
                         inst.x = narrow(op.stack.pointer);
@@ -3115,8 +3789,8 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                     inst.op = KOp::ret;
                     if (op.stack.capacity == 0U) {
                         inst.x = body.call_stack_base;
-                        inst.y = body.call_stack_base + 1U;
-                        inst.z = call_stack_depth;
+                        inst.y = body.call_stack_base;
+                        inst.z = 1U;
                         inst.flags = flag_linear;
                     } else {
                         inst.x = narrow(op.stack.pointer);
@@ -3125,8 +3799,19 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                     }
                 } else if constexpr (std::is_same_v<T, CallableFramePush>
                     || std::is_same_v<T, CallableFramePop>) {
-                    // Isolated and nonrecursive (checked above).
-                    inst.op = KOp::nop;
+                    // Isolated (checked above); a recursive callable's frames
+                    // are real.
+                    if (body.frame_stack_base != 0U) {
+                        if constexpr (std::is_same_v<T, CallableFramePush>) {
+                            lower_frame(inst, op.identity, true, { });
+                        } else {
+                            lower_frame(inst, op.identity, false,
+                                std::vector<RegisterId>(op.preserve_packed.begin(),
+                                    op.preserve_packed.end()));
+                        }
+                    } else {
+                        inst.op = KOp::nop;
+                    }
                 } else if constexpr (std::is_same_v<T, Assert>) {
                     inst.op = KOp::assert_check;
                     inst.x = narrow(op.condition);
@@ -3186,6 +3871,18 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                     }
                     impl_.sampled_ring_layout_baked = true;
                     inst.x = static_cast<std::uint32_t>(*ring);
+                    if (const auto& initial = impl_.get_signal(op.signal).initial_value;
+                        signal_width(op.signal) > 64U || initial.is_logic9()) {
+                        // A wide or Logic9 signal's ring entries are several
+                        // planes of several words (aux 2): imm_a the chunks
+                        // and, from bit 32, 1 for a Logic9 ring, imm_b the
+                        // default's constants.
+                        inst.aux = 2U;
+                        inst.imm_a = wide_chunks(signal_width(op.signal))
+                            | (initial.is_logic9() ? std::uint64_t { 1 } << 32U : 0U);
+                        inst.imm_b = sampled_default_constants(op.signal);
+                        return;
+                    }
                     // An empty history reads the signal's default: its
                     // value at the start of simulation (sampled_defaults),
                     // which is the initial value after the startup writes.
@@ -3811,8 +4508,31 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                 if (op.kind == SvaKind::tick) {
                     (void)narrow(op.start);
                     (void)narrow(op.disabled);
-                    if (op.guard_count != 0U) {
+                    if (op.guard_count != 0U && !chunked(op.guards)) {
                         (void)narrow(op.guards);
+                    }
+                    // A plan of a supported shape gets its attempt automaton
+                    // as generated code (z the plan's index plus one; the
+                    // operands' registers relative to y); the others call
+                    // the host monitor (FSIM_KERNEL_SVA_NATIVE=0: all).
+                    static const bool native_enabled = [] {
+                        const char* text = std::getenv("FSIM_KERNEL_SVA_NATIVE");
+                        return text == nullptr || std::string_view { text } != "0";
+                    }();
+                    std::string reason = "disabled";
+                    std::optional<SvaNativePlan> native;
+                    if (native_enabled) {
+                        native = sva_native_plan(op, reason);
+                    }
+                    if (native) {
+                        body.sva_plans.push_back(std::move(*native));
+                        inst.z = static_cast<std::uint32_t>(body.sva_plans.size());
+                        inst.imm_a = static_cast<std::uint64_t>(op.guards)
+                            | (static_cast<std::uint64_t>(op.start) << 32U);
+                        inst.imm_b = static_cast<std::uint64_t>(op.disabled)
+                            | (static_cast<std::uint64_t>(op.guard_count) << 32U);
+                    } else if (profile_) {
+                        ++profile_generic_ops_["sva_tick_host:" + reason];
                     }
                 }
             } else {
@@ -3862,7 +4582,12 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
             check(inst.y);
             break;
         case KOp::store_vhdl:
-            check(inst.x);
+            // A wide nine-value constant stored to a resolved slot (sub 2,
+            // wide_constants) names its chunked register, which the store
+            // does not read: the codes are at imm_a.
+            if (inst.sub != 2U || inst.width <= 64U) {
+                check(inst.x);
+            }
             if (inst.sub == 1U || inst.sub == 3U) {
                 check(inst.y);
             }
@@ -3936,7 +4661,15 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
     if (!vhdl && !member.register_kinds.empty()) {
         track_unknowns(body, member_index);
     }
-    if (vhdl) {
+    if (vhdl && behavioral) {
+        // Entry and resume points are the thread's (above); the 'U' and weak
+        // tracking is the VHDL member's.
+        track_unknowns(body, member_index);
+        std::ranges::sort(body.return_targets);
+        body.return_targets.erase(std::unique(body.return_targets.begin(),
+                                      body.return_targets.end()),
+            body.return_targets.end());
+    } else if (vhdl) {
         if (native_prologue(member) && member.prologue_end != member.body_begin
             && member.prologue_end < body.code.size()) {
             // The first run leaves the prologue for the specialized body.
@@ -4043,6 +4776,44 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                 }
             }
         }
+    }
+    // The register-file items of each frame operation, now that the wide
+    // storage and the 'U' shadows have their indices: a narrow register and
+    // its shadow word, or a wide register's chunks and masks. A frame holds
+    // a header pair (the identity) and the pairs of every listed register;
+    // a pop lists the ones its call does not keep.
+    for (auto& save : body.frame_saves) {
+        save.item_begin = static_cast<std::uint32_t>(body.frame_items.size());
+        std::uint32_t offset = 0U;
+        for (auto at = save.register_begin; at < save.register_end; ++at) {
+            const auto id = body.frame_registers[at] & 0x7fffffffU;
+            const bool keep = (body.frame_registers[at] & 0x80000000U) != 0U;
+            if (width[id] == 0U) {
+                continue;
+            }
+            const auto add = [&](const std::uint32_t index, const std::uint32_t count) {
+                if (!keep) {
+                    body.frame_items.push_back({ index, count, offset });
+                }
+                offset += count;
+            };
+            if (id < body.wide_base.size() && body.wide_base[id] != 0U) {
+                const auto chunks = wide_chunks(width[id]);
+                add(body.wide_base[id] & ~wide_unknown_flag,
+                    (body.wide_base[id] & wide_unknown_flag) != 0U ? 2U * chunks
+                                                                    : chunks);
+            } else if (width[id] > 64U) {
+                throw reject("register_width");
+            } else {
+                add(id, 1U);
+                if (body.shadow_base != 0U && id < body.tracked.size()
+                    && body.tracked[id] != 0U) {
+                    add(body.shadow_base + id, 1U);
+                }
+            }
+        }
+        save.item_end = static_cast<std::uint32_t>(body.frame_items.size());
+        save.pairs = 1U + offset;
     }
     if (has_wide) {
         body.wide_registers.assign(register_count, PackedLogic4 { });
@@ -4173,7 +4944,19 @@ bool Interpreter::Impl::StaticKernel::design_may_hold_weak()
                 || std::is_same_v<T, ReadContainerObject>
                 || std::is_same_v<T, ContainerRead>
                 || std::is_same_v<T, ContainerElementRead>
-                || std::is_same_v<T, ContainerAggregateRead>) {
+                || std::is_same_v<T, ContainerAggregateRead>
+                // Integer and status results of string and file operations
+                // (a length, a character code, a comparison, an end-of-file
+                // flag, a handle) hold no weak element.
+                || std::is_same_v<T, StringMethod>
+                || std::is_same_v<T, StringLength>
+                || std::is_same_v<T, StringIndex>
+                || std::is_same_v<T, CompareStrings>
+                || std::is_same_v<T, FileOpen>
+                || std::is_same_v<T, FileClose>
+                || std::is_same_v<T, FileEndOfFile>
+                || std::is_same_v<T, FileErrorStatus>
+                || std::is_same_v<T, FilePosition>) {
                 derived = true;
             } else if constexpr (std::is_same_v<T, Extract>
                 || std::is_same_v<T, DynamicExtract>

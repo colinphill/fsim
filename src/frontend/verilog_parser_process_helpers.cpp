@@ -887,9 +887,6 @@ Statement VerilogParser::parse_procedural_foreach_statement(
     const auto declared_array_rank = [](const auto& self, const Type& type,
                                         const std::size_t depth)
         -> std::optional<std::size_t> {
-        if (depth >= 64U) {
-            return std::nullopt;
-        }
         std::size_t rank { };
         const auto add_dimensions = [&rank](const std::size_t count) {
             if (count > std::numeric_limits<std::size_t>::max() - rank) {

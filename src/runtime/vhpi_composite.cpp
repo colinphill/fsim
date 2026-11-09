@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/vhpi_composite.hpp"
+#include "fsim/support/stack_growth.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -15,7 +16,6 @@ constexpr std::size_t maximum_dimensions = 16;
 constexpr std::size_t maximum_fields = 4096;
 constexpr std::size_t maximum_field_name = 4096;
 constexpr std::size_t maximum_elements = 1U << 20U;
-constexpr std::uint32_t maximum_depth = 64;
 constexpr std::uint32_t maximum_nodes = 1U << 20U;
 
 bool equal_range(const VhdlVhpiRange& lhs, const VhdlVhpiRange& rhs) {
@@ -250,8 +250,12 @@ VhdlVhpiCompositeError VhdlVhpiCompositeSystem::validate_value(
     const VhdlVhpiCompositeValue& value,
     const std::uint32_t depth,
     std::uint32_t& nodes) const {
-  if (depth > maximum_depth) {
-    return VhdlVhpiCompositeError::DepthLimit;
+  // Nested values continue on a new stack segment when the stack is nearly
+  // used up, so the nesting depth is bounded by memory.
+  if (!support::stack_growth_detail::has_room()) {
+    return support::with_stack([&] {
+      return validate_value(type, scalar_profile, value, depth, nodes);
+    });
   }
   if (++nodes > maximum_nodes) {
     return VhdlVhpiCompositeError::NodeLimit;

@@ -77,6 +77,12 @@ class SystemVerilogUvmRunError final : public std::runtime_error {
 
 class SystemVerilogUvmTestRunnerService final {
  public:
+  /// True while the service holds no state: a run that never used it has
+  /// nothing to save (#188). A run has the embedder's execution.
+  [[nodiscard]] bool run_state_idle() const noexcept {
+    return !running_ && run_count_ == 0;
+  }
+
   using Execution = std::function<SystemVerilogUvmRunExecution(
       SystemVerilogClassHandle, std::uint64_t)>;
 

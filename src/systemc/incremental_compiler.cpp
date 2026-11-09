@@ -128,7 +128,8 @@ namespace {
                 "cannot create SystemC scratch parent: " + error.message(), parent);
             return { };
         }
-        for (std::size_t attempt = 0; attempt < 100; ++attempt) {
+        // Each try takes a fresh serial, so the loop ends.
+        for (;;) {
             const auto serial = scratch_sequence.fetch_add(1, std::memory_order_relaxed);
             const auto tick = std::chrono::steady_clock::now().time_since_epoch().count();
             const auto path = parent / ("fsim-systemc-phase-" + std::to_string(tick) + "-" + std::to_string(serial));
@@ -142,10 +143,6 @@ namespace {
                 return { };
             }
         }
-        report(
-            diagnostics, kCompileCode,
-            "cannot allocate a unique SystemC scratch directory", parent);
-        return { };
     }
 
     class ScratchCleanup {

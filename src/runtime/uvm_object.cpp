@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/uvm_object.hpp"
+#include "fsim/support/stack_growth.hpp"
+
+#include "run_state_archive.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -261,6 +264,12 @@ SystemVerilogUvmObjectService::print(
     if (depth >= limits_.maximum_depth) {
       throw std::length_error{"UVM print recursion depth exceeded"};
     }
+    // Nested objects continue on a new stack segment when the stack is
+    // nearly used up, so the nesting depth is bounded by memory.
+    if (!support::stack_growth_detail::has_room()) {
+      support::with_stack([&] { walk(current, std::move(path), depth); });
+      return;
+    }
     if (const auto found = first_paths.find(current);
         found != first_paths.end()) {
       append({std::move(path), type_name(current), found->second, current,
@@ -487,6 +496,18 @@ SystemVerilogUvmObjectService::metadata(
     throw std::out_of_range{"class handle is not an initialized UVM object"};
   }
   return found->second;
+}
+
+void SystemVerilogUvmObjectService::run_state_io(RunStateArchive& archive) {
+  // The descriptors are the design's (registered at setup) and the hooks are
+  // the embedder's; the metadata of each object is the run's.
+  archive.io(metadata_);
+  archive.io(next_instance_id_);
+}
+
+void SystemVerilogUvmObjectService::reset_run_state() {
+  metadata_.clear();
+  next_instance_id_ = 0;
 }
 
 }  // namespace fsim::runtime

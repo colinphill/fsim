@@ -44,6 +44,7 @@ AttemptStorage::AttemptStorage(const std::size_t clocks)
     for (std::size_t clock = 0; clock < clocks; ++clock) {
         clock_ticks(clock) = -1;
         clock_time(clock) = std::numeric_limits<std::int64_t>::min();
+        clock_ticked(clock) = 0;
     }
 }
 
@@ -57,15 +58,19 @@ AttemptStorage::Caps AttemptStorage::caps() const noexcept
     result.events = static_cast<std::size_t>(get(h_events_cap));
     result.requests = static_cast<std::size_t>(get(h_requests_cap));
     result.heap = static_cast<std::size_t>(get(h_heap_cap));
+    result.scratch = static_cast<std::size_t>(get(h_scratch_cap));
+    result.bounds = get(h_bounds_off) == 0
+        ? 0U
+        : static_cast<std::size_t>(words_[static_cast<std::size_t>(get(h_bounds_off))]) + 1U;
     return result;
 }
 
 std::size_t AttemptStorage::total_words(const Caps& caps) noexcept
 {
-    return header_words + 2U * caps.clocks + caps.attempts * attempt_stride
+    return header_words + 3U * caps.clocks + caps.attempts * attempt_stride
         + caps.outcomes * outcome_stride + caps.started * started_stride
         + caps.events * event_stride + caps.requests * request_stride
-        + 2U * caps.heap;
+        + 2U * caps.heap + caps.scratch + caps.bounds;
 }
 
 void AttemptStorage::relayout(const Caps& next)
@@ -82,7 +87,7 @@ void AttemptStorage::relayout(const Caps& next)
         at += size;
         return offset;
     };
-    const auto clocks_off = place(2U * next.clocks);
+    const auto clocks_off = place(3U * next.clocks);
     const auto attempts_off = place(next.attempts * attempt_stride);
     const auto outcomes_off = place(next.outcomes * outcome_stride);
     const auto started_off = place(next.started * started_stride);
@@ -90,10 +95,12 @@ void AttemptStorage::relayout(const Caps& next)
     const auto requests_off = place(next.requests * request_stride);
     const auto heap_off = place(next.heap);
     const auto heap_alt_off = place(next.heap);
+    const auto scratch_off = place(next.scratch);
+    const auto bounds_off = next.bounds == 0U ? std::size_t { 0 } : place(next.bounds);
 
     // Tables keep their rows; the clocks keep their words.
     std::copy_n(old.begin() + static_cast<std::ptrdiff_t>(field(h_clocks_off)),
-        2U * std::min(field(h_clocks_count), next.clocks),
+        3U * std::min(field(h_clocks_count), next.clocks),
         block.begin() + static_cast<std::ptrdiff_t>(clocks_off));
     std::copy_n(old.begin() + static_cast<std::ptrdiff_t>(field(h_attempts_off)),
         field(h_attempts_count) * attempt_stride,
@@ -130,6 +137,16 @@ void AttemptStorage::relayout(const Caps& next)
     std::copy_n(old.begin() + static_cast<std::ptrdiff_t>(field(h_heap_alt_off)),
         field(h_heap_alt_used),
         block.begin() + static_cast<std::ptrdiff_t>(heap_alt_off));
+    if (next.bounds != 0U && field(h_bounds_off) != 0U) {
+        std::copy_n(old.begin() + static_cast<std::ptrdiff_t>(field(h_bounds_off)),
+            std::min<std::size_t>(next.bounds, static_cast<std::size_t>(old[field(h_bounds_off)]) + 1U),
+            block.begin() + static_cast<std::ptrdiff_t>(bounds_off));
+    }
+    // The scratch words in use (a sequence step in generated code grows the
+    // block while it works).
+    std::copy_n(old.begin() + static_cast<std::ptrdiff_t>(field(h_scratch_off)),
+        std::min(field(h_scratch_used), next.scratch),
+        block.begin() + static_cast<std::ptrdiff_t>(scratch_off));
 
     const auto put = [&](const Header header, const std::size_t value) {
         block[header] = static_cast<std::int64_t>(value);
@@ -152,6 +169,9 @@ void AttemptStorage::relayout(const Caps& next)
     put(h_heap_off, heap_off);
     put(h_heap_alt_off, heap_alt_off);
     put(h_heap_cap, next.heap);
+    put(h_scratch_off, scratch_off);
+    put(h_scratch_cap, next.scratch);
+    put(h_bounds_off, bounds_off);
     put(h_total_words, block.size());
     words_ = std::move(block);
     publish(words_.data());
@@ -246,7 +266,7 @@ std::optional<AttemptStorage> AttemptStorage::adopt(
     if (!clocks || !clocks_off || !attempts || !attempts_cap || !requests
         || !requests_cap || !heap_cap || !heap_used || !heap_alt_used
         || !heap_off || !heap_alt_off || *clocks_off < header_words
-        || *clocks_off + 2U * *clocks > total
+        || *clocks_off + 3U * *clocks > total
         || !region(h_attempts_off, h_attempts_cap, attempt_stride)
         || *attempts > *attempts_cap
         || !region(h_requests_off, h_requests_cap, request_stride)
@@ -262,6 +282,14 @@ std::optional<AttemptStorage> AttemptStorage::adopt(
         || *heap_used > *heap_cap || *heap_alt_used > *heap_cap) {
         return std::nullopt;
     }
+    const auto scratch_off = field(h_scratch_off);
+    const auto scratch_cap = field(h_scratch_cap);
+    const auto scratch_used = field(h_scratch_used);
+    if (!scratch_off || !scratch_cap || !scratch_used
+        || *scratch_off < header_words || *scratch_off + *scratch_cap > total
+        || *scratch_used > *scratch_cap) {
+        return std::nullopt;
+    }
     // Each row's record lies inside the used heap.
     const auto table = static_cast<std::size_t>(words[h_attempts_off]);
     for (std::size_t index = 0; index < *attempts; ++index) {
@@ -273,6 +301,15 @@ std::optional<AttemptStorage> AttemptStorage::adopt(
                 > *heap_used) {
             return std::nullopt;
         }
+    }
+    const auto bounds_off = field(h_bounds_off);
+    if (!bounds_off
+        || (*bounds_off != 0U
+            && (*bounds_off < header_words || *bounds_off >= total
+                || words[*bounds_off] < 0
+                || static_cast<std::uint64_t>(words[*bounds_off]) + 1U
+                        > total - *bounds_off))) {
+        return std::nullopt;
     }
     AttemptStorage result;
     result.words_ = std::move(words);
@@ -524,6 +561,53 @@ void AttemptStorage::expire_requests(const std::int64_t time) noexcept
         }
     }
     set(h_requests_count, static_cast<std::int64_t>(kept));
+}
+
+void AttemptStorage::set_bounds(const std::vector<std::int64_t>& bounds)
+{
+    auto next = caps();
+    next.bounds = bounds.size() + 1U;
+    relayout(next);
+    auto* region = &words_[static_cast<std::size_t>(get(h_bounds_off))];
+    region[0] = static_cast<std::int64_t>(bounds.size());
+    std::ranges::copy(bounds, region + 1);
+}
+
+void AttemptStorage::reserve_region(
+    const std::size_t region, const std::size_t needed)
+{
+    auto next = caps();
+    std::size_t* field = nullptr;
+    switch (region) {
+    case grow_attempts:
+        field = &next.attempts;
+        break;
+    case grow_outcomes:
+        field = &next.outcomes;
+        break;
+    case grow_started:
+        field = &next.started;
+        break;
+    case grow_events:
+        field = &next.events;
+        break;
+    case grow_requests:
+        field = &next.requests;
+        break;
+    case grow_heap:
+        field = &next.heap;
+        break;
+    case grow_scratch:
+        field = &next.scratch;
+        break;
+    default:
+        return;
+    }
+    if (*field >= needed) {
+        return;
+    }
+    *field = grown(*field, needed);
+    relayout(next);
 }
 
 void AttemptStorage::refresh_steps_active() noexcept

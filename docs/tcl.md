@@ -179,6 +179,7 @@ to apply them.
 | `simulate.coverage_output` | text |  | code-coverage database written at the end of simulation |
 | `simulate.delay_mode` | text | `typical` | delay mode: minimum, typical, maximum |
 | `simulate.duration` | text |  | time to simulate, e.g. 10us; empty runs to the end |
+| `simulate.engine` | text |  | execution engine: interpreter, compiled, debug, v4; empty takes the command's own; --engine wins |
 | `simulate.foreign_probes` | boolean | `false` | statement, call and suspend callbacks for VPI/VHPI libraries |
 | `simulate.max_deltas` | integer | `100000` | delta cycles allowed in one time step |
 | `simulate.restart` | text |  | run-state file the simulation starts from (repeat the command line of the save) |

@@ -11,6 +11,7 @@
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/semantic/hierarchy_path.hpp"
 #include "fsim/support/sha256.hpp"
+#include "fsim/support/stack_growth.hpp"
 
 #include "../diagnostic/artifact_identity.hpp"
 #include "../elaboration/elaborated_design_process_access.hpp"
@@ -48,7 +49,6 @@
 namespace fsim::app {
 namespace codec_detail {
 
-    constexpr std::size_t kMaximumNesting = 1024;
     constexpr std::string_view kCode = "FSIM-ART-0013";
 
     class DecodeBudget final {
@@ -592,7 +592,7 @@ namespace codec_detail {
             std::same_as<T, runtime::simir::StringMethodOperator>) {
             return value >= runtime::simir::StringMethodOperator::getc
                 && value
-                    <= runtime::simir::StringMethodOperator::vhdl_logic9_ostring;
+                    <= runtime::simir::StringMethodOperator::vhdl_logic9_ostring_signed;
         } else if constexpr (
             std::same_as<T, runtime::simir::VhdlReflectionClass>) {
             return value >= runtime::simir::VhdlReflectionClass::enumeration
@@ -915,7 +915,8 @@ namespace codec_detail {
             value.language_standard, value.compatibility_profile,
             value.register_count, value.string_register_count,
             value.container_register_count, value.debug_locals,
-            value.call_results, value.debug_string_locals, value.debug_container_locals,
+            value.call_results, value.frame_locals, value.debug_string_locals,
+            value.debug_container_locals,
             value.container_register_types, value.static_trigger_regions,
             value.register_value_kinds, value.expression_profiles,
             value.scheduling_domain);
@@ -1455,9 +1456,10 @@ namespace codec_detail {
             if (!failure_.empty()) {
                 return;
             }
-            if (++depth_ > kMaximumNesting) {
-                --depth_;
-                failure_ = "design state exceeds the safe structural nesting depth";
+            // Nested values continue on a new stack segment when the stack
+            // is nearly used up, so the nesting depth is bounded by memory.
+            if (!support::stack_growth_detail::has_room()) {
+                support::with_stack([&] { write(value); });
                 return;
             }
             using Value = std::remove_cv_t<T>;
@@ -1466,7 +1468,6 @@ namespace codec_detail {
             } else if constexpr (std::is_enum_v<Value>) {
                 if (!valid_archive_enum(value)) {
                     failure_ = "design state contains an invalid scalar enumeration";
-                    --depth_;
                     return;
                 }
                 write(static_cast<std::underlying_type_t<Value>>(value));
@@ -1693,7 +1694,6 @@ namespace codec_detail {
             } else {
                 static_assert(sizeof(Value) == 0, "unsupported design-state field");
             }
-            --depth_;
         }
 
         std::string finish() &&
@@ -1965,7 +1965,6 @@ namespace codec_detail {
         support::Sha256* checksum_ { };
         std::array<char, 64 * 1024> buffer_ { };
         std::size_t buffered_ { };
-        std::size_t depth_ { };
         std::string failure_;
         bool runtime_path_projection_ { };
         bool runtime_operation_body_sharing_ { };
@@ -2095,13 +2094,8 @@ namespace codec_detail {
         bool read(T& value)
         {
             using Value = std::remove_cv_t<T>;
-            // Leaf scalars skip the enter()/leave() pair; the depth check is
-            // the one enter() would make, with the same diagnostic.
             if constexpr (std::same_as<Value, bool>
                 || (std::is_integral_v<Value> && !std::is_enum_v<Value>)) {
-                if (depth_ >= kMaximumNesting) {
-                    return fail("design state exceeds the safe structural nesting depth");
-                }
                 return read_scalar(value);
             } else {
                 return read_structured(value);
@@ -2112,8 +2106,10 @@ namespace codec_detail {
         bool read_structured(T& value)
         {
             using Value = std::remove_cv_t<T>;
-            if (!enter()) {
-                return false;
+            // Nested values continue on a new stack segment when the stack
+            // is nearly used up, so the nesting depth is bounded by memory.
+            if (!support::stack_growth_detail::has_room()) {
+                return support::with_stack([&] { return read_structured(value); });
             }
             const bool result = [&]() {
                 if constexpr (std::is_enum_v<Value>) {
@@ -2447,9 +2443,6 @@ namespace codec_detail {
                         // Little-endian wire integers: one bulk copy. A
                         // truncated payload reports the same diagnostic the
                         // per-element read would.
-                        if (size != 0U && depth_ >= kMaximumNesting) {
-                            return fail("design state exceeds the safe structural nesting depth");
-                        }
                         if (size > remaining() / sizeof(Element)) {
                             return fail("design state is truncated");
                         }
@@ -2592,7 +2585,6 @@ namespace codec_detail {
                     static_assert(sizeof(Value) == 0, "unsupported design-state field");
                 }
             }();
-            leave();
             return result;
         }
 
@@ -2906,15 +2898,6 @@ namespace codec_detail {
             return true;
         }
 
-        bool enter()
-        {
-            if (++depth_ > kMaximumNesting) {
-                --depth_;
-                return fail("design state exceeds the safe structural nesting depth");
-            }
-            return true;
-        }
-        void leave() noexcept { --depth_; }
         bool fail(std::string message)
         {
             if (failure_.empty()) {
@@ -3007,7 +2990,6 @@ namespace codec_detail {
         std::array<char, 64 * 1024> buffer_ { };
         std::size_t buffer_position_ { };
         std::size_t buffer_size_ { };
-        std::size_t depth_ { };
         std::string failure_;
         DecodeBudget* budget_ { };
         bool runtime_operation_body_sharing_ { };

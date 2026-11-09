@@ -90,6 +90,11 @@
 #c top.dpi_twice: formal x typespec=vpiIntTypespec
 #c top.dpi_twice: result typespec=vpiIntTypespec
 #c top.dpi_note: formal x typespec=vpiIntTypespec
+#c top.named: formal b typespec=vpiLogicTypespec name=byte_t
+#c top.named: formal c typespec=vpiEnumTypespec name=color_t
+#c top.named: result typespec=vpiLogicTypespec name=byte_t
+#c cp::nibble: formal n typespec=vpiLogicTypespec name=nib_t
+#c cp::nibble: result typespec=vpiLogicTypespec name=nib_t
 #c dpi call line 58: vpiFuncCall top.dpi_twice access=4 functype=1
 #c dpi call line 59: vpiTaskCall top.dpi_note access=4
 #c top.w: vpiContAssign netdeclassign=0

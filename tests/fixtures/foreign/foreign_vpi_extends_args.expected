@@ -1,0 +1,15 @@
+#c Derived extends arguments:
+#c arg 0 type=vpiConstant value=3
+#c arg 1 type=vpiConstant value=4
+#c Named extends arguments:
+#c arg 0 type=vpiConstant value=5
+#c arg 1 type=vpiConstant value=7
+#c Base extends: none
+#c P#(8) assignments:
+#c assign lhs=W type=vpiParamAssign rhs=8
+#c assign lhs=D type=vpiParamAssign rhs=2
+#c PD base assignments:
+#c base assign lhs=W rhs=8
+#c base assign lhs=D rhs=2
+#c member top.d.a found value=7
+#c member top.d.zzz none

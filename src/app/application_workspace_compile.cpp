@@ -419,6 +419,7 @@ namespace {
             "FSIM-ELAB-VHCOMPOP-001",
             "FSIM-ELAB-VHDLCASE-003", "FSIM-ELAB-VHDLCASE-005",
             "FSIM-ELAB-VHENUM-002", "FSIM-ELAB-VHENUM-003",
+            "FSIM-ELAB-VHENUM-004",
             "FSIM-ELAB-VHENUMRANGE-003", "FSIM-ELAB-VHFILE-013", "FSIM-ELAB-VHFILE-014", "FSIM-ELAB-VHENUMRANGE-004",
             "FSIM-ELAB-VHLEGAL-002", "FSIM-ELAB-VHLEGAL-004",
             "FSIM-ELAB-VHLEGAL-010", "FSIM-ELAB-VHNAME-002", "FSIM-ELAB-VHNAME-003", "FSIM-ELAB-VHOPER-001", "FSIM-ELAB-VHRANGE-001",
@@ -528,8 +529,15 @@ namespace {
                                             spelling, name);
                                     });
                             }
-                            for (std::size_t depth = 0;
-                                 depth < 32U && type_id.valid(); ++depth) {
+                            std::vector<decltype(type_id)> followed;
+                            while (type_id.valid()) {
+                                // A subtype chain that returns to a type
+                                // already followed is not unconstrained.
+                                if (std::ranges::find(followed, type_id)
+                                    != followed.end()) {
+                                    return false;
+                                }
+                                followed.push_back(type_id);
                                 const auto type = std::ranges::find(types,
                                     type_id, &semantic::vhdl::TypeDefinition::id);
                                 if (type == types.end()) {

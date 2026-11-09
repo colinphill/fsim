@@ -10,11 +10,12 @@
 // application keeps beside the engine.
 #include "application_simulation_internal.hpp"
 
-#include "fsim/runtime/run_state_archive.hpp"
+#include "../runtime/run_state_archive.hpp"
 #include "fsim/runtime/run_state_image.hpp"
 #include "fsim/runtime/run_state_sections.hpp"
-#include "fsim/runtime/run_state_value_codecs.hpp"
+#include "../runtime/run_state_value_codecs.hpp"
 #include "fsim/runtime/scheduler_events.hpp"
+#include "../runtime/uvm_run_state.hpp"
 #include "fsim/support/native_filesystem.hpp"
 
 #include <algorithm>
@@ -155,6 +156,146 @@ bool Simulation::Impl::uvm_state_live() const
 {
     return !uvm_roots_by_scope.empty() || !uvm_phase_objects.empty()
         || !uvm_run_test.roots.empty() || uvm_run_test.phase.has_value();
+}
+
+bool Simulation::Impl::uvm_state_present() const
+{
+    return uvm_state_live() || !uvm_registry.types().empty()
+        || uvm_objects.instance_count() != 0U || uvm_resources.size() != 0U
+        || !uvm_activity.events().empty();
+}
+
+std::string Simulation::Impl::uvm_unsaved_state() const
+{
+    // Each of these holds a function of the embedding program, which a file
+    // cannot carry (the services' own state is written by "app.uvm").
+    if (!uvm_components.run_state_idle()) {
+        return "a UVM phase callback is running";
+    }
+    if (!uvm_activity.run_state_idle()) {
+        return "a UVM activity observer is running";
+    }
+    if (!uvm_objections.run_state_idle()) {
+        return "a UVM objection is being finalized";
+    }
+    if (!uvm_resources.run_state_idle()) {
+        return "a UVM resource holds a callback of the embedding program";
+    }
+    if (!uvm_config_db.run_state_idle()) {
+        return "a UVM config_db waiter holds a callback of the embedding "
+               "program";
+    }
+    if (!uvm_reports.run_state_idle()) {
+        return "a UVM report hook or catcher is a callback of the embedding "
+               "program";
+    }
+    return { };
+}
+
+std::vector<std::string> Simulation::Impl::uvm_unused_services() const
+{
+    // The application's run never creates state in these services: only the
+    // embedding API does (ports, FIFOs, sequences, registers, callbacks,
+    // events, a test runner), with handlers that a file cannot carry. The
+    // section holds none of them, so the save is refused while one is not
+    // empty (FSIM-SAVE-0011).
+    std::vector<std::string> names;
+    const auto idle = [&names](const bool at_rest, const char* service) {
+        if (!at_rest) {
+            names.emplace_back(service);
+        }
+    };
+    FSIM_RS_IDLE("sim.impl", uvm_tlm1);
+    idle(uvm_tlm1.run_state_idle(), "UVM TLM 1 service");
+    FSIM_RS_IDLE("sim.impl", uvm_tlm2);
+    idle(uvm_tlm2.run_state_idle(), "UVM TLM 2 service");
+    FSIM_RS_IDLE("sim.impl", uvm_sequences);
+    idle(uvm_sequences.run_state_idle(), "UVM sequence service");
+    FSIM_RS_IDLE("sim.impl", uvm_callbacks);
+    idle(uvm_callbacks.run_state_idle(), "UVM callback service");
+    FSIM_RS_IDLE("sim.impl", uvm_transactions);
+    idle(uvm_transactions.run_state_idle(), "UVM transaction recorder");
+    FSIM_RS_IDLE("sim.impl", uvm_register_model);
+    idle(uvm_register_model.run_state_idle(), "UVM register model service");
+    FSIM_RS_IDLE("sim.impl", uvm_foreign);
+    idle(uvm_foreign.run_state_idle(), "UVM foreign service");
+    FSIM_RS_IDLE("sim.impl", uvm_synchronization);
+    idle(uvm_synchronization.run_state_idle(), "UVM synchronization service");
+    FSIM_RS_IDLE("sim.impl", uvm_test_runner);
+    idle(uvm_test_runner.run_state_idle(), "UVM test runner");
+    return names;
+}
+
+void Simulation::Impl::uvm_run_state_io(runtime::RunStateArchive& archive)
+{
+    // The handles of the phase and objection services are bound to the
+    // services of the restoring run.
+    const runtime::SystemVerilogUvmRunStateOwners owners {
+        uvm_phases.run_state_owner(), uvm_objections.run_state_owner()
+    };
+    archive.set_context(&owners);
+    // The services in the order of their dependencies; the handles to class
+    // objects name the objects of "app.class_heap" by slot and generation, so
+    // a restore needs no rebinding of those.
+    archive.io(uvm_objects);
+    archive.io(uvm_components);
+    archive.io(uvm_activity);
+    archive.io(uvm_phases);
+    archive.io(uvm_objections);
+    archive.io(uvm_resources);
+    archive.io(uvm_config_db);
+    archive.io(uvm_factory);
+    archive.io(uvm_command_line);
+    archive.io(uvm_reports);
+    // What the application keeps beside them: the phase objects handed to
+    // user code, the run_test in progress, the port and sequencer maps.
+    archive.io(uvm_phase_objects);
+    archive.io(uvm_run_test);
+    archive.io(uvm_tlm_owners);
+    archive.io(uvm_analysis_connections);
+    archive.io(uvm_sequence_sequencers);
+    archive.io(uvm_sequencer_items);
+    archive.io(uvm_sequencer_current);
+    archive.io(uvm_pending_items);
+    archive.io(uvm_root_report_object);
+    archive.io(uvm_singletons);
+    archive.io(uvm_roots_by_scope);
+    archive.set_context(nullptr);
+}
+
+void Simulation::Impl::reset_uvm_state()
+{
+    uvm_phase_objects.clear();
+    uvm_run_test = { };
+    uvm_tlm_owners.clear();
+    uvm_analysis_connections.clear();
+    uvm_sequence_sequencers.clear();
+    uvm_sequencer_items.clear();
+    uvm_sequencer_current.clear();
+    uvm_pending_items.clear();
+    uvm_root_report_object = { };
+    uvm_singletons.clear();
+    uvm_roots_by_scope.clear();
+    uvm_objects.reset_run_state();
+    uvm_components.reset_run_state();
+    uvm_activity.reset_run_state();
+    uvm_phases.reset_run_state();
+    uvm_objections.reset_run_state();
+    uvm_resources.reset_run_state();
+    uvm_config_db.reset_run_state();
+    uvm_factory.reset_run_state();
+    uvm_command_line.reset_run_state();
+    uvm_reports.reset_run_state();
+}
+
+void Simulation::Impl::reapply_uvm_command_line()
+{
+    // The factory overrides, configuration and report settings of the command
+    // line are part of time zero, as they were at the start.
+    const auto arguments = uvm_command_line.settings().arguments;
+    uvm_command_line.apply(arguments);
+    uvm_command_line.apply_initial_report_settings(uvm_reports, uvm_objections);
+    schedule_uvm_report_settings();
 }
 
 void Simulation::Impl::queue_save(SaveRequest request)
@@ -435,12 +576,26 @@ Simulation::StateFileResult Simulation::Impl::read_state_file(
     } else if (vpi_values != nullptr) {
         vpi_values->reset_records();
     }
+    // The UVM services, for the same reason: a pending objection drain is an
+    // event the engine restores, and it finds its record in the objection
+    // service (IEEE 1800.2-2020 9.3.1). A file without the section holds no
+    // UVM state; the registry's clear returns the services to time zero.
+    if (image.find("app.uvm") != nullptr) {
+        std::vector<std::string> uvm_errors;
+        if (!runtime::load_section(image, "app.uvm", 1U,
+                [this](runtime::RunStateArchive& archive) {
+                    uvm_run_state_io(archive);
+                },
+                uvm_errors)) {
+            return failure(join_messages(uvm_errors));
+        }
+    }
     // The splits the saved run made after its start, rebuilt before the
     // engine restores its state so that the plan fits it.
     if (image.find("app.late_splits") != nullptr) {
         std::vector<std::string> split_errors;
         std::vector<LateSplit> splits;
-        if (!runtime::load_section(image, "app.late_splits", 2U,
+        if (!runtime::load_section(image, "app.late_splits", 3U,
                 [&splits](runtime::RunStateArchive& archive) {
                     archive.io(splits);
                 },
@@ -574,21 +729,34 @@ void Simulation::Impl::register_save_sections()
         .present = [this] { return class_static_store.property_count() != 0U; },
     });
 
-    // The UVM services (components, phases, objections, sequences, factory,
-    // configuration database) are host state that no section writes yet: a
-    // file without it would restart a testbench whose phase machinery knows
-    // nothing of the components that exist, and the phases would run again.
-    // The save refuses while a root, a phase object or a run_test is live.
+    // The UVM services (#188): objects, components, phases and their
+    // processes, objections and drains, resources and configuration,
+    // factory overrides, the report server and the settings it applied, and
+    // the maps the application keeps beside them, written as one section.
+    // The services' hooks and the registry of types are the design's and the
+    // command line's. The section is read by read_state_file ahead of the
+    // engine's events, because a pending objection drain is a scheduler event
+    // that finds its record here; the owner has no restore for that reason,
+    // like "app.vpi_writes". A service that only the embedding API fills
+    // (TLM, sequences, callbacks, registers, events) is not in the section;
+    // the audit refuses the save while one holds state.
     section_registry.add({
         .name = "app.uvm",
         .version = 1U,
-        .present = [this] { return uvm_state_live(); },
-        .refuse = [this]() -> std::string {
-            return uvm_state_live()
-                ? std::string { "the UVM component, phase and objection "
-                                "state lives in host services that the "
-                                "run-state file does not carry yet" }
-                : std::string { };
+        .save = [this](RunStateArchive& archive) { uvm_run_state_io(archive); },
+        .present = [this] { return uvm_state_present(); },
+        .clear = [this] {
+            if (uvm_state_present()) {
+                reset_uvm_state();
+            }
+        },
+        .refuse = [this] { return uvm_unsaved_state(); },
+        .audit = [this](std::vector<std::string>& messages) {
+            for (const auto& name : uvm_unused_services()) {
+                messages.push_back("FSIM-SAVE-0011: the " + name
+                    + " holds state that the run-state file does not carry "
+                      "(it is filled only through the embedding API)");
+            }
         },
     });
 
@@ -671,7 +839,7 @@ void Simulation::Impl::register_save_sections()
     // keeps the structure of the running design).
     section_registry.add({
         .name = "app.late_splits",
-        .version = 2U,
+        .version = 3U,
         .save = [this](RunStateArchive& archive) { archive.io(late_splits); },
         .present = [this] { return !late_splits.empty(); },
     });
@@ -683,10 +851,16 @@ void Simulation::Impl::register_save_sections()
             if (vpi_values != nullptr) {
                 vpi_values->bind_event_owner(owners);
             }
+            // A pending objection drain (set_drain_time) is an event of the
+            // objection service ("app.uvm" holds its record).
+            uvm_objections.bind_event_owner(owners);
         },
         .bind_handle = [this](const std::string_view kind,
                            const std::uint64_t key,
                            const runtime::ScheduledTaskHandle& handle) {
+            if (kind == "uvm.objection_drain") {
+                return uvm_objections.bind_restored_drain(key, handle);
+            }
             return kind == "vpi.scheduled_write" && vpi_values != nullptr
                 && vpi_values->bind_restored_write(key, handle);
         },

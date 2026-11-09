@@ -116,6 +116,8 @@ module top;
         n = {U, U};
         n = U << 2;
         n = -P;
+        n = {2{U}}; // 10101010 (11.4.12.1)
+        n = {2{U, 2'b01}}; // 101001101001
     endtask
 
     // Output task arguments as written (37.62): a lone literal, and string

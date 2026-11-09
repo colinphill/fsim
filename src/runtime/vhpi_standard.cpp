@@ -2,6 +2,7 @@
 #include "fsim/runtime/vhpi_bridge.h"
 
 #include <array>
+#include <vector>
 #include <atomic>
 #include <cctype>
 #include <cstdarg>
@@ -12,10 +13,9 @@
 
 namespace {
 
-constexpr std::size_t maximum_host_depth = 64U;
 constexpr std::size_t maximum_text_size = 1U << 20U;
-thread_local std::array<const fsim_vhpi_std_host_v1*, maximum_host_depth>
-    host_stack{};
+// The hosts entered on this thread, innermost last; it grows with the nesting.
+thread_local std::vector<const fsim_vhpi_std_host_v1*> host_stack{};
 thread_local std::size_t host_depth{};
 // The outermost host entered on the simulation thread. A library may query
 // the design from a thread of its own while the simulation thread is parked
@@ -111,9 +111,15 @@ const vhpiPhysT vhpiHR = {838190317, 661127168U};
 FSIM_VHPI_BRIDGE_API int FSIM_VHPI_BRIDGE_CALL
 fsim_vhpi_std_host_enter_v1(const fsim_vhpi_std_host_v1* const host) {
   if (host == nullptr || host->abi_version != FSIM_VHPI_STD_HOST_ABI_VERSION
-      || host->struct_size < offsetof(fsim_vhpi_std_host_v1, register_cb)
-      || host_depth == maximum_host_depth) {
+      || host->struct_size < offsetof(fsim_vhpi_std_host_v1, register_cb)) {
     return -1;
+  }
+  if (host_depth == host_stack.size()) {
+    try {
+      host_stack.push_back(nullptr);
+    } catch (...) {
+      return -1;
+    }
   }
   if (host_depth == 0U) {
     const fsim_vhpi_std_host_v1* expected = nullptr;

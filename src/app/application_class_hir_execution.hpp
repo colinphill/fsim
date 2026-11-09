@@ -3,9 +3,11 @@
 
 #include "application_internal.hpp"
 
+#include <algorithm>
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 namespace fsim::app::application_detail {
 
@@ -83,6 +85,20 @@ public:
         std::string_view,
         std::string_view,
         runtime::SystemVerilogClassHandle)>;
+    /// Appends elements to a class-handle queue property.
+    using ClassHandleQueueWrite = std::function<void(
+        runtime::SystemVerilogClassHandle,
+        std::string_view,
+        std::span<const runtime::SystemVerilogClassHandle>)>;
+    /// The native UVM root's `find_all` and `get_children`: the components
+    /// the call returns for a receiver, or nullopt when the receiver is not
+    /// the root.
+    using RootContainerMethod = std::function<std::optional<
+        std::vector<runtime::SystemVerilogClassHandle>>(
+        runtime::SystemVerilogClassHandle,
+        std::string_view,
+        std::string_view,
+        runtime::SystemVerilogClassHandle)>;
     using ClassHandleFixedArrayWrite = std::function<void(
         runtime::SystemVerilogClassHandle,
         std::string_view,
@@ -145,6 +161,17 @@ public:
         ClassHandleContainerWrite write)
     {
         write_class_handle_container_ = std::move(write);
+    }
+    void set_class_handle_queue_write_service(ClassHandleQueueWrite write)
+    {
+        write_class_handle_queue_ = std::move(write);
+    }
+    void set_root_container_method_service(
+        std::function<bool(runtime::SystemVerilogClassHandle)> is_root,
+        RootContainerMethod method)
+    {
+        is_native_root_ = std::move(is_root);
+        root_container_method_ = std::move(method);
     }
     void set_class_handle_fixed_array_write_service(
         ClassHandleFixedArrayWrite write)
@@ -311,6 +338,29 @@ private:
         semantic::sv::Direction direction) noexcept;
     [[nodiscard]] static runtime::PackedLogic4 resize_packed(
         const runtime::PackedLogic4& value, std::size_t width);
+    /// `uvm_top.find_all(pattern, queue[, start])` and
+    /// `uvm_top.get_children(queue)` on the native root: the components are
+    /// written into the class property queue the call names. nullopt when the
+    /// receiver is not the native root.
+    [[nodiscard]] std::optional<runtime::PackedLogic4>
+    evaluate_root_container_call(
+        const semantic::sv::Expression& call,
+        runtime::SystemVerilogClassHandle caller,
+        runtime::SystemVerilogClassHandle receiver,
+        std::string_view method_name,
+        PackedEnvironment& environment);
+    /// A queue or dynamic array of class handles declared in a method body
+    /// (IEEE 1800-2017 7.10, 7.5): its elements, kept per invocation (the
+    /// invocation's environment) and per declaration, or null when the
+    /// expression does not name one.
+    [[nodiscard]] std::vector<runtime::SystemVerilogClassHandle>*
+    local_handle_queue(
+        semantic::ExpressionId expression,
+        const PackedEnvironment& environment);
+    [[nodiscard]] std::vector<runtime::SystemVerilogClassHandle>*
+    local_handle_queue(
+        const semantic::sv::Expression* source,
+        const PackedEnvironment& environment);
     [[nodiscard]] std::optional<runtime::PackedLogic4>
     evaluate_class_array_query(
         semantic::ExpressionId array,
@@ -426,7 +476,18 @@ private:
         runtime::SystemVerilogClassHandle handle,
         PackedEnvironment& environment,
         StringEnvironment& string_environment);
+    // Runs invoke_function_body on a stack segment of its own when the
+    // native stack is nearly used up, so call depth is bounded by memory.
     [[nodiscard]] runtime::PackedLogic4 invoke_function_impl(
+        const semantic::sv::SpecializedClassMethod& method,
+        runtime::SystemVerilogClassHandle handle,
+        std::vector<runtime::PackedLogic4>& actuals,
+        std::vector<std::string>& string_actuals,
+        std::span<const std::string> actual_names,
+        std::span<const std::uint8_t> actual_directions,
+        std::span<const std::optional<VariableReference>> actual_references,
+        std::vector<std::size_t>* actual_formals);
+    [[nodiscard]] runtime::PackedLogic4 invoke_function_body(
         const semantic::sv::SpecializedClassMethod& method,
         runtime::SystemVerilogClassHandle handle,
         std::vector<runtime::PackedLogic4>& actuals,
@@ -512,6 +573,14 @@ private:
     StringPropertyWrite write_string_property_;
     ClassPropertyContainerRead read_class_property_container_;
     ClassHandleContainerWrite write_class_handle_container_;
+    ClassHandleQueueWrite write_class_handle_queue_;
+    // The local queues of class handles of the running invocations, by the
+    // invocation's environment and the declaration.
+    std::map<std::pair<const PackedEnvironment*, std::uint32_t>,
+        std::vector<runtime::SystemVerilogClassHandle>>
+        local_handle_queues_;
+    std::function<bool(runtime::SystemVerilogClassHandle)> is_native_root_;
+    RootContainerMethod root_container_method_;
     ClassHandleFixedArrayWrite write_class_handle_fixed_array_;
     TimeSource now_;
     ObjectConstructor construct_;
@@ -524,12 +593,19 @@ private:
     CallValueEnvironment* call_values_ { };
     std::vector<PendingCallFrame> pending_call_frames_;
     SystemVerilogClassExecutionStatistics statistics_;
-    std::size_t depth_ { };
     std::optional<runtime::simir::ProcessId> report_process_;
     std::string active_hierarchy_;
     // Values of static locals of class methods, by declaration.
     std::map<std::uint32_t, runtime::PackedLogic4> static_locals_;
-    std::size_t constant_depth_ { };
+    // Constant initializers being evaluated; a reference back to one of them
+    // is a cycle.
+    std::vector<semantic::ExpressionId> active_constant_initializers_;
+    [[nodiscard]] bool constant_initializer_active(
+        const semantic::ExpressionId initializer) const
+    {
+        return std::ranges::find(active_constant_initializers_, initializer)
+            != active_constant_initializers_.end();
+    }
     // The function being executed returns a string.
     bool string_return_ { };
     std::map<std::uint32_t, VariableReference> active_references_;

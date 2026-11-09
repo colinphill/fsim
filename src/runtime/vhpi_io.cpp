@@ -70,7 +70,7 @@ VhdlVhpiIoError VhdlVhpiIoSystem::validate_identity(
 
 VhdlVhpiIoResult<fsim_vhpi_handle_v1> VhdlVhpiIoSystem::root_of(
     fsim_vhpi_handle_v1 object) const {
-  for (std::uint32_t depth = 0; depth < 1'024; ++depth) {
+  for (;;) {
     const auto metadata = objects_->lookup_object(object);
     if (!metadata) {
       return {{}, metadata.error == VhdlVhpiObjectError::CrossSimulation
@@ -82,7 +82,6 @@ VhdlVhpiIoResult<fsim_vhpi_handle_v1> VhdlVhpiIoSystem::root_of(
     }
     object = metadata.value.parent;
   }
-  return {{}, VhdlVhpiIoError::ResourceLimit};
 }
 
 VhdlVhpiIoContextResult VhdlVhpiIoSystem::register_context(

@@ -59,6 +59,8 @@ legacy JIT was removed, so the loop compares the reference evaluator with v4.
 - **Guarantee.**
   - `fsim simulate` runs v4 by default.
   - `--engine v4` names it explicitly.
+  - The engine of `fsim simulate` and `fsim tcl` is also set by the
+    configuration key `simulate.engine` (same values); `--engine` wins.
   - `--engine interpreter` runs the reference evaluator only. It stays as the
     differential oracle and as the debug engine.
   - `--engine debug` keeps its meaning (S20).
@@ -297,7 +299,7 @@ state, S3):
     Slot values, pending timers and net-delay changes, queued writes and
     suspended threads (their waits move to the copy with their epochs) keep
     their state, and a multi-threaded kernel plans its batches again. A graft
-    the kernel cannot take (a debugger plan, a VHDL kernel, a hosted or lazy
+    the kernel cannot take (a VHDL kernel, a hosted or lazy
     load, a load that keeps reading the net) is refused with the kernel
     unchanged.
 - **Witness.** T-sv (combinational netlist, case block, net array), T-cone.
@@ -547,7 +549,12 @@ state, S3):
   kernel threads on the interpreter tier. Supported: `wait for` (static or
   TIME-valued), `wait on`, `wait until` (a WaitOn loop that re-evaluates the
   condition), each with or without `for T`, bare `wait`, several waits per
-  process, waits inside procedures (per-thread call stack), `report`,
+  process, waits inside procedures (per-thread call stack, a growable store
+  in the compiled body: a call of any depth stays in compiled code, only a
+  full store asks the runtime to grow it; a recursive callable's frames,
+  the packed registers it saves at each call, go on a second growable store
+  of the body, `frame_push`/`frame_pop`, and ride in the thread's saved
+  stack), `report`,
   `std.env.stop/finish`, `now`, and the zero-delay inertial assignments of
   the delta mode. A thread runs in the VHDL round with the members, its
   assignments go through the round queue and apply in the update phase; a
@@ -827,6 +834,40 @@ state, S3):
     the activation that first overrides a signal not already published is
     not intercepted (the watch applies at the next activation); a design with
     a user system task call publishes every signal, so it is.
+  - *The debugger plan* (`--engine debug`, `StaticKernelAccessPlan::debug`)
+    keeps every signal kernel-owned, as for a foreign library. Only the
+    process side changes: every process is a behavioral thread or hosted
+    (no comb/seq/once shape), the members' debug points are executable, and
+    dead logic and delta collapse stay off so that every process runs and
+    can stop. The debugger examines signals through `signal_value` (a
+    durable reference watches the signal), deposits through
+    `deposit_kernel_signal`, forces and releases through the host's
+    override layer and `override_changed`, and subscribes its signal
+    breakpoints and watches with `watch_signal_changes` when they are added.
+    It opens the kernel's rounds to the host (`open_external_observation`)
+    for its time, phase and step stops, and publishes the kernel's pending
+    outputs when a run stops, so a stop inside an activation shows the
+    values its earlier statements wrote. A simulation built without a run's
+    access plan (the library API, an embedding client) takes the process
+    side of this plan but keeps every signal a host signal
+    (`StaticKernelAccessPlan::host_signals`): its change hooks hear every
+    write of every signal in the reference evaluator's order, which the
+    kernel's member order and per-activation publication cannot give. Under
+    `--engine debug` a signal change observer (`Simulation::set_signal_change_hook`,
+    `add_signal_change_hook`, the scalar forms) watches every signal, and a
+    VPI value watch watches its object's signals; under this plan the
+    kernel reports every change of a watched (output) slot at the write
+    (`slot_changed_general` publishes it at once), so several blocking
+    writes of one activation are several changes, as the reference
+    evaluator reports them. Other plans publish the value an activation
+    leaves. A write under a force reaches the host's stored layer first
+    (`restore_override`), so a release finds what the writers wrote
+    meanwhile. Registry reads and puts ask the simulation for a live value
+    with the registry lock released, because the kernel publishes
+    (`notify_live_value`) while it answers. A first-time live SDF net-delay
+    split is grafted like the compiled kernel's, the members' debug points
+    staying at their positions. SystemC designs keep every signal a host
+    signal (S26).
   - Per-partition recompile at a safe point is *not yet*.
 - **Witness.** T-sv, T-vhdl, T-cone (hidden signals read back mid-run and at
   the end: the on-demand class). To add: observed and writable classes.
@@ -860,8 +901,8 @@ state, S3):
   delayed copies host signals. `CodeCoverageHit` is a kernel operation (a
   host counter bump with no signal access; static, behavioral and VHDL
   members run it through the generic step), so coverage keeps processes on
-  the kernel. SystemC is no longer a gate (S26). The debug engine and
-  `signal_width` rows stay gates. The run reports
+  the kernel. SystemC is no longer a gate (S26). The debug engine is no
+  longer a gate (S19); the `signal_width` row stays one. The run reports
   `fsim-profile: static-kernel-access ...`.
 - **Strict mode.** `FSIM_V4_STRICT=1` makes a v4 run fail instead of
   falling back: a design-level refusal or access gate throws at setup, and
@@ -1197,8 +1238,8 @@ state, S3):
   SystemC) runs on the v4 kernel. No SimIR operation is interpreted.
 - **Rule.** The SystemC kernel reads and writes HDL signals through the
   boundary context, outside any SimIR operation, so a design with SystemC
-  processes or named SystemC objects is planned as for the debugger
-  (S19): every signal and container is a host object. Each
+  processes or named SystemC objects keeps every signal and container a
+  host object. Each
   SystemC process keeps its SimIR stub (one `Halt` or `WaitSensitivity`)
   and is never a member or a hosted step: it is a host process whose
   process executor (`SystemCProcessExecutor`) resumes the native SystemC

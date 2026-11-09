@@ -78,9 +78,13 @@ inline constexpr bool behavioral_suspension = std::is_same_v<T, WaitFor>
 /// A ReadSignal of the assertion services (IEEE 1800-2023 16.5.1, 16.9.3):
 /// a sampled value, a sampled-value function ($past, $rose, ...) or a
 /// clocked or gated history read. Its value is the host's sampled history,
-/// not the signal's current value.
+/// not the signal's current value. `$future_gclk` (16.9.4) is the signal's
+/// current value, a plain read whatever clock it names.
 [[nodiscard]] inline bool sampled_read(const ReadSignal& read) noexcept
 {
+    if (read.kind == SignalReadKind::future) {
+        return false;
+    }
     return read.kind != SignalReadKind::current || read.ticks != 1U
         || read.clock || read.gate;
 }
@@ -120,7 +124,14 @@ inline void operation_registers_of(const T& op, std::vector<RegisterId>& reads,
     write.reset();
     {
         if constexpr (std::is_same_v<T, LoadConstant>
-            || std::is_same_v<T, ReadSignal>) {
+            || std::is_same_v<T, ReadSignal>
+            // The attributes of a host signal (IEEE 1076-2019 16.2.4) store
+            // their result through the kernel's operation step.
+            || std::is_same_v<T, SignalEvent>
+            || std::is_same_v<T, SignalActive>
+            || std::is_same_v<T, SignalLastValue>
+            || std::is_same_v<T, SignalLastEvent>
+            || std::is_same_v<T, SignalLastActive>) {
             write = op.destination;
         } else if constexpr (std::is_same_v<T, CopyRegister>
             || std::is_same_v<T, UnaryNot>
@@ -191,6 +202,110 @@ inline void operation_registers_of(const T& op, std::vector<RegisterId>& reads,
             write = op.result;
         } else if constexpr (std::is_same_v<T, PlusArgSelect>) {
             write = op.destination;
+        } else if constexpr (std::is_same_v<T, StringMethod>) {
+            // The reference's execute_string_method and execute_string_format
+            // (StaticKernel::behavioral_step): which registers an operator
+            // reads and which it writes.
+            using M = StringMethodOperator;
+            const auto method = op.operation;
+            const bool dynamic_packed = method == M::format_packed_dynamic_field;
+            const bool dynamic_string = method == M::format_string_dynamic_field;
+            if (method == M::format_packed || dynamic_packed || dynamic_string
+                || method == M::format_string || method == M::format_time
+                || method == M::format_vhdl_time) {
+                if (method == M::format_packed || dynamic_packed
+                    || dynamic_string || method == M::format_vhdl_time
+                    || (method == M::format_time && op.time_unit_femtoseconds != 0U)) {
+                    reads.push_back(op.first);
+                }
+                if (dynamic_packed) {
+                    reads.push_back(op.second);
+                }
+            } else {
+                const bool element = method == M::vhdl_composite_element
+                    || method == M::vhdl_character_element
+                    || method == M::vhdl_string_fill;
+                if (method == M::getc || method == M::putc || method == M::substr
+                    || element || (method >= M::itoa && method <= M::realtoa)) {
+                    reads.push_back(op.first);
+                }
+                if (method == M::putc || method == M::substr || element) {
+                    reads.push_back(op.second);
+                }
+                if (method == M::getc || method == M::compare
+                    || method == M::icompare || method == M::atoi
+                    || method == M::atohex || method == M::atooct
+                    || method == M::atobin || method == M::atoreal
+                    || method == M::vhdl_enumeration_value
+                    || method == M::vhdl_physical_value
+                    || method == M::vhdl_integer_value) {
+                    write = op.destination;
+                }
+            }
+        } else if constexpr (std::is_same_v<T, StringLength>
+            || std::is_same_v<T, CompareStrings>) {
+            write = op.destination;
+        } else if constexpr (std::is_same_v<T, StringIndex>) {
+            reads.push_back(op.index);
+            write = op.destination;
+        } else if constexpr (std::is_same_v<T, StringReport>) {
+            // A VHDL report with a computed message: the severity register.
+            reads.push_back(op.severity);
+        } else if constexpr (std::is_same_v<T, StringReplaceByte>) {
+            reads.push_back(op.index);
+            reads.push_back(op.source);
+        } else if constexpr (std::is_same_v<T, FileOpen>) {
+            // The handle register is read as well (a VHDL file already open).
+            reads.push_back(op.destination);
+            write = op.destination;
+        } else if constexpr (std::is_same_v<T, FileClose>) {
+            reads.push_back(op.handle);
+            if (op.clear_handle) {
+                write = op.handle;
+            }
+        } else if constexpr (std::is_same_v<T, FileWriteLiteral>
+            || std::is_same_v<T, FileWriteString>) {
+            reads.push_back(op.handle);
+        } else if constexpr (std::is_same_v<T, FileFlush>) {
+            if (!op.all) {
+                reads.push_back(op.handle);
+            }
+        } else if constexpr (std::is_same_v<T, FileWriteFormatted>) {
+            reads.push_back(op.handle);
+            reads.push_back(op.source);
+        } else if constexpr (std::is_same_v<T, FileEndOfFile>
+            || std::is_same_v<T, FileErrorStatus>) {
+            reads.push_back(op.handle);
+            write = op.destination;
+        } else if constexpr (std::is_same_v<T, FileReadLine>) {
+            reads.push_back(op.handle);
+            if (op.kind == FileReadKind::unget) {
+                reads.push_back(op.source);
+            }
+            write = op.destination;
+        } else if constexpr (std::is_same_v<T, FileScan>) {
+            // The handle of a file scan (a string source is a string
+            // register); the targets are written (operation_written_registers).
+            if (!op.string_source) {
+                reads.push_back(op.handle);
+            }
+            write = op.destination;
+        } else if constexpr (std::is_same_v<T, FilePosition>) {
+            reads.push_back(op.handle);
+            if (file_position_uses_operands(op.kind)) {
+                reads.push_back(op.offset);
+                reads.push_back(op.origin);
+            }
+            write = op.destination;
+        } else if constexpr (std::is_same_v<T, FileBinaryRead>) {
+            reads.push_back(op.handle);
+            if (op.has_start) {
+                reads.push_back(op.start);
+            }
+            if (op.has_count) {
+                reads.push_back(op.count);
+            }
+            write = op.destination;
         } else if constexpr (std::is_same_v<T, SystemVerilogMath>) {
             // The time queries read no register.
             if (op.function < SystemVerilogMathFunction::Time) {
@@ -245,6 +360,20 @@ inline void operation_registers_of(const T& op, std::vector<RegisterId>& reads,
             || std::is_same_v<T, WriteUpdateDynamicPartSlice>) {
             reads.push_back(op.source);
             reads.push_back(op.selection.base);
+        } else if constexpr (std::is_same_v<T, WriteProjectedWaveform>
+            || std::is_same_v<T, WriteProjectedWaveformSlice>
+            || std::is_same_v<T, WriteProjectedWaveformDynamicSlice>) {
+            // A waveform's values and run-time delays (IEEE 1076-2019
+            // 10.5.2.1) and a dynamic target's index.
+            for (const auto& element : op.elements) {
+                reads.push_back(element.source);
+                if (element.delay_source) {
+                    reads.push_back(*element.delay_source);
+                }
+            }
+            if constexpr (std::is_same_v<T, WriteProjectedWaveformDynamicSlice>) {
+                reads.push_back(op.selection.index);
+            }
         } else if constexpr (std::is_same_v<T, ContainerRead>) {
             reads.push_back(op.index);
             write = op.destination;
@@ -259,6 +388,68 @@ inline void operation_registers_of(const T& op, std::vector<RegisterId>& reads,
             }
         }
     }
+}
+
+/// Every numeric register an operation writes, with the width of the value
+/// (the primary result of operation_registers_of, and the status, count and
+/// target registers of the file operations the reference evaluator stores in
+/// run_file).
+template <typename T>
+inline void operation_written_registers_of(const T& op,
+    std::vector<WrittenRegister>& writes)
+{
+    writes.clear();
+    if constexpr (std::is_same_v<T, FileOpen>) {
+        writes.push_back({ op.destination, 32U });
+        if (op.status) {
+            writes.push_back({ *op.status, 2U });
+        }
+    } else if constexpr (std::is_same_v<T, FileClose>) {
+        if (op.clear_handle) {
+            writes.push_back({ op.handle, 32U });
+        }
+    } else if constexpr (std::is_same_v<T, FileEndOfFile>) {
+        writes.push_back({ op.destination, op.lookahead ? 1U : 32U });
+    } else if constexpr (std::is_same_v<T, FileReadLine>
+        || std::is_same_v<T, FileErrorStatus>) {
+        writes.push_back({ op.destination, 32U });
+        if (op.target_kind == FileTextTargetKind::packed_register) {
+            writes.push_back({ op.target, op.target_width });
+        }
+    } else if constexpr (std::is_same_v<T, FileScan>) {
+        writes.push_back({ op.destination, 32U });
+        if (op.success) {
+            writes.push_back({ *op.success, 1U });
+        }
+        for (const auto& conversion : op.conversions) {
+            if (!conversion.suppress
+                && conversion.target.kind == InputScanTargetKind::packed_register) {
+                writes.push_back({ conversion.target.id, conversion.target.width });
+            }
+        }
+    } else if constexpr (std::is_same_v<T, FilePosition>) {
+        writes.push_back({ op.destination, 32U });
+    } else if constexpr (std::is_same_v<T, FileBinaryRead>) {
+        writes.push_back({ op.destination, 32U });
+        if (op.target_kind == FileBinaryTargetKind::packed_register) {
+            writes.push_back({ op.target, op.width });
+        }
+    } else {
+        std::vector<RegisterId> reads;
+        std::optional<RegisterId> write;
+        operation_registers_of(op, reads, write);
+        if (write) {
+            writes.push_back({ *write, 0U });
+        }
+    }
+}
+
+inline void operation_written_registers(const Operation& operation,
+    std::vector<WrittenRegister>& writes)
+{
+    visit_operation([&](const auto& op) {
+        operation_written_registers_of(op, writes);
+    }, operation);
 }
 
 /// Register operands of the operations the kernel supports.
@@ -565,6 +756,22 @@ inline void kinst_flow(const KInst& inst, const std::uint32_t at,
         }
         next.push_back(std::min(inst.d, size));
         break;
+    case KOp::frame_push:
+        // Reads the registers it saves (and its depth word).
+        use.push_back(inst.x);
+        for (auto item = body.frame_saves[inst.aux].item_begin;
+             item < body.frame_saves[inst.aux].item_end; ++item) {
+            for (std::uint32_t index = 0U; index < body.frame_items[item].count;
+                 ++index) {
+                use.push_back(body.frame_items[item].index + index);
+            }
+        }
+        fall();
+        break;
+    case KOp::frame_pop:
+        use.push_back(inst.x);
+        fall();
+        break;
     case KOp::ret:
         if (inst.z != 0U) {
             use.push_back(inst.x);
@@ -734,6 +941,64 @@ public:
         grouped(body.u_operands);
         put(body.call_stack_base);
         grouped(body.resume_entries);
+        put(body.frame_stack_base);
+        list(body.frame_saves, [&](const CompiledBody::FrameSave& save) {
+            put(save.identity);
+            put(save.item_begin);
+            put(save.item_end);
+            put(save.pairs);
+            put(save.register_begin);
+            put(save.register_end);
+        });
+        list(body.frame_items, [&](const CompiledBody::FrameItem& item) {
+            put(item.index);
+            put(item.count);
+            put(item.offset);
+        });
+        grouped(body.frame_registers);
+        // The plans of the generated attempt automata (KOp::sva_tick, z the
+        // index plus one): a restored body compiles its ticks from them.
+        list(body.sva_plans, [&](const SvaNativePlan& plan) {
+            list(plan.sequences, [&](const SvaNativeSequence& sequence) {
+                list(sequence.code, [&](const SvaNativeStep& step) {
+                    put(static_cast<std::uint64_t>(step.op));
+                    put(step.a);
+                    put(step.b);
+                    put(step.c);
+                    put_signed(step.lo);
+                    put_signed(step.hi);
+                    put(step.line);
+                    put(step.column);
+                    put_signed(step.lo_slot);
+                    put_signed(step.hi_slot);
+                });
+                put(sequence.counters);
+                put(sequence.state_base);
+            });
+            list(plan.properties, [&](const SvaNativeProperty& property) {
+                put(static_cast<std::uint64_t>(property.kind));
+                put(property.overlapped ? 1U : 0U);
+                put(property.sequence);
+                put_signed(property.child);
+                list(property.children,
+                    [&](const std::int32_t child) { put_signed(child); });
+                put(property.guard);
+                put_signed(property.lo);
+                put_signed(property.lo_slot);
+                put_signed(property.hi);
+                put_signed(property.hi_slot);
+                put(property.line);
+                put(property.column);
+            });
+            put(plan.root);
+            put(plan.every_match ? 1U : 0U);
+            grouped(plan.clock_guards);
+            list(plan.guard_positions,
+                [&](const std::pair<std::uint32_t, std::uint32_t>& position) {
+                    put(position.first);
+                    put(position.second);
+                });
+        });
     }
     /// Width plus the raw bit planes (two four-state, four logic9).
     void packed(const PackedLogic4& value)
@@ -831,6 +1096,17 @@ public:
             return false;
         }
         value = static_cast<std::int64_t>(raw >> 1U) ^ -static_cast<std::int64_t>(raw & 1U);
+        return true;
+    }
+    /// A signed value of a narrower field; one outside its range is corrupt.
+    bool get_narrow(std::int32_t& value)
+    {
+        std::int64_t wide { };
+        if (!get_signed(wide) || wide < std::numeric_limits<std::int32_t>::min()
+            || wide > std::numeric_limits<std::int32_t>::max()) {
+            return false;
+        }
+        value = static_cast<std::int32_t>(wide);
         return true;
     }
     /// A count beyond the remaining bytes is corrupt (each item takes one).
@@ -1013,7 +1289,52 @@ public:
             && get(body.shadow_base) && get(body.weak) && raw(body.tracked)
             && raw(body.u_mode) && grouped(body.u_operand_begin)
             && grouped(body.u_operands) && get(body.call_stack_base)
-            && grouped(body.resume_entries);
+            && grouped(body.resume_entries) && get(body.frame_stack_base)
+            && list(body.frame_saves, [&](CompiledBody::FrameSave& save) {
+                   return get(save.identity) && get(save.item_begin)
+                       && get(save.item_end) && get(save.pairs)
+                       && get(save.register_begin) && get(save.register_end);
+               })
+            && list(body.frame_items, [&](CompiledBody::FrameItem& item) {
+                   return get(item.index) && get(item.count) && get(item.offset);
+               })
+            && grouped(body.frame_registers)
+            && list(body.sva_plans, [&](SvaNativePlan& plan) {
+                   return list(plan.sequences, [&](SvaNativeSequence& sequence) {
+                              return list(sequence.code, [&](SvaNativeStep& step) {
+                                         return get(step.op) && get(step.a)
+                                             && get(step.b) && get(step.c)
+                                             && get_signed(step.lo)
+                                             && get_signed(step.hi)
+                                             && get(step.line) && get(step.column)
+                                             && get_narrow(step.lo_slot)
+                                             && get_narrow(step.hi_slot);
+                                     })
+                                  && get(sequence.counters)
+                                  && get(sequence.state_base);
+                          })
+                       && list(plan.properties, [&](SvaNativeProperty& property) {
+                              return get(property.kind) && get(property.overlapped)
+                                  && get(property.sequence)
+                                  && get_narrow(property.child)
+                                  && list(property.children,
+                                      [&](std::int32_t& child) {
+                                          return get_narrow(child);
+                                      })
+                                  && get(property.guard)
+                                  && get_signed(property.lo)
+                                  && get_narrow(property.lo_slot)
+                                  && get_signed(property.hi)
+                                  && get_narrow(property.hi_slot)
+                                  && get(property.line) && get(property.column);
+                          })
+                       && get(plan.root) && get(plan.every_match)
+                       && grouped(plan.clock_guards)
+                       && list(plan.guard_positions,
+                           [&](std::pair<std::uint32_t, std::uint32_t>& position) {
+                               return get(position.first) && get(position.second);
+                           });
+               });
     }
     bool packed(PackedLogic4& value)
     {

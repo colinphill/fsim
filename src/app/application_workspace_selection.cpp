@@ -525,6 +525,13 @@ namespace {
                 && instance_reference(design, reference)) {
                 return;
             }
+            // A class that extends or names a class of an exported library is
+            // specialized from that library's compiled HIR (IEEE 1800-2023
+            // 8.13, 8.25): the library is part of the design, so the class
+            // specializer sees the classes it names.
+            if (reference.kind == Kind::class_declaration) {
+                use_exported(referenced_library);
+            }
             if (reference.kind == Kind::package || reference.kind == Kind::import
                 || reference.kind == Kind::context || reference.kind == Kind::class_declaration) {
                 for (std::size_t index = 0; index < records_.size(); ++index) {

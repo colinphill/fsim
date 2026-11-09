@@ -128,9 +128,8 @@ void test_vhdl_2008_lexical_surface()
     using namespace fsim::frontend;
     const auto parsed = parse_text("vhdl-2008-lexical.vhd",
         R"(
-/* VHDL-2008 outer comment
-   /* nested comment */
-*/
+/* VHDL-2008 delimited comment; an inner /* opens nothing and
+   the first star-slash ends the comment (IEEE 1076-2019 15.9) */
 entity \Lexical\\Name\ is
 end entity;
 architecture \RTL\\Body\ of \Lexical\\Name\ is
@@ -276,17 +275,14 @@ end architecture;
         count_code(long_literal.diagnostics, "FSIM-VHDL-PARSE-263") == 0 && long_literal.design.units.size() == 2 && long_literal.design.units[1].concurrent_statements.size() == 1 && long_literal.design.units[1].concurrent_statements[0].value.decoded_string.has_value() && long_literal.design.units[1].concurrent_statements[0].value.decoded_string->size() == 4097 && long_literal.design.units[1].concurrent_statements[0].value.decoded_string->back() == '1',
         "source-determined VHDL bit-string length must not have a semantic cap");
 
-    std::string over_nested;
-    for (std::size_t depth = 0; depth < 65; ++depth) {
-        over_nested += "/*";
-    }
-    for (std::size_t depth = 0; depth < 65; ++depth) {
-        over_nested += "*/";
-    }
-    const auto bounded = lex(SourceText { "nested-comments.vhd", std::move(over_nested) },
+    // A delimited comment ends at the first `*/`; a `/*` inside it does not
+    // nest (IEEE 1076-2019 15.9).
+    const auto flat = lex(
+        SourceText { "flat-comments.vhd",
+            "/* outer /* inner */ entity recovered is end entity;" },
         Language::Vhdl2008);
-    require(count_code(bounded.diagnostics, "FSIM-FE-LEX-007") == 1,
-        "VHDL block-comment nesting must have one bounded diagnostic");
+    require(count_code(flat.diagnostics, "FSIM-FE-LEX-002") == 0,
+        "a VHDL delimited comment ends at its first closing delimiter");
     const auto unterminated = lex(
         SourceText {
             "unterminated-vhdl-lexemes.vhd",

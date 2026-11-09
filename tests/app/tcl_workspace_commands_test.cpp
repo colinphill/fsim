@@ -669,6 +669,21 @@ puts sdf-workspace-ok
     }
 }
 
+// The command line of a Tcl script run on `engine` (--engine, as for
+// `fsim simulate`); an empty engine leaves the default.
+std::vector<std::string> tcl_arguments(
+    const std::string& engine, const std::string_view script)
+{
+    std::vector<std::string> arguments { "fsim", "tcl" };
+    if (!engine.empty()) {
+        arguments.push_back("--engine");
+        arguments.push_back(engine);
+    }
+    arguments.push_back("-c");
+    arguments.emplace_back(script);
+    return arguments;
+}
+
 // DEVICE (IEEE 1497-2001 5.4.1) in an SDF file and in a live reannotation.
 // dev has an output z that a module path ends at (a => z, 5 ns) and an output
 // y that no module path ends at, driven by the primitive g1:
@@ -679,7 +694,7 @@ puts sdf-workspace-ok
 //  - second.sdf, applied at the safe point of 11 ns: DEVICE z (2), DEVICE y
 //    (6). The changes pending at 11 ns keep their time (z at 13 ns, y at
 //    14 ns); a falls at 40 ns, so z falls at 42 ns and y at 46 ns.
-void run_sdf_device_workspace_commands_test()
+void run_sdf_device_workspace_commands_test(const std::string& engine)
 {
     TemporaryDirectory temporary;
     WorkingDirectory working_directory(temporary.path());
@@ -783,9 +798,10 @@ puts sdf-device-ok
     std::istringstream input;
     std::ostringstream output;
     std::ostringstream error;
-    if (run_cli({ "fsim", "tcl", "-c", script }, input, output, error) != 0
+    if (run_cli(tcl_arguments(engine, script), input, output, error) != 0
         || output.str().find("sdf-device-ok") == std::string::npos) {
-        throw std::runtime_error("Tcl DEVICE session failed: " + error.str());
+        throw std::runtime_error("Tcl DEVICE session (engine '" + engine
+            + "') failed: " + error.str());
     }
 }
 
@@ -940,10 +956,8 @@ puts sdf-net-delay-ok
 //   t falls at 40 ns: u3.a is delayed by 5 ns, so z3 falls at 45 ns;
 //   t rises at 70 ns: z3 rises at 75 ns.
 // u1.a keeps its 3 ns delay: z1 rises at 13, falls at 43 and rises at 73 ns.
-void run_sdf_live_split_workspace_commands_test()
+void prepare_live_split_workspace()
 {
-    TemporaryDirectory temporary;
-    WorkingDirectory working_directory(temporary.path());
     {
         std::ofstream source { "top.sv" };
         source << R"sv(`timescale 1ns/1ps
@@ -997,6 +1011,13 @@ endmodule
     };
     invoke({ "fsim", "compile", "--library", "work", "top.sv" });
     invoke({ "fsim", "elaborate", "work.top", "--snapshot", "livesplit" });
+}
+
+void run_sdf_live_split_workspace_commands_test(const std::string& engine)
+{
+    TemporaryDirectory temporary;
+    WorkingDirectory working_directory(temporary.path());
+    prepare_live_split_workspace();
     constexpr auto script = R"FSIM_TCL(
 set loaded [fsim::load_snapshot livesplit]
 set first [fsim::sdf configure first.sdf top top typ]
@@ -1038,11 +1059,126 @@ puts sdf-live-split-ok
     std::istringstream input;
     std::ostringstream output;
     std::ostringstream error;
-    if (run_cli({ "fsim", "tcl", "-c", script }, input, output, error) != 0
+    if (run_cli(tcl_arguments(engine, script), input, output, error) != 0
         || output.str().find("sdf-live-split-ok") == std::string::npos) {
-        throw std::runtime_error(
-            "Tcl live split session failed: " + error.str());
+        throw std::runtime_error("Tcl live split session (engine '" + engine
+            + "') failed: " + error.str());
     }
+}
+
+// The live split under the debugger plan keeps the breakpoints set before it.
+// z3 follows t at once while u3.a is undelayed, so the signal breakpoint
+// `top.z3 == 1` stops the run at 10 ns; the split of u3.a (a 5 ns delay, at
+// the safe point of 11 ns) then moves the next change of z3 to the delayed
+// time: z3 falls at 45 ns (no stop) and rises at 75 ns, where the
+// breakpoint stops the run again. u1.a keeps its 3 ns delay: z1 follows at
+// 73 ns, so z1 is already 1 when the run stops.
+void run_sdf_live_split_debug_breakpoint_test()
+{
+    TemporaryDirectory temporary;
+    WorkingDirectory working_directory(temporary.path());
+    prepare_live_split_workspace();
+    constexpr auto script = R"FSIM_TCL(
+set loaded [fsim::load_snapshot livesplit]
+set first [fsim::sdf configure first.sdf top top typ]
+if {![dict get $first effective]} {error "first SDF file did not apply: $first"}
+set ::sdf_live_committed 0
+proc commit_split_at_safe_point {time delta phase} {
+  if {!$::sdf_live_committed && $time == 11000 && $phase eq "postponed"} {
+    set second [fsim::sdf configure second.sdf top top typ]
+    if {![dict get $second effective] || [dict get $second generation] != 2} {
+      error "safe-point SDF file did not apply: $second"
+    }
+    set ::sdf_live_committed 1
+  }
+}
+fsim::add_callback safe_point commit_split_at_safe_point
+set breakpoint [fsim::debug break add signal top.z3 == 1]
+set breakpoint_id [dict get $breakpoint id]
+set before [fsim::debug continue]
+if {[dict get $before time] != 10000 ||
+    [dict get $before breakpoint_id] != $breakpoint_id ||
+    $::sdf_live_committed} {
+  error "the breakpoint did not stop the run at 10 ns before the split: $before"
+}
+set after [fsim::debug continue]
+if {!$::sdf_live_committed} {error "the split was not committed at 11 ns"}
+if {[dict get $after time] != 75000 ||
+    [dict get $after breakpoint_id] != $breakpoint_id} {
+  error "the breakpoint did not stop the run at 75 ns after the split: $after"
+}
+if {[fsim::read_signal top.z3] ne "1" || [fsim::read_signal top.z1] ne "1"} {
+  error "z3 and z1 are not both 1 at 75 ns"
+}
+puts sdf-live-split-debug-ok
+)FSIM_TCL";
+    std::istringstream input;
+    std::ostringstream output;
+    std::ostringstream error;
+    if (run_cli(tcl_arguments("debug", script), input, output, error) != 0
+        || output.str().find("sdf-live-split-debug-ok") == std::string::npos) {
+        throw std::runtime_error(
+            "Tcl live split debugger session failed: " + error.str());
+    }
+}
+
+// The simulate.engine key (workspace fsim.tcl) picks the engine of a Tcl
+// session, and --engine wins over it. After a plain command has started the
+// simulation, `fsim::debug` is refused for a different execution mode unless
+// the session itself runs on the debug engine.
+void run_tcl_engine_config_test()
+{
+    TemporaryDirectory temporary;
+    WorkingDirectory working_directory(temporary.path());
+    {
+        std::ofstream source { "top.sv" };
+        source << "module top; timeunit 1ns; timeprecision 1ns;\n"
+                  "  logic q;\n"
+                  "  initial begin q = 1'b0; #1 q = 1'b1; #1 $finish; end\n"
+                  "endmodule\n";
+        if (!source)
+            throw std::runtime_error("cannot write Tcl engine source");
+    }
+    {
+        std::ofstream configuration { "fsim.tcl" };
+        configuration << "fsim::config set simulate.engine debug\n";
+        if (!configuration)
+            throw std::runtime_error("cannot write Tcl engine configuration");
+    }
+    const auto invoke = [](const std::vector<std::string>& arguments) {
+        std::istringstream input;
+        std::ostringstream output;
+        std::ostringstream error;
+        if (run_cli(arguments, input, output, error) != 0)
+            throw std::runtime_error("Tcl engine setup failed: " + error.str());
+    };
+    invoke({ "fsim", "compile", "--library", "work", "top.sv" });
+    invoke({ "fsim", "elaborate", "work.top", "--snapshot", "engine" });
+    constexpr auto script = R"FSIM_TCL(
+set loaded [fsim::load_snapshot engine]
+fsim::run 1ns
+set caught [catch {fsim::debug status} message]
+puts "debug-mode-mismatch [string match {*different execution mode*} $message]"
+)FSIM_TCL";
+    const auto run = [&](const std::string& engine) {
+        std::istringstream input;
+        std::ostringstream output;
+        std::ostringstream error;
+        if (run_cli(tcl_arguments(engine, script), input, output, error) != 0)
+            throw std::runtime_error(
+                "Tcl engine session failed: " + error.str());
+        return output.str();
+    };
+    // The key alone: the session runs on the debug engine, so the debugger
+    // command is not refused for a different execution mode.
+    if (run("").find("debug-mode-mismatch 0") == std::string::npos)
+        throw std::runtime_error(
+            "simulate.engine debug did not give the session the debug engine");
+    // --engine interpreter wins over the key: the debugger command is refused
+    // because the simulation runs in another mode.
+    if (run("interpreter").find("debug-mode-mismatch 1") == std::string::npos)
+        throw std::runtime_error(
+            "--engine interpreter did not override simulate.engine");
 }
 
 void write_file(const std::filesystem::path& path, const std::string_view contents)
@@ -1309,9 +1445,17 @@ int main()
     try {
         run_workspace_commands_test();
         run_sdf_workspace_commands_test();
-        run_sdf_device_workspace_commands_test();
+        // The default engine, then the ones `fsim tcl --engine` names: the
+        // times are those of the SDF annotation, whatever runs the design.
+        for (const std::string engine : { "", "v4", "interpreter", "debug" }) {
+            run_sdf_device_workspace_commands_test(engine);
+        }
         run_sdf_net_delay_workspace_commands_test();
-        run_sdf_live_split_workspace_commands_test();
+        for (const std::string engine : { "", "v4", "interpreter", "debug" }) {
+            run_sdf_live_split_workspace_commands_test(engine);
+        }
+        run_sdf_live_split_debug_breakpoint_test();
+        run_tcl_engine_config_test();
         run_systemc_workspace_commands_test();
         run_unqualified_command_test();
         run_windows_long_path_cd_test();

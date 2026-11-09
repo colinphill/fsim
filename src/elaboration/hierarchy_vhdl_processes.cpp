@@ -82,8 +82,17 @@ void HierarchyBuilder::append_vhdl_foreign_architecture_process(
             if (width == 0U) {
                 continue;
             }
+            // An out, inout or buffer port of the instance is a source of
+            // its actual whether or not it has a driver (IEEE 1076-2019
+            // 6.4.2.3); with none it drives its default (14.7.3.2 e)), the
+            // value a driver created for it holds until its first
+            // transaction (14.7.2), so the placeholder drives it from the
+            // start. A signal of the architecture has only drivers as
+            // sources: its region stays dormant until the elaboration
+            // function creates a driver for it (vhpi_create, 20.4.2, 23.6).
             placeholder.driver_regions.push_back(Process::DriverRegion {
-                found->second, 0U, static_cast<std::uint32_t>(width), true });
+                found->second, 0U, static_cast<std::uint32_t>(width), true,
+                !ports });
         }
     };
     drive(entity, true);

@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/vhpi_type.hpp"
+#include "fsim/support/stack_growth.hpp"
 
 namespace fsim::runtime {
 
 namespace {
 
-constexpr std::uint32_t maximum_constraint_depth = 64;
 constexpr std::uint32_t maximum_constraint_nodes = 4096;
 constexpr std::size_t maximum_constraint_children = 1024;
 
@@ -52,8 +52,11 @@ VhdlVhpiTypeError VhdlVhpiTypeSystem::validate_constraint(
     const VhdlVhpiConstraint& constraint,
     const std::uint32_t depth,
     std::uint32_t& nodes) noexcept {
-  if (depth > maximum_constraint_depth) {
-    return VhdlVhpiTypeError::DepthLimit;
+  // Nested constraints continue on a new stack segment when the stack is
+  // nearly used up, so the nesting depth is bounded by memory.
+  if (!support::stack_growth_detail::has_room()) {
+    return support::with_stack(
+        [&] { return validate_constraint(constraint, depth, nodes); });
   }
   if (++nodes > maximum_constraint_nodes) {
     return VhdlVhpiTypeError::NodeLimit;
@@ -188,7 +191,7 @@ VhdlVhpiTypeHandleResult VhdlVhpiTypeSystem::base_type(
     return {{}, object_error(metadata.error)};
   }
   auto current = type;
-  for (std::uint32_t depth = 0; depth <= maximum_constraint_depth; ++depth) {
+  for (;;) {
     const auto found = types_.find(current);
     if (found == types_.end()) {
       return {{}, VhdlVhpiTypeError::NotFound};
@@ -198,7 +201,6 @@ VhdlVhpiTypeHandleResult VhdlVhpiTypeSystem::base_type(
     }
     current = found->second.base_type;
   }
-  return {{}, VhdlVhpiTypeError::DepthLimit};
 }
 
 VhdlVhpiTypeError VhdlVhpiTypeSystem::bind_declaration(

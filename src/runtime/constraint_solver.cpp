@@ -944,7 +944,12 @@ SystemVerilogConstraintSolver::solve(const std::uint64_t selection) const {
     // An implication whose antecedent already holds constrains by its
     // consequent (`a -> x % 16 == 0`, IEEE 1800-2017 18.5.6).
     auto root_id = graph.root;
-    for (std::size_t depth = 0; depth < 8U; ++depth) {
+    std::vector<decltype(root_id)> peeled;
+    for (;;) {
+      if (std::ranges::find(peeled, root_id) != peeled.end()) {
+        break;
+      }
+      peeled.push_back(root_id);
       const auto& node = graph.nodes[root_id];
       if (node.operation != SystemVerilogConstraintExpressionOperator::LogicalOr
           || node.operands.size() != 2U

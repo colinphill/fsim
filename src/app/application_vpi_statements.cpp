@@ -154,6 +154,18 @@ constexpr std::uint32_t body_case = 4U;
     static const std::set<std::string, std::less<>> built_in { "logic", "bit",
         "byte", "shortint", "int", "longint", "integer", "time", "real",
         "realtime", "shortreal", "string" };
+    if (!built_in.contains(word) && word != "void" && !type.container_form
+        && type.unpacked_dimensions.empty() && type.packed_dimensions.empty()
+        && !type.packed_range && type.class_identity.empty()
+        && !type.virtual_interface && !type.type_of
+        && type.target.spelling.find('#') == std::string::npos) {
+        // A type named by a typedef (or enum or struct typedef): VPI
+        // reaches the typedef's typespec (37.41); the elaborator resolves
+        // the name where the callable is declared (26.3).
+        VpiStatementModel::DeclaredType named;
+        named.type_name = type.target.spelling;
+        return named;
+    }
     if (!built_in.contains(word) || type.container_form
         || !type.unpacked_dimensions.empty()) {
         return std::nullopt;
@@ -287,6 +299,44 @@ declared_type_of_tokens(const std::vector<sv::SourceToken>& tokens,
         return vpiShortRealVar;
     }
     if (type.value_form == sv::TypeForm::string || word == "string") {
+        return vpiStringVar;
+    }
+    return word == "bit" ? vpiBitVar : vpiReg;
+}
+
+// The vpiType of a local variable of a property or sequence declaration, from
+// the first word of its declared type (IEEE 1800-2023 16.8, 37.51 detail 2).
+[[nodiscard]] PLI_INT32 assertion_variable_type(
+    const std::vector<sv::SourceToken>& tokens)
+{
+    const std::string_view word = tokens.empty()
+        ? std::string_view { }
+        : std::string_view { tokens.front().text };
+    if (word == "int") {
+        return vpiIntVar;
+    }
+    if (word == "integer") {
+        return vpiIntegerVar;
+    }
+    if (word == "byte") {
+        return vpiByteVar;
+    }
+    if (word == "shortint") {
+        return vpiShortIntVar;
+    }
+    if (word == "longint") {
+        return vpiLongIntVar;
+    }
+    if (word == "time") {
+        return vpiTimeVar;
+    }
+    if (word == "real" || word == "realtime") {
+        return vpiRealVar;
+    }
+    if (word == "shortreal") {
+        return vpiShortRealVar;
+    }
+    if (word == "string") {
         return vpiStringVar;
     }
     return word == "bit" ? vpiBitVar : vpiReg;
@@ -1395,9 +1445,6 @@ std::optional<semantic::StatementId> VpiStatementModel::foreach_body(
     const auto search = [&](const auto& self, const sv::Statement& within,
                             const std::size_t depth)
         -> std::optional<semantic::StatementId> {
-        if (depth > 64U) {
-            return std::nullopt;
-        }
         const auto visit = [&](const std::vector<semantic::StatementId>& ids)
             -> std::optional<semantic::StatementId> {
             for (const auto id : ids) {
@@ -1625,13 +1672,25 @@ std::optional<VpiStatementModel::DeclaredType> VpiStatementModel::declared_type(
     if (declaration == nullptr) {
         return std::nullopt;
     }
-    if (entry.kind == Kind::io_decl) {
-        return declaration->type ? declared_type_of(*declaration->type)
-                                 : std::nullopt;
+    auto result = entry.kind == Kind::io_decl
+        ? (declaration->type ? declared_type_of(*declaration->type)
+                             : std::nullopt)
+        : (declaration->callable
+                ? declared_type_of(declaration->callable->return_type)
+                : std::nullopt);
+    if (result) {
+        result->scope = entry.scope;
+        if (entry.kind == Kind::io_decl) {
+            result->formal = declaration->name;
+            if (const auto* const callable = hir_.find_declaration(
+                    semantic::DeclarationId::from_index(entry.aux))) {
+                result->callable = callable->name;
+            }
+        } else {
+            result->callable = declaration->name;
+        }
     }
-    return declaration->callable
-        ? declared_type_of(declaration->callable->return_type)
-        : std::nullopt;
+    return result;
 }
 
 bool VpiStatementModel::extern_prototype(const VpiHirScope& scope)
@@ -1709,7 +1768,8 @@ bool VpiStatementModel::names_object(const sv::Expression& record,
             return false;
         }
     }
-    for (std::size_t depth = 0U; depth < 16U; ++depth) {
+    // Each step drops the last component of the path, so the walk ends.
+    for (;;) {
         if (hooks_.resolve(within, path) == object) {
             return true;
         }
@@ -1729,7 +1789,7 @@ bool VpiStatementModel::mentions(const std::optional<semantic::ExpressionId> id,
         return false;
     }
     std::vector<semantic::ExpressionId> pending { *id };
-    for (std::size_t steps = 0U; !pending.empty() && steps < 4096U; ++steps) {
+    while (!pending.empty()) {
         const auto current = pending.back();
         pending.pop_back();
         const auto* const record = expression(current.value());
@@ -1753,7 +1813,7 @@ bool VpiStatementModel::targets_object(
     const fsim_vpi_handle_v1 within, const fsim_vpi_handle_v1 object) const
 {
     auto current = id;
-    for (std::size_t depth = 0U; current && depth < 64U; ++depth) {
+    while (current) {
         const auto* const record = expression(current->value());
         if (record == nullptr) {
             return false;
@@ -1806,7 +1866,7 @@ std::vector<fsim_vpi_handle_v1> VpiStatementModel::connections(
     // Whether an assignment target names one object (a select of it counts)
     // rather than a concatenation of several.
     const auto sole_target = [&](std::optional<semantic::ExpressionId> id) {
-        for (std::size_t depth = 0U; id && depth < 64U; ++depth) {
+        while (id) {
             const auto* const record = expression(id->value());
             if (record == nullptr
                 || record->kind == sv::ExpressionKind::concatenation) {
@@ -1828,7 +1888,7 @@ std::vector<fsim_vpi_handle_v1> VpiStatementModel::connections(
     // of its selects (`mem[i] = ...` reads i).
     const auto select_reads = [&](std::optional<semantic::ExpressionId> id,
                                   const fsim_vpi_handle_v1 within) {
-        for (std::size_t depth = 0U; id && depth < 64U; ++depth) {
+        while (id) {
             const auto* const record = expression(id->value());
             if (record == nullptr
                 || (record->kind != sv::ExpressionKind::index
@@ -2037,7 +2097,7 @@ std::vector<VpiStatementModel::ForceSite> VpiStatementModel::force_sites(
     // The object an assignment target names: a select's selected object.
     const auto target_object = [&](std::optional<semantic::ExpressionId> id,
                                    const fsim_vpi_handle_v1 within) {
-        for (std::size_t depth = 0U; id && depth < 64U; ++depth) {
+        while (id) {
             const auto* const record = expression(id->value());
             if (record == nullptr) {
                 return fsim_vpi_handle_v1 { };
@@ -2727,6 +2787,13 @@ PLI_INT32 VpiStatementModel::type(const std::uint64_t serial) const
             : vpiSeqFormalDecl;
     case Kind::assertion_spec:
         return vpiPropertySpec;
+    case Kind::assertion_variable: {
+        const auto& variables
+            = assertion_entries_.at(entry.id).declaration->local_variables;
+        return entry.aux < variables.size()
+            ? assertion_variable_type(variables[entry.aux].type_tokens)
+            : vpiReg;
+    }
     case Kind::assertion_op: {
         const auto& table = assertion_entries_.at(entry.id);
         if (table.tree == nullptr || entry.aux >= table.tree->nodes.size()) {
@@ -2880,6 +2947,14 @@ std::optional<semantic::SourceSpanId> VpiStatementModel::source(
             return std::nullopt;
         }
         return formals[entry.aux].source;
+    }
+    case Kind::assertion_variable: {
+        const auto& variables
+            = assertion_entries_.at(entry.id).declaration->local_variables;
+        if (entry.aux >= variables.size()) {
+            return std::nullopt;
+        }
+        return variables[entry.aux].source;
     }
     case Kind::assertion_op: {
         const auto& table = assertion_entries_.at(entry.id);
@@ -3542,6 +3617,21 @@ std::optional<std::string> VpiStatementModel::string_property(
         }
         return std::nullopt;
     }
+    case Kind::assertion_variable: {
+        const auto& declaration = *assertion_entries_.at(entry.id).declaration;
+        if (entry.aux >= declaration.local_variables.size()) {
+            return std::nullopt;
+        }
+        const auto& name = declaration.local_variables[entry.aux].name;
+        if (property == vpiName) {
+            return name;
+        }
+        if (property == vpiFullName) {
+            return hooks_.full_name(entry.scope) + "." + declaration.name + "."
+                + name;
+        }
+        return std::nullopt;
+    }
     case Kind::assertion_op: {
         const auto& table = assertion_entries_.at(entry.id);
         if (property != vpiName || table.tree == nullptr
@@ -3654,6 +3744,7 @@ std::optional<fsim_vpi_handle_v1> VpiStatementModel::relation(
     // operations and instances of their expressions (IEEE 1800-2023
     // 37.50-37.54).
     if (entry.kind == Kind::assertion_decl || entry.kind == Kind::assertion_formal
+        || entry.kind == Kind::assertion_variable
         || entry.kind == Kind::assertion_spec || entry.kind == Kind::assertion_op) {
         const auto& table = assertion_entries_.at(entry.id);
         const auto& declaration = *table.declaration;
@@ -3672,6 +3763,7 @@ std::optional<fsim_vpi_handle_v1> VpiStatementModel::relation(
         if (type == vpiParent) {
             switch (entry.kind) {
             case Kind::assertion_formal:
+            case Kind::assertion_variable:
             case Kind::assertion_spec:
                 return assertion_decl_handle(
                     declaration, *table.unit, entry.scope);
@@ -3704,6 +3796,8 @@ std::optional<fsim_vpi_handle_v1> VpiStatementModel::relation(
                 return expression_handle(
                     *table.tree->formal_defaults[entry.aux], entry.scope, self);
             }
+            return fsim_vpi_handle_v1 { };
+        case Kind::assertion_variable:
             return fsim_vpi_handle_v1 { };
         case Kind::assertion_spec:
             if (type == vpiClockingEvent && declaration.clock) {
@@ -4253,8 +4347,7 @@ std::optional<std::vector<fsim_vpi_handle_v1>> VpiStatementModel::iterate(
             = expression_handle(*record->target, entry.scope, self);
         const auto width = target != 0U ? hooks_.bit_width(target)
                                         : std::size_t { 0U };
-        for (std::size_t offset = 0U; offset < width && offset < 65536U;
-             ++offset) {
+        for (std::size_t offset = 0U; offset < width; ++offset) {
             found.push_back(node(Kind::cont_assign_bit, entry.id,
                 static_cast<std::uint32_t>(offset), entry.scope, self));
         }
@@ -4379,6 +4472,14 @@ std::optional<std::vector<fsim_vpi_handle_v1>> VpiStatementModel::iterate(
         const auto& table = assertion_entries_.at(entry.id);
         const bool property
             = table.declaration->kind == sv::AssertionDeclarationKind::property;
+        // The local variables the declaration declares (37.51, 37.53).
+        if (type == vpiVariables) {
+            for (std::size_t index = 0U;
+                 index < table.declaration->local_variables.size(); ++index) {
+                found.push_back(node(Kind::assertion_variable, entry.id,
+                    static_cast<std::uint32_t>(index), entry.scope, self));
+            }
+        }
         if (type == (property ? vpiPropFormalDecl : vpiSeqFormalDecl)) {
             for (std::size_t index = 0U;
                  index < table.declaration->formals.size(); ++index) {

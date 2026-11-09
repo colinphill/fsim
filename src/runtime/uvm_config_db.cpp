@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/uvm_config_db.hpp"
 
+#include "run_state_archive.hpp"
+
 #include <algorithm>
 #include <limits>
 #include <sstream>
@@ -210,13 +212,12 @@ SystemVerilogUvmConfigDbService::SystemVerilogUvmConfigDbService(
     SystemVerilogUvmResourcePoolService& resources,
     SystemVerilogUvmConfigDbLimits limits)
     : resources_(&resources), limits_(limits) {
-  if (limits_.default_precedence < 0
-      || static_cast<std::uint64_t>(limits_.default_precedence)
-          < limits_.max_context_depth
-      || limits_.max_report_bytes == 0 || limits_.max_trace_records == 0
+  // A resource's precedence is the signed `default_precedence - depth`
+  // (IEEE 1800.2); a context deeper than the default just gets zero or
+  // negative precedence.
+  if (limits_.max_report_bytes == 0 || limits_.max_trace_records == 0
       || limits_.max_trace_bytes == 0) {
-    throw std::invalid_argument{
-        "UVM config default precedence must cover the context-depth budget"};
+    throw std::invalid_argument{"UVM config report and trace limits are zero"};
   }
 }
 
@@ -621,6 +622,35 @@ void SystemVerilogUvmConfigDbService::trigger_waiters(
       ++callback_failures_;
     }
   }
+}
+
+void SystemVerilogUvmConfigDbService::run_state_io(RunStateArchive& archive) {
+  // The entries name their values in the resource pool (its own section
+  // part); the trace switch and callback are the embedder's.
+  archive.io(entries_);
+  archive.io(next_waiter_token_);
+  archive.io(next_entry_order_);
+  archive.io(next_update_order_);
+  archive.io(next_waiter_order_);
+  archive.io(callback_failures_);
+  archive.io(trace_records_);
+  archive.io(next_trace_sequence_);
+  archive.io(dropped_trace_records_);
+  archive.io(trace_callback_failures_);
+}
+
+void SystemVerilogUvmConfigDbService::reset_run_state() {
+  entries_.clear();
+  waiters_.clear();
+  next_waiter_token_ = 1;
+  next_entry_order_ = 0;
+  next_update_order_ = 0;
+  next_waiter_order_ = 0;
+  callback_failures_ = 0;
+  trace_records_.clear();
+  next_trace_sequence_ = 0;
+  dropped_trace_records_ = 0;
+  trace_callback_failures_ = 0;
 }
 
 }  // namespace fsim::runtime

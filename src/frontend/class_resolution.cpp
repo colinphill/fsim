@@ -250,6 +250,21 @@ void resolve_type(
         shadowed_types,
         diagnostics);
   }
+  // The element of an unpacked array, queue or associative array names its
+  // class like the declaration does (`C table [string];`, IEEE 1800-2023
+  // 7.4, 7.8, 7.9). The compiled environment binds it again from object
+  // metadata (SourceEnvironment::bind_type); resolving it here gives the
+  // sources checked in one workspace the same element type.
+  if (type.systemverilog_container) {
+    for (auto& element : type.systemverilog_container->element_types) {
+      resolve_type(
+          element,
+          owner,
+          entries,
+          shadowed_types,
+          diagnostics);
+    }
+  }
   for (auto& actual : type.systemverilog_class_parameter_actuals) {
     if (actual.type_actual) {
       resolve_type(
@@ -280,6 +295,45 @@ void resolve_type(
             + "' is ambiguous in lexical/import scope",
         type.named_type_span);
     return;
+  }
+  // A forward class declaration completed by a typedef of a class or of a
+  // specialization (`typedef class event_pool; ... typedef pool#(e)
+  // event_pool;`, IEEE 1800-2023 6.18) names that class and its parameter
+  // values; the typedef is the one whose identity is the forward
+  // declaration's, resolved in its own scope.
+  auto* const forward = candidates.front();
+  if (forward->declaration->is_forward_declaration
+      && resolving_design != nullptr) {
+    const Type* aliased = nullptr;
+    for (const auto& unit : resolving_design->units) {
+      if (unit.language != Language::SystemVerilog2017) continue;
+      const auto prefix =
+          effective_library(unit.library) + "::" + unit.name + "::";
+      for (const auto& alias : unit.type_aliases) {
+        if (prefix + alias.name
+            == forward->declaration->canonical_identity) {
+          aliased = &alias.type;
+        }
+      }
+    }
+    if (aliased != nullptr && !aliased->named_type.empty()
+        && aliased->named_type != forward->declaration->name) {
+      auto completed = resolve_name(aliased->named_type, *forward, entries);
+      if (completed.size() == 1U
+          && !completed.front()->declaration->is_forward_declaration) {
+        type.named_type = aliased->named_type;
+        type.spelling = aliased->spelling;
+        type.systemverilog_class_parameter_actuals =
+            aliased->systemverilog_class_parameter_actuals;
+        for (auto& actual : type.systemverilog_class_parameter_actuals) {
+          if (actual.type_actual) {
+            resolve_type(*actual.type_actual, *forward, entries,
+                shadowed_types, diagnostics);
+          }
+        }
+        candidates = std::move(completed);
+      }
+    }
   }
   type.systemverilog_class_name = type.named_type;
   type.systemverilog_class_declaration =
@@ -321,6 +375,13 @@ std::set<std::string> resolve_declared_types(
   }
   return shadowed_types;
 }
+
+void resolve_statement_types(
+    Statement& statement,
+    const ClassEntry& owner,
+    std::vector<ClassEntry>& entries,
+    const std::set<std::string>& shadowed_types,
+    std::vector<Diagnostic>& diagnostics);
 
 void resolve_declaration_types(
     ClassEntry& owner,
@@ -367,6 +428,18 @@ void resolve_declaration_types(
     for (auto& variable : method.variables) {
       resolve_type(
           variable.type,
+          owner,
+          entries,
+          method_shadowed_types,
+          diagnostics);
+    }
+    // The locals of nested blocks and statements name their classes in the
+    // scope of the class's package like the method's own locals do (IEEE
+    // 1800-2023 6.18, 9.3.4); an out-of-block definition resolves its
+    // statements the same way.
+    for (auto& statement : method.statements) {
+      resolve_statement_types(
+          statement,
           owner,
           entries,
           method_shadowed_types,

@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/uvm_objection.hpp"
 
+#include "run_state_archive.hpp"
+#include "run_state_value_codecs.hpp"
+#include "uvm_run_state.hpp"
+
 #include "fsim/runtime/scheduler_events.hpp"
 
 #include <algorithm>
@@ -1051,6 +1055,38 @@ void SystemVerilogUvmObjectionService::cancel_all() noexcept {
   finalization_depth_.clear();
   finalization_recheck_.clear();
   reserved_trace_records_ = 0;
+}
+
+void SystemVerilogUvmObjectionService::run_state_io(RunStateArchive& archive) {
+  // The callbacks and the trace switch are the embedder's; a pending drain is
+  // also a scheduler event of the kind "uvm.objection_drain", whose restored
+  // handle bind_restored_drain puts back, so this section is read before the
+  // scheduler's events.
+  archive.io(entries_);
+  archive.io(source_totals_);
+  archive.io(component_totals_);
+  archive.io(root_totals_);
+  archive.io(drain_times_);
+  archive.io(pending_drains_);
+  archive.io(trace_);
+  archive.io(trace_start_sequence_);
+  archive.io(callback_failures_);
+  archive.io(next_sequence_);
+  archive.io(next_drain_generation_);
+  archive.io(next_drain_order_);
+  archive.io(mutations_);
+  archive.io(reserved_trace_records_);
+}
+
+void SystemVerilogUvmObjectionService::reset_run_state() {
+  cancel_all();
+  trace_.clear();
+  trace_start_sequence_ = 0;
+  callback_failures_.clear();
+  next_sequence_ = 0;
+  next_drain_generation_ = 1;
+  next_drain_order_ = 0;
+  mutations_ = 0;
 }
 
 }  // namespace fsim::runtime

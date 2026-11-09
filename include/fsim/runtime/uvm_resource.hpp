@@ -3,6 +3,7 @@
 
 #include "fsim/runtime/class_heap.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -16,6 +17,8 @@
 #include <vector>
 
 namespace fsim::runtime {
+
+class RunStateArchive;
 
 using SystemVerilogUvmResourceHandle = std::uint64_t;
 using SystemVerilogUvmResourceCallbackToken = std::uint64_t;
@@ -137,6 +140,17 @@ struct SystemVerilogUvmResourceLimits {
 /// generation-safe heap handles; erasing a resource never destroys its value.
 class SystemVerilogUvmResourcePoolService final {
  public:
+  /// Run-state save and restore of the resources, the audit log and the trace
+  /// (#188) and the return to an empty pool. A resource callback is the
+  /// embedder's, so run_state_idle is false while one is registered.
+  void run_state_io(RunStateArchive& archive);
+  void reset_run_state();
+  [[nodiscard]] bool run_state_idle() const noexcept {
+    return std::ranges::none_of(resources_, [](const auto& entry) {
+      return !entry.second.callbacks.empty();
+    });
+  }
+
   using Callback = std::function<void(
       SystemVerilogUvmResourceCallbackEvent,
       const SystemVerilogUvmResource&)>;

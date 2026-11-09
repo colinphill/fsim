@@ -72,7 +72,7 @@ std::optional<Lowerer::HirSvValuePath> Lowerer::hir_class_subarray_element(
         return std::nullopt;
     }
     auto current = expression_id;
-    for (std::size_t depth { }; depth < 16U; ++depth) {
+    for (std::size_t depth { };; ++depth) {
         const auto expression = specialized_hir_unit_->find_expression(
             current);
         if (!expression || expression->systemverilog == nullptr) {
@@ -94,7 +94,6 @@ std::optional<Lowerer::HirSvValuePath> Lowerer::hir_class_subarray_element(
         }
         return path;
     }
-    return std::nullopt;
 }
 
 std::optional<Lowerer::HirSvValuePath> Lowerer::hir_sv_value_path(
@@ -125,7 +124,7 @@ std::optional<Lowerer::HirSvValuePath> Lowerer::hir_sv_value_path(
     std::optional<HirSvValuePath::ClassRoot> class_root;
     std::shared_ptr<const ContainerType> class_root_type;
     auto current = expression_id;
-    for (std::size_t depth { }; depth < 64U; ++depth) {
+    for (;;) {
         const auto expression = specialized_hir_unit_->find_expression(
             current);
         if (!expression || expression->systemverilog == nullptr) {

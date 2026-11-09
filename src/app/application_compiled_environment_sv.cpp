@@ -723,6 +723,21 @@ private:
         return "@uvm-report-" + std::string { name.substr(std::string_view { "uvm_report_" }.size()) };
     }
 
+    // `uvm_root::get()` and the other getters of the library's singletons
+    // answer the native services' one object of the class.
+    static std::string uvm_singleton_intrinsic(
+        const sv::ClassDeclaration& owner, const std::string_view member)
+    {
+        if (!support::is_uvm_library_identity(owner.canonical_identity))
+            return { };
+        if ((owner.name == "uvm_root" && member == "get")
+            || (owner.name == "uvm_cmdline_processor" && member == "get_inst")
+            || (owner.name == "uvm_test_done_objection" && member == "get")
+            || (owner.name == "uvm_resource_pool" && member == "get"))
+            return "@uvm-singleton:" + owner.canonical_identity;
+        return { };
+    }
+
     std::string uvm_database_intrinsic(const sv::ClassDeclaration& owner,
         const std::string_view member, const frontend::Type* selection,
         const SourceScope& scope, const frontend::SourceSpan& source)
@@ -915,6 +930,28 @@ private:
         std::vector<ClassTypeView> operands;
         for (auto& operand : input.operands)
             operands.push_back(expression(operand, scope));
+        // An element of an array, queue or associative array of class handles
+        // (`q[i]`, IEEE 1800-2023 7.4, 7.10, 7.8) is an object of the class
+        // the container declares, so a method selected through it binds like
+        // one selected through a handle (`q[i].get_full_name()`).
+        if (input.kind == frontend::ExpressionKind::Index
+            && operands.size() == 2U) {
+            const auto& base = operands.front();
+            if (!base.identity.empty() && base.source != nullptr
+                && base.source->systemverilog_container)
+                return { nullptr, nullptr, base.identity };
+            const auto& container = input.operands.front();
+            if (container.kind == frontend::ExpressionKind::Identifier
+                && !scope.class_identity.empty()
+                && !scope.objects.contains(container.text)) {
+                const auto declared = source_property(
+                    scope.class_identity, container.text, scope);
+                if (!declared.identity.empty() && declared.source != nullptr
+                    && declared.source->systemverilog_container)
+                    return { nullptr, nullptr, declared.identity };
+            }
+            return { };
+        }
         if (input.kind != frontend::ExpressionKind::Call)
             return { };
         if (input.text.starts_with('.') && !operands.empty()
@@ -967,6 +1004,18 @@ private:
                         input.call_result_signed = false;
                         input.call_result_domain = frontend::ValueDomain::Bit2;
                         return { };
+                    }
+                }
+                if (hash == std::string_view::npos && input.operands.empty()) {
+                    if (auto singleton = uvm_singleton_intrinsic(*owner, member);
+                        !singleton.empty()) {
+                        const auto* selected = method(owner->canonical_identity, member);
+                        input.text = "@sv-static-method:" + std::move(singleton);
+                        input.call_result_width = 64U;
+                        input.call_result_signed = false;
+                        input.call_result_domain = frontend::ValueDomain::Bit2;
+                        return selected != nullptr ? method_result(*selected)
+                                                   : ClassTypeView { };
                     }
                 }
                 auto result = bind_method(input, { nullptr, nullptr, owner->canonical_identity },
@@ -1396,6 +1445,25 @@ private:
                 if (declaration && declaration->systemverilog != nullptr
                     && declaration->systemverilog->declared_type)
                     type.target.target = *declaration->systemverilog->declared_type;
+            }
+        }
+        // The typedef the parser composed packed dimensions over (7.4.1),
+        // looked up like any type name; left unresolved when it is not found.
+        if (!type.composed_over.target.valid()
+            && !type.composed_over.spelling.empty()) {
+            qualify_member(type.composed_over.spelling, *unit,
+                type.composed_over.source);
+            if (const auto id = resolver
+                    .resolve_systemverilog_named_type(
+                        type.composed_over.spelling, scope, false,
+                        type.source_order)
+                    .unique()) {
+                const auto declaration = design_.find_declaration(*id);
+                if (declaration && declaration->systemverilog != nullptr
+                    && declaration->systemverilog->declared_type) {
+                    type.composed_over.target
+                        = *declaration->systemverilog->declared_type;
+                }
             }
         }
         if (type.class_identity.empty()) {

@@ -1,0 +1,5 @@
+#c p1 drivers=c,a
+#c p2 drivers=
+#c signal a drivers=1
+#c signal c drivers=1
+#c signal s drivers=0

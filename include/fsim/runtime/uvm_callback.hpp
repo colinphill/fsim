@@ -6,6 +6,7 @@
 #include "fsim/runtime/uvm_component.hpp"
 #include "fsim/runtime/uvm_object.hpp"
 
+#include <limits>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -118,7 +119,7 @@ struct SystemVerilogUvmCallbackDispatchResult {
 struct SystemVerilogUvmCallbackLimits {
   std::size_t maximum_callbacks{65'536};
   std::size_t maximum_callbacks_per_dispatch{4'096};
-  std::size_t maximum_reentry_depth{64};
+  std::size_t maximum_reentry_depth{std::numeric_limits<std::size_t>::max()};
   std::size_t maximum_failures{65'536};
   std::size_t maximum_type_bytes{4'096};
   std::size_t maximum_name_bytes{4'096};
@@ -141,6 +142,12 @@ private:
 
 class SystemVerilogUvmCallbackService final {
 public:
+  /// True while the service holds no state: a run that never used it has
+  /// nothing to save (#188). A callback is the embedder's.
+  [[nodiscard]] bool run_state_idle() const noexcept {
+    return callbacks_.empty() && order_.empty() && failures_.empty();
+  }
+
   using Callback = std::function<void(SystemVerilogUvmCallbackInvocation &)>;
 
   SystemVerilogUvmCallbackService(SystemVerilogUvmObjectService &objects,
@@ -334,6 +341,12 @@ private:
 
 class SystemVerilogUvmTransactionRecorderService final {
 public:
+  /// True while the service holds no state: a run that never used it has
+  /// nothing to save (#188). A recorder entry holds the embedder's attributes.
+  [[nodiscard]] bool run_state_idle() const noexcept {
+    return transactions_.empty() && trace_records_.empty();
+  }
+
   SystemVerilogUvmTransactionRecorderService(
       SystemVerilogUvmObjectService &objects,
       SystemVerilogUvmComponentService &components,

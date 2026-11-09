@@ -16,9 +16,11 @@
 // generated code wraps with a mask.
 //
 //   header      [0, header_words)            see layout::Header
-//   clocks      clocks_off, 2 * clocks_count tick count per clock, then the
+//   clocks      clocks_off, 3 * clocks_count tick count per clock, then the
 //                                            time step of each clock's last
-//                                            tick (multiclocked, 16.13)
+//                                            tick, then 1 for each clock that
+//                                            ticked in the evaluation in
+//                                            progress (multiclocked, 16.13)
 //   attempts    attempts_off, count, cap     stride 5: started, blob, length,
 //                                            serial, flags
 //   outcomes    ring                         stride 4: outcome, started,
@@ -28,6 +30,9 @@
 //   requests    requests_off, count, cap     stride 2: start time, mode
 //   heap        heap_off, heap_used, heap_cap       the attempts' automaton
 //   heap (alt)  heap_alt_off, heap_alt_used, heap_cap  records, rebuilt per tick
+//   scratch     scratch_off, scratch_used, scratch_cap  work words of one
+//                                            sequence step in generated code;
+//                                            empty between ticks
 //
 // An attempt's automaton (property tree and sequence threads) is a record in
 // the current heap, at `blob` words from heap_off and `length` words long;
@@ -49,8 +54,11 @@ namespace layout {
 /// "SVA1" and the layout version; any change of a stride, an offset or a
 /// field below changes it. Layout 2 (#186 stage 2): the step record carries
 /// the guard's source position, and the header the fail position and the
-/// pop serial of the outcome taken last.
-inline constexpr std::int64_t magic = 0x5356'4131'0002LL;
+/// pop serial of the outcome taken last. Layout 3: the scratch region the
+/// generated attempt automaton works in (header words 36 to 38). Layout 4: a
+/// thread's throughout entries in a record carry the condition's source
+/// position (guard, from, line, column).
+inline constexpr std::int64_t magic = 0x5356'4131'0005LL;
 
 enum Header : std::size_t {
     h_magic = 0,
@@ -95,6 +103,16 @@ enum Header : std::size_t {
     h_last_fail_line,
     h_last_fail_column,
     h_pop_serial,
+    // The scratch region of generated code (layout 3): the words of the
+    // sequence step in progress live in [off, off + used); `used` is zero
+    // between ticks, and growth keeps the used words.
+    h_scratch_off,
+    h_scratch_used,
+    h_scratch_cap,
+    // The per-instance delay and repetition bounds of the plan (layout 5):
+    // the offset of a region whose first word is the count, then the values;
+    // 0 when the plan has none. Generated code reads a slot bound here.
+    h_bounds_off,
 };
 inline constexpr std::size_t header_words = 40;
 static_assert(h_total_words < header_words);
@@ -226,6 +244,11 @@ public:
         return words_[static_cast<std::size_t>(get(layout::h_clocks_off))
             + clocks() + clock];
     }
+    [[nodiscard]] std::int64_t& clock_ticked(std::size_t clock) noexcept
+    {
+        return words_[static_cast<std::size_t>(get(layout::h_clocks_off))
+            + 2U * clocks() + clock];
+    }
 
     // --- attempts ---
     [[nodiscard]] std::size_t attempt_count() const noexcept
@@ -295,6 +318,24 @@ public:
     /// Recomputes h_steps_active from the attempt flags and the requests.
     void refresh_steps_active() noexcept;
 
+    /// Growth for generated code (fsim_sva_grow): makes region `region`
+    /// (see grow_region_*) hold at least `needed` rows (words, for the heap
+    /// and the scratch), growing it as the host's own pushes do.
+    void reserve_region(std::size_t region, std::size_t needed);
+    /// Stores the plan's bounds in the block (layout 5).
+    void set_bounds(const std::vector<std::int64_t>& bounds);
+
+    /// The regions reserve_region grows.
+    enum : std::size_t {
+        grow_attempts,
+        grow_outcomes,
+        grow_started,
+        grow_events,
+        grow_requests,
+        grow_heap,
+        grow_scratch,
+    };
+
 private:
     struct Caps {
         std::size_t clocks { };
@@ -304,6 +345,9 @@ private:
         std::size_t events { };
         std::size_t requests { };
         std::size_t heap { };
+        std::size_t scratch { };
+        // Words of the bounds region (count, values); 0 for none.
+        std::size_t bounds { };
     };
     [[nodiscard]] Caps caps() const noexcept;
     [[nodiscard]] static std::size_t total_words(const Caps& caps) noexcept;

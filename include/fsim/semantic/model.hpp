@@ -423,6 +423,9 @@ public:
         ScopeId scope,
         SourceSpanId source,
         OriginId origin);
+    // Moves an existing expression identity to another scope, for an
+    // expression the linker rebinds to the scope that declares its name.
+    void rebind_expression_scope(ExpressionId id, ScopeId scope);
     [[nodiscard]] StatementId add_statement_identity(
         ScopeId scope,
         SourceSpanId source,

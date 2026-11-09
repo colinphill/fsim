@@ -881,7 +881,19 @@ void Interpreter::Impl::schedule_projected_waveform(
         }
         return;
     }
-    if (width > 1U && elements.size() == 1U) {
+    // The bits of a multi-bit VHDL scalar (an integer, say) keep or reject
+    // their old transactions together (IEEE 1076-2019 10.5.2.2 step 3
+    // compares the value components of whole transactions), which the
+    // per-element path below decides; this bit-wise shortcut serves arrays
+    // and the cases without an old transaction to compare.
+    const bool whole_scalar_inertial = mode == ProjectedDelayMode::inertial
+        && first == 0U && width == target_width
+        && [&] {
+               const auto scalar = vhdl_scalar_widths.find(signal);
+               return scalar != vhdl_scalar_widths.end()
+                   && scalar->second == width && target_has_pending_transaction();
+           }();
+    if (width > 1U && elements.size() == 1U && !whole_scalar_inertial) {
         const auto& element = elements.front();
         if (mode == ProjectedDelayMode::inertial
             && rejection > element.delay) {

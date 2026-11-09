@@ -1,0 +1,6 @@
+#c top.wild: a typespec=vpiLogicTypespec name=wa_t left=3 right=0
+#c top.wild: result typespec=vpiLogicTypespec name=wa_t left=3 right=0
+#c top.expl: b typespec=vpiLogicTypespec name=eb_t left=5 right=0
+#c top.expl: result typespec=vpiLogicTypespec name=eb_t left=5 right=0
+#c top.local_t: c typespec=vpiLogicTypespec name=sh_t left=1 right=0
+#c top.local_t: result typespec=vpiLogicTypespec name=sh_t left=1 right=0

@@ -5,4 +5,6 @@
 #c attribute str=gen
 #c attribute str default=none
 #c attribute zero=0.0
-#c path none
+#c path found
+#c path reversed none
+#c path other net none

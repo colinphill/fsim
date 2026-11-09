@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "lowerer_internal.hpp"
+#include "fsim/support/stack_growth.hpp"
 #include "specialization_cache.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
 #include "fsim/support/vhdl_standard_enumeration.hpp"
@@ -1353,6 +1354,31 @@ const semantic::SpecializedHirUnit* Lowerer::hir_callee_unit(
         : nullptr;
 }
 
+void Lowerer::mark_callee_instance_read(
+    const RegisterId destination, const SignalId signal)
+{
+    if (!active_hir_callable_
+        || *active_hir_callable_ >= hir_callable_frames_.size()) {
+        return;
+    }
+    const auto& frame = hir_callable_frames_[*active_hir_callable_];
+    if (frame.callee_unit == nullptr || !frame.interface_receiver
+        || frame.interface_receiver->empty()) {
+        return;
+    }
+    // The instance path as hir_callee_unit resolves it.
+    constexpr std::string_view instance_prefix { "@instance:" };
+    const auto& receiver = *frame.interface_receiver;
+    const auto instance = receiver.starts_with(instance_prefix)
+        ? receiver.substr(instance_prefix.size())
+        : hierarchy_ + "." + receiver;
+    const auto& name = design_.signal_info_[signal].name;
+    const auto dot = name.rfind('.');
+    hierarchical_marks_.push_back({ 0U, destination, signal, false,
+        instance + '.'
+            + (dot == std::string::npos ? name : name.substr(dot + 1U)) });
+}
+
 std::optional<std::string> Lowerer::hir_class_instance_path(
     const std::string_view declaration_identity) const
 {
@@ -1771,7 +1797,7 @@ std::optional<std::int64_t> Lowerer::hir_vhdl_subtype_name_bound(
 {
     const auto expression = specialized_hir_unit_->find_expression(
         expression_id);
-    if (!expression || expression->vhdl == nullptr || depth > 8U) {
+    if (!expression || expression->vhdl == nullptr) {
         return std::nullopt;
     }
     const auto& source = *expression->vhdl;
@@ -1832,8 +1858,8 @@ std::optional<std::int64_t> Lowerer::hir_vhdl_subtype_name_bound(
             return static_cast<std::int64_t>(
                 static_cast<unsigned char>(literal->vhdl->text[1]));
         }
-        if (const auto nested = hir_vhdl_subtype_name_bound(
-                *bound_id, depth + 1U)) {
+        if (const auto nested = support::with_stack([&] { return hir_vhdl_subtype_name_bound(
+                *bound_id, depth + 1U); })) {
             return nested;
         }
         return specialized_hir_unit_->evaluate_integral_expression(*bound_id);
@@ -1858,9 +1884,6 @@ bool Lowerer::hir_frame_bound_expression(
     }
     const auto bound = [&](const auto& self, const semantic::ExpressionId id,
                            const std::size_t depth) -> bool {
-        if (depth > 64U) {
-            return false;
-        }
         if (hir_generic_actual(id)) {
             return true;
         }
@@ -1868,7 +1891,7 @@ bool Lowerer::hir_frame_bound_expression(
         return record && record->systemverilog != nullptr
             && std::ranges::any_of(record->systemverilog->operands,
                 [&](const semantic::ExpressionId operand) {
-                    return self(self, operand, depth + 1U);
+                    return support::with_stack([&] { return self(self, operand, depth + 1U); });
                 });
     };
     return bound(bound, expression, 0U);
@@ -2105,7 +2128,7 @@ std::optional<std::int64_t> Lowerer::hir_constant_integer(
                                     const semantic::ExpressionId id,
                                     const std::size_t depth) -> bool {
             const auto record = specialized_hir_unit_->find_expression(id);
-            if (!record || record->systemverilog == nullptr || depth > 64U) {
+            if (!record || record->systemverilog == nullptr) {
                 return false;
             }
             if (record->systemverilog->kind
@@ -2114,7 +2137,7 @@ std::optional<std::int64_t> Lowerer::hir_constant_integer(
             }
             return std::ranges::any_of(record->systemverilog->operands,
                 [&](const semantic::ExpressionId operand) {
-                    return self(self, operand, depth + 1U);
+                    return support::with_stack([&] { return self(self, operand, depth + 1U); });
                 });
         };
         if (has_update(has_update, expression_id, 0U)) {
@@ -4010,7 +4033,7 @@ std::optional<bool> Lowerer::hir_vhdl_range_direction(
         if (!source.direction_from_bounds) {
             return source.descending;
         }
-        if (depth >= 32U || !source.left_expression
+        if (!source.left_expression
             || !source.right_expression
             || !visiting.insert(source.left_expression->value()).second) {
             return std::nullopt;
@@ -4067,9 +4090,6 @@ std::optional<bool> Lowerer::hir_vhdl_range_direction(
                                                const std::size_t operand_depth) {
             if (left == right) {
                 return true;
-            }
-            if (operand_depth >= 32U) {
-                return false;
             }
             const auto lhs = specialized_hir_unit_->find_expression(left);
             const auto rhs = specialized_hir_unit_->find_expression(right);
@@ -4211,7 +4231,7 @@ std::optional<bool> Lowerer::hir_vhdl_range_direction(
         }
         if (prefix_range != nullptr) {
             const auto direction = prefix_range->direction_from_bounds
-                ? self(self, *prefix_range, depth + 1U, visiting)
+                ? support::with_stack([&] { return self(self, *prefix_range, depth + 1U, visiting); })
                 : std::optional<bool> { prefix_range->descending };
             return oriented(direction);
         }
@@ -4259,10 +4279,8 @@ std::optional<bool> Lowerer::hir_vhdl_range_direction(
                 [&](semantic::TypeId scalar_type_id)
                 -> const semantic::vhdl::RangeConstraint* {
                 std::unordered_set<std::uint32_t> scalar_types;
-                for (std::size_t scalar_depth = 0U;
-                    scalar_type_id.valid() && scalar_depth < 32U
-                    && scalar_types.insert(scalar_type_id.value()).second;
-                    ++scalar_depth) {
+                while (scalar_type_id.valid()
+                    && scalar_types.insert(scalar_type_id.value()).second) {
                     const auto type = specialized_hir_unit_->find_type(
                         scalar_type_id);
                     if (!type || type->vhdl == nullptr) {
@@ -4311,7 +4329,7 @@ std::optional<bool> Lowerer::hir_vhdl_range_direction(
         }
         if (scalar_prefix_range != nullptr) {
             const auto direction = scalar_prefix_range->direction_from_bounds
-                ? self(self, *scalar_prefix_range, depth + 1U, visiting)
+                ? support::with_stack([&] { return self(self, *scalar_prefix_range, depth + 1U, visiting); })
                 : std::optional<bool> { scalar_prefix_range->descending };
             return oriented(direction);
         }
@@ -4769,7 +4787,7 @@ bool Lowerer::hir_systemverilog_own_element_member(
     // declared array variable, unlike a generate-element path
     // (`blk[1].mem`), whose root names a generate block.
     auto root = expression_id;
-    for (std::size_t depth { }; depth < 32U; ++depth) {
+    for (;;) {
         const auto view = specialized_hir_unit_->find_expression(root);
         if (!view || view->systemverilog == nullptr
             || view->systemverilog->kind
@@ -4805,13 +4823,13 @@ bool Lowerer::hir_vhdl_signed_array(
     const auto node = specialized_hir_unit_ != nullptr
         ? specialized_hir_unit_->find_expression(expression)
         : std::nullopt;
-    if (depth < 16U && node && node->vhdl != nullptr
+    if (node && node->vhdl != nullptr
         && (node->vhdl->kind == semantic::vhdl::ExpressionKind::concatenation
             || (node->vhdl->kind == semantic::vhdl::ExpressionKind::binary
                 && node->vhdl->text == "&"))) {
         return std::ranges::any_of(node->vhdl->operands,
             [&](const semantic::ExpressionId operand) {
-                return hir_vhdl_signed_array(operand, depth + 1U);
+                return support::with_stack([&] { return hir_vhdl_signed_array(operand, depth + 1U); });
             });
     }
     const auto subtype = hir_vhdl_expression_subtype(expression);
@@ -6465,6 +6483,15 @@ Lowerer::hir_referenced_declaration(
             && (record.resolved_builtin_type == "character"
                 || record.resolved_builtin_type == "bit")) {
             return std::nullopt;
+        }
+        // Typed STD_ULOGIC (9.3.2, 12.5): only a retained declaration of
+        // that type can be the literal; a same-spelled literal of another
+        // type (a VITAL symbol's 'Z') is a homograph, so the lookup that
+        // follows must not reach it by another route.
+        if (record.kind == semantic::vhdl::ExpressionKind::logic_literal
+            && !record.resolved_builtin_type.empty()) {
+            return hir_resolver().resolve_expression_name(expression_id)
+                .unique();
         }
         // A character literal in a context of another type denotes that
         // type's literal, not the visible user enumeration literal (9.3.2,
@@ -9369,6 +9396,22 @@ Lowerer::hir_runtime_binding(
                     }
                 }
             }
+            // A local port of a component bound with a port map denotes
+            // the signal its instance associates with it, and the port of
+            // the bound entity a formal conversion reads is that port's
+            // signal (IEEE 1076-2019 14.5.4, 6.5.7.1): neither is an object
+            // of the region the binding map is lowered in.
+            if (!signal_id && found == signals_.end()
+                && hir_vhdl_declaration_signals_ != nullptr
+                && declaration->vhdl != nullptr) {
+                if (const auto bound = hir_vhdl_declaration_signals_->find(
+                        declaration_id.value());
+                    bound != hir_vhdl_declaration_signals_->end()) {
+                    signal_id = bound->second;
+                    result.vhdl_port = false;
+                    result.vhdl_direction = semantic::vhdl::Direction::unknown;
+                }
+            }
             if (!signal_id && found == signals_.end()) {
                 found = signals_.find(result.name);
             }
@@ -11323,7 +11366,7 @@ Lowerer::hir_systemverilog_array_query_shape(
             -> std::optional<bool> {
             auto current = reference;
             std::vector<semantic::TypeId> visited;
-            for (std::size_t depth { }; depth < 64U; ++depth) {
+            for (;;) {
                 if (!current.target.target.valid()) {
                     return current.value_form
                             == semantic::sv::TypeForm::unpacked_structure
@@ -11349,7 +11392,6 @@ Lowerer::hir_systemverilog_array_query_shape(
                     return false;
                 current = definition->systemverilog->base;
             }
-            return std::nullopt;
         };
         const auto unpacked_aggregate = is_unpacked_aggregate(*leaf);
         if (!unpacked_aggregate) {
@@ -12280,7 +12322,7 @@ bool Lowerer::hir_vhdl_local_vector_constant(
     }
     const bool array = !effective->constraints.empty() || [&] {
         auto type_id = effective->type_mark.target;
-        for (std::size_t depth { }; depth < 16U && type_id.valid(); ++depth) {
+        while (type_id.valid()) {
             const auto type = specialized_hir_unit_->find_type(type_id);
             if (!type || type->vhdl == nullptr) {
                 return false;
@@ -15084,7 +15126,7 @@ Lowerer::hir_vhdl_attribute_profile(
         const auto fold = [&](const auto& self, const semantic::ExpressionId id,
                               const std::size_t depth) -> std::optional<double> {
             const auto value = specialized_hir_unit_->find_expression(id);
-            if (!value || value->vhdl == nullptr || depth > 32U) {
+            if (!value || value->vhdl == nullptr) {
                 return std::nullopt;
             }
             const auto& node = *value->vhdl;
@@ -15099,14 +15141,14 @@ Lowerer::hir_vhdl_attribute_profile(
             }
             if (node.kind == Kind::unary && node.operands.size() == 1U
                 && (node.text == "-" || node.text == "+")) {
-                const auto operand = self(self, node.operands.front(), depth + 1U);
+                const auto operand = support::with_stack([&] { return self(self, node.operands.front(), depth + 1U); });
                 return operand && node.text == "-" ? std::optional { -*operand } : operand;
             }
             if (node.kind == Kind::binary && node.operands.size() == 2U
                 && (node.text == "+" || node.text == "-" || node.text == "*"
                     || node.text == "/")) {
-                const auto lhs = self(self, node.operands[0], depth + 1U);
-                const auto rhs = self(self, node.operands[1], depth + 1U);
+                const auto lhs = support::with_stack([&] { return self(self, node.operands[0], depth + 1U); });
+                const auto rhs = support::with_stack([&] { return self(self, node.operands[1], depth + 1U); });
                 if (!lhs || !rhs || (node.text == "/" && *rhs == 0.0)) {
                     return std::nullopt;
                 }
@@ -15123,7 +15165,7 @@ Lowerer::hir_vhdl_attribute_profile(
                     && declaration->vhdl->form == semantic::vhdl::DeclarationForm::constant
                     && declaration->vhdl->initializer
                     && *declaration->vhdl->initializer != id) {
-                    return self(self, *declaration->vhdl->initializer, depth + 1U);
+                    return support::with_stack([&] { return self(self, *declaration->vhdl->initializer, depth + 1U); });
                 }
             }
             return std::nullopt;
@@ -17942,7 +17984,7 @@ frontend::SystemVerilogScalarKind Lowerer::hir_systemverilog_scalar_kind(
     if (source.kind == semantic::sv::ExpressionKind::index
         && source.operands.size() == 2U) {
         auto root = source.operands.front();
-        for (std::size_t depth { }; depth < 16U; ++depth) {
+        for (;;) {
             const auto prefix = specialized_hir_unit_->find_expression(root);
             if (!prefix || prefix->systemverilog == nullptr
                 || prefix->systemverilog->kind
@@ -18286,10 +18328,13 @@ Lowerer::hir_systemverilog_packed_shape(
                        .value_or(resolved);
     }
     const auto* type = &resolved;
-    for (std::size_t depth { };
-        type->packed_dimensions.empty() && type->target.target.valid()
-        && depth < 16U;
-        ++depth) {
+    std::vector<semantic::TypeId> visited_types;
+    while (type->packed_dimensions.empty() && type->target.target.valid()) {
+        if (std::ranges::find(visited_types, type->target.target)
+            != visited_types.end()) {
+            break;
+        }
+        visited_types.push_back(type->target.target);
         const auto definition
             = specialized_hir_unit_->find_type(type->target.target);
         // A typedef of a packed array of structures (`typedef s_t [1:0]
@@ -18353,7 +18398,7 @@ std::optional<bool> Lowerer::hir_systemverilog_packed_element_signed(
     }
     std::size_t depth = 1U;
     auto root = expression->systemverilog->operands.front();
-    for (; depth < 32U; ++depth) {
+    for (;; ++depth) {
         const auto prefix = specialized_hir_unit_->find_expression(root);
         if (!prefix || prefix->systemverilog == nullptr
             || prefix->systemverilog->kind
@@ -18386,7 +18431,8 @@ std::optional<bool> Lowerer::hir_systemverilog_packed_element_signed(
         return std::nullopt;
     }
     auto selects = depth - unpacked;
-    for (std::size_t layer { }; layer < 16U; ++layer) {
+    std::vector<semantic::TypeId> visited_layers;
+    for (;;) {
         const auto dimensions = current.packed_dimensions.empty()
             ? (current.packed_range ? 1U : 0U)
             : current.packed_dimensions.size();
@@ -18424,12 +18470,14 @@ std::optional<bool> Lowerer::hir_systemverilog_packed_element_signed(
             : std::nullopt;
         if (!definition || definition->systemverilog == nullptr
             || definition->systemverilog->form
-                != semantic::sv::TypeForm::alias) {
+                != semantic::sv::TypeForm::alias
+            || std::ranges::find(visited_layers, current.target.target)
+                != visited_layers.end()) {
             return false;
         }
+        visited_layers.push_back(current.target.target);
         current = definition->systemverilog->base;
     }
-    return false;
 }
 
 bool Lowerer::hir_actual_extension_signed(
@@ -18654,13 +18702,13 @@ Lowerer::vhdl_character_literal_items() const
                          const std::size_t depth) -> void {
         items.push_back({ id.value(), kind, position });
         const auto expression = design.find_expression(id);
-        if (depth > 32U || !expression || expression->vhdl == nullptr
+        if (!expression || expression->vhdl == nullptr
             || expression->vhdl->kind
                 != semantic::vhdl::ExpressionKind::aggregate) {
             return;
         }
         for (const auto& association : expression->vhdl->associations) {
-            self(self, association.value, kind, position, depth + 1U);
+            support::with_stack([&] { return self(self, association.value, kind, position, depth + 1U); });
         }
     };
     const auto add_range = [&](const semantic::vhdl::RangeConstraint& range,
@@ -18862,7 +18910,7 @@ void Lowerer::classify_hir_vhdl_character_literal(
                                    const semantic::ExpressionId id,
                                    const std::size_t depth) -> bool {
         const auto expression = specialized_hir_unit_->find_expression(id);
-        if (depth > 32U || !expression || expression->vhdl == nullptr) {
+        if (!expression || expression->vhdl == nullptr) {
             return false;
         }
         if (expression->vhdl->kind
@@ -18873,7 +18921,7 @@ void Lowerer::classify_hir_vhdl_character_literal(
                 == semantic::vhdl::ExpressionKind::aggregate
             && std::ranges::any_of(expression->vhdl->associations,
                 [&](const auto& association) {
-                    return self(self, association.value, depth + 1U);
+                    return support::with_stack([&] { return self(self, association.value, depth + 1U); });
                 });
     };
     // A record aggregate's element values take the record element subtypes
@@ -18886,7 +18934,7 @@ void Lowerer::classify_hir_vhdl_character_literal(
                                            const semantic::ScopeId scope,
                                            const std::size_t depth) -> void {
         const auto aggregate = specialized_hir_unit_->find_expression(id);
-        if (depth > 16U || !aggregate || aggregate->vhdl == nullptr
+        if (!aggregate || aggregate->vhdl == nullptr
             || aggregate->vhdl->kind
                 != semantic::vhdl::ExpressionKind::aggregate
             || !subtype.type_mark.target.valid()) {
@@ -18930,8 +18978,8 @@ void Lowerer::classify_hir_vhdl_character_literal(
                     element->subtype, scope, hir_generic_binding_frames_)) {
                 mark(association.value);
             } else {
-                self(self, association.value, element->subtype, scope,
-                    depth + 1U);
+                support::with_stack([&] { return self(self, association.value, element->subtype, scope,
+                    depth + 1U); });
             }
         }
     };
@@ -19418,7 +19466,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_array_ordering(
 std::optional<double> Lowerer::hir_vhdl_constant_real(
     const semantic::ExpressionId expression, const std::size_t depth) const
 {
-    if (specialized_hir_unit_ == nullptr || depth > 16U) {
+    if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
     }
     const auto node = specialized_hir_unit_->find_expression(expression);
@@ -19434,8 +19482,8 @@ std::optional<double> Lowerer::hir_vhdl_constant_real(
             || (source.text != "-" && source.text != "+")) {
             return std::nullopt;
         }
-        const auto operand = hir_vhdl_constant_real(
-            source.operands.front(), depth + 1U);
+        const auto operand = support::with_stack([&] { return hir_vhdl_constant_real(
+            source.operands.front(), depth + 1U); });
         return operand && source.text == "-"
             ? std::optional { -*operand }
             : operand;
@@ -19444,10 +19492,10 @@ std::optional<double> Lowerer::hir_vhdl_constant_real(
         if (source.operands.size() != 2U) {
             return std::nullopt;
         }
-        const auto left = hir_vhdl_constant_real(
-            source.operands.front(), depth + 1U);
-        const auto right = hir_vhdl_constant_real(
-            source.operands.back(), depth + 1U);
+        const auto left = support::with_stack([&] { return hir_vhdl_constant_real(
+            source.operands.front(), depth + 1U); });
+        const auto right = support::with_stack([&] { return hir_vhdl_constant_real(
+            source.operands.back(), depth + 1U); });
         if (!left || !right) {
             return std::nullopt;
         }
@@ -19479,8 +19527,14 @@ std::optional<double> Lowerer::hir_vhdl_constant_real(
             || !declaration->vhdl->initializer) {
             return std::nullopt;
         }
-        return hir_vhdl_constant_real(
-            *declaration->vhdl->initializer, depth + 1U);
+        // A constant whose initializer names it again has no value.
+        thread_local support::ActiveSet<std::uint32_t> active;
+        if (!active.enter(source.referenced_name->selected->value())) {
+            return std::nullopt;
+        }
+        const support::ActiveSet<std::uint32_t>::Entry entry { active };
+        return support::with_stack([&] { return hir_vhdl_constant_real(
+            *declaration->vhdl->initializer, depth + 1U); });
     }
     default:
         return std::nullopt;
@@ -19583,7 +19637,7 @@ std::optional<PackedLogic4> Lowerer::hir_vhdl_default_value(
     const std::size_t depth,
     const bool scalar) const
 {
-    if (specialized_hir_unit_ == nullptr || depth > 16U || width == 0U) {
+    if (specialized_hir_unit_ == nullptr || width == 0U) {
         return std::nullopt;
     }
     const auto effective = hir_effective_vhdl_subtype(declared);
@@ -19651,7 +19705,7 @@ std::optional<PackedLogic4> Lowerer::hir_vhdl_default_value(
             }
             auto id = *range->left_expression;
             bool negative { };
-            for (std::size_t depth { }; depth < 4U; ++depth) {
+            for (;;) {
                 const auto node = specialized_hir_unit_->find_expression(id);
                 if (!node || node->vhdl == nullptr) {
                     return std::nullopt;
@@ -19671,7 +19725,6 @@ std::optional<PackedLogic4> Lowerer::hir_vhdl_default_value(
                 return value ? std::optional { negative ? -*value : *value }
                              : std::nullopt;
             }
-            return std::nullopt;
         }();
         return left
             ? std::optional { unsigned_value(
@@ -19694,8 +19747,8 @@ std::optional<PackedLogic4> Lowerer::hir_vhdl_default_value(
                 return std::nullopt;
             }
             offset -= *element_width;
-            const auto value = hir_vhdl_default_value(
-                declared_element, *element_width, depth + 1U, true);
+            const auto value = support::with_stack([&] { return hir_vhdl_default_value(
+                declared_element, *element_width, depth + 1U, true); });
             if (!value) {
                 return std::nullopt;
             }
@@ -19725,8 +19778,8 @@ std::optional<PackedLogic4> Lowerer::hir_vhdl_default_value(
         if (!element_width || width % *element_width != 0U) {
             return std::nullopt;
         }
-        const auto value = hir_vhdl_default_value(
-            element_subtype, *element_width, depth + 1U, true);
+        const auto value = support::with_stack([&] { return hir_vhdl_default_value(
+            element_subtype, *element_width, depth + 1U, true); });
         if (!value || value->is_logic9()) {
             return std::nullopt;
         }
@@ -23590,6 +23643,16 @@ Lowerer::hir_vhdl_standard_function_profile(
     const auto logic_mapping = name == "to_01" || name == "to_x01"
         || name == "to_x01z" || name == "to_ux01";
     const auto logic_unknown_predicate = name == "is_x";
+    // STD_LOGIC_1164 RESOLVED of a STD_ULOGIC_VECTOR and NUMERIC_STD
+    // STD_MATCH (IEEE 1076-2019 16.7, 16.8.5).
+    const auto logic_resolved = name == "resolved"
+        && source.operands.size() == 1U;
+    const auto logic_match = name == "std_match"
+        && source.operands.size() == 2U;
+    // NUMERIC_STD FIND_LEFTMOST and FIND_RIGHTMOST (IEEE 1076-2019 16.8.5).
+    const auto numeric_find = (name == "find_leftmost"
+                                  || name == "find_rightmost")
+        && source.operands.size() == 2U;
     const auto reduction = name == "and_reduce" || name == "nand_reduce"
         || name == "or_reduce" || name == "nor_reduce"
         || name == "xor_reduce" || name == "xnor_reduce";
@@ -23629,7 +23692,8 @@ Lowerer::hir_vhdl_standard_function_profile(
         || same_hir_identifier(
             source.text, "std.env.pslisassertcovered", true);
     if (!bit_conversion && !logic_conversion && !logic_mapping
-        && !logic_unknown_predicate
+        && !logic_unknown_predicate && !logic_resolved && !logic_match
+        && !numeric_find
         && !reduction && !numeric_to_integer && !numeric_resize
         && !numeric_shift && !numeric_extremum && !psl_query) {
         return std::nullopt;
@@ -23735,6 +23799,28 @@ Lowerer::hir_vhdl_standard_function_profile(
                     vhdl_integer_standard())),
             frontend::ValueDomain::Integer,
             true,
+        };
+    }
+    if (numeric_find) {
+        return HirVhdlStandardFunctionProfile {
+            HirVhdlStandardFunctionKind::numeric_find,
+            name,
+            static_cast<std::size_t>(
+                frontend::vhdl_predefined_integer_storage_width(
+                    vhdl_integer_standard())),
+            frontend::ValueDomain::Integer,
+            true,
+        };
+    }
+    if (logic_resolved || logic_match) {
+        return HirVhdlStandardFunctionProfile {
+            logic_resolved ? HirVhdlStandardFunctionKind::logic_resolved
+                           : HirVhdlStandardFunctionKind::logic_match,
+            name,
+            1U,
+            logic_resolved ? frontend::ValueDomain::Logic9
+                           : frontend::ValueDomain::Boolean,
+            false,
         };
     }
     if (logic_unknown_predicate) {
@@ -24093,7 +24179,7 @@ Lowerer::hir_systemverilog_indexed_member(
     }
     auto root = expression->systemverilog->operands.front();
     std::size_t indices { 1U };
-    for (std::size_t depth { }; depth < 16U; ++depth) {
+    for (;;) {
         const auto prefix = specialized_hir_unit_->find_expression(root);
         if (!prefix || prefix->systemverilog == nullptr
             || prefix->systemverilog->kind
@@ -24308,18 +24394,20 @@ Lowerer::hir_systemverilog_type_member_path(
             // A member of a named packed array type (`t_str s;` with
             // `typedef logic [7:0][7:0] t_str`) has that type's dimensions.
             auto shaped = member->type;
-            for (std::size_t depth { };
-                 depth < 8U && !shaped.packed_range
+            std::vector<semantic::sv::TypeReference> visited_shapes;
+            while (!shaped.packed_range
                  && shaped.packed_dimensions.empty()
                  && (shaped.target.target.valid()
-                     || !shaped.target.spelling.empty());
-                 ++depth) {
+                     || !shaped.target.spelling.empty())) {
                 const auto effective = hir_resolver()
                     .effective_systemverilog_type(
                         shaped, specialized_hir_unit_->scope());
-                if (!effective || *effective == shaped) {
+                if (!effective || *effective == shaped
+                    || std::ranges::find(visited_shapes, *effective)
+                        != visited_shapes.end()) {
                     break;
                 }
+                visited_shapes.push_back(shaped);
                 shaped = *effective;
             }
             const auto member_range = [&]()
@@ -30586,6 +30674,12 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_enumeration_string(
         || expression->vhdl->decoded_string->empty()) {
         return std::nullopt;
     }
+    // The context-typed pass gave the literal a predefined array type
+    // (STD_ULOGIC_VECTOR, BIT_VECTOR, STRING): its elements are not
+    // positions of a retained enumeration whose literals share a spelling.
+    if (!expression->vhdl->resolved_builtin_type.empty()) {
+        return std::nullopt;
+    }
     const auto& decoded = *expression->vhdl->decoded_string;
     const auto encode = [&](const semantic::vhdl::TypeDefinition& array)
         -> std::optional<std::string> {
@@ -30631,12 +30725,20 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_enumeration_string(
     };
     std::optional<std::string> bits;
     const auto subtype = hir_vhdl_expression_subtype_ref(expression_id);
-    if (const auto* array = subtype && subtype->type_mark.target.valid()
+    // The array type the context gave the literal decides its elements.
+    const auto* typed = expression->vhdl->resolved_type
+        ? vhdl_array_definition(
+              *specialized_hir_unit_, *expression->vhdl->resolved_type)
+        : nullptr;
+    if (typed != nullptr) {
+        bits = encode(*typed);
+    } else if (const auto* array = subtype && subtype->type_mark.target.valid()
             ? vhdl_array_definition(
                   *specialized_hir_unit_, subtype->type_mark.target)
             : nullptr) {
         bits = encode(*array);
-    } else if (!subtype && expected_width != 0U) {
+    } else if (!subtype && expected_width != 0U
+        && !expression->vhdl->resolved_type) {
         // Without a contextual type, use the one encoding that every array
         // type of the unit with such elements and this width agrees on.
         // STD.STANDARD.BIT_VECTOR is always visible and is one of them.
@@ -30879,10 +30981,16 @@ bool Lowerer::hir_systemverilog_type_signed(
     const auto resolver = hir_resolver();
     const auto resolution_scope
         = use_scope.value_or(specialized_hir_unit_->scope());
-    for (int depth = 0; depth < 8; ++depth) {
+    // A type parameter or typedef can name itself again: stop on a repeat.
+    std::vector<decltype(current)> visited;
+    for (;;) {
         if (current.signed_value) {
             return true;
         }
+        if (std::ranges::find(visited, current) != visited.end()) {
+            return false;
+        }
+        visited.push_back(current);
         if (current.target.target.valid()) {
             if (const auto binding = hir_systemverilog_type_parameter_binding(
                     current.target.target)) {
@@ -30897,7 +31005,6 @@ bool Lowerer::hir_systemverilog_type_signed(
         }
         current = *effective;
     }
-    return false;
 }
 
 std::optional<Lowerer::HirVhdlRecordField> Lowerer::hir_vhdl_record_field(

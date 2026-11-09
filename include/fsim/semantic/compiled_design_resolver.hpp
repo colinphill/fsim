@@ -471,12 +471,41 @@ public:
         std::string_view library, std::string_view package,
         std::string_view member, ScopeId use_scope) const;
 
+    /// Whether a use clause of the unit's context (its primary unit's, and the
+    /// contexts they reference) names `library.package.member` or
+    /// `library.package.all` (IEEE 1076-2019 12.4). Says nothing about
+    /// whether the package declares `member`.
+    [[nodiscard]] bool vhdl_package_member_use_clause_names(
+        std::string_view library, std::string_view package,
+        std::string_view member, ScopeId use_scope) const;
+
+    /// Whether `member` of the package is directly visible in `use_scope`
+    /// through a use clause and not hidden there (12.3, 12.4): a selected-name
+    /// use clause or `.all` names it, and no nonoverloadable declaration of the
+    /// designator in a region around the use hides it. With `overloadable`
+    /// (a subprogram, operator or enumeration literal) a homograph-free
+    /// declaration of an overloadable kind does not hide it. The package may be
+    /// compiler-served: the caller says whether it declares the member.
+    [[nodiscard]] bool vhdl_package_member_use_visible(
+        std::string_view library, std::string_view package,
+        std::string_view member, ScopeId use_scope,
+        bool overloadable) const;
+
     /// Return whether a compiler-owned type spelling, whether retained as
     /// `@builtin:std.env.time_record`, selected, or directly imported,
     /// denotes a visible governed package member in the selected unit's
     /// context.
     [[nodiscard]] bool vhdl_builtin_type_visible(
         std::string_view spelling, ScopeId use_scope) const;
+
+    /// Whether a character literal may denote this enumeration literal
+    /// declaration (IEEE 1076-2019 9.3.2, 12.5): the context-typed pass
+    /// records the literal's type on the expression, and a same-spelled
+    /// literal of another type (a VITAL symbol enumeration's 'Z' beside
+    /// STD_ULOGIC's) is a homograph that does not name it. Anything else,
+    /// and an expression the pass left untyped, fits.
+    [[nodiscard]] bool vhdl_character_literal_fits_context(
+        const vhdl::Expression& expression, DeclarationId declaration) const;
 
     [[nodiscard]] CompiledDeclarationResolution
     resolve_vhdl_callable_candidates(

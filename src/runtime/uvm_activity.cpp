@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/uvm_activity.hpp"
 
+#include "run_state_archive.hpp"
+
 #include <limits>
 #include <utility>
 #include <vector>
@@ -103,6 +105,20 @@ void SystemVerilogUvmActivityService::publish(
     }
   }
   --reentry_depth_;
+}
+
+void SystemVerilogUvmActivityService::run_state_io(RunStateArchive& archive) {
+  // The observers are the embedder's callbacks.
+  archive.io(events_);
+  archive.io(failures_);
+  archive.io(next_sequence_);
+}
+
+void SystemVerilogUvmActivityService::reset_run_state() {
+  events_.clear();
+  failures_.clear();
+  next_sequence_ = 0;
+  reentry_depth_ = 0;
 }
 
 }  // namespace fsim::runtime

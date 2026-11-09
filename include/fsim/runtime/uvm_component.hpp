@@ -4,6 +4,7 @@
 #include "fsim/runtime/class_heap.hpp"
 #include "fsim/runtime/uvm_object.hpp"
 
+#include <limits>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -15,6 +16,8 @@
 #include <vector>
 
 namespace fsim::runtime {
+
+class RunStateArchive;
 
 class SystemVerilogUvmPhaseService;
 
@@ -28,7 +31,7 @@ enum class SystemVerilogUvmComponentState : std::uint8_t {
 struct SystemVerilogUvmComponentLimits {
   std::size_t maximum_roots{64};
   std::size_t maximum_components{65'536};
-  std::size_t maximum_depth{256};
+  std::size_t maximum_depth{std::numeric_limits<std::size_t>::max()};
   std::size_t maximum_children{65'536};
   std::size_t maximum_name_bytes{1'024};
   std::size_t maximum_full_name_bytes{16'384};
@@ -51,6 +54,15 @@ struct SystemVerilogUvmComponentSnapshot {
 /// recursive teardown is leaf first and generation safe.
 class SystemVerilogUvmComponentService final {
  public:
+  /// Run-state save and restore of the roots and the hierarchy (#188), the
+  /// return to the empty hierarchy, and whether no phase callback is running
+  /// (the one scratch member).
+  void run_state_io(RunStateArchive& archive);
+  void reset_run_state();
+  [[nodiscard]] bool run_state_idle() const noexcept {
+    return !phase_callback_active_ && !phase_child_parent_.has_value();
+  }
+
   using LifecycleHook =
       std::function<void(const SystemVerilogUvmComponentSnapshot&)>;
 

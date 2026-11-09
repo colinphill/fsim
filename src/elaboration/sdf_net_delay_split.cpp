@@ -427,6 +427,10 @@ struct LoadKey {
 struct BitDelays {
     std::map<std::string, NetDelayTable> by_source;
     NetDelayTable port_delays;
+    // The record that set each of those delays (the later of the records
+    // that name the bit), npos for none.
+    std::map<std::string, std::size_t> source_owner;
+    std::size_t port_owner { std::string::npos };
 };
 
 // A record that ends at a load: the bits it names and its delays.
@@ -476,6 +480,9 @@ struct Load {
     // Per bit of the port (a record of a bit or part select covers only its
     // bits), then the settled delay of each bit.
     std::vector<BitDelays> bits;
+    // The record whose delays each bit ended with (the later of the records
+    // that name it, IEEE 1364-2005 16.3); npos for a bit no record names.
+    std::vector<std::size_t> owner;
     std::uint32_t width { };
     std::vector<NetDelayTable> delays;
     // The instance of each INTERCONNECT source port.
@@ -517,6 +524,33 @@ std::vector<NetDelayTable> group_delays(
     return result;
 }
 
+// The delays of `increment` added to those of `base`, transition by
+// transition, with the pulse limits (IEEE 1364-2005 16.3).
+NetDelayTable added(const NetDelayTable& base, const NetDelayTable& increment)
+{
+    NetDelayTable result;
+    for (std::size_t index = 0U; index < result.delay.size(); ++index) {
+        result.delay[index] = base.delay[index] + increment.delay[index];
+        result.reject[index] = base.reject[index] + increment.reject[index];
+        result.error[index] = base.error[index] + increment.error[index];
+    }
+    return result;
+}
+
+// The record that owns each bit's delay from the drivers that `source` stands
+// for (empty: the drivers no INTERCONNECT names), like group_delays.
+std::vector<std::size_t> group_owners(
+    const Load& load, const std::string& source)
+{
+    std::vector<std::size_t> result;
+    for (const auto& bit : load.bits) {
+        const auto found = bit.source_owner.find(source);
+        result.push_back(
+            found != bit.source_owner.end() ? found->second : bit.port_owner);
+    }
+    return result;
+}
+
 // Applies the records of `load` in order of occurrence. An INTERCONNECT
 // whose source port drives nothing on the load's net (`driven` holds the
 // sources that do) is annotated as the delay from all sources, like a PORT
@@ -529,6 +563,7 @@ void apply_records(const ElaboratedDesignState& state, Load& load,
     const std::set<std::string>& driven, std::vector<std::string>& notes)
 {
     load.bits.assign(load.width, BitDelays { });
+    load.owner.assign(load.width, std::string::npos);
     for (const auto& applied : load.applied) {
         const auto& record = state.sdf_net_delays[applied.record];
         const bool from_all = record.kind == SdfNetDelayKind::port
@@ -542,14 +577,27 @@ void apply_records(const ElaboratedDesignState& state, Load& load,
         for (auto bit = applied.first; bit < applied.first + applied.count;
             ++bit) {
             auto& entry = load.bits[bit];
+            load.owner[bit] = applied.record;
             if (from_all) {
-                entry.port_delays = applied.delays;
+                entry.port_delays = record.increment
+                    ? added(entry.port_delays, applied.delays)
+                    : applied.delays;
+                entry.port_owner = applied.record;
                 for (auto& each : entry.by_source) {
-                    each.second = applied.delays;
+                    each.second = record.increment
+                        ? added(each.second, applied.delays) : applied.delays;
+                    entry.source_owner[each.first] = applied.record;
                 }
             } else {
-                entry.by_source.insert_or_assign(
-                    record.source.object, applied.delays);
+                const auto current = entry.by_source.find(record.source.object);
+                entry.by_source.insert_or_assign(record.source.object,
+                    record.increment
+                        ? added(current != entry.by_source.end()
+                                ? current->second : entry.port_delays,
+                            applied.delays)
+                        : applied.delays);
+                entry.source_owner.insert_or_assign(
+                    record.source.object, applied.record);
             }
         }
     }
@@ -1208,12 +1256,20 @@ SdfNetDelaySplitResult split_sdf_net_delays(ElaboratedDesignState& state)
     const auto add_drivers = [&](const Load& load, const SignalId id,
                                  const std::vector<Feed>& feeds,
                                  const std::vector<NetDelayTable>& delays,
-                                 const std::string& tag) {
+                                 const std::string& tag,
+                                 const std::vector<std::size_t>& owners) {
         const auto kind = state.signals[feeds.front().read].value_kind;
         Runs runs;
         for (std::uint32_t begin = 0U; begin < delays.size();) {
             auto end = begin + 1U;
-            while (end < delays.size() && delays[end] == delays[begin]) {
+            // A run also ends where the record that owns the bits changes,
+            // so that a put on one record retimes only its own bits
+            // (vpi_put_delays, IEEE 1800-2023 38.32).
+            const auto owned = [&](const std::uint32_t bit) {
+                return owners.empty() ? std::string::npos : owners[bit];
+            };
+            while (end < delays.size() && delays[end] == delays[begin]
+                && owned(end) == owned(begin)) {
                 ++end;
             }
             const bool whole = begin == 0U && end == delays.size();
@@ -1297,13 +1353,22 @@ SdfNetDelaySplitResult split_sdf_net_delays(ElaboratedDesignState& state)
         if (load.groups.empty()) {
             const auto runs = add_drivers(
                 load, id, { Feed { key.signal, load.strength } }, load.delays,
-                { });
+                { }, load.owner);
             for (std::size_t index = 0U; index < load.records.size();
                 ++index) {
                 auto& declared = state.sdf_net_delays[load.records[index]];
                 declared.delayed = true;
                 declared.load_signal = id;
                 declared.driver = run_driver(runs, load.record_offsets[index]);
+                // Every run whose bits this record owns: a put on the record
+                // retimes each (a record that a later one overrides entirely
+                // keeps `driver` alone).
+                declared.run_drivers.clear();
+                for (const auto& [begin, process] : runs) {
+                    if (load.owner[begin] == load.records[index]) {
+                        declared.run_drivers.push_back(process);
+                    }
+                }
             }
             ++result.split;
             continue;
@@ -1424,16 +1489,23 @@ SdfNetDelaySplitResult split_sdf_net_delays(ElaboratedDesignState& state)
             found->second.push_back(number);
         }
         std::map<std::pair<bool, std::string>, Runs> bucket_runs;
+        // The record that owns each bit of a bucket's runs (npos for the
+        // load's own undelayed group).
+        std::map<std::pair<bool, std::string>, std::vector<std::size_t>>
+            bucket_owners;
         for (std::size_t number = 0U; number < buckets.size(); ++number) {
             std::vector<Feed> feeds;
             for (const auto group : buckets[number].second) {
                 feeds.push_back({ shadow_of(group, key.signal),
                     load.groups[group].strength });
             }
+            const auto& lead = load.groups[buckets[number].second.front()];
+            auto owners = lead.own ? std::vector<std::size_t> { }
+                                   : group_owners(load, lead.source);
             bucket_runs.emplace(buckets[number].first,
-                add_drivers(load, id, feeds,
-                    load.groups[buckets[number].second.front()].delays,
-                    '_' + std::to_string(number)));
+                add_drivers(load, id, feeds, lead.delays,
+                    '_' + std::to_string(number), owners));
+            bucket_owners.emplace(buckets[number].first, std::move(owners));
         }
         std::set<std::string> driven;
         for (const auto& group : load.groups) {
@@ -1462,6 +1534,15 @@ SdfNetDelaySplitResult split_sdf_net_delays(ElaboratedDesignState& state)
             declared.load_signal = id;
             declared.driver
                 = run_driver(found->second, load.record_offsets[index]);
+            // The runs of that group whose bits this record owns, so that a
+            // put on the record retimes each of them and no other bit.
+            declared.run_drivers.clear();
+            const auto& owners = bucket_owners.at(found->first);
+            for (const auto& [begin, process] : found->second) {
+                if (!owners.empty() && owners[begin] == load.records[index]) {
+                    declared.run_drivers.push_back(process);
+                }
+            }
         }
         ++result.split;
     }
@@ -1492,13 +1573,14 @@ sdf_net_delay_retiming(
     // with the copy signal and driver process the split gave it. The split
     // numbers them in a fixed order from one baseline, so the same triples
     // mean the same copies and drivers.
-    using Triple = std::tuple<std::string, SignalId, ProcessId>;
+    using Triple = std::tuple<std::string, SignalId, ProcessId,
+        std::vector<ProcessId>>;
     const auto delayed = [](const std::vector<SdfNetDelayInfo>& records) {
         std::vector<Triple> triples;
         for (const auto& record : records) {
             if (record.delayed) {
                 triples.emplace_back(record.destination.object,
-                    record.load_signal, record.driver);
+                    record.load_signal, record.driver, record.run_drivers);
             }
         }
         std::ranges::sort(triples);

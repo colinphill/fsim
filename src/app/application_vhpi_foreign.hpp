@@ -19,6 +19,10 @@ namespace fsim::app {
 class Simulation;
 }
 
+namespace fsim::semantic {
+class CompiledDesign;
+}
+
 namespace fsim::app::application_detail {
 
 /// The live VHPI service of one simulation: it loads the modules, owns the
@@ -99,6 +103,14 @@ struct VhpiCatalogUnit {
 /// (IEEE 1076-2019 19.4.5: `vhpiDesignUnits`).
 using VhpiLibraryUnits
     = std::function<std::vector<VhpiCatalogUnit>(std::string_view library)>;
+/// The design of one analyzed unit the elaborated design does not hold,
+/// linked from its library object and the objects that object depends on
+/// (null when the unit cannot be loaded). A VHPI program that asks for the
+/// declarations or statements of such a unit gets them from this design
+/// (IEEE 1076-2019 19.4.5); the design is read the first time it is asked.
+using VhpiLibraryDesign
+    = std::function<std::shared_ptr<const semantic::CompiledDesign>(
+        std::string_view library, const VhpiCatalogUnit& unit)>;
 [[nodiscard]] std::unique_ptr<VhpiForeignService> attach_vhpi_modules(
     Simulation& simulation,
     std::span<const std::string> modules,
@@ -108,6 +120,7 @@ using VhpiLibraryUnits
     diagnostic::Engine& diagnostics,
     ForeignCompanion companion = {},
     VhpiLibraryDirectories libraries = {},
-    VhpiLibraryUnits library_units = {});
+    VhpiLibraryUnits library_units = {},
+    VhpiLibraryDesign library_design = {});
 
 } // namespace fsim::app::application_detail

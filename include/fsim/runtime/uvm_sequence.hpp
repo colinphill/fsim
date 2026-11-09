@@ -8,6 +8,7 @@
 #include "fsim/runtime/uvm_phase.hpp"
 #include "fsim/runtime/uvm_tlm1.hpp"
 
+#include <limits>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -746,7 +747,7 @@ struct SystemVerilogUvmSequenceLimits {
   std::size_t maximum_full_name_bytes{16'384};
   std::size_t maximum_nominal_type_bytes{4'096};
   std::size_t maximum_profile_bytes{8'192};
-  std::size_t maximum_depth{256};
+  std::size_t maximum_depth{std::numeric_limits<std::size_t>::max()};
   std::size_t maximum_children_per_sequence{65'536};
   std::size_t maximum_items_per_sequence{262'144};
   std::size_t maximum_active_executions{65'536};
@@ -759,7 +760,7 @@ struct SystemVerilogUvmSequenceLimits {
   std::size_t maximum_relevance_waits{65'536};
   std::uint32_t maximum_priority{0x7fff'ffffU};
   std::size_t maximum_access_requests{65'536};
-  std::size_t maximum_access_depth{256};
+  std::size_t maximum_access_depth{std::numeric_limits<std::size_t>::max()};
   std::size_t maximum_consecutive_grabs{256};
   std::size_t maximum_transactions{262'144};
   std::size_t maximum_transactions_per_sequencer{65'536};
@@ -795,6 +796,15 @@ private:
 /// root ownership while lifecycle callbacks remain dormant until execution.
 class SystemVerilogUvmSequenceService final {
 public:
+  /// True while the service holds no state: a run that never used it has
+  /// nothing to save (#188). Its sequences and roles hold the embedder's callbacks.
+  [[nodiscard]] bool run_state_idle() const noexcept {
+    return sequencers_.empty() && sequences_.empty() && items_.empty()
+        && requests_.empty() && accesses_.empty() && transactions_.empty()
+        && roles_.empty() && execution_events_.empty() && role_events_.empty()
+        && virtual_events_.empty();
+  }
+
   SystemVerilogUvmSequenceService(SystemVerilogClassHeap &heap,
                                   SystemVerilogUvmObjectService &objects,
                                   SystemVerilogUvmComponentService &components,

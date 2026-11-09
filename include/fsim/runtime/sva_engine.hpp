@@ -121,6 +121,14 @@ public:
     {
         return storage_;
     }
+    /// The block's words, for generated code and its differential check.
+    [[nodiscard]] std::int64_t* mutable_block_base() noexcept
+    {
+        return storage_.data();
+    }
+    /// A monitor of the same plan holding a copy of this block, bound to no
+    /// table entry (FSIM_KERNEL_SVA_CHECK's reference).
+    [[nodiscard]] std::unique_ptr<Monitor> reference_copy() const;
     /// Publishes the block's base in a table entry (BlockSlot), kept
     /// through growth and a restore; the compiled kernel pops outcomes
     /// through it (KOp::sva_outcome).
@@ -129,6 +137,17 @@ public:
     {
         return storage_.slot().bound();
     }
+    /// Growth for generated code (fsim_sk_sva_grow): see
+    /// AttemptStorage::reserve_region. The base moves; the bound table
+    /// entry follows.
+    void reserve_region(std::size_t region, std::size_t needed)
+    {
+        storage_.reserve_region(region, needed);
+    }
+    /// Replaces the attempt block by a copy of `words` (the kernel's
+    /// differential check of the generated automaton, FSIM_KERNEL_SVA_CHECK);
+    /// false when the words are not a block of this build.
+    [[nodiscard]] bool load_block(std::vector<std::int64_t> words);
     /// The monitor as a run-state record: the plan, its bounds and the
     /// attempt block (D.9 $save / $restart). Loading rebuilds the compiled
     /// plan and adopts the block.

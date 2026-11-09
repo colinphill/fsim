@@ -15,6 +15,7 @@
 // saved as the module that holds it and its offset in the module, and a
 // user_data value is saved as the bytes of the pointer (IEEE 1800-2023 38.36.3
 // NOTE: it should be an identifier, not memory).
+#include "fsim/runtime/packed_value.hpp"
 #include "fsim/runtime/run_state_sections.hpp"
 
 #include <cstdint>

@@ -1,0 +1,5 @@
+uvm_top is the root
+uvm_cmdline_proc is the processor
+uvm_test_done is live
+uvm_resources is the pool
+uvm_default_printer is the table printer

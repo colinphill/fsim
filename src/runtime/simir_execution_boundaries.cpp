@@ -897,6 +897,15 @@ const char* Interpreter::Impl::run_class_operation(
     if (!class_method_call_context_hook) {
         return "class method service is unavailable";
     }
+    // A queue or dynamic array of class handles (kind 6 in, kind 7 in and
+    // out) is a container register; the service sees the handles as one
+    // encoded string actual, in decimal (encode_dpi_string_array), and
+    // returns them the same way.
+    const auto handle_queue = [&](const std::size_t index) {
+        return !operation.actual_kinds.empty()
+            && (operation.actual_kinds[index] == 6U
+                || operation.actual_kinds[index] == 7U);
+    };
     std::vector<PackedLogic4> actuals;
     std::vector<std::string> string_actuals;
     actuals.reserve(operation.actuals.size());
@@ -904,6 +913,16 @@ const char* Interpreter::Impl::run_class_operation(
     for (std::size_t index = 0; index < operation.actuals.size(); ++index) {
         const auto string_actual = !operation.actual_kinds.empty()
             && operation.actual_kinds[index] == 1U;
+        if (handle_queue(index)) {
+            std::vector<std::string> handles;
+            for (const auto& element
+                : access.read_container(operation.actuals[index]).elements) {
+                handles.push_back(std::to_string(element.low_word().aval));
+            }
+            actuals.emplace_back(64);
+            string_actuals.push_back(encode_dpi_string_array(handles));
+            continue;
+        }
         actuals.push_back(string_actual
                 ? PackedLogic4(64)
                 : access.read(operation.actuals[index]));
@@ -929,7 +948,17 @@ const char* Interpreter::Impl::run_class_operation(
     for (std::size_t index = 0; index < actuals.size(); ++index) {
         const auto string_actual = !operation.actual_kinds.empty()
             && operation.actual_kinds[index] == 1U;
-        if (string_actual) {
+        if (handle_queue(index)) {
+            if (operation.actual_kinds[index] == 7U) {
+                auto& queue = access.container(operation.actuals[index]);
+                queue.elements.clear();
+                for (const auto& text
+                    : decode_dpi_string_array(string_actuals[index])) {
+                    queue.elements.push_back(PackedLogic4::from_aval_bval(
+                        64, std::stoull(text), 0));
+                }
+            }
+        } else if (string_actual) {
             access.string(operation.actuals[index])
                 = std::move(string_actuals[index]);
         } else {
@@ -1228,10 +1257,6 @@ std::vector<VhdlCallPathFrame> vhdl_call_path(const ProcessProgramView& program,
 {
     std::vector<VhdlCallPathFrame> frames;
     frames.push_back(VhdlCallPathFrame { source, scope.str() });
-    constexpr std::size_t maximum_call_path_depth = 256U;
-    if (call_stack.size() > maximum_call_path_depth - 1U) {
-        throw std::invalid_argument { "STD.ENV call path exceeds 256 frames" };
-    }
     const auto& operations = program.operations();
     for (auto returns = call_stack.rbegin(); returns != call_stack.rend();
          ++returns) {
@@ -2842,11 +2867,25 @@ void Interpreter::Impl::handle_boundary(
             const auto actual = method->actuals[index];
             const auto string_actual = !method->actual_kinds.empty()
                 && method->actual_kinds[index] == 1U;
-            actuals.push_back(
-                string_actual ? PackedLogic4(64) : read_boundary_value(actual));
+            // A queue of class handles (kind 6 in, kind 7 in and out) is a
+            // container register, passed as one encoded string.
+            const auto handle_queue = !method->actual_kinds.empty()
+                && (method->actual_kinds[index] == 6U
+                    || method->actual_kinds[index] == 7U);
+            std::vector<std::string> handles;
+            if (handle_queue) {
+                for (const auto& element
+                    : read_container_register(process, actual).elements) {
+                    handles.push_back(
+                        std::to_string(element.low_word().aval));
+                }
+            }
+            actuals.push_back(string_actual || handle_queue
+                    ? PackedLogic4(64) : read_boundary_value(actual));
             string_actuals.push_back(
                 string_actual
                     ? process.executor->read_string_register(actual)
+                : handle_queue ? encode_dpi_string_array(handles)
                     : std::string { });
         }
         const auto handle = read_boundary_handle(
@@ -2881,7 +2920,20 @@ void Interpreter::Impl::handle_boundary(
         for (std::size_t index = 0; index < actuals.size(); ++index) {
             const auto string_actual = !method->actual_kinds.empty()
                 && method->actual_kinds[index] == 1U;
-            if (string_actual) {
+            if (!method->actual_kinds.empty()
+                && (method->actual_kinds[index] == 6U
+                    || method->actual_kinds[index] == 7U)) {
+                if (method->actual_kinds[index] == 7U) {
+                    auto& queue = get_container_register(
+                        process, method->actuals[index]);
+                    queue.elements.clear();
+                    for (const auto& text
+                        : decode_dpi_string_array(string_actuals[index])) {
+                        queue.elements.push_back(PackedLogic4::from_aval_bval(
+                            64, std::stoull(text), 0));
+                    }
+                }
+            } else if (string_actual) {
                 process.executor->write_string_register(
                     method->actuals[index], string_actuals[index]);
             } else {

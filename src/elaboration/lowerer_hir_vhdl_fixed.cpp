@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "lowerer_internal.hpp"
+#include "fsim/support/stack_growth.hpp"
 #include "fsim/support/vhdl_fixed_bounds.hpp"
 
 #include <algorithm>
@@ -147,7 +148,7 @@ std::optional<Lowerer::HirVhdlFixedRange> Lowerer::hir_vhdl_fixed_range(
     const semantic::ExpressionId expression_id,
     const std::size_t depth) const
 {
-    if (specialized_hir_unit_ == nullptr || depth > 64U) {
+    if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
     }
     const auto expression = specialized_hir_unit_->find_expression(
@@ -161,10 +162,10 @@ std::optional<Lowerer::HirVhdlFixedRange> Lowerer::hir_vhdl_fixed_range(
             || !is_hir_vhdl_fixed_operator(expression_id)) {
             return std::nullopt;
         }
-        const auto lhs = hir_vhdl_fixed_operand_range(
-            source.operands[0], source.operands[1], depth + 1U);
-        const auto rhs = hir_vhdl_fixed_operand_range(
-            source.operands[1], source.operands[0], depth + 1U);
+        const auto lhs = support::with_stack([&] { return hir_vhdl_fixed_operand_range(
+            source.operands[0], source.operands[1], depth + 1U); });
+        const auto rhs = support::with_stack([&] { return hir_vhdl_fixed_operand_range(
+            source.operands[1], source.operands[0], depth + 1U); });
         if (!lhs || !rhs) {
             return std::nullopt;
         }
@@ -186,7 +187,7 @@ std::optional<Lowerer::HirVhdlFixedRange> Lowerer::hir_vhdl_fixed_range(
     }
     if (source.kind == semantic::vhdl::ExpressionKind::call
         && is_hir_vhdl_fixed_function(expression_id)) {
-        return hir_vhdl_fixed_call_range(expression_id, depth + 1U);
+        return support::with_stack([&] { return hir_vhdl_fixed_call_range(expression_id, depth + 1U); });
     }
     auto subtype = hir_vhdl_expression_subtype(expression_id);
     if (!subtype) {
@@ -255,14 +256,14 @@ Lowerer::hir_vhdl_fixed_call_range(
     const auto expression = specialized_hir_unit_ != nullptr
         ? specialized_hir_unit_->find_expression(expression_id)
         : std::nullopt;
-    if (!expression || expression->vhdl == nullptr || depth > 64U
+    if (!expression || expression->vhdl == nullptr
         || expression->vhdl->operands.empty()) {
         return std::nullopt;
     }
     const auto& source = *expression->vhdl;
     const auto name = lowercase_vhdl_simple_name(source.text);
     if (fixed_shift_function(name)) {
-        return hir_vhdl_fixed_range(source.operands.front(), depth + 1U);
+        return support::with_stack([&] { return hir_vhdl_fixed_range(source.operands.front(), depth + 1U); });
     }
     if (name != "to_ufixed" && name != "to_sfixed" && name != "resize"
         && !fixed_binary_string_function(name)) {
@@ -272,8 +273,8 @@ Lowerer::hir_vhdl_fixed_call_range(
     if (name == "resize") {
         // The overload, and so the result's signedness, follows the
         // operand's type; its bounds come from the size arguments alone.
-        if (const auto operand = hir_vhdl_fixed_range(
-                source.operands.front(), depth + 1U)) {
+        if (const auto operand = support::with_stack([&] { return hir_vhdl_fixed_range(
+                source.operands.front(), depth + 1U); })) {
             signed_value = operand->signed_value;
         } else {
             auto subtype = hir_vhdl_expression_subtype(
@@ -301,8 +302,8 @@ Lowerer::hir_vhdl_fixed_call_range(
     }
     // A size_res argument gives its own range; an integer one is the left
     // index of a result whose right index defaults to zero.
-    if (const auto size = hir_vhdl_fixed_range(
-            source.operands[1], depth + 1U)) {
+    if (const auto size = support::with_stack([&] { return hir_vhdl_fixed_range(
+            source.operands[1], depth + 1U); })) {
         return HirVhdlFixedRange { size->left, size->right, signed_value };
     }
     if (name != "resize") {

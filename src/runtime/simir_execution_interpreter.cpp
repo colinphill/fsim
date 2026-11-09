@@ -697,9 +697,17 @@ bool Interpreter::Impl::execute_operation(ProcessState& process,
         } else if constexpr (std::is_same_v<OperationType, ReadSignal>) {
             (void)get_signal(op.signal);
             if (op.kind == SignalReadKind::current) {
+                // A SystemVerilog reader sees a std_logic value through the
+                // Logic4 mapping (IEEE 1800-2023 21.2.1.3): 'H' is 1, 'L' is
+                // 0, 'U', 'W' and '-' are x.
+                auto value = logical_signal_value(op.signal);
+                if (value.is_logic9()
+                    && process.program().scheduling_domain()
+                        == ProcessSchedulingDomain::systemverilog) {
+                    value = coerce_value_kind(value, ValueKind::logic4);
+                }
                 get_register(process, op.destination) = coerce_value_kind(
-                    logical_signal_value(op.signal),
-                    register_value_kind(process, op.destination));
+                    value, register_value_kind(process, op.destination));
                 ++process.pc;
                 return;
             }

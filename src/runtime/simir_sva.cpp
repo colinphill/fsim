@@ -115,11 +115,8 @@ std::size_t Interpreter::Impl::sva_tick_core(AssertionStorage& storage,
 {
     // $assertoff and its VPI form stop new attempts; attempts already
     // running complete (IEEE 1800-2017 20.12).
-    if (const auto filter = fork_spawn_filter; start && filter) {
-        if (fork_spawn_filter_observes) {
-            prepare_callback_observation();
-        }
-        start = (*filter)(storage.design_process());
+    if (start && fork_spawn_filter) {
+        start = sva_attempt_allowed(storage);
     }
     std::string error;
     try {
@@ -131,6 +128,25 @@ std::size_t Interpreter::Impl::sva_tick_core(AssertionStorage& storage,
     if (!error.empty()) {
         storage.fail(error);
     }
+    sva_tick_reports(storage, active_monitor);
+    return active_monitor.pending_outcomes();
+}
+
+bool Interpreter::Impl::sva_attempt_allowed(AssertionStorage& storage)
+{
+    const auto filter = fork_spawn_filter;
+    if (!filter) {
+        return true;
+    }
+    if (fork_spawn_filter_observes) {
+        prepare_callback_observation();
+    }
+    return (*filter)(storage.design_process());
+}
+
+void Interpreter::Impl::sva_tick_reports(
+    AssertionStorage& storage, sva::Monitor& active_monitor)
+{
     const auto attempt_starts = active_monitor.take_started();
     if (sva_attempt_hook) {
         for (const auto when : attempt_starts) {
@@ -146,7 +162,6 @@ std::size_t Interpreter::Impl::sva_tick_core(AssertionStorage& storage,
             }
         }
     }
-    return active_monitor.pending_outcomes();
 }
 
 void Interpreter::Impl::run_sva(

@@ -32,3 +32,4 @@ tests/app/line_directive_application_test.cpp|fsim.application.line_directives|i
 tests/project/project_config_test.cpp|fsim.project|project,source-map,portable-path,diagnostic
 tests/app/tcl_application_test.cpp|fsim.application.tcl|tcl,cli,source-map,portable-path,diagnostic
 tests/app/tcl_debugger_commands_test.cpp|fsim.application.tcl-debugger_commands|tcl,debugger,diagnostic,source-map,portable-path,plugin,lifecycle
+tests/app/tcl_debugger_owned_signals_test.cpp|fsim.application.tcl-debugger_owned_signals|tcl,debugger,source-map,portable-path

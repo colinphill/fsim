@@ -217,6 +217,7 @@ interp.impl	vhdl_conversion_drivers	P+ids	driver registrations made after start;
 interp.impl	vhdl_scalar_widths	Cfg	configuration from the artifact or command line
 interp.impl	vhdl_disconnected_drivers	P	signal values, driver contributions, forces and history
 interp.impl	vhdl_created_drivers	P+ids	driver registrations made after start; replayed from the host.structure journal
+interp.impl	dormant_driver_regions	D	dormant placeholder driver regions of foreign architectures, from the artifact at registration; the created drivers that activate them replay with vhdl_created_drivers
 interp.impl	vhdl_resolved_values	P	signal values, driver contributions, forces and history
 interp.impl	vhdl_driver_initial_values	Cfg	configuration from the artifact or command line
 interp.impl	pending_vhdl_resolutions	S	commit scratch, empty at a save point
@@ -397,6 +398,7 @@ interp.impl	has_bidirectional_switches	D	derived tables rebuilt from the artifac
 interp.impl	switch_refreshing	S	commit scratch, empty at a save point
 interp.impl	started	P	plain run state
 interp.impl	reset_source	Cfg	factory the embedder installs; rebuilt from the same command line
+interp.impl	reset_twin_class_hooks	Cfg	set by the embedder before a reset (Interpreter::set_reset_twin_class_hooks)
 interp.impl	run_state_event_host	Cfg	the embedder's scheduler-event owners and handle takers (Interpreter::set_run_state_event_host), installed by the application from the same command line
 interp.impl	plan_journal	Cfg	the foreign requests that change the plan (watches, boundary, foreign writes, grafts), in order; replay_plan_onto gives them to the reset twin, and the same libraries make the startup ones again in a restarted process (dropped callbacks need no plan)
 interp.impl	plan_watched	Cfg	dedup set of plan_journal
@@ -414,6 +416,7 @@ interp.impl	package_static_initialization_active	S	commit scratch, empty at a sa
 interp.impl	package_static_initialization_process	D	assigned once at start from the design's package initialization process
 interp.impl	package_static_startup_signal_processes	D	derived tables rebuilt from the artifact or from saved values
 interp.impl	validation_only	Cfg	configuration from the artifact or command line
+interp.impl	reset_twin	Cfg	set by the reset on its twin before the twin starts (Interpreter::reset_run_state)
 interp.impl	stopped_by_design	P	plain run state
 interp.impl	paused_in_final	P	plain run state
 interp.impl	simulator_status	P	plain run state
@@ -688,6 +691,7 @@ process.vital	delay	P	VITAL timing and delay state
 kernel.impl	slot_conversions_	D	derived from the artifact or rebuilt after restore
 kernel.impl	conversion_members_	D	derived from the artifact or rebuilt after restore
 kernel.impl	conversion_queue_	S	scratch: empty at a save point (a non-empty queue refuses the save)
+kernel.impl	sva_check_refs_	S	scratch: the FSIM_KERNEL_SVA_CHECK reference monitors, filled and emptied within one generated tick
 kernel.impl	conversion_queued_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
 kernel.impl	running_conversions_	S	scratch: empty at a save point (a non-empty queue refuses the save)
 kernel.impl	quiet_commit_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
@@ -746,6 +750,9 @@ kernel.impl	timers_	P	kernel dynamic state (S5)
 kernel.impl	timer_sequence_	P	kernel dynamic state (S5)
 kernel.impl	net_delay_sites_	P	kernel dynamic state (S5)
 kernel.impl	net_delay_site_of_	D	derived from the artifact or rebuilt after restore
+kernel.impl	projected_sites_	P	kernel dynamic state: the projected output waveforms of the members' drivers of kernel signals (IEEE 1076-2019 14.7.2)
+kernel.impl	projected_site_of_	D	derived from projected_sites_ after restore
+kernel.impl	member_projects_cache_	D	cache of a scan of the member's operations (the artifact)
 kernel.impl	armed_timer_	D	derived: the kernel.timer doorbell is not saved; rearm() arms it for the earliest saved timer (S5)
 kernel.impl	vhdl_ready_threads_	P	kernel dynamic state (S5)
 kernel.impl	vhdl_ready_threads_spare_	W	allocator cache or spare buffer: holds capacity, never run state
@@ -878,6 +885,13 @@ kernel.impl	write_storage_	W	backing store of a write queue, kept for its capaci
 kernel.impl	writes_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
 kernel.impl	profile_deopts_	Prof	profile counters
 kernel.impl	profile_generic_runs_	Prof	profile counters
+kernel.impl	verified_thread_runs_	Prof	FSIM_KERNEL_VERIFY counter
+kernel.impl	verified_member_runs_	Prof	FSIM_KERNEL_VERIFY counter
+kernel.impl	verify_skipped_members_	Prof	FSIM_KERNEL_VERIFY profile rows
+kernel.impl	verify_thread_reason_	D	FSIM_KERNEL_VERIFY: a function of the member's operations
+kernel.impl	verify_thread_decided_	D	FSIM_KERNEL_VERIFY: a function of the member's operations
+kernel.impl	verify_live_registers_	D	FSIM_KERNEL_VERIFY: a function of the member's operations
+kernel.impl	shadow_	W	FSIM_KERNEL_VERIFY: set before a thread activation and cleared after it (run_behavioral_compiled)
 kernel.impl	interpreted_bytecode_runs_	Prof	profile counters
 kernel.impl	interpreted_operations_	Prof	profile counters
 kernel.impl	interpreted_deopts_	Prof	profile counters
@@ -1247,6 +1261,7 @@ kernel.timer	sequence	P	timers saved, re-armed through rearm()
 kernel.timer	thread	P	timers saved, re-armed through rearm()
 kernel.timer	epoch	P	timers saved, re-armed through rearm()
 kernel.timer	net_delay	P	timers saved, re-armed through rearm()
+kernel.timer	projected	P	timers saved, re-armed through rearm()
 kernel.net_delay_site	member	P	sites are made at the first execution of the operation, so a run holds them as state
 kernel.net_delay_site	pc	P	sites are made at the first execution of the operation, so a run holds them as state
 kernel.net_delay_site	slot	P	sites are made at the first execution of the operation, so a run holds them as state
@@ -1277,15 +1292,16 @@ kernel.hosted_delayed	time	P	hosted next-delta wake
 kernel.hosted_delayed	delta	P	hosted next-delta wake
 kernel.hosted_delayed	ready	P	hosted next-delta wake
 sim.impl	dpi_function_hook	Cfg	observers and hooks installed by the embedder
-sim.impl	uvm_phase_objects	P+ids	UVM live state, extends uvm_checkpoint (S6)
-sim.impl	uvm_run_test	P+ids	application run state (S6)
-sim.impl	uvm_tlm_owners	P+ids	UVM live state, extends uvm_checkpoint (S6)
-sim.impl	uvm_analysis_connections	P+ids	UVM live state, extends uvm_checkpoint (S6)
-sim.impl	uvm_sequence_sequencers	P+ids	UVM live state, extends uvm_checkpoint (S6)
-sim.impl	uvm_sequencer_items	P+ids	UVM live state, extends uvm_checkpoint (S6)
-sim.impl	uvm_sequencer_current	P+ids	UVM live state, extends uvm_checkpoint (S6)
-sim.impl	uvm_pending_items	P+ids	UVM live state, extends uvm_checkpoint (S6)
-sim.impl	uvm_root_report_object	P+ids	application run state (S6)
+sim.impl	uvm_phase_objects	P+ids	saved by the app.uvm section (#188); handles to class objects keep their slot and generation, phase and objection handles are bound to the restoring run's services
+sim.impl	uvm_run_test	P+ids	saved by the app.uvm section (#188); handles to class objects keep their slot and generation, phase and objection handles are bound to the restoring run's services
+sim.impl	uvm_tlm_owners	P+ids	saved by the app.uvm section (#188); handles to class objects keep their slot and generation, phase and objection handles are bound to the restoring run's services
+sim.impl	uvm_analysis_connections	P+ids	saved by the app.uvm section (#188); handles to class objects keep their slot and generation, phase and objection handles are bound to the restoring run's services
+sim.impl	uvm_sequence_sequencers	P+ids	saved by the app.uvm section (#188); handles to class objects keep their slot and generation, phase and objection handles are bound to the restoring run's services
+sim.impl	uvm_sequencer_items	P+ids	saved by the app.uvm section (#188); handles to class objects keep their slot and generation, phase and objection handles are bound to the restoring run's services
+sim.impl	uvm_sequencer_current	P+ids	saved by the app.uvm section (#188); handles to class objects keep their slot and generation, phase and objection handles are bound to the restoring run's services
+sim.impl	uvm_pending_items	P+ids	saved by the app.uvm section (#188); handles to class objects keep their slot and generation, phase and objection handles are bound to the restoring run's services
+sim.impl	uvm_root_report_object	P+ids	saved by the app.uvm section (#188); handles to class objects keep their slot and generation, phase and objection handles are bound to the restoring run's services
+sim.impl	uvm_singletons	P+ids	saved by the app.uvm section (#188); the object of each UVM library singleton class, by class identity
 sim.impl	built	D	artifact products and caches
 sim.impl	generated_class_specializations	D	artifact products and caches
 sim.impl	generated_class_index	D	artifact products and caches
@@ -1300,29 +1316,29 @@ sim.impl	class_owner_parameter_values	P+ids	application run state (S6)
 sim.impl	chandle_registry	P+ids	application run state (S6)
 sim.impl	class_static_store	P+ids	application run state (S6)
 sim.impl	class_methods	P+ids	application run state (S6)
-sim.impl	uvm_objects	P+ids	UVM live state, extends uvm_checkpoint (S6)
-sim.impl	uvm_components	P+ids	UVM live state, extends uvm_checkpoint (S6)
-sim.impl	uvm_activity	P+ids	UVM live state, extends uvm_checkpoint (S6)
-sim.impl	uvm_phases	P+ids	UVM live state, extends uvm_checkpoint (S6)
-sim.impl	uvm_objections	P+ids	UVM live state, extends uvm_checkpoint (S6)
-sim.impl	uvm_tlm1	P+ids	UVM live state, extends uvm_checkpoint (S6)
-sim.impl	uvm_tlm2	P+ids	UVM live state, extends uvm_checkpoint (S6)
-sim.impl	uvm_sequences	P+ids	UVM live state, extends uvm_checkpoint (S6)
-sim.impl	uvm_callbacks	P+ids	UVM live state, extends uvm_checkpoint (S6)
-sim.impl	uvm_transactions	P+ids	UVM live state, extends uvm_checkpoint (S6)
-sim.impl	uvm_register_model	P+ids	UVM live state, extends uvm_checkpoint (S6)
-sim.impl	uvm_foreign	P+ids	UVM live state, extends uvm_checkpoint (S6)
-sim.impl	uvm_registry	P+ids	UVM live state, extends uvm_checkpoint (S6)
-sim.impl	uvm_factory	P+ids	UVM live state, extends uvm_checkpoint (S6)
-sim.impl	uvm_resources	P+ids	UVM live state, extends uvm_checkpoint (S6)
-sim.impl	uvm_synchronization	P+ids	UVM live state, extends uvm_checkpoint (S6)
-sim.impl	uvm_config_db	P+ids	UVM live state, extends uvm_checkpoint (S6)
-sim.impl	uvm_command_line	P+ids	UVM live state, extends uvm_checkpoint (S6)
-sim.impl	uvm_test_runner	P+ids	UVM live state, extends uvm_checkpoint (S6)
-sim.impl	uvm_reports	P+ids	UVM live state, extends uvm_checkpoint (S6)
+sim.impl	uvm_objects	P+ids	saved by the app.uvm section (#188); handles to class objects keep their slot and generation, phase and objection handles are bound to the restoring run's services
+sim.impl	uvm_components	P+ids	saved by the app.uvm section (#188); handles to class objects keep their slot and generation, phase and objection handles are bound to the restoring run's services
+sim.impl	uvm_activity	P+ids	saved by the app.uvm section (#188); handles to class objects keep their slot and generation, phase and objection handles are bound to the restoring run's services
+sim.impl	uvm_phases	P+ids	saved by the app.uvm section (#188); handles to class objects keep their slot and generation, phase and objection handles are bound to the restoring run's services
+sim.impl	uvm_objections	P+ids	saved by the app.uvm section (#188); handles to class objects keep their slot and generation, phase and objection handles are bound to the restoring run's services
+sim.impl	uvm_tlm1	S	filled only through the embedding API; non-empty refuses the save with FSIM-SAVE-0011 (the app.uvm audit) and the reset with FSIM-SAVE-0018 (#188)
+sim.impl	uvm_tlm2	S	filled only through the embedding API; non-empty refuses the save with FSIM-SAVE-0011 (the app.uvm audit) and the reset with FSIM-SAVE-0018 (#188)
+sim.impl	uvm_sequences	S	filled only through the embedding API; non-empty refuses the save with FSIM-SAVE-0011 (the app.uvm audit) and the reset with FSIM-SAVE-0018 (#188)
+sim.impl	uvm_callbacks	S	filled only through the embedding API; non-empty refuses the save with FSIM-SAVE-0011 (the app.uvm audit) and the reset with FSIM-SAVE-0018 (#188)
+sim.impl	uvm_transactions	S	filled only through the embedding API; non-empty refuses the save with FSIM-SAVE-0011 (the app.uvm audit) and the reset with FSIM-SAVE-0018 (#188)
+sim.impl	uvm_register_model	S	filled only through the embedding API; non-empty refuses the save with FSIM-SAVE-0011 (the app.uvm audit) and the reset with FSIM-SAVE-0018 (#188)
+sim.impl	uvm_foreign	S	filled only through the embedding API; non-empty refuses the save with FSIM-SAVE-0011 (the app.uvm audit) and the reset with FSIM-SAVE-0018 (#188)
+sim.impl	uvm_registry	D	the design's types, registered at setup from the compiled class specializations
+sim.impl	uvm_factory	P+ids	saved by the app.uvm section (#188); handles to class objects keep their slot and generation, phase and objection handles are bound to the restoring run's services
+sim.impl	uvm_resources	P+ids	saved by the app.uvm section (#188); handles to class objects keep their slot and generation, phase and objection handles are bound to the restoring run's services
+sim.impl	uvm_synchronization	S	filled only through the embedding API; non-empty refuses the save with FSIM-SAVE-0011 (the app.uvm audit) and the reset with FSIM-SAVE-0018 (#188)
+sim.impl	uvm_config_db	P+ids	saved by the app.uvm section (#188); handles to class objects keep their slot and generation, phase and objection handles are bound to the restoring run's services
+sim.impl	uvm_command_line	P+ids	saved by the app.uvm section (#188); handles to class objects keep their slot and generation, phase and objection handles are bound to the restoring run's services
+sim.impl	uvm_test_runner	S	filled only through the embedding API; non-empty refuses the save with FSIM-SAVE-0011 (the app.uvm audit) and the reset with FSIM-SAVE-0018 (#188)
+sim.impl	uvm_reports	P+ids	saved by the app.uvm section (#188); handles to class objects keep their slot and generation, phase and objection handles are bound to the restoring run's services
 sim.impl	uvm_report_setting_tasks	P+ids	UVM report settings with a time; event sim.uvm_report_setting rebinds each handle (S2), live state extends uvm_checkpoint (S6)
 sim.impl	numeric_metavalue_reports	P+ids	application run state (S6)
-sim.impl	uvm_roots_by_scope	P+ids	UVM live state, extends uvm_checkpoint (S6)
+sim.impl	uvm_roots_by_scope	P+ids	saved by the app.uvm section (#188); handles to class objects keep their slot and generation, phase and objection handles are bound to the restoring run's services
 sim.impl	class_execution	D	unreviewed: derived (S6 reviews)
 sim.impl	class_hir_execution	D	unreviewed: derived (S6 reviews)
 sim.impl	design_process_count	D	artifact products and caches
@@ -1500,6 +1516,7 @@ foreign.vpi_live	signal_traps_	D	VPI handle tables and model caches, rebuilt on 
 foreign.vpi_live	signal_hook_	Cfg	user callback or hook, dropped at restart (owner decision 5)
 foreign.vpi_live	statement_drivers_	D	VPI handle tables and model caches, rebuilt on demand; not saved
 foreign.vpi_live	member_watches_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	size_member_watches_	D	VPI handle tables and model caches, rebuilt on demand; not saved
 foreign.vpi_live	member_watch_hook_	Cfg	user callback or hook, dropped at restart (owner decision 5)
 foreign.vpi_live	next_iterator_	W	vpi_iterate creates, vpi_scan or vpi_free_object ends; a restore drops the handles a library holds (restore_run_state clears the table, IEEE 1800-2023 38.36.3)
 foreign.vpi_live	iterators_	W	vpi_iterate creates, vpi_scan or vpi_free_object ends; a restore drops the handles a library holds (restore_run_state clears the table, IEEE 1800-2023 38.36.3)
@@ -1617,6 +1634,15 @@ foreign.vhpi_live	literal_objects_	D	VHPI object tables and caches, rebuilt on d
 foreign.vhpi_live	integer_objects_	D	VHPI object tables and caches, rebuilt on demand; not saved
 foreign.vhpi_live	protected_held_	D	VHPI object tables and caches, rebuilt on demand; not saved
 foreign.vhpi_live	physical_literals_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	standard_unit_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	callee_hidden_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	callee_active_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	semantics_	Cfg	loaded modules and registrations from the same command line (identity-checked at restart)
+foreign.vhpi_live	library_design_	Cfg	loaded modules and registrations from the same command line (identity-checked at restart)
+foreign.vhpi_live	side_designs_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	side_units_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	side_hosts_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	side_	D	VHPI object tables and caches, rebuilt on demand; not saved
 foreign.vhpi_live	callback_pool_	Cfg	user callbacks, dropped at restart (owner decision 5)
 foreign.vhpi_live	free_callbacks_	Cfg	user callbacks, dropped at restart (owner decision 5)
 foreign.vhpi_live	callbacks_	P+ids	only vhpiCbStartOfRestart/vhpiCbEndOfRestart survive a restart; vhpiAutomaticRestoreP is 0 (owner decision 5)
@@ -1739,6 +1765,7 @@ foreign.vpi_callbacks	pending_value_objects	C	value-change deliveries run inside
 foreign.vpi_callbacks	pending_values	C	value-change deliveries run inside their time slot, so a save finds none; callbacks drop at restart (owner decision 5)
 foreign.vpi_callbacks	dispatching	S	exact test in SystemVerilogVpiCallbackManager::audit_rest_state (FSIM-SAVE-0011): set only inside dispatch_callbacks
 foreign.vpi_callbacks	has_registrations	Cfg	wiring
+foreign.vpi_callbacks	has_assertion_registrations	Cfg	wiring: sticky gate set when an assertion callback is first registered; it only skips work when no assertion callback exists
 foreign.vpi_control	owner	Cfg	wiring
 foreign.vpi_control	next_id	P	id counter
 foreign.vpi_control	stable_order_base	Cfg	wiring
@@ -1771,3 +1798,5 @@ sim.impl	tranif_requests	D	as net_delay_split_requests: artifact products and ca
 sim.impl	tranif_observer	Cfg	observers and hooks installed by the embedder
 sim.impl	tranif_controls	D	tranif control splits made by vpi_put_delays; rebuilt with the replayed gate splits of the plan journal (wave AE)
 sim.impl	gate_delay_error	W	set by gate_delay_program and read by the same vpi_put_delays call
+sim.impl	uvm_default_printer_signal	D	cache of the signal that holds the library's uvm_default_printer, searched on the first print_topology
+sim.impl	uvm_singleton_variable_signals	D	cache of the signals that hold the library's uvm_top and uvm_cmdline_proc, searched on the first request of each singleton

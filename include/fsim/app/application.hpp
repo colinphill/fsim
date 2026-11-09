@@ -787,6 +787,12 @@ public:
     [[nodiscard]] runtime::PackedLogic4 read_process_local(
         runtime::simir::ProcessId process, std::size_t local_index,
         std::size_t newer_activations = 0U) const;
+    /// The value slot `local_index` of the process program's frame-local table
+    /// holds (`Process::frame_locals`, IEEE 1076-2019 14.6): a formal or local
+    /// of a VHDL function or the parameter of a `for` loop of a running call.
+    [[nodiscard]] runtime::PackedLogic4 read_process_frame_local(
+        runtime::simir::ProcessId process, std::size_t local_index,
+        std::size_t newer_activations = 0U) const;
     /// The value slot `slot` of the process program's call-result table holds
     /// (`Process::call_results`, IEEE 1800-2023 37.42, 38.15).
     [[nodiscard]] runtime::PackedLogic4 read_process_call_result(
@@ -1615,6 +1621,9 @@ private:
     friend struct ::fsim::runtime::simir::RunStateTestAccess;
     struct Impl;
     void install_execution_point_hooks();
+    /// Watch every signal when a debugger plan keeps them in the kernel and
+    /// a client installs a signal change observer.
+    void watch_debug_plan_signals();
     std::unique_ptr<Impl> impl_;
 };
 

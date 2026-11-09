@@ -32,6 +32,16 @@ namespace fsim::app {
     const auto method_name = method_separator == std::string_view::npos
         ? canonical_identity
         : canonical_identity.substr(method_separator + 2U);
+    // The methods of the object `uvm_root::get()` and `uvm_top` hold are the
+    // native hierarchy's (IEEE 1800.2-2020 13.2): the library's bodies would
+    // run on an object without the state its constructor makes.
+    if (support::is_uvm_library_identity(canonical_identity)
+        && is_uvm_root_handle(handle)) {
+        if (auto result = invoke_uvm_root_method(
+                method_name, actuals, string_actuals, actual_names)) {
+            return std::move(*result);
+        }
+    }
     // The UVM library's phase callbacks of uvm_component (reached through
     // `super.build_phase(phase)` and the like) do framework bookkeeping that
     // the simulation's UVM phase services perform; their bodies are not run.
@@ -447,6 +457,18 @@ Simulation::Impl::invoke_source_static_function(
                                    : runtime::SystemVerilogClassHandle { },
             0);
     }
+    // `uvm_root::get()`, `uvm_cmdline_processor::get_inst()`,
+    // `uvm_test_done_objection::get()` and `uvm_resource_pool::get()` answer
+    // the one object of the class, allocated on the first call without the
+    // library constructor (the native services do the work, as for the root's
+    // report object below); the package variables `uvm_top`, `uvm_cmdline_proc`,
+    // `uvm_test_done` and `uvm_resources` hold it.
+    if (constexpr std::string_view singleton { "@uvm-singleton:" };
+        canonical_identity.starts_with(singleton)) {
+        const std::string identity { canonical_identity.substr(singleton.size()) };
+        const auto singleton_handle = uvm_singleton(identity);
+        return runtime::PackedLogic4::from_aval_bval(64, singleton_handle, 0);
+    }
     // The package-level report functions report for the root (IEEE
     // 1800.2-2020 F.3.2.3).
     if (canonical_identity.starts_with("@uvm-report-")) {
@@ -464,16 +486,8 @@ Simulation::Impl::invoke_source_static_function(
         if (member == "object") {
             // The root's report object, allocated once without running the
             // library constructor; reports through it go to the root.
-            if (uvm_root_report_object == 0) {
-                uvm_root_report_object = construct_class(
-                    "@no-constructor:uvm::uvm_pkg::uvm_report_object",
-                    "uvm::uvm_pkg::uvm_report_object",
-                    std::span<const runtime::PackedLogic4> { },
-                    std::span<const std::string> { },
-                    std::span<const std::string> { }, "$uvm-root");
-            }
             return runtime::PackedLogic4::from_aval_bval(
-                64, uvm_root_report_object, 0);
+                64, uvm_root_report_handle(), 0);
         }
         if (member == "enabled") {
             const auto severity = word(1U, 0);

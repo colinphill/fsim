@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/semantic/systemverilog_class_specialization.hpp"
+#include "fsim/support/stack_growth.hpp"
+#include "fsim/support/active_set.hpp"
 #include "hierarchy_sv_constant_evaluator.hpp"
 #include "fsim/support/vhdl_tool_identity.hpp"
 #include "fsim/support/vhdl_standard_enumeration.hpp"
@@ -8,6 +10,7 @@
 #include "fsim/frontend/coverage_resolution.hpp"
 #include "fsim/frontend/parser.hpp"
 #include "fsim/frontend/output_format.hpp"
+#include "fsim/runtime/string_methods.hpp"
 
 #include <charconv>
 #include <cctype>
@@ -268,9 +271,6 @@ PackedLogic4 character_string_value(const std::string_view text)
         semantic::sv::TypeReference type,
         const std::size_t depth = 0U)
     {
-        if (depth > 32U) {
-            return { };
-        }
         if (type.virtual_interface && !type.interface_type.empty()) {
             auto result = std::string { "virtual " } + type.interface_type;
             if (!type.interface_modport.empty()) {
@@ -293,8 +293,8 @@ PackedLogic4 character_string_value(const std::string_view text)
                 for (const auto& actual : type.interface_parameter_actuals) {
                     std::string text;
                     if (actual.type) {
-                        text = hir_systemverilog_type_name(
-                            specialization, *actual.type, depth + 1U);
+                        text = support::with_stack([&] { return hir_systemverilog_type_name(
+                            specialization, *actual.type, depth + 1U); });
                     } else if (actual.expression) {
                         if (const auto value
                             = specialization.evaluate_integral_expression(
@@ -323,8 +323,8 @@ PackedLogic4 character_string_value(const std::string_view text)
                 element_type.unpacked_dimensions.clear();
                 element_type.container_element_types.clear();
             }
-            auto result = hir_systemverilog_type_name(
-                specialization, std::move(element_type), depth + 1U);
+            auto result = support::with_stack([&] { return hir_systemverilog_type_name(
+                specialization, std::move(element_type), depth + 1U); });
             if (result.empty()) {
                 return { };
             }
@@ -384,10 +384,18 @@ PackedLogic4 character_string_value(const std::string_view text)
                         != type.target.target
                     || definition->systemverilog->base.target.spelling
                         != type.target.spelling)) {
-                return hir_systemverilog_type_name(
+                // A typedef chain that comes back to itself has no name.
+                thread_local support::ActiveSet<semantic::sv::TypeReference>
+                    active;
+                if (!active.enter(type)) {
+                    return { };
+                }
+                const support::ActiveSet<semantic::sv::TypeReference>::Entry
+                    entry { active };
+                return support::with_stack([&] { return hir_systemverilog_type_name(
                     specialization,
                     definition->systemverilog->base,
-                    depth + 1U);
+                    depth + 1U); });
             }
         }
         if (type.value_form == semantic::sv::TypeForm::string) {
@@ -1432,7 +1440,7 @@ std::optional<DynamicIndex> Lowerer::lower_hir_dynamic_index(
         // of an enclosing selection (`a[i][j]`) add their elements' offsets.
         std::vector<std::pair<semantic::ExpressionId, semantic::ExpressionId>>
             chain { { source_id, index_id } };
-        for (auto current = source_id; chain.size() < 64U;) {
+        for (auto current = source_id;;) {
             const auto expression
                 = specialized_hir_unit_->find_expression(current);
             if (!expression || expression->systemverilog == nullptr
@@ -5743,7 +5751,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
                                           const semantic::ExpressionId id,
                                           const std::size_t depth) -> bool {
             const auto node = specialized_hir_unit_->find_expression(id);
-            if (depth > 32U || !node || node->vhdl == nullptr) {
+            if (!node || node->vhdl == nullptr) {
                 return false;
             }
             const auto& value = *node->vhdl;
@@ -5761,7 +5769,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
                 && !value.operands.empty()
                 && std::ranges::all_of(value.operands,
                     [&](const semantic::ExpressionId operand) {
-                        return self(self, operand, depth + 1U);
+                        return support::with_stack([&] { return self(self, operand, depth + 1U); });
                     });
         };
         const auto context_compatible_bit_literal = source
@@ -6217,8 +6225,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
                                   const semantic::ExpressionId current,
                                   const std::size_t depth)
             -> std::optional<std::int64_t> {
-            if (depth > 64U
-                || !active_expressions.insert(current.value()).second) {
+            if (!active_expressions.insert(current.value()).second) {
                 return std::nullopt;
             }
             const auto leave_expression = [&] {
@@ -6272,8 +6279,8 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
                 // integer folding would give character literals the wrong
                 // enum ordinal (for example, '1' is ordinal 3 in Index_T).
                 if (qualified_root && *qualified_root == expected_root) {
-                    const auto result = self(
-                        self, value.operands.front(), depth + 1U);
+                    const auto result = support::with_stack([&] { return self(
+                        self, value.operands.front(), depth + 1U); });
                     leave_expression();
                     return result;
                 }
@@ -6329,8 +6336,8 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
                 const auto value_matches = constant_root
                     && *constant_root == expected_root;
                 const auto result = value_matches
-                    ? self(
-                          self, *declaration_value.initializer, depth + 1U)
+                    ? support::with_stack([&] { return self(
+                          self, *declaration_value.initializer, depth + 1U); })
                     : std::nullopt;
                 active_declarations.erase(selected->value());
                 leave_expression();
@@ -7349,9 +7356,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
     const auto element_invariant = [&](const auto& self,
                                        const semantic::ExpressionId id,
                                        const std::size_t depth) -> bool {
-        const auto expression = depth < 64U
-            ? specialized_hir_unit_->find_expression(id)
-            : std::nullopt;
+        const auto expression = specialized_hir_unit_->find_expression(id);
         if (!expression || expression->vhdl == nullptr) {
             return false;
         }
@@ -7383,7 +7388,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
         case Kind::aggregate:
             return std::ranges::all_of(node.associations,
                 [&](const auto& association) {
-                    return self(self, association.value, depth + 1U);
+                    return support::with_stack([&] { return self(self, association.value, depth + 1U); });
                 });
         default:
             return false;
@@ -8223,9 +8228,9 @@ Lowerer::lower_hir_systemverilog_packed_pattern(
                            .value_or(base);
             }
         }
-        for (std::size_t depth { }; depth < 16U
-            && base.packed_dimensions.empty() && base.target.target.valid();
-            ++depth) {
+        std::set<std::uint32_t> visited_bases;
+        while (base.packed_dimensions.empty() && base.target.target.valid()
+            && visited_bases.insert(base.target.target.value()).second) {
             const auto definition
                 = specialized_hir_unit_->find_type(base.target.target);
             if (!definition || definition->systemverilog == nullptr
@@ -10411,6 +10416,336 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_standard_function(
         process_.operations.emplace_back(VhdlPslApi {
             kind, destination, std::nullopt });
         return destination;
+    }
+    if (profile.kind == HirVhdlStandardFunctionKind::numeric_find) {
+        // NUMERIC_STD FIND_LEFTMOST / FIND_RIGHTMOST: the index of the first
+        // element of ARG, scanning ARG'RANGE (leftmost) or ARG'REVERSE_RANGE
+        // (rightmost), for which `ARG(INDEX) ?= Y` is true, else -1. `?=` of
+        // two STD_ULOGIC values is '1' exactly when either is '-' or both
+        // are 0/L or both are 1/H.
+        if (source.operands.size() != 2U) {
+            return std::nullopt;
+        }
+        const auto width = hir_expression_width(
+            source.operands[0], hir_process_scope_);
+        const bool leftmost = profile.name == "find_leftmost";
+        const auto subtype = hir_vhdl_expression_subtype(source.operands[0]);
+        const auto effective = subtype
+            ? hir_effective_vhdl_subtype(*subtype) : std::nullopt;
+        std::optional<std::int64_t> left;
+        bool descending { true };
+        if (width && effective) {
+            for (const auto& range : effective->constraints) {
+                if (range.kind == semantic::vhdl::RangeKind::array_index
+                    && range.left && range.right) {
+                    left = range.left;
+                    descending = range.descending;
+                    break;
+                }
+            }
+            if (!left && effective->constraints.empty()) {
+                left = static_cast<std::int64_t>(*width) - 1;
+            }
+        }
+        if (!width || !left) {
+            report(
+                "FSIM-ELAB-VHNUM-002",
+                std::string { profile.name }
+                    + " requires an argument with locally static bounds",
+                hir_source_span(source.source));
+            return std::nullopt;
+        }
+        auto result = load_integer(-1, profile.width,
+            frontend::ValueDomain::Integer);
+        if (*width == 0U) {
+            return result;
+        }
+        const auto value = lower_hir_expression(source.operands[0], *width);
+        const auto wanted = lower_hir_expression(source.operands[1], 1U);
+        if (!value || !wanted) {
+            return std::nullopt;
+        }
+        if (register_domain(*value) != frontend::ValueDomain::Logic9
+            || register_domain(*wanted) != frontend::ValueDomain::Logic9) {
+            report(
+                "FSIM-ELAB-VHLOGIC-002",
+                std::string { profile.name }
+                    + " requires a standard-logic argument",
+                hir_source_span(source.source));
+            return std::nullopt;
+        }
+        const auto state_constant = [&](const runtime::Logic9 state) {
+            const auto destination = allocate_register(
+                1U, frontend::ValueDomain::Logic9);
+            process_.operations.emplace_back(LoadConstant {
+                destination,
+                PackedLogic4::from_logic9_msb_string(
+                    std::string(1U, runtime::to_char(state))),
+            });
+            return destination;
+        };
+        const auto boolean_binary = [&](const BinaryOperator operation,
+                                        const RegisterId lhs,
+                                        const RegisterId rhs) {
+            const auto destination = allocate_register(
+                1U, frontend::ValueDomain::Boolean);
+            process_.operations.emplace_back(
+                Binary { operation, destination, lhs, rhs });
+            return destination;
+        };
+        const auto in_class = [&](const RegisterId operand,
+                                  const runtime::Logic9 first,
+                                  const runtime::Logic9 second) {
+            return boolean_binary(BinaryOperator::bit_or,
+                boolean_binary(BinaryOperator::case_equal, operand,
+                    state_constant(first)),
+                boolean_binary(BinaryOperator::case_equal, operand,
+                    state_constant(second)));
+        };
+        using Logic9 = runtime::Logic9;
+        const auto wanted_dash = boolean_binary(BinaryOperator::case_equal,
+            *wanted, state_constant(Logic9::dont_care));
+        const auto wanted_zero = in_class(*wanted, Logic9::zero, Logic9::l);
+        const auto wanted_one = in_class(*wanted, Logic9::one, Logic9::h);
+        // The scan order is the position order; the first match wins, so
+        // the selects are built from the last position back to the first.
+        const auto positions = static_cast<std::size_t>(*width);
+        for (std::size_t step = positions; step-- > 0U;) {
+            // Position `step` of the scan: from the left (the most
+            // significant element) or from the right.
+            const auto element_bit = leftmost ? positions - 1U - step : step;
+            const auto index_offset = leftmost ? step : positions - 1U - step;
+            const auto index = descending
+                ? *left - static_cast<std::int64_t>(index_offset)
+                : *left + static_cast<std::int64_t>(index_offset);
+            auto element = *value;
+            if (positions != 1U) {
+                element = allocate_register(
+                    1U, frontend::ValueDomain::Logic9);
+                process_.operations.emplace_back(Extract {
+                    element, *value,
+                    static_cast<std::uint32_t>(element_bit), 1U });
+            }
+            const auto dash = boolean_binary(BinaryOperator::bit_or,
+                wanted_dash,
+                boolean_binary(BinaryOperator::case_equal, element,
+                    state_constant(Logic9::dont_care)));
+            const auto zeros = boolean_binary(BinaryOperator::bit_and,
+                in_class(element, Logic9::zero, Logic9::l), wanted_zero);
+            const auto ones = boolean_binary(BinaryOperator::bit_and,
+                in_class(element, Logic9::one, Logic9::h), wanted_one);
+            const auto matched = boolean_binary(BinaryOperator::bit_or, dash,
+                boolean_binary(BinaryOperator::bit_or, zeros, ones));
+            const auto chosen = allocate_register(
+                profile.width, frontend::ValueDomain::Integer);
+            process_.operations.emplace_back(ConditionalSelect {
+                chosen, matched,
+                load_integer(index, profile.width,
+                    frontend::ValueDomain::Integer),
+                result });
+            result = chosen;
+        }
+        return result;
+    }
+    if (profile.kind == HirVhdlStandardFunctionKind::logic_resolved
+        || profile.kind == HirVhdlStandardFunctionKind::logic_match) {
+        const bool resolving
+            = profile.kind == HirVhdlStandardFunctionKind::logic_resolved;
+        if (source.operands.size() != (resolving ? 1U : 2U)) {
+            return std::nullopt;
+        }
+        const auto operand_width = [&](const semantic::ExpressionId operand)
+            -> std::optional<std::size_t> {
+            auto width = hir_expression_width(operand, hir_process_scope_);
+            if (!width && hir_vhdl_null_value(operand)) {
+                width = 0U;
+            }
+            return width;
+        };
+        const auto location = runtime_source_location(
+            hir_source_span(source.source));
+        const auto logic_constant = [&](const runtime::Logic9 state) {
+            const auto destination = allocate_register(
+                1U, frontend::ValueDomain::Logic9);
+            process_.operations.emplace_back(LoadConstant {
+                destination,
+                PackedLogic4::from_logic9_msb_string(
+                    std::string(1U, runtime::to_char(state))),
+            });
+            return destination;
+        };
+        const auto boolean_binary = [&](const BinaryOperator operation,
+                                        const RegisterId left,
+                                        const RegisterId right) {
+            const auto destination = allocate_register(
+                1U, frontend::ValueDomain::Boolean);
+            process_.operations.emplace_back(
+                Binary { operation, destination, left, right });
+            return destination;
+        };
+        const auto is_state = [&](const RegisterId value,
+                                  const runtime::Logic9 state) {
+            return boolean_binary(BinaryOperator::case_equal, value,
+                logic_constant(state));
+        };
+        const auto either = [&](const RegisterId value,
+                                const std::initializer_list<runtime::Logic9>
+                                    states) {
+            auto result = is_state(value, *states.begin());
+            for (auto state = states.begin() + 1; state != states.end();
+                 ++state) {
+                result = boolean_binary(
+                    BinaryOperator::bit_or, result, is_state(value, *state));
+            }
+            return result;
+        };
+        const auto element = [&](const RegisterId value,
+                                 const std::size_t width,
+                                 const std::size_t bit) {
+            if (width == 1U) {
+                return value;
+            }
+            const auto destination = allocate_register(
+                1U, frontend::ValueDomain::Logic9);
+            process_.operations.emplace_back(Extract {
+                destination, value, static_cast<std::uint32_t>(bit), 1U });
+            return destination;
+        };
+        const auto select = [&](const RegisterId condition,
+                                const RegisterId when_true,
+                                const RegisterId when_false) {
+            const auto destination = allocate_register(
+                1U, frontend::ValueDomain::Logic9);
+            process_.operations.emplace_back(ConditionalSelect {
+                destination, condition, when_true, when_false });
+            return destination;
+        };
+        if (resolving) {
+            // IEEE 1076-2019 STD_LOGIC_1164 RESOLVED: one element is itself
+            // (even '-'), none is 'Z', else the fold of resolution_table
+            // from 'Z'.
+            const auto width = operand_width(source.operands[0]);
+            if (!width) {
+                return std::nullopt;
+            }
+            if (*width == 0U) {
+                return logic_constant(runtime::Logic9::z);
+            }
+            const auto value = lower_hir_expression(
+                source.operands[0], *width);
+            if (!value) {
+                return std::nullopt;
+            }
+            if (register_domain(*value) != frontend::ValueDomain::Logic9) {
+                report(
+                    "FSIM-ELAB-VHLOGIC-002",
+                    "resolved requires a standard-logic vector operand",
+                    hir_source_span(source.source));
+                return std::nullopt;
+            }
+            if (*width == 1U) {
+                return *value;
+            }
+            // resolution_table of two values: 'U' dominates, then 'X' and
+            // '-', then a clash of forcing values; a forcing value beats
+            // the weak ones, 'Z' gives way, and unequal weak values are 'W'.
+            const auto resolve_pair = [&](const RegisterId left,
+                                          const RegisterId right) {
+                using Logic9 = runtime::Logic9;
+                const auto any_of = [&](const std::initializer_list<Logic9>
+                                            states) {
+                    return boolean_binary(BinaryOperator::bit_or,
+                        either(left, states), either(right, states));
+                };
+                const auto uninitialized = any_of({ Logic9::u });
+                const auto unknown = any_of({ Logic9::x, Logic9::dont_care });
+                const auto forcing_zero = any_of({ Logic9::zero });
+                const auto forcing_one = any_of({ Logic9::one });
+                const auto clash = boolean_binary(
+                    BinaryOperator::bit_and, forcing_zero, forcing_one);
+                const auto left_z = is_state(left, Logic9::z);
+                const auto right_z = is_state(right, Logic9::z);
+                const auto same = boolean_binary(
+                    BinaryOperator::case_equal, left, right);
+                const auto weak = select(left_z, right,
+                    select(right_z, left,
+                        select(same, left, logic_constant(Logic9::w))));
+                return select(uninitialized, logic_constant(Logic9::u),
+                    select(unknown, logic_constant(Logic9::x),
+                        select(clash, logic_constant(Logic9::x),
+                            select(forcing_zero, logic_constant(Logic9::zero),
+                                select(forcing_one,
+                                    logic_constant(Logic9::one), weak)))));
+            };
+            auto result = logic_constant(runtime::Logic9::z);
+            for (std::size_t bit = 0U; bit < *width; ++bit) {
+                result = resolve_pair(result, element(*value, *width, bit));
+            }
+            return result;
+        }
+        // NUMERIC_STD STD_MATCH: MATCH_TABLE elementwise ('-' matches all;
+        // 0/L and 1/H are the two classes; 'U', 'X', 'Z' and 'W' match only
+        // '-'). A null argument or unequal lengths return false with a
+        // warning (the body's `assert NO_WARNING ... severity warning`).
+        const auto left_width = operand_width(source.operands[0]);
+        const auto right_width = operand_width(source.operands[1]);
+        if (!left_width || !right_width) {
+            return std::nullopt;
+        }
+        const auto no_match = [&](const char* const message) {
+            process_.operations.emplace_back(Assert {
+                load_integer(0, 1U, frontend::ValueDomain::Boolean),
+                message,
+                AssertionSeverity::warning,
+                location,
+            });
+            return load_constant(
+                unsigned_value(0U, 1U), frontend::ValueDomain::Boolean);
+        };
+        if (*left_width == 0U || *right_width == 0U) {
+            return no_match(
+                "NUMERIC_STD.STD_MATCH: null detected, returning FALSE");
+        }
+        if (*left_width != *right_width) {
+            return no_match("NUMERIC_STD.STD_MATCH: L'LENGTH /= R'LENGTH, "
+                            "returning FALSE");
+        }
+        const auto left = lower_hir_expression(
+            source.operands[0], *left_width);
+        const auto right = lower_hir_expression(
+            source.operands[1], *right_width);
+        if (!left || !right) {
+            return std::nullopt;
+        }
+        if (register_domain(*left) != frontend::ValueDomain::Logic9
+            || register_domain(*right) != frontend::ValueDomain::Logic9) {
+            report(
+                "FSIM-ELAB-VHLOGIC-002",
+                "std_match requires standard-logic operands",
+                hir_source_span(source.source));
+            return std::nullopt;
+        }
+        using Logic9 = runtime::Logic9;
+        std::optional<RegisterId> all;
+        for (std::size_t bit = 0U; bit < *left_width; ++bit) {
+            const auto l = element(*left, *left_width, bit);
+            const auto r = element(*right, *right_width, bit);
+            const auto dont_care = boolean_binary(BinaryOperator::bit_or,
+                is_state(l, Logic9::dont_care),
+                is_state(r, Logic9::dont_care));
+            const auto zeros = boolean_binary(BinaryOperator::bit_and,
+                either(l, { Logic9::zero, Logic9::l }),
+                either(r, { Logic9::zero, Logic9::l }));
+            const auto ones = boolean_binary(BinaryOperator::bit_and,
+                either(l, { Logic9::one, Logic9::h }),
+                either(r, { Logic9::one, Logic9::h }));
+            const auto matched = boolean_binary(BinaryOperator::bit_or,
+                dont_care,
+                boolean_binary(BinaryOperator::bit_or, zeros, ones));
+            all = all ? boolean_binary(BinaryOperator::bit_and, *all, matched)
+                      : matched;
+        }
+        return *all;
     }
     if (source.operands.empty()) {
         return std::nullopt;
@@ -13612,7 +13947,7 @@ std::optional<SignalId> Lowerer::hir_vhdl_external_signal(
                 subtype_prefix.size());
             const auto effective = hir_effective_vhdl_subtype(declared);
             const auto root = [&](semantic::TypeId type) {
-                for (std::size_t depth { }; depth < 32U && type.valid(); ++depth) {
+                while (type.valid()) {
                     const auto definition = specialized_hir_unit_->find_type(type);
                     if (!definition || definition->vhdl == nullptr
                         || (definition->vhdl->form != semantic::vhdl::TypeForm::subtype
@@ -14231,6 +14566,8 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             && hierarchical_reference_used_) {
             hierarchical_marks_.push_back({ 0U, whole, member->signal, false,
                 hierarchical_last_path_ });
+        } else {
+            mark_callee_instance_read(whole, member->signal);
         }
         record_implicit_signal_dependency(member->signal);
         const auto selected = allocate_register(
@@ -14980,6 +15317,19 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             return std::nullopt;
         }
     }
+    // A character literal that fits the formals of more than one overload
+    // of a call has no one type (IEEE 1076-2019 12.5).
+    if (expression->vhdl != nullptr
+        && expression->vhdl->kind
+            == semantic::vhdl::ExpressionKind::logic_literal
+        && expression->vhdl->resolved_builtin_type == "@ambiguous-literal") {
+        report(
+            "FSIM-ELAB-VHENUM-004",
+            "character literal " + expression->vhdl->text
+                + " is ambiguous: it fits more than one overload of the call",
+            hir_source_span(expression->vhdl->source));
+        return std::nullopt;
+    }
     if (expression->vhdl != nullptr
         && (expression->vhdl->kind
                 == semantic::vhdl::ExpressionKind::name
@@ -15005,8 +15355,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             auto type_id = effective && effective->type_mark.target.valid()
                 ? effective->type_mark.target
                 : vhdl_array_context->type_mark.target;
-            for (std::size_t depth { }; type_id.valid() && depth < 32U;
-                 ++depth) {
+            while (type_id.valid()) {
                 const auto type = specialized_hir_unit_->find_type(type_id);
                 if (!type || type->vhdl == nullptr) {
                     break;
@@ -15210,6 +15559,8 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             && hierarchical_reference_used_) {
             hierarchical_marks_.push_back({ 0U, destination, *signal, false,
                 hierarchical_last_path_ });
+        } else {
+            mark_callee_instance_read(destination, *signal);
         }
         record_implicit_signal_dependency(*signal);
         if (expected_width != 0U && expected_width != info.width) {
@@ -16186,7 +16537,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                                     const semantic::ExpressionId id,
                                     const std::size_t depth) -> bool {
             const auto record = specialized_hir_unit_->find_expression(id);
-            if (!record || record->systemverilog == nullptr || depth > 64U) {
+            if (!record || record->systemverilog == nullptr) {
                 return false;
             }
             if (record->systemverilog->kind
@@ -16195,7 +16546,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             }
             return std::ranges::any_of(record->systemverilog->operands,
                 [&](const semantic::ExpressionId operand) {
-                    return self(self, operand, depth + 1U);
+                    return support::with_stack([&] { return self(self, operand, depth + 1U); });
                 });
         };
         const auto value = [&]() -> std::optional<std::int64_t> {
@@ -17053,8 +17404,11 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                     // `localparam foo_t Q = P;`: the value of the
                     // parameter its initializer names.
                     auto named = parameter_value(parameter->second);
-                    for (std::size_t depth { }; named && depth < 16U;
-                         ++depth) {
+                    // Parameters naming each other in a ring end the walk.
+                    std::set<std::uint32_t> visited_parameters;
+                    while (named
+                        && visited_parameters.insert(named->first.value())
+                               .second) {
                         value = lower_hir_static_container_actual(
                             named->second, type, named->first);
                         if (value
@@ -21013,7 +21367,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                                       const semantic::ExpressionId id,
                                       const std::size_t depth) -> void {
                     const auto node = specialized_hir_unit_->find_expression(id);
-                    if (!valid || !node || node->vhdl == nullptr || depth > 8U) {
+                    if (!valid || !node || node->vhdl == nullptr) {
                         valid = false;
                         return;
                     }
@@ -21025,7 +21379,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                                 valid = false;
                                 return;
                             }
-                            self(self, association.value, depth + 1U);
+                            support::with_stack([&] { return self(self, association.value, depth + 1U); });
                         }
                         return;
                     }
@@ -27882,9 +28236,8 @@ std::optional<std::string> Lowerer::hir_vhdl_path_text(
     // unlabeled process has an empty label.
     const auto scope_labels = [&](semantic::ScopeId scope) {
         std::vector<std::string> result;
-        for (std::size_t depth { }; depth < 64U && scope.valid()
-             && scope.value() < scopes.size();
-             ++depth) {
+        // Each step moves to the parent scope, so the walk ends.
+        while (scope.valid() && scope.value() < scopes.size()) {
             const auto& record = scopes[scope.value()];
             if (!record.parent) {
                 break;
@@ -28439,9 +28792,6 @@ std::optional<std::string> Lowerer::hir_vhdl_null_composite_image(
     // The image of a composite value without scalar subelements: a record
     // without elements or with only such elements, or a null array (IEEE
     // 1076-2019 5.7, 16.2.2).
-    if (depth > 16U) {
-        return std::nullopt;
-    }
     const auto effective = hir_effective_vhdl_subtype(subtype).value_or(subtype);
     const semantic::vhdl::TypeDefinition* definition { };
     auto type_id = effective.type_mark.target;
@@ -28475,8 +28825,8 @@ std::optional<std::string> Lowerer::hir_vhdl_null_composite_image(
     for (const auto& element : definition->record_elements) {
         const auto element_subtype = semantic::vhdl::constrained_element_subtype(
             effective, element.name, element.subtype);
-        const auto image = hir_vhdl_null_composite_image(
-            element_subtype, image_quotes, depth + 1U);
+        const auto image = support::with_stack([&] { return hir_vhdl_null_composite_image(
+            element_subtype, image_quotes, depth + 1U); });
         if (!image) {
             return std::nullopt;
         }
@@ -28935,7 +29285,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_string_value(
     }
     // A physical literal, as a count of primary units.
     auto target = subtype.type_mark.target;
-    for (std::size_t depth { }; target.valid() && depth < 16U; ++depth) {
+    while (target.valid()) {
         const auto type = specialized_hir_unit_->find_type(target);
         if (!type || type->vhdl == nullptr) {
             break;
@@ -29289,6 +29639,32 @@ std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_scalar_image(
     if (array_value) {
         // TO_STRING/TO_HSTRING/TO_OSTRING of a bit or logic vector; digits
         // and metavalues are upper case (IEEE 1076-2008 5.3.2.4).
+        const bool radix = vector_format == runtime::simir::OutputFormat::hexadecimal
+            || vector_format == runtime::simir::OutputFormat::octal;
+        if (radix) {
+            // TO_HSTRING and TO_OSTRING of a bit or logic vector convert the
+            // element characters group by group as the body of
+            // STD_LOGIC_1164 (and NUMERIC_STD for SIGNED) does: 'Z' for a
+            // group of only 'Z', 'X' for any other group with a non-0/1
+            // element after TO_X01Z, a pad of '0' ('Z' under a leading 'Z',
+            // the sign element for SIGNED) on the left.
+            append_formatted(runtime::simir::OutputFormat::binary, false,
+                frontend::SystemVerilogScalarKind::None);
+            const bool hexadecimal
+                = vector_format == runtime::simir::OutputFormat::hexadecimal;
+            const bool is_signed = simple_type == "signed"
+                || simple_type == "unresolved_signed";
+            StringMethod conversion;
+            conversion.operation = hexadecimal
+                ? (is_signed ? StringMethodOperator::vhdl_logic9_hstring_signed
+                             : StringMethodOperator::vhdl_logic9_hstring)
+                : (is_signed ? StringMethodOperator::vhdl_logic9_ostring_signed
+                             : StringMethodOperator::vhdl_logic9_ostring);
+            conversion.source = upper();
+            conversion.string_destination = allocate_string_register();
+            process_.operations.emplace_back(conversion);
+            return string_quoted(conversion.string_destination);
+        }
         append_formatted(vector_format, false,
             frontend::SystemVerilogScalarKind::None);
         return string_quoted(upper());
@@ -30802,35 +31178,17 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
             if (binary) {
                 text = std::move(bits);
             } else {
-                const auto digits = output_bytes;
-                text.assign(digits, '0');
-                constexpr std::string_view digits_text {
-                    "0123456789ABCDEF"
-                };
-                for (std::size_t digit = 0; digit < digits; ++digit) {
-                    unsigned value { };
-                    for (std::size_t bit = 0; bit < group; ++bit) {
-                        const auto offset = digit * group + bit;
-                        if (offset >= bits.size()) {
-                            continue;
-                        }
-                        const auto state
-                            = bits[bits.size() - offset - 1U];
-                        if (state != '0' && state != '1') {
-                            report(
-                                "FSIM-ELAB-VHLOGIC-003",
-                                std::string { *logic_string_function }
-                                    + " static octal/hex profile requires "
-                                      "only 0/1 states",
-                                hir_source_span(operand->vhdl->source));
-                            return std::nullopt;
-                        }
-                        if (state == '1') {
-                            value |= 1U << bit;
-                        }
-                    }
-                    text[digits - digit - 1U] = digits_text[value];
-                }
+                // The conversion of the STD_LOGIC_1164 body (group padding
+                // and the X and Z digits included).
+                std::ranges::transform(bits, bits.begin(), [](const char value) {
+                    return static_cast<char>(std::toupper(
+                        static_cast<unsigned char>(value)));
+                });
+                text = *runtime::simir::execute_string_method(
+                    group == 4U ? runtime::simir::StringMethodOperator::vhdl_logic9_hstring
+                                : runtime::simir::StringMethodOperator::vhdl_logic9_ostring,
+                    bits, { }, std::nullopt, std::nullopt)
+                            .string;
             }
             const auto destination = allocate_string_register();
             process_.operations.emplace_back(LoadStringConstant {
@@ -34159,12 +34517,16 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_parameter_pattern(
     auto value_expression = specialized_hir_unit_->find_expression(value);
     // A name of another typed parameter, such as an actual naming the
     // parent's localparam, denotes that parameter's value.
-    for (int depth = 0; depth < 8 && value_expression
+    std::set<std::uint32_t> visited_parameters;
+    while (value_expression
          && value_expression->systemverilog != nullptr
          && value_expression->systemverilog->kind
-             == semantic::sv::ExpressionKind::name;
-         ++depth) {
+             == semantic::sv::ExpressionKind::name) {
         const auto named = hir_referenced_declaration(value);
+        // Parameters naming each other in a ring have no value.
+        if (named && !visited_parameters.insert(named->value()).second) {
+            return std::nullopt;
+        }
         const auto declaration = named
             ? specialized_hir_unit_->find_declaration(*named)
             : std::nullopt;
@@ -34196,12 +34558,16 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_parameter_pattern(
     }
     // A named type such as `pkg::cfg_t` resolves to its definition.
     const auto type_resolver = hir_resolver();
-    for (int depth = 0; depth < 8 && !type->target.target.valid(); ++depth) {
+    std::vector<semantic::sv::TypeReference> visited_types;
+    while (!type->target.target.valid()) {
         const auto effective = type_resolver.effective_systemverilog_type(
             *type, specialized_hir_unit_->scope());
-        if (!effective || *effective == *type) {
+        if (!effective || *effective == *type
+            || std::ranges::find(visited_types, *effective)
+                != visited_types.end()) {
             break;
         }
+        visited_types.push_back(*type);
         type = *effective;
     }
     return lower_hir_systemverilog_packed_pattern(value, *type, *width);
@@ -34240,11 +34606,13 @@ Lowerer::hir_systemverilog_parameter_member_slice(
         auto definition = type->target.target.valid()
             ? specialized_hir_unit_->find_type(type->target.target)
             : std::nullopt;
-        for (std::size_t depth { }; depth < 8U && definition
+        std::set<std::uint32_t> visited_aliases;
+        while (definition
              && definition->systemverilog != nullptr
              && definition->systemverilog->form
-                 == semantic::sv::TypeForm::alias;
-             ++depth) {
+                 == semantic::sv::TypeForm::alias
+             && visited_aliases.insert(
+                    definition->systemverilog->declaration.value()).second) {
             const auto alias_declaration
                 = specialized_hir_unit_->find_declaration(
                     definition->systemverilog->declaration);

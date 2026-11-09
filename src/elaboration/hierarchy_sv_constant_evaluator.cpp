@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "hierarchy_sv_constant_evaluator.hpp"
+#include "fsim/support/stack_growth.hpp"
 #include "fsim/semantic/systemverilog_constant_array.hpp"
+#include "fsim/support/active_set.hpp"
 #include "fsim/support/index_distance.hpp"
 #include "specialization_cache.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
@@ -99,7 +101,8 @@ using ScalarKind = frontend::SystemVerilogScalarKind;
 {
     const auto& design = specialization.design();
     std::optional<semantic::ScopeId> current { scope };
-    for (std::size_t depth { }; current && depth < 4096U; ++depth) {
+    // Each step moves to the parent scope, so the walk ends.
+    while (current) {
         const auto* record = design.find_scope(*current);
         if (record == nullptr) {
             return false;
@@ -238,9 +241,6 @@ systemverilog_constant_name_declaration(
 constexpr std::uint32_t maximum_constant_width
     = hir_systemverilog_maximum_constant_width;
 constexpr std::uint64_t maximum_constant_work_units = 64U * 1024U * 1024U;
-// Each constant call frame uses several native frames; deeper recursion
-// falls back to run-time evaluation instead of exhausting the stack.
-constexpr std::size_t maximum_constant_call_depth = 256U;
 constexpr std::size_t maximum_constant_local_array_elements = 65536U;
 constexpr std::uint64_t maximum_constant_local_array_bits
     = 8U * 1024U * 1024U;
@@ -5048,12 +5048,11 @@ private:
             std::string path = record.text.substr(11U);
             auto base = specialization_.find_expression(
                 record.operands.front());
-            for (std::size_t depth { }; depth < 64U && base
+            while (base
                  && base->systemverilog != nullptr
                  && base->systemverilog->kind == ExpressionKind::call
                  && base->systemverilog->text.starts_with("@sv-select:")
-                 && base->systemverilog->operands.size() == 1U;
-                 ++depth) {
+                 && base->systemverilog->operands.size() == 1U) {
                 path = base->systemverilog->text.substr(11U) + "." + path;
                 base = specialization_.find_expression(
                     base->systemverilog->operands.front());
@@ -5216,13 +5215,29 @@ private:
         return std::nullopt;
     }
 
+    /// A constant function can call itself as deep as its work budget
+    /// allows: each call runs on a stack segment with room for it.
     [[nodiscard]] std::optional<Value> evaluate_callable(
         const semantic::sv::Declaration& callable,
         const semantic::sv::Expression& call,
         LocalUnpackedArray* const array_result = nullptr)
     {
-        if (!callable.callable || frames_.size() >= maximum_constant_call_depth) {
-            error_ = "constant function recursion exceeds the call-depth limit";
+        return support::with_stack([&] {
+            return evaluate_callable_body(callable, call, array_result);
+        });
+    }
+
+    [[nodiscard]] std::optional<Value> evaluate_callable_body(
+        const semantic::sv::Declaration& callable,
+        const semantic::sv::Expression& call,
+        LocalUnpackedArray* const array_result)
+    {
+        if (!callable.callable) {
+            return std::nullopt;
+        }
+        // Each call is charged to the work budget, which ends a recursion
+        // that never returns.
+        if (!consume_work(1U)) {
             return std::nullopt;
         }
         // A real result or argument is outside integral evaluation.
@@ -5832,11 +5847,15 @@ private:
             : std::nullopt;
         // A typedef of a package type (`typedef pkg::S t;`) names that type
         // in the typedef's own scope.
-        for (std::size_t depth { }; depth < 8U && definition
+        std::unordered_set<std::uint32_t> visited_aliases;
+        while (definition
              && definition->systemverilog != nullptr
              && definition->systemverilog->form
-                 == semantic::sv::TypeForm::alias;
-             ++depth) {
+                 == semantic::sv::TypeForm::alias) {
+            if (!visited_aliases.insert(
+                    definition->systemverilog->declaration.value()).second) {
+                return nullptr;
+            }
             const auto alias = specialization_.find_declaration(
                 definition->systemverilog->declaration);
             auto base = definition->systemverilog->base;
@@ -5970,9 +5989,6 @@ private:
     [[nodiscard]] std::optional<std::uint64_t> aggregate_width(
         const semantic::sv::TypeReference& input, const unsigned depth = 0U)
     {
-        if (depth > 32U) {
-            return std::nullopt;
-        }
         const auto type = with_unpacked_dimensions(input);
         if (!type.unpacked_dimensions.empty()) {
             const auto bounds = unpacked_bounds(type);
@@ -5982,7 +5998,7 @@ private:
             auto element = type;
             element.unpacked_dimensions.clear();
             element.container_form.reset();
-            auto width = aggregate_width(element, depth + 1U);
+            auto width = support::with_stack([&] { return aggregate_width(element, depth + 1U); });
             for (const auto& [left, right] : *bounds) {
                 const auto count = static_cast<std::uint64_t>(
                     std::max(left, right) - std::min(left, right)) + 1U;
@@ -5996,9 +6012,15 @@ private:
         }
         bool union_form { };
         if (const auto* const members = aggregate_members(type, &union_form)) {
+            // An aggregate that holds itself has no width.
+            if (!aggregate_width_active_.enter(type)) {
+                return std::nullopt;
+            }
+            const support::ActiveSet<semantic::sv::TypeReference>::Entry
+                aggregate_entry { aggregate_width_active_ };
             std::uint64_t total { };
             for (const auto& member : *members) {
-                const auto width = aggregate_width(member.type, depth + 1U);
+                const auto width = support::with_stack([&] { return aggregate_width(member.type, depth + 1U); });
                 if (!width || *width == 0U
                     || *width > maximum_constant_width - total) {
                     return std::nullopt;
@@ -6795,11 +6817,15 @@ private:
                 : std::nullopt;
             // A typedef of a package type (`typedef pkg::S t;`) names that
             // type in the typedef's own scope.
-            for (std::size_t depth { }; depth < 8U && definition
+            std::unordered_set<std::uint32_t> visited_aliases;
+            while (definition
                  && definition->systemverilog != nullptr
                  && definition->systemverilog->form
-                     == semantic::sv::TypeForm::alias;
-                 ++depth) {
+                     == semantic::sv::TypeForm::alias) {
+                if (!visited_aliases.insert(
+                        definition->systemverilog->declaration.value()).second) {
+                    return std::nullopt;
+                }
                 const auto alias = specialization_.find_declaration(
                     definition->systemverilog->declaration);
                 auto base = definition->systemverilog->base;
@@ -9223,7 +9249,24 @@ private:
         const auto previous_callable = compiled_callable_;
         compiled_callable_ = callable.id;
         // Each pass assumes the read profiles the previous one stored.
-        for (std::size_t pass { }; pass < 4U; ++pass) {
+        // The passes end when nothing changes; a state met before means the
+        // profiles go around in a circle and never settle.
+        const auto same_assumptions
+            = [](const std::unordered_map<std::uint32_t, ProgramAssumption>& a,
+                  const std::unordered_map<std::uint32_t, ProgramAssumption>& b) {
+                  return a.size() == b.size()
+                      && std::ranges::all_of(a, [&](const auto& entry) {
+                             const auto other = b.find(entry.first);
+                             return other != b.end()
+                                 && other->second.read_shape
+                                     == entry.second.read_shape
+                                 && other->second.checked
+                                     == entry.second.checked;
+                         });
+              };
+        std::vector<std::unordered_map<std::uint32_t, ProgramAssumption>>
+            earlier_assumptions;
+        for (;;) {
             ProgramCompilation compilation;
             compilation.assumptions = assumptions;
             compilation_ = &compilation;
@@ -9264,7 +9307,14 @@ private:
                 return std::make_shared<const sv_constant_program::Program>(
                     std::move(compilation.program));
             }
-            refusal = "value profiles do not settle";
+            if (std::ranges::any_of(earlier_assumptions,
+                    [&](const auto& earlier) {
+                        return same_assumptions(earlier, assumptions);
+                    })) {
+                refusal = "value profiles do not settle";
+                break;
+            }
+            earlier_assumptions.push_back(assumptions);
         }
         compiled_callable_ = previous_callable;
         if (sv_const_program_trace()) {
@@ -9986,6 +10036,7 @@ private:
     OperandContexts contexts_;
     std::vector<Frame> frames_;
     std::uint64_t work_units_used_ { };
+    support::ActiveSet<semantic::sv::TypeReference> aggregate_width_active_;
 };
 
 /// The scalar view of a constant: a real-family or chandle value as it is,
@@ -10094,14 +10145,14 @@ bool hir_systemverilog_constant_expression(
             const auto operands_are_constant = [&] {
                 return std::ranges::all_of(source.operands,
                     [&](const semantic::ExpressionId operand) {
-                        return self(self, operand, depth + 1U);
+                        return support::with_stack([&] { return self(self, operand, depth + 1U); });
                     });
             };
             const auto call_arguments_are_constant = [&] {
                 return std::ranges::all_of(source.call_arguments,
                     [&](const semantic::sv::CallAssociation& argument) {
                         return argument.actual
-                            && self(self, *argument.actual, depth + 1U);
+                            && support::with_stack([&] { return self(self, *argument.actual, depth + 1U); });
                     });
             };
             switch (source.kind) {

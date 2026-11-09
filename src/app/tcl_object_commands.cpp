@@ -993,9 +993,6 @@ namespace {
         const ContainerValue& value,
         const std::size_t depth = 0)
     {
-        if (depth > 32) {
-            throw std::length_error { "container value nesting exceeds 32 levels" };
-        }
         if (value.type.element_kind == ContainerElementKind::Aggregate
             && value.type.aggregate_value) {
             Tcl_Obj* result = Tcl_NewDictObj();

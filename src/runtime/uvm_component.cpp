@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/uvm_component.hpp"
 
+#include "run_state_archive.hpp"
+
 #include <algorithm>
 #include <exception>
 #include <limits>
@@ -468,6 +470,25 @@ SystemVerilogUvmComponentService::root(
     throw std::out_of_range{"null or stale UVM root handle"};
   }
   return found->second;
+}
+
+void SystemVerilogUvmComponentService::run_state_io(RunStateArchive& archive) {
+  // The hooks are the embedder's; the roots and the hierarchy are the run's.
+  archive.io(roots_);
+  archive.io(roots_by_identity_);
+  archive.io(components_);
+  archive.io(next_root_);
+  archive.io(next_creation_order_);
+}
+
+void SystemVerilogUvmComponentService::reset_run_state() {
+  roots_.clear();
+  roots_by_identity_.clear();
+  components_.clear();
+  next_root_ = 1;
+  next_creation_order_ = 0;
+  phase_callback_active_ = false;
+  phase_child_parent_.reset();
 }
 
 }  // namespace fsim::runtime

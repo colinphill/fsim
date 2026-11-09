@@ -14,3 +14,21 @@
 #c paramdrc change=10 argument=1 time=308
 #c paramdrc change=11 argument=1 time=311
 #c paramdrc change=12 argument=1 time=317
+#c drc asynchon=0
+#c paramdrc change=13 argument=1 time=505
+#c paramdrc change=14 argument=1 time=508
+#c paramdrc change=15 argument=1 time=511
+#c drc asynchon=0
+#c paramdrc change=16 argument=1 time=705
+#c paramdrc change=17 argument=1 time=708
+#c paramdrc change=18 argument=1 time=711
+#c paramdrc change=19 argument=1 time=714
+#c drc asynchon=0
+#c paramdrc change=20 argument=1 time=905
+#c paramdrc change=21 argument=1 time=908
+#c paramdrc change=22 argument=1 time=911
+#c drc asynchon=0
+#c paramdrc change=23 argument=1 time=1005
+#c paramdrc change=24 argument=1 time=1008
+#c paramdrc change=25 argument=1 time=1011
+#c paramdrc change=26 argument=1 time=1014

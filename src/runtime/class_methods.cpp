@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/class_methods.hpp"
+#include "fsim/support/stack_growth.hpp"
 
 #include <algorithm>
 #include <stdexcept>
@@ -275,6 +276,14 @@ SystemVerilogClassInvocationResult SystemVerilogClassMethodRuntime::execute(
     const SystemVerilogClassInvocationHandle existing_continuation) {
   if (call_depth_ >= limits_.maximum_call_depth) {
     throw std::length_error{"class method recursion depth exceeded"};
+  }
+  // Nested calls continue on a new stack segment when the stack is nearly
+  // used up, so call depth is bounded by memory.
+  if (!support::stack_growth_detail::has_room()) {
+    return support::with_stack([&] {
+      return execute(descriptor, std::move(frame), actuals,
+          existing_continuation);
+    });
   }
   struct DepthGuard {
     std::size_t& depth;

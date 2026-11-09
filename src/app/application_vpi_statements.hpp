@@ -189,6 +189,15 @@ public:
         std::string word;
         bool is_signed { };
         std::vector<std::pair<std::int64_t, std::int64_t>> ranges;
+        /// The typedef a formal or result is declared with (an identifier,
+        /// `word` is then empty), and the callable scope that declares it:
+        /// the typespec is that typedef's (37.41, 37.25).
+        std::string type_name;
+        /// The callable and formal ("" for the result) the type belongs to:
+        /// the key of the typespec the elaborator resolved for it.
+        std::string callable;
+        std::string formal;
+        fsim_vpi_handle_v1 scope { };
     };
     /// The return type of a function scope.
     [[nodiscard]] std::optional<DeclaredType> scope_return_type(
@@ -430,6 +439,10 @@ private:
         assertion_formal,
         assertion_spec,
         assertion_op,
+        // A local variable of a property or sequence declaration (37.51,
+        // 37.53 vpiVariables): `id` indexes `assertion_entries_`, `aux` the
+        // local variable.
+        assertion_variable,
     };
 
     struct Node {

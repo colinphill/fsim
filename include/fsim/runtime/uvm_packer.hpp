@@ -3,6 +3,7 @@
 
 #include "fsim/runtime/packed_value.hpp"
 
+#include <limits>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -50,7 +51,7 @@ struct SystemVerilogUvmPackerPolicy {
 };
 
 struct SystemVerilogUvmPackerLimits {
-  std::size_t maximum_depth{1024};
+  std::size_t maximum_depth{std::numeric_limits<std::size_t>::max()};
   std::size_t maximum_items{1U << 20U};
   std::size_t maximum_bits{1U << 28U};
   std::size_t maximum_payload_bytes{1U << 28U};

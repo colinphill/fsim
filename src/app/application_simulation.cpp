@@ -485,10 +485,16 @@ std::string Simulation::Impl::reset_refusal() const
                "elaborated state, so the time-zero state of IEEE 1800-2023 "
                "D.8 cannot be reached";
     }
-    if (uvm_state_live()) {
-        return "FSIM-SAVE-0018: the run holds UVM component or phase state, "
-               "which lives in host services that a reset does not return to "
-               "their time-zero state yet (IEEE 1800-2023 D.8)";
+    if (const auto reason = uvm_unsaved_state(); !reason.empty()) {
+        // The UVM services return to time zero (reset_uvm_state), except a
+        // callback of the embedding program, which cannot be rebuilt.
+        return "FSIM-SAVE-0018: " + reason + ", which a reset cannot return "
+               "to its time-zero state (IEEE 1800-2023 D.8)";
+    }
+    if (const auto unused = uvm_unused_services(); !unused.empty()) {
+        return "FSIM-SAVE-0018: the " + unused.front() + " holds state made "
+               "through the embedding API, which a reset does not return to "
+               "its time-zero state (IEEE 1800-2023 D.8)";
     }
     if (!foreign_structure.empty()) {
         // The twin is the design as the artifact builds it; processes,
@@ -970,9 +976,11 @@ SdfReannotationCommitResult Simulation::commit_sdf_reannotation(
                 const auto& running = impl_->built.design.sdf_net_delays();
                 if (!record.delayed) {
                     for (const auto& each : running) {
-                        if (each.delayed && same_load(each, record))
-                            (void)impl_->interpreter->set_net_delay_table(
-                                impl_->running_process(each.driver), none);
+                        if (each.delayed && same_load(each, record)) {
+                            for (const auto driver : each.drivers())
+                                (void)impl_->interpreter->set_net_delay_table(
+                                    impl_->running_process(driver), none);
+                        }
                     }
                     continue;
                 }
@@ -987,11 +995,13 @@ SdfReannotationCommitResult Simulation::commit_sdf_reannotation(
                     // one table per source group, which only a retiming of
                     // identical splits maps).
                     if (std::ranges::count(running, kept->driver,
-                            &elaboration::SdfNetDelayInfo::driver) == 1)
-                        (void)impl_->interpreter->set_net_delay_table(
-                            impl_->running_process(kept->driver),
-                            elaboration::sdf_net_delay_table(
-                                record.delays, record.reject, record.error));
+                            &elaboration::SdfNetDelayInfo::driver) == 1) {
+                        for (const auto driver : kept->drivers())
+                            (void)impl_->interpreter->set_net_delay_table(
+                                impl_->running_process(driver),
+                                elaboration::sdf_net_delay_table(
+                                    record.delays, record.reject, record.error));
+                    }
                     continue;
                 }
                 // Later records to one load replace earlier ones (16.3).
@@ -1004,6 +1014,7 @@ SdfReannotationCommitResult Simulation::commit_sdf_reannotation(
                 record.delayed = false;
                 record.load_signal = { };
                 record.driver = { };
+                record.run_drivers.clear();
                 request_net_delay_split(std::move(record));
             }
             // A split the engine refuses fails the reannotation; the timing
@@ -1581,6 +1592,9 @@ std::uint64_t Simulation::add_execution_point_hook(ExecutionPointHook hook)
     impl_->execution_point_observers.emplace(token, std::move(hook));
     if (impl_->execution_point_observers.size() == 1U) {
         install_execution_point_hooks();
+        // A probe observer reads the simulation time at its point, which
+        // the kernel's own time steps do not keep (open_external_observation).
+        open_external_observation();
     }
     return token;
 }

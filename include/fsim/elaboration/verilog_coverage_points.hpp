@@ -5,6 +5,7 @@
 #include "fsim/frontend/coverage_source_control.hpp"
 #include "fsim/frontend/design.hpp"
 
+#include <limits>
 #include <cstddef>
 #include <string>
 #include <string_view>
@@ -65,7 +66,7 @@ struct VerilogStatementCoverageExclusion {
 struct VerilogCoveragePointLimits {
     std::size_t maximum_sources { 1U << 16U };
     std::size_t maximum_statements { 1U << 20U };
-    std::size_t maximum_nesting { 1U << 12U };
+    std::size_t maximum_nesting { std::numeric_limits<std::size_t>::max() };
 };
 
 enum class VerilogCoveragePointError {

@@ -138,6 +138,63 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-11-09: Wave AF/AG close gate: SVA automaton as generated code, VHDL overload resolution, binding conversions, depth caps removed, conformance rows (this commit, sweeps `agc2g`, `agc2ga`)
+
+This commit holds everything since `61314b3e`: the backlog wave AF (workers af1-af6) and the conformance and follow-up wave AG (ag1-ag8, cap1, cap2), under the 11-09 scope freeze after round 12, and the fixes for the agc1 sweep regressions. Design notes for the SVA automaton are in the Wave AF section at the end of this file.
+
+**Contents:**
+- **SVA (#186 follow-ups, af6):** each directive's attempt automaton is generated code (`SvaAutomatonEmitter`): sequences with joins, `throughout`, `first_match`, property trees, started-list kinds, any consequent, multiclocked plans, per-instance bounds; only a malformed plan keeps the host tick. Kernel reads of wide, Logic9 and global-clocking sampled values. `FSIM_KERNEL_SVA_CHECK=1` checks each generated tick against `sva::Monitor`.
+- **VHDL (af1, af2, af3, af5):**
+  - Overload resolution is strict IEEE 1076-2019 12.5 for every literal in every context; a literal that fits several overloads is `FSIM-ELAB-VHENUM-004`. One STANDARD catalog (`src/semantic/vhdl_standard_catalog`) serves the resolver and VHPI.
+  - ieee `resolved`, numeric_std `std_match` (all overloads, with the body's warning) and `find_leftmost`/`find_rightmost`; `to_hstring`/`to_ostring` give 'X' for a partly-Z nibble.
+  - An inertial rewrite of a multi-bit scalar with pending transactions is decided per whole transaction (10.5.2.2 step 3), both engines. Delayed and transport writes of compiled VHDL processes are kernel projected waveforms (`KOp::net_delay` sub 1).
+  - Wide dynamic-index writes into resolved slots (`WriteProjectedDynamicSlice`) and wide dynamic stores compile as word loops above 8 chunks; the 20,000-operation expansion cap is removed.
+  - Binding indications: port-map and formal conversions get a real intermediate signal per component port (7.3.2.2); generic maps follow the LRM; an unassociated local port is `FSIM-ELAB-VHCOMP-017`. Chained formal designators parse (6.5.7.1). Dormant foreign-architecture drivers (DesignIR 8).
+  - Recursive subprograms with formals and locals get compiled frames on a growable heap call stack (`NativeCallStack`; strings, containers and private arrays in recursive VHDL frames are `not_compiled:recursive_frame_storage`, backlog).
+- **Fixed caps (cap1, cap2, owner 11-09):** depth caps are removed (constant-function recursion, class call depth, instance depth, VHDL folding frames, PSL/Tcl/SVA/comment nesting); deep recursion runs on a switched stack (`support::with_stack`); non-termination is caught by step and work budgets only. Audit: `.local-artifacts/followups/fixed-caps-audit-1109.md`.
+- **SystemVerilog and UVM (af4):** the UVM 1.2 separate-library flow elaborates; `uvm_top` and the other package handles bind to the native services' handles under 1.2 and 2020.3.1; UVM 1.2 save/restart/reset variants; a design class the specializer drops is always an error, fixed at its source. Forward `typedef class X;` completed by a parameterized typedef (6.18, 8.27).
+- **Foreign interfaces (ag1-ag8):** VPI array-var class properties (`vpiArrayVar`, 37.17/37.33) with element handles, `vpi_get/put_value_array` on fixed-size arrays; VHPI binding and conversion objects, uniform component-instance ports, row 246 debug locals (`frame_locals`), PostAnalysis audit; library-API simulations without a run access plan keep host signals (`host_signals`, #195 split) while `--engine debug` stays kernel-owned.
+- **Tools:** `simulate.engine` config key (`--engine` wins). `FSIM_KERNEL_VERIFY` replays compiled SystemVerilog thread activations (af3); see the replay gaps below.
+- **agc1 sweep regressions fixed (before agc2):**
+  - nvc conv12, conv16, elab14, elab19, elab22, issue405, issue714, issue1074, issue1094: a matured kernel projected transaction did not reach wired formals or conversions; `follow_slot_update` now propagates it as `commit_round` does (14.7.3.3).
+  - vests tc744, nvc vests41: a behavioral thread's jump into its expanded family accesses was mapped to the end of the body (`map_target`).
+  - nvc ieee16: logic9 registers reached the real/math payload through the generic bridge (`numeric_register`).
+  - nvc wait12: a postponed process's delayed write had no timer armed after a region run (`run_hosted_region`).
+  - ivtest sv_export5, sv_ps_method1, sv_ps_method3, verilator t_package_verb, t_static_init_pkg_order: package name initializers.
+  - verilator 69 and sv-tests 18 SVA cases in the AOT sweep: the body cache did not serialize `sva_plans` (bodies magic v11).
+  - Regression fixture `tests/fixtures/vhdl/behavioral_process/kernel_paths.vhd` covers the four kernel paths; each part fails on agc1.
+
+**Gate (archive `agc2`):**
+- **ct4:** normal 1639/1643, strict 1638/1643, verify 1630/1643, mt4 1639/1643. Known gaps in every variant: `uvm_phase_tlm` x2 (static calls on a parameterized-class specialization lose the specialization, 8.25.1; owner 11-09 backlog) and `vpi-model` x2 (`parrtype2` typedef name; owner 11-09 backlog). Verify and strict: the replay gaps below.
+- **Sweeps `agc2g` and `agc2ga`:** 0 losses and 0 gains against `ae4g` and `ae4ga` in all six suites.
+- **cocotb against `ae4`:** +0 -0 in all four configurations.
+- **Census:** 0 losses in both modes; host=0 for every admitted case; `kernel_deopts` 0 cases (ae4: 2 / 11). Hosted only verilator t_wait_order WaitOrder (as ae4).
+- **vgate:** rc 0. **`collapse_fuzz` seeds 1-200:** 0 failures.
+- **D6:** skipped at this gate (owner 11-09); `ae4-g5` stays the last campaign. Simulate peak RSS on original_throughput (no library, same workspace recipe): agc1 677-684 MB, sd1 717-731 MB, ae4 779-797 MB, so the ae4 +54 MB is gone; not re-measured under D6 conditions.
+
+| Suite | ae4g passed / in scope | agc2g passed / in scope | Excluded (agc2g) |
+|---|---:|---:|---:|
+| ivtest | 2633 / 2633 | 2633 / 2633 | 278 |
+| nvc | 1257 / 1257 | 1257 / 1257 | 225 |
+| sv-tests | 1495 / 1495 | 1495 / 1495 | 2 |
+| verilator | 2070 / 2070 | 2070 / 2070 | 345 |
+| vests | 3663 / 3663 | 3663 / 3663 | 2 |
+| vhdl-compliance | 65 / 65 | 65 / 65 | 7 |
+| cocotb 2.1 Verilog | 708 / 708 | 708 / 708 | 1 |
+| cocotb 2.1 VHDL | 646 / 646 | 646 / 646 | 1 |
+| cocotb master Verilog | 735 / 735 | 735 / 735 | 1 |
+| cocotb master VHDL | 666 / 666 | 666 / 666 | 1 |
+
+**Verify thread-replay gaps (backlog, 11-09 freeze).** Nine tests fail only under `FSIM_KERNEL_VERIFY`, and `inline-ops-sampled-logic9` only under strict with its own verify step. After a side review asked for per-case proof, each was traced; none shows a wrong compiled value (`.local-artifacts/followups/verify-thread-replay-gaps-1109.md`):
+- A private frame's array restore at `CallableFramePop` is not in the generic record (`sv_mutable_index_callable_fold_batch58`).
+- A host write the compiled run mirrors into a kernel slot is only recorded by the reference (`sv_language_details_batch51`, cmos; both sides make the same host write).
+- `FileScan` (`$sscanf`, `$fscanf`, `$value$plusargs`) signal and host targets are not in the generic record, so the reference reads stale values (`sv_sscanf_*`, `sv_sformat_packed_output_batch58`, `static-kernel-behavioral`, `plusargs`); the tests check the scanned values themselves and the compiled run passes them.
+- `verify_writes` reads a kind-2 entry (an unpacked-array element NBA, indexed into `nba_`) as a kind-1 pending write and crashes (`systemverilog-scheduling-witnesses`, `static-kernel-image`, fixed_array_write at O2).
+- Verify switches native units off, so hosted assertion processes run on the interpreter, which strict refuses (`inline-ops-sampled-logic9`).
+- The verify messages now name the first differing word with both values, the operation type, and whether the host writes agree (message text only; built after `agc2`).
+
+**Backlog (found in this wave, not regressions):** the SV->VHDL extra in-between value on v4 (ag5, `sv_region_leaf`); multiclocked non-sequence roots stay refused; kernel-order replay for library-API simulations; strings, containers and private arrays in recursive VHDL frames; UVM state in the save file (#188); #183 idle plug-in cost.
+
 ### 2026-11-08: Wave AE gate: SVA operations in the kernel, wide operations inline, save/restart/reset, conformance rows (this commit, sweeps `ae4g`, `ae4ga`)
 
 This commit holds everything since `bf5d40be`. That is waves Y through AE (#166, #172–#191, #128/#185, #150, #109, #186) under the 11-07 scope freeze (`.local-artifacts/followups/freeze-1107.md`), and the fixes for the ae3 sweep regressions. Design notes for #166 and #186 are in the entries below and in the Wave AC/AD/AE sections at the end of this file.
@@ -6153,7 +6210,7 @@ Header (`layout::Header`, 40 words, the rest zero):
 | 4 | `h_steps_active` | attempts with stepping plus pending step requests; step records are produced only while it is nonzero |
 | 5 | `h_next_serial` | serial of the next attempt |
 | 6 | `h_time` | time step of the last tick |
-| 7, 8 | `h_clocks_count`, `h_clocks_off` | clocks of a multiclocked plan (0 otherwise); region of `2 * count` words: tick count of each clock, then the time step of each clock's last tick |
+| 7, 8 | `h_clocks_count`, `h_clocks_off` | clocks of a multiclocked plan (0 otherwise); region of `3 * count` words: tick count of each clock, then the time step of each clock's last tick, then 1 for each clock that ticked in the evaluation in progress |
 | 9, 10, 11 | `h_attempts_off`, `_count`, `_cap` | attempt table, stride 5 |
 | 12 .. 15 | `h_outcomes_off`, `_head`, `_count`, `_cap` | outcome ring, stride 4 |
 | 16 .. 19 | `h_started_off`, `_head`, `_count`, `_cap` | start-time ring, stride 1 |
@@ -6218,3 +6275,25 @@ Written by worker ae6; built and gated on `ae4` (2026-11-08; the six-suite table
 - **Layout 2** of the attempt block (`sva::layout::magic` 0x5356'4131'0002): header words 33-35 (above), event stride 10 (the guard's source position, for `matched_exprs`). **Plan text `sva3`** adds one source span per guard (`semantic::sva::GuardSpan`).
 - **Strict stepping** (owner, 39.5.2): `Monitor::request_step` refuses a start time at or before the last tick's time step and a running attempt; `Interpreter::set_sva_step` and `Simulation::set_assertion_step` report it, `vpi_control` fails with a `vpi_chk_error` message.
 - **Kernel image and schemas** (the lead serializes): the kernel image magic changes with the three `KOp`s and the frame field; the run-state schema changes with `sva_pop_serial` replacing `sva_outcome_starts`, the block layout and the step record.
+
+
+## Wave AF: #186 follow-ups - the attempt automaton as generated code, and kernel reads for wide, Logic9 and global-clocking sampled values
+
+Written by worker af6; built and gated on `agc2` (2026-11-09; the six-suite table is in the gate entry in §4).
+
+- **A. Per-plan attempt automaton** (`SvaAutomatonEmitter`, `src/compiler/static_kernel_codegen.cpp`). `KOp::sva_tick` with `z != 0` (the plan's index plus one in `CompiledBody::sva_plans`; `imm_a` the guards and start registers, `imm_b` the disabled register and guard count, all relative to `y`) calls one generated function per directive; one internal function per sequence runs `Matcher::step`, and the tick function runs `Monitor::tick` and `Instance::step` of the supported shapes. Everything works on the attempt block through the directive's entry in the kernel's table (reloaded at every use; growth moves the block). The record words written are those of `Instance::encode` and `Matcher::encode`, so the host decodes them for `finish`, `kill_attempt`, save and restart, and a restored block continues in generated code.
+  - **Covered** (`sva_native_plan`, `simir_static_kernel_compiled.cpp`): a single clocked plan with literal bounds whose root is a sequence (`assert`, `cover`, `cover sequence` with `every_match`), `not` of a sequence, or an overlapped or non-overlapped implication or followed-by (`|->`, `|=>`, `#-#`, `#=#`) of a sequence and a sequence or vacuous consequent, over sequences of check, delay, fork, jump and repetition counter (`counter_set`, `counter_branch`, `counter_increment`) and match, with any number of counters and steps. Outcomes, vacuity, `disable iff`, the attempt-start reports (the started ring is filled only while `frame.assertion_starts` is set; `fsim_sk_sva_post` runs the hooks), step events and the strict step rule (39.5.2: requests are expired and erased in generated code), `$assertoff` (`fsim_sk_sva_filter`), and the guards of a wide register (more than 64) are as the host's.
+  - **Host tick, with a profile reason** (`fsim-kernel: generic <n> sva_tick_host:<reason>` under `FSIM_PROFILE_KERNEL`, and `reason=effect:sva_tick`): `plan` (a malformed plan; multiclocked plans are generated code too). These run `sva::Monitor::tick` on the same block.
+  - **Layout 4** (round 3): `throughout` and `first_match` are generated code. A record's throughout entries are `{guard, from, line, column}` (the host kept `{guard, from}` and lost the condition's position after a decode); the generated matcher keeps threads in a working form (maximum entries and groups of the program, unused ones zero) and encodes the kept threads at the end of the step, after the threads of a matched `first_match` group are dropped.
+- **Property trees of fixed operands** (family 1): not (of any property), and, or, implies, iff, if/else, nexttime, accept_on, reject_on and vacuous over sequences are generated code, node by node (`emit_node`/`skip_node`): an instance's record is its header, its matcher (a started sequence) and its operands (position, instance) in creation order; a decided instance is its header alone, so a parent keeps its decided operands until it resolves. Cases `t1`-`t12` of `assertion_automaton`.
+- **Started-list kinds** (family 2): `always`/`s_always`, `eventually`/`s_eventually` (windows with literal, slot or `$` bounds) and `until`/`s_until`/`until_with` are generated code in `emit_node`: the started instances (`n_started`) and until pairs (`n_until`, flag 64) are counted loops over child records, with the host's early exits (an operand that resolves the property stops the stepping of the rest, `until`'s judged-pair return skips the front pruning, which shifts the output record). Cases `u1`-`u12` of `assertion_automaton`.
+- **Any consequent** (family 3): `|->`, `|=>`, `#-#` and `#=#` with a consequent of any supported property, at the root or nested in a tree, are generated code in `emit_node` (antecedent matcher, counted started consequents, `antecedent_done`/`satisfied` flags and the consequent count in the header). Cases `v1`-`v9` of `assertion_automaton`.
+- **Multiclocked plans** (round 9): a sequence plan with several clocks is generated code. The tick function runs `Monitor::tick`'s prologue: each clock's tick guard (a clock ticks at most once in a time step) updates its tick count, last-tick time and `ticked` word (the third word of each clock, so the clock region is `3 * count` words), a tick with no clock ticking and no `disable iff` ends the evaluation, and the property counts ticks of the leading clock and starts attempts only on them. The matcher classifies each seeded thread as `Matcher::step` does (a thread on a clock that did not tick, or one still switching, is kept at once and does not run), and a running thread reads its own clock's tick count as `now` (a slot reloaded at every program counter). The `clock` op sets the thread's clock and either continues in the time step (`##0` with the target clock already ticked) or keeps the thread switching with the evaluation's time. Case `assertion_multiclock` (an independent model of 16.13.1, six plans over four clocks). Only a malformed plan keeps the host tick.
+- **Joins** (round 8): `and`, `intersect` and `within` sequences are generated code. A thread carries its join references `{join, side}` (working form sized by the deepest join nesting of the sequence, found by a data-flow over its program; the same for throughout entries and first_match groups; no count caps remain); the matcher record's join table (id, kind, continuation thread, the two sides' end ticks in ascending order) is decoded into the scratch log at the start of a step (tags 4 join, 5 end tick) and pruned by `collect_joins` (live sides, productive joins, threads of pruned joins) before the kept threads and surviving joins are encoded.
+- **Layout 5** (round 7): the block carries the plan's per-instance bounds (`h_bounds_off`: a region of count then values, filled by `Monitor::build`); generated code reads a slot bound from it, so instances with different delay or repetition parameters share one plan text and stay in generated code. Test `fsim.application.inline-ops-assertion-bounds`.
+- **Layout 3** of the block (`sva::layout::magic` 0x5356'4131'0003): the scratch region (header words 36-38) that a sequence step works in (a log of thread entries and visited keys; empty between ticks, kept across growth by `h_scratch_used`). `fsim_sk_sva_grow` is the one helper of the automaton (`reason=capacity:sva_tick`): it grows attempts (0), outcomes (1), started (2), events (3), requests (4), heap (5) or scratch (6) as the host's own pushes do (`AttemptStorage::reserve_region`). A matcher step has no thread limit (owner, 11-08): the host's 65536-thread error is removed and thread storage grows with the block. The monitor is created at the first tick by `fsim_sk_sva_ensure`.
+  - **Check mode**: `FSIM_KERNEL_SVA_CHECK=1` ticks a reference `sva::Monitor` on a copy of the block after every generated tick and compares counters, attempt rows and records, and the outcome, start, step-event and request queues; a difference ends the run with the first differing word. `FSIM_KERNEL_VERIFY` replays VHDL members only and disables native units, so it cannot cover this code; the tests below set the check variable through `FSIM_KERNEL_ENV`. `FSIM_KERNEL_SVA_NATIVE=0` keeps every tick on the host.
+- **B. Kernel reads.**
+  - Sampled values of wide signals: `$sampled` (Preponed words) and `$past`/clocked `$sampled` (history ring entry) into a chunked register are `KOp::wide_load` sub 4 and 5; `$rose`, `$fell`, `$stable`, `$changed` of a wide or Logic9 signal are `KOp::sva_sampled_load` with aux bit 1 (imm_a chunks and, from bit 32, 1 for a Logic9 ring; imm_b the default's constants in `CompiledBody::wide_constants`, laid out as a ring entry). A Logic9 ring read into a Logic4 register is coerced (21.2.1.3); into a wide register with masks it keeps all nine codes. A SystemVerilog reader sees a std_logic value through the Logic4 mapping (21.2.1.3: H is 1, L is 0, U/W/- are x) in the interpreter, the host `$sampled` read and the kernel alike (owner, Q3); the history keeps the nine codes for `$stable`/`$changed`. The host section version is 3 (attempt block layout 4).
+  - `$future_gclk` is the signal's current value: a plain read. `$rising_gclk`, `$falling_gclk`, `$steady_gclk` and `$changing_gclk` still read the host (they compare the current value with the sampled one and need a slot read in `KOp::sva_sampled_load`).
+- **Tests**: `fsim.application.inline-ops-assertion-automaton`, `-sampled-wide`, `-sampled-logic9`, `-sampled-gclk`, and `fsim.compliance.sv_property_kinds_checked.{interpreter,v4}` (the host-tick kinds).

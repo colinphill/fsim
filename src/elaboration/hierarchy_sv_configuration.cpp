@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "hierarchy_builder_internal.hpp"
+#include "fsim/support/stack_growth.hpp"
 
 namespace fsim::elaboration {
 namespace {
@@ -42,9 +43,9 @@ namespace {
         }
         for (std::size_t index = 0U;
             index < left_expression.operands.size(); ++index) {
-            if (!same_compiled_extern_expression(compiled,
+            if (!support::with_stack([&] { return same_compiled_extern_expression(compiled,
                     left_expression.operands[index],
-                    right_expression.operands[index], depth + 1U)) {
+                    right_expression.operands[index], depth + 1U); })) {
                 return false;
             }
         }

@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "hierarchy_sv_type_layout_internal.hpp"
+#include "fsim/support/stack_growth.hpp"
 
 #include "elaborator_internal.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
+#include "fsim/support/active_set.hpp"
 #include "hierarchy_sv_constant_evaluator.hpp"
 #include "hierarchy_sv_parameters_internal.hpp"
 
@@ -87,7 +89,7 @@ std::optional<std::int64_t> sized_range_bound(
                                    const semantic::ExpressionId id,
                                    const std::size_t depth) -> bool {
         const auto view = specialization.find_expression(id);
-        if (!view || view->systemverilog == nullptr || depth > 64U) {
+        if (!view || view->systemverilog == nullptr) {
             return false;
         }
         const auto& source = *view->systemverilog;
@@ -99,7 +101,7 @@ std::optional<std::int64_t> sized_range_bound(
         }
         return std::ranges::any_of(source.operands,
             [&](const semantic::ExpressionId operand) {
-                return self(self, operand, depth + 1U);
+                return support::with_stack([&] { return self(self, operand, depth + 1U); });
             });
     };
     const auto width_aware = [&]() -> std::optional<std::int64_t> {
@@ -482,14 +484,21 @@ systemverilog_vpi_declared_type(
             ? declaration->systemverilog->scope
             : specialization.scope();
     };
+    support::ActiveSet<semantic::sv::TypeReference> shape_active;
     const auto shape = [&](const auto& self,
                            const semantic::sv::TypeReference& input,
                            const semantic::ScopeId use_scope,
                            const unsigned depth) -> std::optional<Descriptor> {
-        if (depth > 32U || input.virtual_interface
+        if (input.virtual_interface
             || !input.class_identity.empty() || input.type_of) {
             return std::nullopt;
         }
+        // A type that names itself again has no shape.
+        if (!shape_active.enter(input)) {
+            return std::nullopt;
+        }
+        const support::ActiveSet<semantic::sv::TypeReference>::Entry
+            shape_entry { shape_active };
         // A fixed unpacked array of its element type, its dimensions
         // outermost first (IEEE 1800-2023 7.4.2).
         if (!input.unpacked_dimensions.empty()
@@ -502,7 +511,7 @@ systemverilog_vpi_declared_type(
             if (element_type.value_form == Form::static_array) {
                 element_type.value_form.reset();
             }
-            auto element = self(self, element_type, use_scope, depth + 1U);
+            auto element = support::with_stack([&] { return self(self, element_type, use_scope, depth + 1U); });
             if (!element) {
                 return std::nullopt;
             }
@@ -527,7 +536,7 @@ systemverilog_vpi_declared_type(
         if (const auto effective
             = resolver.effective_systemverilog_type(input, use_scope);
             effective && *effective != input) {
-            return self(self, *effective, use_scope, depth + 1U);
+            return support::with_stack([&] { return self(self, *effective, use_scope, depth + 1U); });
         }
         if (input.packed_over_named_type) {
             return std::nullopt;
@@ -567,7 +576,7 @@ systemverilog_vpi_declared_type(
             case Form::alias:
             case Form::type_parameter:
             case Form::packed_integral:
-                element = self(self, record->base, record_scope, depth + 1U);
+                element = support::with_stack([&] { return self(self, record->base, record_scope, depth + 1U); });
                 if (!element) {
                     return std::nullopt;
                 }
@@ -587,7 +596,7 @@ systemverilog_vpi_declared_type(
                     || record->form == Form::packed_union;
                 aggregate.is_signed = aggregate.packed && record->base.signed_value;
                 for (const auto& member : record->members) {
-                    auto child = self(self, member.type, record_scope, depth + 1U);
+                    auto child = support::with_stack([&] { return self(self, member.type, record_scope, depth + 1U); });
                     if (!child) {
                         return std::nullopt;
                     }
@@ -604,7 +613,7 @@ systemverilog_vpi_declared_type(
                 // An enumeration without a base type is an int (6.19).
                 auto base = record->base.target.resolved()
                         || !record->base.target.spelling.empty()
-                    ? self(self, record->base, record_scope, depth + 1U)
+                    ? support::with_stack([&] { return self(self, record->base, record_scope, depth + 1U); })
                     : std::optional<Descriptor> { };
                 if (!base) {
                     base.emplace();
@@ -814,25 +823,33 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
         }
         ranges.resize(ranges.size() - named.ranges.size());
     };
+    support::ActiveSet<semantic::sv::TypeReference> build_active;
     const auto build = [&](const auto& self,
                            const semantic::sv::TypeReference& input,
                            const semantic::ScopeId use_scope,
                            const unsigned depth) -> std::optional<Typespec> {
         // A virtual interface is only the element of a fixed array here
         // (below); a scalar one has its typespec from the declaration.
-        if (depth > 32U || input.type_of
+        if (input.type_of
             || (input.virtual_interface && input.unpacked_dimensions.empty()
                 && !input.container_form)
             || (input.virtual_interface && input.container_form
                 && *input.container_form != Form::static_array)) {
             return std::nullopt;
         }
+        // A type that names itself again has no typespec.
+        if (!build_active.enter(input)) {
+            return std::nullopt;
+        }
+        const support::ActiveSet<semantic::sv::TypeReference>::Entry
+            build_entry { build_active };
         // An unpacked dimension, leftmost first, or a dynamic array, queue
         // or associative array (IEEE 1800-2023 7.4, 7.5, 7.8, 7.10).
         if (input.container_form || !input.unpacked_dimensions.empty()) {
             Typespec array;
             array.kind = Kind::Array;
             auto element = input;
+            bool nested_container = false;
             if (input.container_form) {
                 array.array_kind
                     = *input.container_form == Form::dynamic_array
@@ -847,7 +864,7 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
                     } else {
                         element.container_form.reset();
                     }
-                    auto inner = self(self, element, use_scope, depth + 1U);
+                    auto inner = support::with_stack([&] { return self(self, element, use_scope, depth + 1U); });
                     if (!inner) {
                         return std::nullopt;
                     }
@@ -862,14 +879,25 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
                                     *input.associative_index_metadata)
                             : semantic::sv::TypeReference { };
                         index_reference.target = *input.associative_index;
-                        if (auto key = self(
-                                self, index_reference, use_scope, depth + 1U)) {
+                        if (auto key = support::with_stack([&] { return self(
+                                self, index_reference, use_scope, depth + 1U); })) {
                             array.index.push_back(std::move(*key));
                         }
                     }
                     return array;
                 }
-                element.container_form.reset();
+                // A fixed array of dynamic arrays, queues or associative
+                // arrays has that container as its element (`int a[2][$]`,
+                // IEEE 1800-2023 7.4, 7.10).
+                if (!input.container_element_types.empty()
+                    && input.container_element_types.front().container_form
+                    && *input.container_element_types.front().container_form
+                        != Form::static_array) {
+                    element = input.container_element_types.front();
+                    nested_container = true;
+                } else {
+                    element.container_form.reset();
+                }
             }
             for (const auto& range : input.unpacked_dimensions) {
                 const auto bounds = range_of(range);
@@ -878,7 +906,26 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
                 }
                 array.ranges.push_back(*bounds);
             }
-            element.unpacked_dimensions.clear();
+            if (!nested_container) {
+                element.unpacked_dimensions.clear();
+            }
+            // The use's own form is the container's (static_array and the
+            // like), not the element's; an element that is itself a dynamic
+            // array, queue or associative array keeps its form (`int
+            // a[2][$]`, IEEE 1800-2023 7.4, 7.10).
+            if (element.value_form && *element.value_form != Form::string
+                && *element.value_form != Form::packed_integral
+                && *element.value_form != Form::enumeration
+                && *element.value_form != Form::packed_structure
+                && *element.value_form != Form::packed_union
+                && *element.value_form != Form::unpacked_structure
+                && *element.value_form != Form::unpacked_union
+                && *element.value_form != Form::class_handle
+                && *element.value_form != Form::dynamic_array
+                && *element.value_form != Form::queue
+                && *element.value_form != Form::associative_array) {
+                element.value_form.reset();
+            }
             // The element of an array of virtual interfaces is an interface
             // typespec, named by its typedef when it was declared through
             // one (IEEE 1800-2023 37.29 example 1, 37.30).
@@ -891,7 +938,7 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
                                       != element.interface_type
                               ? std::string_view { element.target.spelling }
                               : std::string_view { }) }
-                : self(self, element, use_scope, depth + 1U);
+                : support::with_stack([&] { return self(self, element, use_scope, depth + 1U); });
             if (!inner) {
                 return std::nullopt;
             }
@@ -914,10 +961,16 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
         // its name; the effective type, which expands it, is only for an
         // unbound name or a type parameter.
         if (record == nullptr || record->form == Form::type_parameter) {
-            if (const auto effective
+            if (auto effective
                 = resolver.effective_systemverilog_type(input, use_scope);
                 effective && *effective != input) {
-                return self(self, *effective, use_scope, depth + 1U);
+                // The named type packed dimensions were composed over is
+                // part of the use, not of what the lookup returns.
+                if (!effective->composed_over.target.valid()) {
+                    effective->composed_over = input.composed_over;
+                }
+                auto expanded = support::with_stack([&] { return self(self, *effective, use_scope, depth + 1U); });
+                return expanded;
             }
         }
         // A resolved named type's reference carries its flattened width as
@@ -943,6 +996,44 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
                 return std::nullopt;
             }
             dimensions.push_back(*bounds);
+        }
+        // Packed dimensions composed over a named non-aggregate type left a
+        // bare vector; the array is of that named type (7.4.1, 37.25). The
+        // dimensions of the element are the trailing ones whose bit count
+        // is the element's.
+        if (record == nullptr && input.composed_over.target.valid()
+            && !dimensions.empty()) {
+            semantic::sv::TypeReference element_reference;
+            element_reference.target = input.composed_over;
+            if (auto element
+                = support::with_stack([&] { return self(self, element_reference, use_scope, depth + 1U); });
+                element && !element->name.empty()) {
+                const auto element_bits = bits(bits, *element);
+                const auto product = [](const auto& ranges) {
+                    std::uint64_t result = 1U;
+                    for (const auto& range : ranges) {
+                        result *= elaboration_detail::index_distance(
+                                      range.left, range.right)
+                            + 1U;
+                    }
+                    return result;
+                };
+                const auto total = product(dimensions);
+                auto outer = dimensions;
+                if (element_bits != 0U && total % element_bits == 0U) {
+                    while (!outer.empty()
+                        && product(outer) > total / element_bits) {
+                        outer.pop_back();
+                    }
+                    if (!outer.empty() && product(outer) == total / element_bits) {
+                        Typespec array;
+                        array.kind = Kind::PackedArray;
+                        array.ranges = std::move(outer);
+                        array.element.push_back(std::move(*element));
+                        return array;
+                    }
+                }
+            }
         }
         if (record == nullptr) {
             const auto& spelling = input.target.spelling;
@@ -1041,9 +1132,9 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
                 }
                 if (form == Form::associative_array
                     && record->container->associative_index) {
-                    if (auto key = self(self,
+                    if (auto key = support::with_stack([&] { return self(self,
                             *record->container->associative_index,
-                            record_scope, depth + 1U)) {
+                            record_scope, depth + 1U); })) {
                         array.index.push_back(std::move(*key));
                     }
                 }
@@ -1074,7 +1165,7 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
                 element.packed_range.reset();
                 element.packed_over_named_type = false;
             }
-            auto inner = self(self, element, record_scope, depth + 1U);
+            auto inner = support::with_stack([&] { return self(self, element, record_scope, depth + 1U); });
             if (!inner) {
                 return std::nullopt;
             }
@@ -1131,7 +1222,7 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
             case Form::queue:
             case Form::associative_array:
             case Form::string: {
-                named = self(self, record->base, record_scope, depth + 1U);
+                named = support::with_stack([&] { return self(self, record->base, record_scope, depth + 1U); });
                 if (!named) {
                     return std::nullopt;
                 }
@@ -1169,7 +1260,7 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
                 aggregate.tagged = record->form == Form::tagged_union;
                 aggregate.is_signed = aggregate.packed && record->base.signed_value;
                 for (const auto& member : record->members) {
-                    auto child = self(self, member.type, record_scope, depth + 1U);
+                    auto child = support::with_stack([&] { return self(self, member.type, record_scope, depth + 1U); });
                     if (!child) {
                         return std::nullopt;
                     }
@@ -1188,7 +1279,7 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
                 // An enumeration without a base type is an int (6.19).
                 auto base = record->base.target.resolved()
                         || !record->base.target.spelling.empty()
-                    ? self(self, record->base, record_scope, depth + 1U)
+                    ? support::with_stack([&] { return self(self, record->base, record_scope, depth + 1U); })
                     : std::optional<Typespec> { };
                 if (!base) {
                     base.emplace();
@@ -1236,7 +1327,10 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
             }
         }
         drop_named(dimensions, *named);
-        if (dimensions.empty()) {
+        // An unpacked array is not a packed element: the packed dimensions
+        // a use inherits from the typedef's element type belong to the
+        // typedef's own levels, not to a wrapper over it (7.4.1, 37.25).
+        if (dimensions.empty() || named->kind == Kind::Array) {
             return named;
         }
         // Packed dimensions over a named type (7.4.1).

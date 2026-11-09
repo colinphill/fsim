@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "vhdl_hir_type_validation.hpp"
+#include "fsim/support/stack_growth.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
 #include "fsim/support/vhdl_standard_enumeration.hpp"
 
@@ -576,8 +577,7 @@ private:
                 && contextual_result_declaration(definition->declaration);
         };
         auto root = prefix;
-        for (std::size_t depth = 0U; root && root->vhdl != nullptr
-             && depth < 64U; ++depth) {
+        while (root && root->vhdl != nullptr) {
             if (root->vhdl->kind == semantic::vhdl::ExpressionKind::name
                 && root->vhdl->text.find('.') != std::string::npos) {
                 return result_object(root);
@@ -1151,9 +1151,6 @@ private:
         const semantic::ExpressionId expression_id,
         const std::size_t depth = 0U) const
     {
-        if (depth > 64U) {
-            return std::nullopt;
-        }
         const auto expected_type = subtype_type(expected_subtype);
         const auto expected_root = expected_type
             ? enumeration_root_type(*expected_type)
@@ -1191,8 +1188,8 @@ private:
             if (!locally_static(expression_id)) {
                 return std::nullopt;
             }
-            return enumeration_index_value(
-                expected_subtype, value.operands.front(), depth + 1U);
+            return support::with_stack([&] { return enumeration_index_value(
+                expected_subtype, value.operands.front(), depth + 1U); });
         }
         const auto direct_literal
             = value.kind == Kind::logic_literal
@@ -1286,9 +1283,9 @@ private:
                 // Keep the selected enum identity through the initializer;
                 // generic integral folding reads a literal such as '1' as 1.
                 return declaration->vhdl->initializer
-                    ? enumeration_index_value(
+                    ? support::with_stack([&] { return enumeration_index_value(
                           expected_subtype,
-                          *declaration->vhdl->initializer, depth + 1U)
+                          *declaration->vhdl->initializer, depth + 1U); })
                     : std::nullopt;
             } else if (!direct_literal
                 || declaration->vhdl->form
@@ -2235,7 +2232,7 @@ private:
     bool contains_indirect(const SubtypeIndication& subtype, std::size_t depth) const
     {
         const auto* definition = root_definition(subtype);
-        if (definition == nullptr || depth > 16U) {
+        if (definition == nullptr) {
             return false;
         }
         switch (definition->form) {
@@ -2246,11 +2243,11 @@ private:
             return true;
         case TypeForm::array:
             return definition->element_subtype
-                && contains_indirect(*definition->element_subtype, depth + 1U);
+                && support::with_stack([&] { return contains_indirect(*definition->element_subtype, depth + 1U); });
         case TypeForm::record:
             return std::ranges::any_of(definition->record_elements,
                 [&](const semantic::vhdl::RecordElement& element) {
-                    return contains_indirect(element.subtype, depth + 1U);
+                    return support::with_stack([&] { return contains_indirect(element.subtype, depth + 1U); });
                 });
         default:
             return false;
@@ -2298,7 +2295,7 @@ private:
     bool reads_nonstatic_object(const semantic::ExpressionId id, const std::size_t depth = 0U) const
     {
         const auto found = specialization_.find_expression(id);
-        if (!found || found->vhdl == nullptr || depth > 16U) {
+        if (!found || found->vhdl == nullptr) {
             return false;
         }
         const auto& value = *found->vhdl;
@@ -2316,7 +2313,7 @@ private:
             }
         }
         return std::ranges::any_of(value.operands, [&](const semantic::ExpressionId operand) {
-            return reads_nonstatic_object(operand, depth + 1U);
+            return support::with_stack([&] { return reads_nonstatic_object(operand, depth + 1U); });
         });
     }
 
@@ -2331,8 +2328,8 @@ private:
         }
         const auto& scopes = specialization_.design().semantics.scopes();
         auto scope = user->vhdl->scope;
-        for (std::size_t depth { }; depth < 64U && scope.valid() && scope.value() < scopes.size();
-             ++depth) {
+        // Each step moves to the parent scope, so the walk ends.
+        while (scope.valid() && scope.value() < scopes.size()) {
             if (scope == declaration->vhdl->scope) {
                 return true;
             }
@@ -2349,7 +2346,7 @@ private:
     bool reads_signal_or_variable(const semantic::ExpressionId id, const std::size_t depth = 0U) const
     {
         const auto found = specialization_.find_expression(id);
-        if (!found || found->vhdl == nullptr || depth > 16U) {
+        if (!found || found->vhdl == nullptr) {
             return false;
         }
         const auto& value = *found->vhdl;
@@ -2365,7 +2362,7 @@ private:
             }
         }
         return std::ranges::any_of(value.operands, [&](const semantic::ExpressionId operand) {
-            return reads_signal_or_variable(operand, depth + 1U);
+            return support::with_stack([&] { return reads_signal_or_variable(operand, depth + 1U); });
         });
     }
 
@@ -4278,11 +4275,11 @@ private:
         case TypeForm::protected_body:
             return { OperandClass::other, root };
         case TypeForm::scalar: {
-            if (!definition->scalar_range || depth > 8U) {
+            if (!definition->scalar_range) {
                 return { };
             }
             const auto bound_class = [&](const std::optional<semantic::ExpressionId> id) {
-                return id ? operand_type(*id, depth + 1U).kind : OperandClass::unknown;
+                return id ? support::with_stack([&] { return operand_type(*id, depth + 1U); }).kind : OperandClass::unknown;
             };
             const auto left = bound_class(definition->scalar_range->left_expression);
             const auto right = bound_class(definition->scalar_range->right_expression);
@@ -4306,7 +4303,7 @@ private:
         const semantic::ExpressionId id, const std::size_t depth = 0U) const
     {
         const auto expression = specialization_.find_expression(id);
-        if (!expression || expression->vhdl == nullptr || depth > 8U) {
+        if (!expression || expression->vhdl == nullptr) {
             return { };
         }
         const auto& value = *expression->vhdl;
@@ -4353,7 +4350,7 @@ private:
                 if (const auto type = named_type(mark, value.scope)) {
                     subtype.type_mark.target = *type;
                 }
-                return subtype_operand_type(subtype, depth + 1U);
+                return support::with_stack([&] { return subtype_operand_type(subtype, depth + 1U); });
             }
             // T'LEFT, T'RIGHT, T'LOW and T'HIGH of a scalar type mark have
             // the type of T (IEEE 1076-1993 14.1).
@@ -4369,7 +4366,7 @@ private:
                         subtype.type_mark.spelling = prefix->vhdl->text;
                         subtype.type_mark.target = *type;
                         const auto result
-                            = subtype_operand_type(subtype, depth + 1U);
+                            = support::with_stack([&] { return subtype_operand_type(subtype, depth + 1U); });
                         if (result.kind == OperandClass::enumeration
                             || result.kind == OperandClass::integer
                             || result.kind == OperandClass::physical
@@ -4384,7 +4381,7 @@ private:
             if (value.operands.size() == 1U
                 && (value.text == "-" || value.text == "+" || value.text == "abs")
                 && predefined_operator(value)) {
-                const auto operand = operand_type(value.operands.front(), depth + 1U);
+                const auto operand = support::with_stack([&] { return operand_type(value.operands.front(), depth + 1U); });
                 if (operand.kind == OperandClass::integer
                     || operand.kind == OperandClass::floating
                     || operand.kind == OperandClass::physical) {
@@ -4396,8 +4393,8 @@ private:
             if (value.operands.size() != 2U || !predefined_operator(value)) {
                 return { };
             }
-            const auto left = operand_type(value.operands[0], depth + 1U);
-            const auto right = operand_type(value.operands[1], depth + 1U);
+            const auto left = support::with_stack([&] { return operand_type(value.operands[0], depth + 1U); });
+            const auto right = support::with_stack([&] { return operand_type(value.operands[1], depth + 1U); });
             const auto same = [&]() -> OperandType {
                 if (types_conflict(left, right)) {
                     return { };
@@ -4604,8 +4601,8 @@ private:
             }
         }
         const auto& scopes = specialization_.design().semantics.scopes();
-        for (std::size_t depth { }; depth < 64U && scope.valid() && scope.value() < scopes.size();
-             ++depth) {
+        // Each step moves to the parent scope, so the walk ends.
+        while (scope.valid() && scope.value() < scopes.size()) {
             if (callable_scopes_->contains(scope.value())) {
                 return true;
             }
@@ -4900,7 +4897,7 @@ private:
                             const auto nested = specialization_.find_expression(association.value);
                             return level + 1U < dimensions && nested && nested->vhdl != nullptr
                                 && nested->vhdl->kind == semantic::vhdl::ExpressionKind::aggregate
-                                && self(self, *nested->vhdl, level + 1U);
+                                && support::with_stack([&] { return self(self, *nested->vhdl, level + 1U); });
                         });
                 };
                 const bool others = has_others(has_others, *operand->vhdl, 0U);
@@ -5078,21 +5075,18 @@ private:
         std::unordered_set<std::uint32_t>& active_declarations,
         const std::size_t depth) const
     {
-        if (depth > 64U) {
-            return false;
-        }
         const auto range_is_static = [&](const RangeConstraint& constraint) {
             return (constraint.left_expression
-                       ? locally_static_expression(
+                       ? support::with_stack([&] { return locally_static_expression(
                              *constraint.left_expression,
                              active_expressions, active_declarations,
-                             depth + 1U)
+                             depth + 1U); })
                        : constraint.left.has_value())
                 && (constraint.right_expression
-                    ? locally_static_expression(
+                    ? support::with_stack([&] { return locally_static_expression(
                           *constraint.right_expression,
                           active_expressions, active_declarations,
-                          depth + 1U)
+                          depth + 1U); })
                     : constraint.right.has_value());
         };
         const auto constraints_are_static = [&](const auto& candidate) {
@@ -5114,8 +5108,7 @@ private:
                   std::unordered_set<std::uint32_t>& active_expressions,
                   std::unordered_set<std::uint32_t>& active_declarations)
             -> bool {
-            if (active_expressions.size() >= 64U
-                || !active_expressions.insert(id.value()).second) {
+            if (!active_expressions.insert(id.value()).second) {
                 return true;
             }
             const auto expression = design.find_expression(id);
@@ -5223,11 +5216,7 @@ private:
             type_id = subtype.type_mark.target;
         }
         std::unordered_set<std::uint32_t> active_types;
-        std::size_t type_depth { };
         while (type_id) {
-            if (type_depth++ >= 64U) {
-                return false;
-            }
             if (!active_types.insert(type_id->value()).second) {
                 return false;
             }
@@ -5460,8 +5449,7 @@ private:
         std::unordered_set<std::uint32_t>& active_declarations,
         const std::size_t depth = 0U) const
     {
-        if (depth > 64U
-            || !active_expressions.insert(id.value()).second) {
+        if (!active_expressions.insert(id.value()).second) {
             return false;
         }
         const auto finish = [&](const bool result) {
@@ -5477,9 +5465,9 @@ private:
             return std::ranges::all_of(
                 expression.operands,
                 [&](const semantic::ExpressionId operand) {
-                    return locally_static_expression(
+                    return support::with_stack([&] { return locally_static_expression(
                         operand, active_expressions,
-                        active_declarations, depth + 1U);
+                        active_declarations, depth + 1U); });
                 });
         };
         using Kind = semantic::vhdl::ExpressionKind;
@@ -5515,13 +5503,13 @@ private:
                 } else if (stored.form == Form::constant
                     && !stored.deferred && stored.initializer
                     && stored.subtype) {
-                    result = locally_static_subtype(
+                    result = support::with_stack([&] { return locally_static_subtype(
                                  *stored.subtype, stored.scope,
                                  active_expressions, active_declarations,
-                                 depth + 1U)
-                        && locally_static_expression(
+                                 depth + 1U); })
+                        && support::with_stack([&] { return locally_static_expression(
                             *stored.initializer, active_expressions,
-                            active_declarations, depth + 1U);
+                            active_declarations, depth + 1U); });
                 }
             }
             active_declarations.erase(declaration_id->value());
@@ -5623,12 +5611,12 @@ private:
                 const auto target = conversion_subtype(
                     type_name, expression.scope);
                 return finish(target
-                    && locally_static_subtype(
+                    && support::with_stack([&] { return locally_static_subtype(
                         *target, expression.scope, active_expressions,
-                        active_declarations, depth + 1U)
-                    && locally_static_expression(
+                        active_declarations, depth + 1U); })
+                    && support::with_stack([&] { return locally_static_expression(
                         expression.operands.front(), active_expressions,
-                        active_declarations, depth + 1U));
+                        active_declarations, depth + 1U); }));
             }
             if (equal_ignoring_ascii_case(expression.text, "'left")
                 || equal_ignoring_ascii_case(expression.text, "'right")
@@ -5643,17 +5631,17 @@ private:
                 const auto prefix = expression_subtype(
                     expression.operands.front());
                 if (!prefix
-                    || !locally_static_subtype(
+                    || !support::with_stack([&] { return locally_static_subtype(
                         *prefix, expression.scope, active_expressions,
-                        active_declarations, depth + 1U)) {
+                        active_declarations, depth + 1U); })) {
                     return finish(false);
                 }
                 return finish(std::ranges::all_of(
                     std::span { expression.operands }.subspan(1U),
                     [&](const semantic::ExpressionId operand) {
-                        return locally_static_expression(
+                        return support::with_stack([&] { return locally_static_expression(
                             operand, active_expressions,
-                            active_declarations, depth + 1U);
+                            active_declarations, depth + 1U); });
                     }));
             }
             if (!expression.referenced_name) {
@@ -5667,14 +5655,14 @@ private:
                 const auto target = conversion_subtype(
                     *expression.referenced_name, expression.scope);
                 if (target) {
-                    return finish(locally_static_subtype(
+                    return finish(support::with_stack([&] { return locally_static_subtype(
                                       *target, expression.scope,
                                       active_expressions,
-                                      active_declarations, depth + 1U)
-                        && locally_static_expression(
+                                      active_declarations, depth + 1U); })
+                        && support::with_stack([&] { return locally_static_expression(
                             expression.operands.front(),
                             active_expressions, active_declarations,
-                            depth + 1U));
+                            depth + 1U); }));
                 }
             }
             const auto resolutions = resolver.resolve_vhdl_callables(
@@ -5712,18 +5700,18 @@ private:
         case Kind::aggregate:
             return finish(std::ranges::all_of(
                 expression.associations, [&](const auto& association) {
-                    return locally_static_expression(
+                    return support::with_stack([&] { return locally_static_expression(
                                association.value, active_expressions,
-                               active_declarations, depth + 1U)
+                               active_declarations, depth + 1U); })
                         && (equal_ignoring_ascii_case(
                                 association.choice_spelling, "others")
                             || std::ranges::all_of(
                                 association.choices,
                                 [&](const semantic::ExpressionId choice) {
-                                    return locally_static_expression(
+                                    return support::with_stack([&] { return locally_static_expression(
                                         choice, active_expressions,
                                         active_declarations,
-                                        depth + 1U);
+                                        depth + 1U); });
                                 }));
                 }));
         default:
@@ -5735,9 +5723,6 @@ private:
         const semantic::ExpressionId id,
         const std::size_t depth = 0U) const
     {
-        if (depth > 64U) {
-            return false;
-        }
         const auto expression = specialization_.find_expression(id);
         if (!expression || expression->vhdl == nullptr) {
             return false;
@@ -5747,8 +5732,8 @@ private:
         if (value.kind == Kind::aggregate) {
             return std::ranges::all_of(
                 value.associations, [&](const auto& association) {
-                    return aggregate_target_name_is_locally_static(
-                        association.value, depth + 1U);
+                    return support::with_stack([&] { return aggregate_target_name_is_locally_static(
+                        association.value, depth + 1U); });
                 });
         }
         if (value.kind == Kind::name) {
@@ -5760,20 +5745,20 @@ private:
                        [&](const semantic::ExpressionId index) {
                            return locally_static(index);
                        })
-                && aggregate_target_name_is_locally_static(
-                    value.operands.front(), depth + 1U);
+                && support::with_stack([&] { return aggregate_target_name_is_locally_static(
+                    value.operands.front(), depth + 1U); });
         }
         if (value.kind == Kind::slice && value.operands.size() == 3U) {
             return locally_static(value.operands[1])
                 && locally_static(value.operands[2])
-                && aggregate_target_name_is_locally_static(
-                    value.operands.front(), depth + 1U);
+                && support::with_stack([&] { return aggregate_target_name_is_locally_static(
+                    value.operands.front(), depth + 1U); });
         }
         if (value.kind == Kind::call
             && value.text.starts_with("@vhdl-member:")
             && value.operands.size() == 1U) {
-            return aggregate_target_name_is_locally_static(
-                value.operands.front(), depth + 1U);
+            return support::with_stack([&] { return aggregate_target_name_is_locally_static(
+                value.operands.front(), depth + 1U); });
         }
         return false;
     }
@@ -5805,7 +5790,7 @@ private:
             return;
         }
         // An indexed or sliced target denotes part of its prefix.
-        for (std::size_t depth { }; depth < 8U; ++depth) {
+        for (;;) {
             const auto part = specialization_.find_expression(target_id);
             if (!part || part->vhdl == nullptr
                 || (part->vhdl->kind != semantic::vhdl::ExpressionKind::index
@@ -5895,7 +5880,7 @@ private:
     bool reads_out_port(const semantic::ExpressionId id, const std::size_t depth) const
     {
         const auto found = specialization_.find_expression(id);
-        if (!found || found->vhdl == nullptr || depth > 32U) {
+        if (!found || found->vhdl == nullptr) {
             return false;
         }
         if (found->vhdl->kind == semantic::vhdl::ExpressionKind::call
@@ -5906,7 +5891,7 @@ private:
             return true;
         }
         return std::ranges::any_of(found->vhdl->operands, [&](const semantic::ExpressionId operand) {
-            return reads_out_port(operand, depth + 1U);
+            return support::with_stack([&] { return reads_out_port(operand, depth + 1U); });
         });
     }
 
@@ -5968,7 +5953,7 @@ private:
                                 return true;
                             }
                             const auto operand = specialization_.find_expression(id);
-                            if (depth > 16U || !operand || operand->vhdl == nullptr) {
+                            if (!operand || operand->vhdl == nullptr) {
                                 return false;
                             }
                             const auto& node = *operand->vhdl;
@@ -5997,7 +5982,7 @@ private:
                                 && !node.operands.empty()
                                 && std::ranges::all_of(node.operands,
                                     [&](const semantic::ExpressionId child) {
-                                        return self(self, child, depth + 1U);
+                                        return support::with_stack([&] { return self(self, child, depth + 1U); });
                                     });
                         };
                         static_name = std::ranges::all_of(
@@ -6588,7 +6573,7 @@ private:
             }
             const auto& formals = body->vhdl->callable->formals;
             const auto signal_name = [&](semantic::ExpressionId id) {
-                for (std::size_t depth { }; depth < 16U; ++depth) {
+                for (;;) {
                     const auto actual = specialization_.find_expression(id);
                     if (!actual || actual->vhdl == nullptr) {
                         return true;
@@ -6689,8 +6674,7 @@ private:
             // A body in a nested region (a block or process inside the
             // declaring architecture) declares a different subprogram.
             const auto nested_in_declaring_region = [&](semantic::ScopeId scope) {
-                for (std::size_t depth { }; depth < 64U && scope.valid()
-                     && scope.value() < scopes.size(); ++depth) {
+                while (scope.valid() && scope.value() < scopes.size()) {
                     const auto parent = scopes[scope.value()].parent;
                     if (!parent) {
                         return false;
@@ -7144,7 +7128,7 @@ private:
         const SubtypeIndication& context, const std::size_t depth = 0U)
     {
         const auto aggregate = specialization_.find_expression(aggregate_id);
-        if (depth > 8U || !aggregate || aggregate->vhdl == nullptr) {
+        if (!aggregate || aggregate->vhdl == nullptr) {
             return;
         }
         auto expression = *aggregate->vhdl;
@@ -7511,8 +7495,8 @@ private:
                     continue;
                 }
                 if (value->vhdl->kind == semantic::vhdl::ExpressionKind::aggregate) {
-                    validate_aggregate(association.value, *definition->element_subtype,
-                        depth + 1U);
+                    support::with_stack([&] { return validate_aggregate(association.value, *definition->element_subtype,
+                        depth + 1U); });
                     continue;
                 }
                 if (positional(association)
@@ -7678,7 +7662,7 @@ private:
                 continue;
             }
             if (value->vhdl->kind == semantic::vhdl::ExpressionKind::aggregate) {
-                validate_aggregate(association.value, element->subtype, depth + 1U);
+                support::with_stack([&] { return validate_aggregate(association.value, element->subtype, depth + 1U); });
                 continue;
             }
             if (!compatible(association.value, element->subtype)) {
@@ -7742,7 +7726,7 @@ private:
             return;
         }
         auto prefix_id = target_id;
-        for (std::size_t depth { }; depth < 8U; ++depth) {
+        for (;;) {
             const auto target = specialization_.find_expression(prefix_id);
             if (!target || target->vhdl == nullptr) {
                 return;
@@ -7967,7 +7951,7 @@ private:
                 || selector_type.kind == OperandClass::enumeration)) {
             auto current = *selector_subtype;
             std::unordered_set<std::uint32_t> visiting;
-            for (std::size_t depth { }; depth < 8U && !range; ++depth) {
+            while (!range) {
                 if (current.constraints.size() == 1U) {
                     const auto& constraint = current.constraints.front();
                     const auto evaluate = [&](const std::optional<std::int64_t> value,
@@ -8108,7 +8092,7 @@ private:
     {
         std::vector<semantic::ExpressionId> indices;
         auto current = outer;
-        for (std::size_t depth { }; depth < 16U; ++depth) {
+        for (;;) {
             const auto found = specialization_.find_expression(current);
             if (!found || found->vhdl == nullptr) {
                 return;
@@ -8174,7 +8158,7 @@ private:
         const auto source = specialization_.find_expression(outer);
         auto subtype = specialized_subtype(*declaration->vhdl->subtype);
         std::size_t position { };
-        for (std::size_t level { }; level < 8U && position < indices.size(); ++level) {
+        while (position < indices.size()) {
             const auto* definition = root_definition(subtype);
             if (definition == nullptr) {
                 // A predefined scalar type (INTEGER, REAL, TIME, BOOLEAN,
@@ -9014,9 +8998,6 @@ private:
         const semantic::ScopeId scope,
         const std::size_t depth = 0U) const
     {
-        if (depth >= 64U) {
-            return std::nullopt;
-        }
         // Array-valued positional segments and their nested positional form
         // are a VHDL-2008 aggregate extension, regardless of whether the
         // segment is written as a slice, a typed array object, or an
@@ -9123,9 +9104,9 @@ private:
                     = operand && operand->vhdl != nullptr
                         ? operand->vhdl->scope
                         : value->vhdl->scope;
-                return positional_array_segment_count(
+                return support::with_stack([&] { return positional_array_segment_count(
                     operand_id, expected_array, expected_element,
-                    operand_scope, depth + 1U);
+                    operand_scope, depth + 1U); });
             }
             return std::nullopt;
         }
@@ -9157,9 +9138,9 @@ private:
             const auto child_scope = child && child->vhdl != nullptr
                 ? child->vhdl->scope
                 : value->vhdl->scope;
-            auto increment = positional_array_segment_count(
+            auto increment = support::with_stack([&] { return positional_array_segment_count(
                 association.value, expected_array, expected_element,
-                child_scope, depth + 1U);
+                child_scope, depth + 1U); });
             if (!increment) {
                 const auto child_type
                     = expression_subtype(association.value);
@@ -10158,14 +10139,6 @@ private:
         const semantic::ScopeId expected_declaration_scope,
         const std::size_t depth = 0U)
     {
-        if (depth > 8U) {
-            report(
-                "FSIM-ELAB-VHARRAYAGG-009",
-                "VHDL array aggregate element requires its exact "
-                    "contextual subtype",
-                aggregate.source);
-            return;
-        }
         if (context.dimensions.empty()) {
             report(
                 "FSIM-ELAB-VHARRAYAGG-009",
@@ -10206,9 +10179,9 @@ private:
                 nested.dimensions.erase(nested.dimensions.begin());
                 if (expression.kind
                     == semantic::vhdl::ExpressionKind::aggregate) {
-                    validate_array_aggregate_element_types(
+                    support::with_stack([&] { return validate_array_aggregate_element_types(
                         expression, nested, array_subtype, element,
-                        expected_declaration_scope, depth + 1U);
+                        expected_declaration_scope, depth + 1U); });
                     continue;
                 }
                 if (expression.kind
@@ -10247,9 +10220,9 @@ private:
                         && actual_profile.dimensions.size()
                             == nested.dimensions.size()
                         && same_root) {
-                        validate_array_aggregate_element_types(
+                        support::with_stack([&] { return validate_array_aggregate_element_types(
                             *operand->vhdl, nested, array_subtype, element,
-                            expected_declaration_scope, depth + 1U);
+                            expected_declaration_scope, depth + 1U); });
                     } else {
                         report(
                             "FSIM-ELAB-VHARRAYAGG-009",
@@ -10308,10 +10281,10 @@ private:
                                 element, expected_declaration_scope);
                         }
                         if (nested_element) {
-                            validate_array_aggregate_element_types(
+                            support::with_stack([&] { return validate_array_aggregate_element_types(
                                 *operand->vhdl, element_profile, element,
                                 *nested_element, expected_declaration_scope,
-                                depth + 1U);
+                                depth + 1U); });
                         }
                     } else {
                         validate_aggregate(*operand->vhdl, element);
@@ -10331,10 +10304,10 @@ private:
                             element, expected_declaration_scope);
                     }
                     if (nested_element) {
-                        validate_array_aggregate_element_types(
+                        support::with_stack([&] { return validate_array_aggregate_element_types(
                             expression, element_profile, element,
                             *nested_element, expected_declaration_scope,
-                            depth + 1U);
+                            depth + 1U); });
                     }
                 } else {
                     validate_aggregate(expression, element);
@@ -11531,7 +11504,7 @@ private:
                 || expression.text == "'reverse_range")) {
             auto current = *prefix;
             const TypeDefinition* definition = nullptr;
-            for (std::size_t depth { }; depth < 16U; ++depth) {
+            for (;;) {
                 definition = current.type_mark.target.valid()
                     ? type_definition(current.type_mark.target)
                     : nullptr;
@@ -11588,7 +11561,7 @@ private:
                 expression.operands.front());
             // An element of an interface object also takes its bounds from
             // the actual (IEEE 1076-2008 5.3.2.2).
-            for (std::size_t depth { }; depth < 16U && prefix_expression
+            while (prefix_expression
                  && prefix_expression->vhdl != nullptr
                  && (prefix_expression->vhdl->kind
                          == semantic::vhdl::ExpressionKind::index
@@ -11598,8 +11571,7 @@ private:
                              == semantic::vhdl::ExpressionKind::call
                          && prefix_expression->vhdl->text.starts_with(
                              "@vhdl-member:")))
-                 && !prefix_expression->vhdl->operands.empty();
-                 ++depth) {
+                 && !prefix_expression->vhdl->operands.empty()) {
                 prefix_expression = specialization_.find_expression(
                     prefix_expression->vhdl->operands.front());
             }
@@ -11841,7 +11813,7 @@ private:
                 return true;
             }
             auto current = *object->vhdl->subtype;
-            for (std::size_t depth { }; depth < 16U; ++depth) {
+            for (;;) {
                 const auto constraints = std::ranges::count_if(
                     current.constraints, [](const RangeConstraint& range) {
                         return range.kind == RangeKind::array_index;
@@ -11860,7 +11832,6 @@ private:
                 }
                 current = definition->base;
             }
-            return false;
         };
         const auto contextual_result
             = prefix_profile.kind == ProfileKind::array
@@ -13093,7 +13064,7 @@ private:
                 return true;
             }
             const auto found = specialization_.find_expression(bound);
-            if (!found || found->vhdl == nullptr || depth > 4U) {
+            if (!found || found->vhdl == nullptr) {
                 return false;
             }
             const auto& value = *found->vhdl;
@@ -13136,7 +13107,7 @@ private:
                     || value.text == "/" || value.text == "**")
                 && std::ranges::any_of(value.operands,
                     [&](const semantic::ExpressionId operand) {
-                        return self(self, operand, depth + 1U);
+                        return support::with_stack([&] { return self(self, operand, depth + 1U); });
                     });
         };
         const auto validate_range_bounds = [&](const auto& initial,
@@ -13374,7 +13345,7 @@ private:
                     const auto has_object_root = [&] {
                         auto current_id = *prefix_id;
                         std::unordered_set<std::uint32_t> seen;
-                        for (std::size_t depth { }; depth < 64U; ++depth) {
+                        for (;;) {
                             if (!seen.insert(current_id.value()).second) {
                                 return false;
                             }
@@ -13432,7 +13403,6 @@ private:
                                 || declaration->vhdl->form
                                     == semantic::vhdl::DeclarationForm::alias;
                         }
-                        return false;
                     }();
                     if (!has_object_root) {
                         return false;
@@ -14200,11 +14170,10 @@ private:
                     continue;
                 }
                 auto current = specialization_.find_expression(*association.expression);
-                for (std::size_t depth { }; depth < 8U && current && current->vhdl != nullptr
+                while (current && current->vhdl != nullptr
                      && (current->vhdl->kind == semantic::vhdl::ExpressionKind::index
                          || current->vhdl->kind == semantic::vhdl::ExpressionKind::slice)
-                     && !current->vhdl->operands.empty();
-                     ++depth) {
+                     && !current->vhdl->operands.empty()) {
                     const auto& operands = current->vhdl->operands;
                     if (std::any_of(operands.begin() + 1, operands.end(),
                             [&](const semantic::ExpressionId index) {

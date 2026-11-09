@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/semantic/compiled_design_normalization.hpp"
+#include "fsim/support/stack_growth.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
 #include "fsim/semantic/compiled_design_vhdl_resolution.hpp"
 
@@ -1087,7 +1088,7 @@ struct VhdlGenericDependencyContext {
 struct VhdlGenericDependencySearch {
     struct Result {
         bool depends { };
-        // False means a cycle, depth limit, unresolved lookup, or missing
+        // False means a cycle, unresolved lookup, or missing
         // record prevented a complete search. Such results preserve the old
         // bool answer but are not stored in the pass-scoped guard cache.
         bool complete { true };
@@ -1101,7 +1102,7 @@ struct VhdlGenericDependencySearch {
     [[nodiscard]] Result expression(
         const ExpressionId id, const std::size_t depth = 0U)
     {
-        if (depth > 64U || !active_expressions.insert(id).second) {
+        if (!active_expressions.insert(id).second) {
             return { false, false };
         }
         const auto finish = [&](const Result result) {
@@ -1146,8 +1147,8 @@ struct VhdlGenericDependencySearch {
                         return finish({ true, true });
                     case Form::constant: {
                         if (declaration->initializer) {
-                            const auto initializer = expression(
-                                *declaration->initializer, depth + 1U);
+                            const auto initializer = support::with_stack([&] { return expression(
+                                *declaration->initializer, depth + 1U); });
                             if (initializer.depends) {
                                 return finish({ true,
                                     complete && initializer.complete });
@@ -1165,22 +1166,22 @@ struct VhdlGenericDependencySearch {
             }
         }
         for (const auto operand : value.operands) {
-            const auto result = expression(operand, depth + 1U);
+            const auto result = support::with_stack([&] { return expression(operand, depth + 1U); });
             if (result.depends) {
                 return finish({ true, complete && result.complete });
             }
             complete = complete && result.complete;
         }
         for (const auto& association : value.associations) {
-            const auto result = expression(
-                association.value, depth + 1U);
+            const auto result = support::with_stack([&] { return expression(
+                association.value, depth + 1U); });
             if (result.depends) {
                 return finish({ true, complete && result.complete });
             }
             complete = complete && result.complete;
             for (const auto choice : association.choices) {
-                const auto choice_result = expression(
-                    choice, depth + 1U);
+                const auto choice_result = support::with_stack([&] { return expression(
+                    choice, depth + 1U); });
                 if (choice_result.depends) {
                     return finish({ true,
                         complete && choice_result.complete });
@@ -1197,16 +1198,16 @@ struct VhdlGenericDependencySearch {
     {
         bool complete = true;
         if (value.left_expression) {
-            const auto left = expression(
-                *value.left_expression, depth + 1U);
+            const auto left = support::with_stack([&] { return expression(
+                *value.left_expression, depth + 1U); });
             if (left.depends) {
                 return left;
             }
             complete = complete && left.complete;
         }
         if (value.right_expression) {
-            const auto right = expression(
-                *value.right_expression, depth + 1U);
+            const auto right = support::with_stack([&] { return expression(
+                *value.right_expression, depth + 1U); });
             if (right.depends) {
                 return { true, complete && right.complete };
             }
@@ -1219,12 +1220,9 @@ struct VhdlGenericDependencySearch {
         const vhdl::SubtypeIndication& value,
         const std::size_t depth = 0U)
     {
-        if (depth > 64U) {
-            return { true, false };
-        }
         bool complete = true;
         for (const auto& candidate : value.constraints) {
-            const auto result = range(candidate, depth + 1U);
+            const auto result = support::with_stack([&] { return range(candidate, depth + 1U); });
             if (result.depends) {
                 return { true, complete && result.complete };
             }
@@ -1232,7 +1230,7 @@ struct VhdlGenericDependencySearch {
         }
         for (const auto& element : value.element_constraints) {
             for (const auto& candidate : element.constraints) {
-                const auto result = range(candidate, depth + 1U);
+                const auto result = support::with_stack([&] { return range(candidate, depth + 1U); });
                 if (result.depends) {
                     return { true, complete && result.complete };
                 }
@@ -1245,7 +1243,7 @@ struct VhdlGenericDependencySearch {
     [[nodiscard]] Result type(
         const TypeId id, const ScopeId scope, const std::size_t depth = 0U)
     {
-        if (depth > 64U || !active_types.insert(id).second) {
+        if (!active_types.insert(id).second) {
             return { false, false };
         }
         const auto finish = [&](const Result result) {
@@ -1267,16 +1265,16 @@ struct VhdlGenericDependencySearch {
         }
         bool complete = declaration != nullptr
             && definition.form != vhdl::TypeForm::unresolved;
-        const auto base_constraints = constraints(
-            definition.base, depth + 1U);
+        const auto base_constraints = support::with_stack([&] { return constraints(
+            definition.base, depth + 1U); });
         if (base_constraints.depends) {
             return finish({ true,
                 complete && base_constraints.complete });
         }
         complete = complete && base_constraints.complete;
         if (definition.scalar_range) {
-            const auto scalar_range = range(
-                *definition.scalar_range, depth + 1U);
+            const auto scalar_range = support::with_stack([&] { return range(
+                *definition.scalar_range, depth + 1U); });
             if (scalar_range.depends) {
                 return finish({ true,
                     complete && scalar_range.complete });
@@ -1299,7 +1297,7 @@ struct VhdlGenericDependencySearch {
         if (!base) {
             return finish({ false, false });
         }
-        const auto base_result = type(*base, use_scope, depth + 1U);
+        const auto base_result = support::with_stack([&] { return type(*base, use_scope, depth + 1U); });
         if (base_result.depends) {
             return finish({ true,
                 complete && base_result.complete });
@@ -1313,10 +1311,7 @@ struct VhdlGenericDependencySearch {
         const ScopeId scope,
         const std::size_t depth = 0U)
     {
-        if (depth > 64U) {
-            return { true, false };
-        }
-        const auto subtype_constraints = constraints(value, depth + 1U);
+        const auto subtype_constraints = support::with_stack([&] { return constraints(value, depth + 1U); });
         if (subtype_constraints.depends) {
             return subtype_constraints;
         }
@@ -1327,7 +1322,7 @@ struct VhdlGenericDependencySearch {
         if (!type_id) {
             return { false, false };
         }
-        const auto type_result = type(*type_id, scope, depth + 1U);
+        const auto type_result = support::with_stack([&] { return type(*type_id, scope, depth + 1U); });
         if (type_result.depends) {
             return { true,
                 subtype_constraints.complete && type_result.complete };

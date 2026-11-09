@@ -992,7 +992,11 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
     std::vector<SelectedNodeProperty> selected;
     std::vector<PackedLogic4> values;
   };
-  const auto solve = [&]() -> Outcome {
+  // The sizes of resizable containers that were tried and left their
+  // elements' constraints unsatisfiable: variable identity and value.
+  using SizeChoice = std::vector<std::pair<std::string, PackedLogic4>>;
+  const auto solve = [&](const std::vector<SizeChoice>* excluded
+                         = nullptr) -> Outcome {
     // A random property that no constraint references takes a uniformly
     // chosen value (IEEE 1800-2017 18.5); a wide one is drawn directly
     // instead of enumerating its complete domain.
@@ -1078,7 +1082,7 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
                          [&](const auto id) { return wide_ids.contains(id); })
                   > 1;
             });
-        const auto passes = std::min<std::size_t>(64U, wide.size() + 1U);
+        const auto passes = wide.size() + 1U;
         for (std::size_t pass = 0U; pass < passes; ++pass) {
         const auto derived_before = derived.size();
         bool narrowed{};
@@ -1422,6 +1426,30 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
       }
     }
     configure(solver, variables);
+    // A size tuple already tried is not offered again.
+    if (excluded != nullptr) {
+      for (const auto& choice : *excluded) {
+        SystemVerilogConstraintExpressionBuilder builder;
+        std::vector<SystemVerilogConstraintExpressionId> equalities;
+        std::vector<SystemVerilogConstraintVariableId> ids;
+        for (const auto& [identity, value] : choice) {
+          const auto found = variables.find(identity);
+          if (found == variables.end()) continue;
+          const auto& profile = solver.variables()[found->second].profile;
+          equalities.push_back(builder.binary(
+              SystemVerilogConstraintExpressionOperator::Equal,
+              builder.variable(found->second, profile),
+              builder.constant(value, profile)));
+          ids.push_back(found->second);
+        }
+        if (equalities.empty()) continue;
+        const auto same = builder.conjunction(equalities);
+        const auto root = builder.unary(
+            SystemVerilogConstraintExpressionOperator::LogicalNot, same);
+        solver.add_clause(systemverilog_constraint_expression_clause(
+            "$size-tried", std::move(ids), std::move(builder).finish(root)));
+      }
+    }
     const auto selection = request.selection
             == SystemVerilogClassRandomizeSelection::NoProperties
         ? std::uint64_t{}
@@ -1511,12 +1539,15 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
     }
     Outcome outcome;
     // A size that leaves the elements' constraints unsatisfiable is
-    // replaced by another (IEEE 1800-2017 18.5.8.1).
-    constexpr std::size_t size_attempts = 8U;
-    for (std::size_t attempt = 0; attempt < size_attempts; ++attempt) {
+    // replaced by another (IEEE 1800-2017 18.5.8.1, 18.6.3); a size
+    // is never tried twice, so the loop ends when no candidate is left and
+    // the sizing solve is unsatisfiable.
+    std::vector<SizeChoice> tried;
+    for (;;) {
+      SizeChoice choice;
       if (sized) {
         add_sizes();
-        auto sizing = solve();
+        auto sizing = solve(&tried);
         if (sizing.result.status
             != SystemVerilogConstraintSolveStatus::Satisfied) {
           return sizing.result;
@@ -1540,6 +1571,7 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
               });
           if (chosen == sizing.selected.end()) continue;
           const auto& value = sizing.values.at(chosen->property.variable);
+          choice.emplace_back(identity_of(node, index), value);
           sizes[c] = static_cast<std::size_t>(value.low_word().aval);
           if (!containers[c].member_paths.empty()) {
             resize_structures(c, sizes[c]);
@@ -1559,8 +1591,10 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
                     && item.property.property_index == index;
               });
           if (chosen == sizing.selected.end()) continue;
-          handle_sizes[h] = static_cast<std::size_t>(
-              sizing.values.at(chosen->property.variable).low_word().aval);
+          const auto& handle_value
+              = sizing.values.at(chosen->property.variable);
+          choice.emplace_back(identity_of(node, index), handle_value);
+          handle_sizes[h] = static_cast<std::size_t>(handle_value.low_word().aval);
         }
         strip();
       }
@@ -1570,10 +1604,12 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
         materialize(c, sizes[c]);
       }
       outcome = solve();
-      if (!sized || outcome.result.status
+      // Without a chosen size there is no other size to try.
+      if (!sized || choice.empty() || outcome.result.status
               != SystemVerilogConstraintSolveStatus::Unsatisfiable) {
         break;
       }
+      tried.push_back(std::move(choice));
       strip();
     }
     if (outcome.result.status

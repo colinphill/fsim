@@ -679,6 +679,19 @@ struct Association {
     std::optional<ExpressionId> expression;
     std::optional<SubtypeIndication> type;
     SourceSpanId source;
+    /// In the port map of a binding indication, a formal part `f(s)` whose
+    /// `f` is not a port of the bound entity converts the port `s` (IEEE
+    /// 1076-2019 6.5.7.1): the parser kept the association as the
+    /// individual-association group of a formal `f` (`expression`, with the
+    /// ports in its choices and the component's local ports in its
+    /// elements), and the linker's binding-map resolution, which knows the
+    /// entity, marks it. Elaboration then drives each local port with the
+    /// conversion in the implied block (14.5.4).
+    bool formal_conversion { };
+    /// One call `f(s)` per element of such a group, built with the group so
+    /// the conversion has an expression to lower; empty when the group's
+    /// choices are not simple names.
+    std::vector<ExpressionId> formal_conversion_calls;
 };
 
 struct Instance {
@@ -692,6 +705,13 @@ struct Instance {
     bool configuration { };
     SourceSpanId source;
     OriginId origin;
+    /// The entity declaration a direct `entity lib.name[(arch)]`
+    /// instantiation names (IEEE 1076-2019 11.7.1): the unit the linker's
+    /// entity reference of this instance resolved to. Elaboration and the
+    /// VHPI library model use it as the one binding instead of resolving the
+    /// name again. Empty for a component or configuration instantiation and
+    /// where the entity is not part of the design.
+    std::optional<UnitId> linked_entity;
 };
 
 struct CallableProfile {

@@ -669,6 +669,46 @@ void VhdlHirBuilder::add_design(const frontend::ParsedDesign& parsed)
         input.configuration_name, input.span, scope);
     output.generic_map = associations(input.generic_map, scope, parent);
     output.port_map = associations(input.port_map, scope, parent);
+    // `f(s) => d` parses as the individual-association group of a formal
+    // `f`, the same as `p(3 downto 2) => a(3 downto 2)` (IEEE 1076-2019
+    // 6.5.7.1): whether `f` converts the entity port `s` is known once the
+    // linked design has the entity. The call `f(s)` the conversion lowers is
+    // built with the group, one per element whose choice is a simple name;
+    // the linker's binding-map resolution marks the association.
+    for (std::size_t index = 0;
+         index < input.port_map.size() && index < output.port_map.size();
+         ++index) {
+        const auto& connection = input.port_map[index];
+        const auto& group = connection.value;
+        if (!connection.port
+            || connection.kind != frontend::PortActualKind::Expression
+            || group.kind != frontend::ExpressionKind::Aggregate
+            || group.text != "@vhdl-formal-subelements"
+            || group.operands.empty()
+            || group.aggregate_choice_expressions.size()
+                != group.operands.size()) {
+            continue;
+        }
+        std::vector<semantic::ExpressionId> calls;
+        for (const auto& choices : group.aggregate_choice_expressions) {
+            if (choices.size() != 1U
+                || choices.front().kind != frontend::ExpressionKind::Identifier) {
+                calls.clear();
+                break;
+            }
+            const frontend::Expression call {
+                frontend::ExpressionKind::Call, *connection.port,
+                { choices.front() }, connection.span
+            };
+            const auto id = expression(call, scope, parent);
+            if (!id) {
+                calls.clear();
+                break;
+            }
+            calls.push_back(*id);
+        }
+        output.port_map[index].formal_conversion_calls = std::move(calls);
+    }
     output.source = source(input.span);
     return output;
 }

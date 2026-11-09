@@ -246,7 +246,7 @@ class Resolver final {
       Expression& expression, const Scope& scope, std::size_t depth);
   void substitute_class_parameter_references(
       Expression& expression, const Scope& scope,
-      std::size_t depth = 0U) const;
+      std::vector<std::string> active = { }) const;
   // A class constant at a module constant site (`C#(5)::b`, `P::C::n`,
   // `CFG::w`) names that member of the selected specialization; the
   // elaboration-time evaluator binds the selection's actuals.

@@ -1,0 +1,2 @@
+#c sv vhpivardeclk shared=1 value=5
+#c sw vhpivardeclk shared=1 value=1010

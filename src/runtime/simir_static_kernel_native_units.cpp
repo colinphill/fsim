@@ -41,8 +41,9 @@ void visit_slot_operands(Inst& inst, Visit&& visit)
         visit(inst.x, false);
         break;
     case KOp::wide_load:
-        // Sub 3 reads a host signal (bound as load_host's).
-        if (inst.sub != 3U) {
+        // Sub 3 reads a host signal (bound as load_host's); sub 4 and 5 the
+        // sampled words and rings.
+        if (inst.sub < 3U) {
             visit(inst.x, false);
         }
         break;
@@ -100,7 +101,8 @@ bool same_body(const CompiledBody& left, const CompiledBody& right, const bool s
         || left.parts.size() != right.parts.size()
         || left.concat.size() != right.concat.size()
         || left.wide_base != right.wide_base
-        || left.wide_constants.size() != right.wide_constants.size()) {
+        || left.wide_constants.size() != right.wide_constants.size()
+        || left.sva_plans != right.sva_plans) {
         return false;
     }
     for (std::size_t at = 0U; at < left.wide_constants.size(); ++at) {
@@ -168,6 +170,7 @@ std::uint64_t hash_body(const CompiledBody& body, const bool shape)
     mix(body.u_operands.size() | body.indices.size() << 20U
         | body.parts.size() << 40U);
     mix(body.wide_base.size() | body.wide_constants.size() << 32U);
+    mix(body.sva_plans.size());
     return hash;
 }
 } // namespace
@@ -382,6 +385,8 @@ void Interpreter::Impl::StaticKernel::run_native(NativeUnit& unit,
     frame.kernel = this;
     frame.program = unit.program;
     frame.instance = &body;
+    frame.call_stack = &body.call_entries;
+    frame.frame_stack = &body.frame_entries;
     frame.writes = &write_queue();
     frame.containers = container_info_.data();
     frame.member = member;
@@ -946,13 +951,18 @@ namespace {
     case 8U:
         return "VHDL integer exponent must be nonnegative";
     case 9U:
-        return "dynamic packed index is invalid";
+        // The reference's text without its operand detail (it appends the
+        // index and range): a prefix of it.
+        return "dynamic packed index is outside the declared range";
     case 10U:
         return "invalid dynamic part-select write";
     case 11U:
         return "insert range is outside the target value";
     case 12U:
         return "static kernel write is outside its signal";
+    case 13U:
+        return "dynamic packed index contains an unknown or high-impedance "
+               "value";
     default:
         return "branch condition is unknown or high impedance";
     }
@@ -2310,6 +2320,8 @@ void Interpreter::Impl::StaticKernel::build_fused_groups()
         case KOp::integer_check:
         case KOp::call:
         case KOp::ret:
+        case KOp::frame_push:
+        case KOp::frame_pop:
         case KOp::assert_check:
         case KOp::load_field9:
             return false;
@@ -2429,6 +2441,9 @@ void Interpreter::Impl::StaticKernel::concatenate_members(CompiledBody& program,
             = static_cast<std::uint32_t>(program.concat.size());
         const auto constant_base
             = static_cast<std::uint32_t>(program.wide_constants.size());
+        const auto plan_base = static_cast<std::uint32_t>(program.sva_plans.size());
+        program.sva_plans.insert(program.sva_plans.end(), body.sva_plans.begin(),
+            body.sva_plans.end());
         if (!body.wide_base.empty() || !program.wide_base.empty()) {
             program.wide_base.resize(register_base, 0U);
             program.wide_base.resize(register_base + body.registers.size(), 0U);
@@ -2489,9 +2504,16 @@ void Interpreter::Impl::StaticKernel::concatenate_members(CompiledBody& program,
                 // The tick reads its SimIR operands at the register base.
                 inst.y += register_base;
                 reg(inst.d);
+                if (inst.op == KOp::sva_tick && inst.z != 0U) {
+                    inst.z += plan_base;
+                }
                 break;
             case KOp::sva_sampled_load:
                 reg(inst.d);
+                if ((inst.aux & 2U) != 0U) {
+                    // A wide or Logic9 ring's default constants.
+                    inst.imm_b += constant_base;
+                }
                 break;
             case KOp::net_delay:
                 // y is the SimIR operation, not a register.
@@ -2613,6 +2635,10 @@ void Interpreter::Impl::StaticKernel::concatenate_members(CompiledBody& program,
                 break;
             case KOp::wide_load:
                 reg(inst.d);
+                if (inst.sub == 5U) {
+                    // A history ring's default constants.
+                    inst.imm_b += constant_base;
+                }
                 break;
             case KOp::wide_copy:
                 reg(inst.d);
@@ -2665,6 +2691,8 @@ void Interpreter::Impl::StaticKernel::concatenate_members(CompiledBody& program,
             case KOp::integer_check:
             case KOp::call:
             case KOp::ret:
+            case KOp::frame_push:
+            case KOp::frame_pop:
             case KOp::assert_check:
             case KOp::load_field9:
                 throw std::logic_error(
@@ -2999,7 +3027,9 @@ void Interpreter::Impl::StaticKernel::build_partitions(
                     inst.x = bind((std::uint64_t { 1 } << 40U) | inst.x);
                     break;
                 case KOp::wide_load:
-                    inst.x = bind((std::uint64_t { 5 } << 40U) | inst.x);
+                    if (inst.sub < 4U) {
+                        inst.x = bind((std::uint64_t { 5 } << 40U) | inst.x);
+                    }
                     break;
                 case KOp::store_slot:
                 case KOp::store_slot_nba:

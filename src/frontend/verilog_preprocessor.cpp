@@ -2,6 +2,7 @@
 #include "fsim/frontend/preprocessor.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
+#include "fsim/support/stack_growth.hpp"
 #include "verilog_preprocessor_internal.hpp"
 
 #include <algorithm>
@@ -464,6 +465,13 @@ namespace {
             const std::filesystem::path& normalized,
             const std::size_t depth)
         {
+            // Nested includes continue on a new stack segment when the stack
+            // is nearly used up, so nesting is bounded by memory.
+            if (!fsim::support::stack_growth_detail::has_room()) {
+                fsim::support::with_stack(
+                    [&] { process_file(normalized, depth); });
+                return;
+            }
             const auto name = fsim::support::path_to_utf8(normalized);
             if (depth > options_.maximum_include_depth) {
                 diagnose(
@@ -2155,6 +2163,14 @@ namespace {
             const std::size_t depth,
             const std::vector<std::string>& inherited_stack)
         {
+            // Nested expansions continue on a new stack segment when the
+            // stack is nearly used up, so nesting is bounded by memory.
+            if (!fsim::support::stack_growth_detail::has_room()) {
+                return fsim::support::with_stack([&] {
+                    return expand_invocation(
+                        tokens, index, depth, inherited_stack);
+                });
+            }
             const auto tick = tokens[index++];
             if (index >= tokens.size()
                 || tokens[index].kind != TokenKind::Identifier) {

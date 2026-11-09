@@ -1255,6 +1255,11 @@ end context ieee_std_context;
                     "minimum",
                     "maximum",
                 };
+                // STD_MATCH is declared by NUMERIC_STD only (IEEE 1076-2019
+                // 16.8.5); NUMERIC_BIT has none.
+                if (package == "numeric_std") {
+                    unit.standard_package_declarations.emplace_back("std_match");
+                }
             }
             if (unit.primary_name.empty() && package == "std_logic_1164") {
                 const auto unavailable = [&](const std::string_view name) {

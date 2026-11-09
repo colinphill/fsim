@@ -110,6 +110,11 @@ bool Interpreter::replay_plan_onto(
     return true;
 }
 
+void Interpreter::set_reset_twin_class_hooks(const bool share) noexcept
+{
+    impl_->reset_twin_class_hooks = share;
+}
+
 bool Interpreter::can_reset_run_state() const noexcept
 {
     const auto& impl = *impl_;
@@ -143,6 +148,24 @@ bool Interpreter::reset_run_state()
                                  "rebuilt for the reset";
             return false;
         }
+        if (impl.reset_twin_class_hooks) {
+            // Its package initializers allocate and call through this run's
+            // class services (the embedder cleared them for the reset).
+            auto& target = *twin->impl_;
+            target.class_allocate_context_hook = impl.class_allocate_context_hook;
+            target.class_property_read_hook = impl.class_property_read_hook;
+            target.class_property_write_hook = impl.class_property_write_hook;
+            target.class_property_container_hook
+                = impl.class_property_container_hook;
+            target.class_method_call_context_hook
+                = impl.class_method_call_context_hook;
+            target.class_static_property_read_hook
+                = impl.class_static_property_read_hook;
+            target.class_static_property_write_hook
+                = impl.class_static_property_write_hook;
+            target.class_static_method_call_context_hook
+                = impl.class_static_method_call_context_hook;
+        }
         // The twin has the plan this run has: what the foreign interfaces
         // asked before start, then start without running anything, then what
         // they asked after it (D.8: the time-zero state of this run's design).
@@ -155,6 +178,7 @@ bool Interpreter::reset_run_state()
         // the twin and every process is armed for time zero, but nothing
         // runs yet (a restore from a file skips both, its state replaces
         // them).
+        twin->impl_->reset_twin = true;
         twin->start();
         if (!replay_plan_onto(*twin, true, reason)) {
             impl.reset_failure = std::move(reason);

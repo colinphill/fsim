@@ -494,7 +494,7 @@ void test_rejections()
         auto fixture = make_fixture();
         auto& classes = fixture.design.mutable_systemverilog().mutable_classes();
         classes[0].base = sv::ClassRelation {
-            "Derived", "work::pkg::Derived", { },
+            "Derived", "work::pkg::Derived", { }, { }, { },
             classes[0].source, classes[0].origin, { }
         };
         classes[0].base_declaration_identity = "work::pkg::Derived";

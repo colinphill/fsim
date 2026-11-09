@@ -1,0 +1,2 @@
+#c q vhpifunccallk name="+" operator=1 builtin=1 static=locally params=2 operands=vhpiintliteralk:1,vhpiintliteralk:1
+#c b vhpifunccallk name="not" operator=1 builtin=1 static=locally params=1 operands=vhpienumliteralk

@@ -3,6 +3,7 @@
 // KIR analyses of the engine v4 static kernel: reachability and liveness
 // pruning, 'U' tracking and dead-constant elimination.
 #include "simir_static_kernel_compiled_internal.hpp"
+#include "fsim/support/stack_growth.hpp"
 
 #include <array>
 #include <cxxabi.h>
@@ -738,6 +739,8 @@ void Interpreter::Impl::StaticKernel::track_unknowns(CompiledBody& body,
         case KOp::jump:
         case KOp::call:
         case KOp::ret:
+        case KOp::frame_push:
+        case KOp::frame_pop:
         // SystemVerilog assertion state and sampled values: Logic4 words.
         case KOp::sva_tick:
         case KOp::sva_outcome:
@@ -1614,7 +1617,6 @@ const char* Interpreter::Impl::StaticKernel::prove_collapse_ranges(const Member&
     // An interval check enumerates at most this many values; the execution
     // visits at most `steps` instructions and joined registers.
     constexpr std::int64_t value_limit = 4096;
-    constexpr std::uint32_t depth_limit = 256U;
     std::uint64_t steps = std::uint64_t { 1 } << 22U;
     const auto& body = *member.compiled;
     const auto& code = body.code;
@@ -1857,6 +1859,17 @@ const char* Interpreter::Impl::StaticKernel::prove_collapse_ranges(const Member&
         case KOp::ret:
             if (inst.z != 0U) {
                 clear(inst.x, 1U);
+            }
+            return true;
+        case KOp::frame_push:
+            clear(inst.x, 1U);
+            return true;
+        case KOp::frame_pop:
+            // The restored registers hold values the walk did not see.
+            clear(inst.x, 1U);
+            for (auto item = body.frame_saves[inst.aux].item_begin;
+                 item < body.frame_saves[inst.aux].item_end; ++item) {
+                clear(body.frame_items[item].index, body.frame_items[item].count);
             }
             return true;
         case KOp::constant:
@@ -2190,7 +2203,7 @@ const char* Interpreter::Impl::StaticKernel::prove_collapse_ranges(const Member&
                             ? !std::ranges::binary_search(input_offsets, inst.x)
                             // A host signal's wide read (sub 3) names a
                             // signal, not a slot: never a collapse input.
-                            : (inst.op == KOp::wide_load && inst.sub == 3U)
+                            : (inst.op == KOp::wide_load && inst.sub >= 3U)
                                 || !input_slot(inst.x)) {
                         values[inst.d] = { };
                         return true;
@@ -2449,6 +2462,12 @@ const char* Interpreter::Impl::StaticKernel::prove_collapse_ranges(const Member&
     const auto run = [&](const auto& self, std::uint32_t at, const std::uint32_t stop,
                          std::vector<AbstractValue>& values,
                          const std::uint32_t depth) -> const char* {
+        // Nested branches continue on a new stack segment when the stack is
+        // nearly used up; the step budget bounds the work.
+        if (!support::stack_growth_detail::has_room()) {
+            return support::with_stack(
+                [&] { return self(self, at, stop, values, depth); });
+        }
         while (at != stop && at < nodes) {
             if (steps == 0U) {
                 return "range_steps";
@@ -2482,7 +2501,7 @@ const char* Interpreter::Impl::StaticKernel::prove_collapse_ranges(const Member&
                 return "range_static_branch";
             }
             const auto meet = ipdom[at];
-            if (meet == none || depth >= depth_limit || steps < registers) {
+            if (meet == none || steps < registers) {
                 return "range_limit";
             }
             steps -= registers;

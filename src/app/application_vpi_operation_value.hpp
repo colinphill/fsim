@@ -408,6 +408,36 @@ enum class Truth : std::uint8_t { no, yes, unknown };
         }
         return vector_result(bits, false);
     }
+    // Replication `{n{a, b}}`: the first operand is the constant repetition
+    // count, the others the concatenated items, the first most significant
+    // (11.4.12.1). A count of zero or beyond 65,536 has no value here.
+    case vpiMultiConcatOp: {
+        if (count < 2U || any_real) {
+            return std::nullopt;
+        }
+        const auto repeat_bits = bits_of(0U);
+        const auto repeat = to_limbs(repeat_bits);
+        if (!all_known(repeat_bits)
+            || std::ranges::any_of(std::span { repeat }.subspan(1U),
+                [](const std::uint32_t limb) { return limb != 0U; })
+            || repeat[0] == 0U || repeat[0] > 65536U) {
+            return std::nullopt;
+        }
+        Bits item;
+        for (std::size_t index = count; index-- > 1U;) {
+            const auto part = bits_of(index);
+            item.insert(item.end(), part.begin(), part.end());
+        }
+        if (item.empty()) {
+            return std::nullopt;
+        }
+        Bits bits;
+        bits.reserve(item.size() * repeat[0]);
+        for (std::uint32_t copy = 0U; copy < repeat[0]; ++copy) {
+            bits.insert(bits.end(), item.begin(), item.end());
+        }
+        return vector_result(bits, false);
+    }
     // Logical operators: operands are self-determined, the result one bit
     // (11.4.7).
     case vpiLogAndOp:

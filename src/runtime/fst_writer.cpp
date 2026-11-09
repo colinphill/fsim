@@ -716,7 +716,8 @@ namespace {
             static std::atomic<std::uint64_t> next_workspace { 0U };
             const auto clock_value = static_cast<std::uint64_t>(
                 std::chrono::steady_clock::now().time_since_epoch().count());
-            for (std::uint64_t attempt = 0; attempt < 100U; ++attempt) {
+            // Each try takes a fresh sequence number, so the loop ends.
+            for (;;) {
                 const auto sequence = next_workspace.fetch_add(
                     1U, std::memory_order_relaxed);
                 root_ = base / ("fsim-fst-" + std::to_string(clock_value)
@@ -734,8 +735,6 @@ namespace {
                         "failed to create FST temporary workspace");
                 }
             }
-            throw std::runtime_error(
-                "failed to create FST temporary workspace");
 #else
             auto native_template = (base / "fsim-fst-XXXXXX").native();
             native_template.push_back('\0');

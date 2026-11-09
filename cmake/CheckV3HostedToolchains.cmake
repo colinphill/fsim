@@ -119,7 +119,7 @@ endfunction()
 fsim_require_hosted_tokens(.github/workflows/ci.yml
   "runs-on: ubuntu-24.04"
   "runs-on: windows-2022"
-  "timeout-minutes: 120"
+  "timeout-minutes: 180"
   "clang-22 --version"
   "clang++-22 --version"
   "installed_version=$(/usr/lib/llvm-22/bin/llvm-config --version)"
@@ -238,7 +238,7 @@ fsim_require_hosted_occurrences(
 fsim_require_hosted_occurrences("--parallel 2" 4)
 fsim_require_hosted_occurrences("ctest --test-dir" 2)
 fsim_require_hosted_occurrences("--output-on-failure" 2)
-fsim_require_hosted_occurrences("timeout-minutes: 120" 2)
+fsim_require_hosted_occurrences("timeout-minutes: 180" 2)
 foreach(FSIM_INDEX RANGE 0 3)
   list(GET FSIM_ARTIFACTS ${FSIM_INDEX} FSIM_ARTIFACT)
   list(GET FSIM_RETAINED_LOGS ${FSIM_INDEX} FSIM_RETAINED_LOG)

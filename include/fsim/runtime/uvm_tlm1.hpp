@@ -7,6 +7,7 @@
 #include "fsim/runtime/uvm_component.hpp"
 #include "fsim/runtime/uvm_phase.hpp"
 
+#include <limits>
 #include <compare>
 #include <cstddef>
 #include <cstdint>
@@ -106,7 +107,7 @@ struct SystemVerilogUvmTlm1Limits {
   std::size_t maximum_name_bytes{1'024};
   std::size_t maximum_profile_bytes{4'096};
   std::size_t maximum_fanout{65'536};
-  std::size_t maximum_depth{256};
+  std::size_t maximum_depth{std::numeric_limits<std::size_t>::max()};
   std::size_t maximum_resolution_work{1U << 20U};
   std::size_t maximum_mutations{1U << 20U};
   std::size_t maximum_fifos{65'536};
@@ -117,7 +118,7 @@ struct SystemVerilogUvmTlm1Limits {
   std::size_t maximum_pending_operations{262'144};
   std::size_t maximum_execution_operations{1U << 22U};
   std::size_t maximum_analysis_callbacks_per_publication{65'536};
-  std::size_t maximum_analysis_recursion_depth{64};
+  std::size_t maximum_analysis_recursion_depth{std::numeric_limits<std::size_t>::max()};
   std::size_t maximum_analysis_failures{65'536};
   std::size_t maximum_analysis_publications{1U << 22U};
 };
@@ -244,6 +245,13 @@ struct SystemVerilogUvmTlm1AnalysisResult {
 /// prior binding; resolve_all publishes a complete stable binding atomically.
 class SystemVerilogUvmTlm1Service final {
 public:
+  /// True while the service holds no state: a run that never used it has
+  /// nothing to save (#188). Its handlers are the embedder's callbacks.
+  [[nodiscard]] bool run_state_idle() const noexcept {
+    return endpoints_.empty() && fifos_.empty() && transport_handlers_.empty()
+        && analysis_subscribers_.empty() && operations_.empty();
+  }
+
   using CompletionCallback =
       std::function<void(const SystemVerilogUvmTlm1OperationSnapshot &)>;
   using TransportHandler =

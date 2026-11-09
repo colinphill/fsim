@@ -363,6 +363,18 @@ void Interpreter::Impl::StaticKernel::run_hosted_region(
         }
         run_hosted(ready[position]);
     }
+    // A region's thread (a VHDL postponed process, say) may have waited for
+    // a time or made a projected assignment: the timers it queued are armed
+    // as after an activation.
+    if (behavioral_) {
+        arm_timer();
+        if (vhdl_threads_) {
+            arm_vhdl_timer();
+        }
+    }
+    if ((!behavioral_ || !vhdl_threads_) && !projected_sites_.empty()) {
+        arm_vhdl_timer();
+    }
 }
 
 void Interpreter::Impl::StaticKernel::execute_hosted_startup(
@@ -565,7 +577,8 @@ PackedLogic4 Interpreter::Impl::StaticKernel::member_register(
     const std::uint32_t member_index, const RegisterId reg)
 {
     auto& member = members_[member_index];
-    if (member.compiled && !member.generic_mode) {
+    if (member.compiled && !member.generic_mode
+        && !(member.fresh && member.kind != StaticKernelMemberKind::behavioral)) {
         sync_behavioral_registers(member_index, static_kernel_detail::no_slot);
     }
     if (reg >= member.registers.size()) {
@@ -582,7 +595,8 @@ void Interpreter::Impl::StaticKernel::set_member_register(
     if (reg >= member.registers.size()) {
         throw std::out_of_range { "invalid SimIR register ID" };
     }
-    const bool native = member.compiled && !member.generic_mode;
+    const bool native = member.compiled && !member.generic_mode
+        && !(member.fresh && member.kind != StaticKernelMemberKind::behavioral);
     if (native) {
         sync_behavioral_registers(member_index, static_kernel_detail::no_slot);
     }

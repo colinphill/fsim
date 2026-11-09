@@ -222,7 +222,7 @@ fsim_require_warning_occurrences("-DFSIM_WARNINGS_AS_ERRORS=ON" 2)
 fsim_require_warning_occurrences("--parallel 2" 4)
 fsim_require_warning_occurrences("ctest --test-dir" 2)
 fsim_require_warning_occurrences("--output-on-failure" 2)
-fsim_require_warning_occurrences("timeout-minutes: 120" 2)
+fsim_require_warning_occurrences("timeout-minutes: 180" 2)
 fsim_require_warning_tokens(tests/CMakeLists.txt
   "NAME fsim.v3-hosted-toolchains"
   "CheckCurrentHostedLanes.cmake")

@@ -409,6 +409,26 @@ fsim_vpi_handle_v1 VpiClassModel::typespec_of(
     return make(Kind::typespec, declaration, specialization, 0U);
 }
 
+std::optional<semantic::ExpressionId> VpiClassModel::lexical_actual(
+    const std::size_t use, const std::size_t base, const std::size_t index) const
+{
+    const auto& parameters = class_at(base).parameters;
+    const auto& relation = class_at(use).base;
+    if (relation) {
+        for (std::size_t at = 0U; at < relation->actuals.size(); ++at) {
+            const auto& actual = relation->actuals[at];
+            const bool match = actual.formal
+                ? *actual.formal == parameters.at(index).name
+                : at == index;
+            if (match && actual.kind == sv::ActualKind::expression
+                && actual.expression) {
+                return actual.expression;
+            }
+        }
+    }
+    return parameters.at(index).default_value;
+}
+
 // The specialization a bare class name denotes (every parameter at its
 // default), none when the class has no specialization of its own.
 std::size_t VpiClassModel::default_specialization(
@@ -660,6 +680,8 @@ PLI_INT32 VpiClassModel::type(const std::uint64_t serial) const
     }
     case Kind::parameter:
         return vpiParameter;
+    case Kind::param_assign:
+        return vpiParamAssign;
     case Kind::class_typedef:
         return typedef_type(entry);
     case Kind::constraint:
@@ -786,6 +808,7 @@ std::optional<std::int64_t> VpiClassModel::property(
         return item_property(nodes_.at(entry.member), property);
     case Kind::extends:
     case Kind::class_typedef:
+    case Kind::param_assign:
         return std::nullopt;
     }
     return std::nullopt;
@@ -869,6 +892,7 @@ std::optional<std::string> VpiClassModel::string_property(
         }
         return std::nullopt;
     case Kind::extends:
+    case Kind::param_assign:
         return std::nullopt;
     }
     return std::nullopt;
@@ -911,10 +935,13 @@ fsim_vpi_handle_v1 VpiClassModel::relation(
                 }
                 return 0U;
             }
+            // The base typespec of this class's `extends` keeps the use,
+            // whose actuals are its parameter assignments (37.32 detail 3).
             if (source.base) {
                 if (const auto owner
                     = find_declaration(source.base->declaration_identity)) {
-                    return typespec_of(*owner, no_index);
+                    return make(Kind::typespec, *owner, no_index,
+                        entry.declaration + 1U);
                 }
             }
             return 0U;
@@ -936,6 +963,40 @@ fsim_vpi_handle_v1 VpiClassModel::relation(
         }
         return type == vpiParent || type == vpiScope ? defn_of(entry.declaration)
                                                      : 0U;
+    // The parameter an assignment sets and the actual it sets it to (37.32
+    // vpiParamAssign; 37.28 vpiLhs, vpiRhs); a parameter left at its default
+    // has no assignment.
+    case Kind::param_assign: {
+        // A lexical assignment's member holds the use (the deriving class,
+        // plus one) above the parameter's index.
+        const auto parameter = entry.member % param_assign_stride;
+        const auto use = entry.member / param_assign_stride;
+        if (type == vpiLhs) {
+            return make(Kind::parameter, entry.declaration,
+                entry.specialization, parameter);
+        }
+        if (type == vpiRhs && hooks_.expression) {
+            if (entry.specialization != no_index) {
+                const auto& actual = specializations_[entry.specialization]
+                                         .parameters.at(parameter);
+                return actual.expression
+                    ? hooks_.expression(*actual.expression, hooks_.handle(serial))
+                    : 0U;
+            }
+            const auto expression
+                = use != 0U ? lexical_actual(use - 1U, entry.declaration, parameter)
+                            : std::nullopt;
+            return expression
+                ? hooks_.expression(*expression, hooks_.handle(serial))
+                : 0U;
+        }
+        if (type == vpiParent) {
+            return entry.specialization == no_index && use != 0U
+                ? make(Kind::typespec, entry.declaration, no_index, use)
+                : typespec_of(entry.declaration, entry.specialization);
+        }
+        return 0U;
+    }
     case Kind::constraint:
     case Kind::constraint_item:
         return constraint_relation(entry, type);
@@ -957,6 +1018,23 @@ std::vector<fsim_vpi_handle_v1> VpiClassModel::members_of(
             if (!source.methods[index].out_of_block_definition) {
                 objects.push_back(
                     make(Kind::method, declaration, specialization, index));
+            }
+        }
+        break;
+    // The assignments of a class specialization (37.32 detail 3): one per
+    // value parameter, the object of its Rhs being any object with the
+    // right value, here the actual or default expression it was bound to;
+    // none for a lexical typespec, whose Rhs is the use's explicit actual,
+    // and none for a type parameter, whose Rhs would be a typespec.
+    case vpiParamAssign:
+        if (specialization != no_index) {
+            const auto& actuals = specializations_[specialization].parameters;
+            for (std::size_t index = 0U; index < actuals.size(); ++index) {
+                if (!actuals[index].type_parameter && actuals[index].expression
+                    && index < source.parameters.size()) {
+                    objects.push_back(make(
+                        Kind::param_assign, declaration, specialization, index));
+                }
             }
         }
         break;
@@ -1001,16 +1079,103 @@ std::optional<std::vector<fsim_vpi_handle_v1>> VpiClassModel::iterate(
     if (entry.kind == Kind::constraint || entry.kind == Kind::constraint_item) {
         return constraint_iterate(entry, type);
     }
+    // The arguments `extends B(args)` passes to the base constructor, in
+    // source order (IEEE 1800-2023 8.17, 37.32 vpiArgument).
+    if (entry.kind == Kind::extends && type == vpiArgument) {
+        std::vector<fsim_vpi_handle_v1> arguments;
+        const auto& source = class_at(entry.declaration);
+        if (source.base && hooks_.expression) {
+            const auto self
+                = extends_of(entry.declaration, entry.specialization);
+            // The formals of the base constructor, from the nearest class
+            // of the base chain that declares one; a named argument takes
+            // its formal's place, and the arguments come in formal order
+            // (8.17, 13.5.4). Defaults the call leaves out are not listed.
+            std::vector<std::string> formals;
+            auto base = find_declaration(source.base->declaration_identity);
+            std::vector<std::size_t> followed_bases;
+            while (base && formals.empty()) {
+                // A class chain that returns to a class already followed
+                // (a class extending itself) ends the walk.
+                if (std::ranges::find(followed_bases, *base)
+                    != followed_bases.end()) {
+                    break;
+                }
+                followed_bases.push_back(*base);
+                const auto& declared = class_at(*base);
+                for (const auto& method : declared.methods) {
+                    if (method.kind != semantic::sv::ClassMethodKind::constructor) {
+                        continue;
+                    }
+                    const auto* const callable
+                        = hir_.find_declaration(method.declaration);
+                    if (callable == nullptr || !callable->callable) {
+                        continue;
+                    }
+                    for (const auto formal : callable->callable->formals) {
+                        if (const auto* const record
+                            = hir_.find_declaration(formal)) {
+                            formals.push_back(record->name);
+                        }
+                    }
+                    break;
+                }
+                base = declared.base
+                    ? find_declaration(declared.base->declaration_identity)
+                    : std::nullopt;
+            }
+            const auto& names = source.base->constructor_argument_names;
+            std::vector<std::pair<std::size_t, semantic::ExpressionId>> bound;
+            for (std::size_t index = 0U;
+                 index < source.base->constructor_arguments.size(); ++index) {
+                std::size_t slot = index;
+                if (index < names.size() && !names[index].empty()
+                    && !formals.empty()) {
+                    const auto found
+                        = std::ranges::find(formals, names[index]);
+                    if (found == formals.end()) {
+                        continue;
+                    }
+                    slot = static_cast<std::size_t>(found - formals.begin());
+                }
+                bound.emplace_back(
+                    slot, source.base->constructor_arguments[index]);
+            }
+            std::ranges::stable_sort(bound, {},
+                &std::pair<std::size_t, semantic::ExpressionId>::first);
+            for (const auto& [slot, id] : bound) {
+                static_cast<void>(slot);
+                if (const auto handle = hooks_.expression(id, self);
+                    handle != 0U) {
+                    arguments.push_back(handle);
+                }
+            }
+        }
+        return arguments;
+    }
     if (entry.kind != Kind::typespec) {
         return std::vector<fsim_vpi_handle_v1> { };
     }
     // A lexical typespec supports none of the member relations (37.32
-    // detail 2).
+    // detail 2), but the parameter assignments of the use it came from
+    // (detail 3): the explicit actuals of the `extends`, else the defaults.
     if (entry.specialization == no_index) {
-        return std::vector<fsim_vpi_handle_v1> { };
+        std::vector<fsim_vpi_handle_v1> assignments;
+        if (type == vpiParamAssign && entry.member != 0U) {
+            const auto& parameters = class_at(entry.declaration).parameters;
+            for (std::size_t index = 0U; index < parameters.size(); ++index) {
+                if (!parameters[index].type_parameter
+                    && lexical_actual(entry.member - 1U, entry.declaration, index)) {
+                    assignments.push_back(make(Kind::param_assign,
+                        entry.declaration, no_index,
+                        entry.member * param_assign_stride + index));
+                }
+            }
+        }
+        return assignments;
     }
     if (type == vpiVariables || type == vpiMethods || type == vpiParameter
-        || type == vpiNamedEvent || type == vpiNamedEventArray
+        || type == vpiParamAssign || type == vpiNamedEvent || type == vpiNamedEventArray
         || type == vpiConstraint || type == vpiTypedef
         || type == vpiInternalScope) {
         return members_of(entry.declaration, entry.specialization, type);

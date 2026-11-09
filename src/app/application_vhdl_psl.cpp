@@ -130,11 +130,9 @@ namespace {
     };
 
     [[nodiscard]] bool weak_property(const UnitModel& unit,
-        std::span<const std::string> tokens, const std::size_t depth = 0U)
+        std::span<const std::string> tokens,
+        std::vector<std::string> followed = { })
     {
-        if (depth > 256U) {
-            return false;
-        }
         tokens = trim(tokens);
         if (tokens.empty()) {
             return false;
@@ -143,11 +141,17 @@ namespace {
             return true;
         }
         if (tokens.size() == 1U) {
-            const auto found = unit.declarations.find(canonical(tokens.front()));
+            const auto name = canonical(tokens.front());
+            const auto found = unit.declarations.find(name);
+            // A property that refers back to itself is not weak.
+            if (std::ranges::find(followed, name) != followed.end()) {
+                return false;
+            }
+            followed.push_back(name);
             return found != unit.declarations.end()
                 && found->second.kind == PslDeclarationKind::property
                 && weak_property(
-                    unit, found->second.body_tokens, depth + 1U);
+                    unit, found->second.body_tokens, std::move(followed));
         }
         return false;
     }
@@ -182,10 +186,6 @@ namespace {
             const std::size_t depth = 0U) const
         {
             work(tokens.size() + 1U);
-            if (depth > 256U) {
-                throw std::runtime_error(
-                    "VHDL PSL executable declaration nesting exceeds 256");
-            }
             tokens = trim(tokens);
             if (tokens.empty()) {
                 return VhdlPslAttemptOutcome::failure;
@@ -958,10 +958,6 @@ namespace {
             const VhdlPslSampleValues& values, const std::size_t depth) const
         {
             work(tokens.size() + 1U);
-            if (depth > 256U) {
-                throw std::runtime_error(
-                    "VHDL PSL Boolean declaration nesting exceeds 256");
-            }
             tokens = trim(tokens);
             if (tokens.empty()) {
                 return false;

@@ -29,6 +29,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace fsim::runtime::simir {
@@ -168,7 +169,13 @@ std::optional<std::vector<Sensitivity>> body_edge(
     // A register through bit selects and copies: the clock's current value,
     // or a constant's level.
     const auto source = [&](RegisterId reg) -> const Operation* {
-        for (std::size_t steps = 0U; steps < 8U; ++steps) {
+        std::unordered_set<RegisterId> followed;
+        for (;;) {
+            // A register chain that returns to a register already followed
+            // has no defining operation.
+            if (!followed.insert(reg).second) {
+                return nullptr;
+            }
             const auto found = definition.find(reg);
             if (found == definition.end()) {
                 return nullptr;
@@ -182,7 +189,6 @@ std::optional<std::vector<Sensitivity>> body_edge(
                 return &operation;
             }
         }
-        return nullptr;
     };
     const auto clock_value = [&](const Operation* operation) {
         const auto* read = operation != nullptr ? operation_get_if<ReadSignal>(operation) : nullptr;
@@ -268,9 +274,14 @@ std::optional<std::pair<SignalId, bool>> latch_level(const Member& member)
     std::optional<SignalId> signal;
     std::optional<bool> high;
     std::vector<RegisterId> pending { branch.condition };
-    for (std::size_t steps = 0U; !pending.empty() && steps < 16U; ++steps) {
+    std::unordered_set<RegisterId> visited;
+    while (!pending.empty()) {
         const auto reg = pending.back();
         pending.pop_back();
+        // A register reached again was already examined.
+        if (!visited.insert(reg).second) {
+            continue;
+        }
         const auto found = definition.find(reg);
         if (found == definition.end()) {
             return std::nullopt;
@@ -676,7 +687,9 @@ void Interpreter::Impl::StaticKernel::report_domains()
                 leaf_depths[node].push_back(depth);
                 continue;
             }
-            if (depth >= 64U || visited.size() > 4096U) {
+            // A path longer than the node count revisits a node: the cone
+            // has a combinational cycle and no finite depth.
+            if (depth >= writers.size()) {
                 bounded = false;
                 break;
             }

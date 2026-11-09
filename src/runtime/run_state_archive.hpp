@@ -42,6 +42,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace fsim::runtime {
@@ -110,6 +111,13 @@ public:
     void read_bytes(void* data, std::size_t size);
     void packed(PackedLogic4& value);
 
+    /// What a codec needs to rebuild an object that is bound to its owner (a
+    /// service handle names a slot and a generation of one service): the
+    /// section's visitor sets it before the first `io`, and a codec reads it
+    /// back when loading. Not owned and not written to the file.
+    void set_context(const void* context) noexcept { context_ = context; }
+    [[nodiscard]] const void* context() const noexcept { return context_; }
+
 private:
     RunStateArchive(std::string* out, std::string_view in) noexcept
         : out_ { out }
@@ -123,10 +131,13 @@ private:
     template <typename Set> void set(Set& values);
     template <typename Unordered> void unordered_entries(Unordered& values);
     template <typename Pointer> void pointer(Pointer& value);
+    template <typename Variant, std::size_t Index = 0U>
+    void emplace_alternative(Variant& value, std::uint32_t index);
 
     std::string* out_ { };
     std::string_view in_;
     std::string error_;
+    const void* context_ { };
 };
 
 namespace run_state_detail {
@@ -161,6 +172,9 @@ struct is_unordered_map<std::unordered_map<K, V, H, E, A>> : std::true_type { };
 template <typename T> struct is_unordered_set : std::false_type { };
 template <typename K, typename H, typename E, typename A>
 struct is_unordered_set<std::unordered_set<K, H, E, A>> : std::true_type { };
+template <typename T> struct is_variant : std::false_type { };
+template <typename... Alternatives>
+struct is_variant<std::variant<Alternatives...>> : std::true_type { };
 template <typename T> struct is_unique_ptr : std::false_type { };
 template <typename T, typename D>
 struct is_unique_ptr<std::unique_ptr<T, D>> : std::true_type { };
@@ -350,6 +364,19 @@ template <typename Pointer> void RunStateArchive::pointer(Pointer& value)
     }
 }
 
+// The alternative `index` of a variant, default constructed (loading).
+template <typename Variant, std::size_t Index>
+void RunStateArchive::emplace_alternative(Variant& value, const std::uint32_t index)
+{
+    if constexpr (Index < std::variant_size_v<Variant>) {
+        if (index == Index) {
+            value.template emplace<Index>();
+        } else {
+            emplace_alternative<Variant, Index + 1U>(value, index);
+        }
+    }
+}
+
 template <typename T> void RunStateArchive::io(T& value)
 {
     using namespace run_state_detail;
@@ -375,7 +402,7 @@ template <typename T> void RunStateArchive::io(T& value)
         auto underlying = static_cast<std::underlying_type_t<T>>(value);
         integral(underlying);
         value = static_cast<T>(underlying);
-    } else if constexpr (std::is_integral_v<T>) {
+    } else if constexpr (std::is_integral_v<T> || std::is_floating_point_v<T>) {
         integral(value);
     } else if constexpr (std::is_same_v<T, std::string>) {
         const auto size = count(value.size());
@@ -430,6 +457,21 @@ template <typename T> void RunStateArchive::io(T& value)
         unordered_entries(value);
     } else if constexpr (is_unique_ptr<T>::value || is_shared_ptr<T>::value) {
         pointer(value);
+    } else if constexpr (is_variant<T>::value) {
+        // The index of the alternative, then the alternative.
+        std::uint32_t index = static_cast<std::uint32_t>(value.index());
+        io(index);
+        if (!ok()) {
+            return;
+        }
+        if (loading()) {
+            if (index >= std::variant_size_v<T>) {
+                fail("bad variant index");
+                return;
+            }
+            emplace_alternative(value, index);
+        }
+        std::visit([&](auto& alternative) { io(alternative); }, value);
     } else {
         static_assert(std::is_aggregate_v<T>,
             "run-state field type needs a RunStateCodec");

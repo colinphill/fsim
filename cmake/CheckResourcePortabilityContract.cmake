@@ -4459,7 +4459,6 @@ endforeach()
 
 foreach(FSIM_VHDL_2019_CONDITIONAL_POLICY IN ITEMS
     "analyze_vhdl_conditionals"
-    "max_conditional_depth = 128U"
     "FSIM-VHDL-CA-001"
     "FSIM-VHDL-CA-002"
     "FSIM-VHDL-CA-003"
@@ -4483,8 +4482,7 @@ foreach(FSIM_VHDL_2019_CONDITIONAL_POLICY IN ITEMS
     "conditional identifier names are case-insensitive while their string "
     "values remain case-sensitive"
     "directive-like text inside block comments is ignored and ordinary "
-    "conditional analysis rejects excess nesting without losing group "
-    "synchronization or growing its frame stack past the bound")
+    "conditional analysis nests without a fixed depth limit")
   string(FIND
     "${FSIM_VHDL_2019_CONDITIONAL_IMPLEMENTATION_CONTENTS}${FSIM_VHDL_2019_CONDITIONAL_INTERNAL_CONTENTS}${FSIM_VHDL_2019_CONDITIONAL_DRIVER_CONTENTS}${FSIM_VHDL_2019_FRONTEND_TEST_CONTENTS}"
     "${FSIM_VHDL_2019_CONDITIONAL_POLICY}" FSIM_INDEX)

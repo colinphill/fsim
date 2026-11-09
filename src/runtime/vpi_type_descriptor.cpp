@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/vpi_type_descriptor.hpp"
+#include "fsim/support/stack_growth.hpp"
 #include "fsim/support/index_distance.hpp"
 
 #include <algorithm>
@@ -11,7 +12,6 @@ namespace fsim::runtime {
 
 namespace {
 
-    constexpr std::size_t maximum_depth = 64;
     constexpr std::size_t maximum_nodes = 65'536;
     constexpr std::size_t maximum_elements = 65'536;
     constexpr std::size_t maximum_name_size = 4096;
@@ -100,8 +100,11 @@ namespace {
         const std::size_t depth,
         SystemVerilogVpiDescriptorLayout& layout)
     {
-        if (depth > maximum_depth) {
-            return SystemVerilogVpiDescriptorError::DepthLimit;
+        // Nested descriptors continue on a new stack segment when the stack
+        // is nearly used up, so the nesting depth is bounded by memory.
+        if (!support::stack_growth_detail::has_room()) {
+            return support::with_stack(
+                [&] { return measure(descriptor, depth, layout); });
         }
         if (static_cast<unsigned>(descriptor.kind)
                 > static_cast<unsigned>(

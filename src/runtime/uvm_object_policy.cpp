@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/uvm_object.hpp"
+#include "fsim/support/stack_growth.hpp"
 
 #include <algorithm>
 #include <array>
@@ -265,6 +266,14 @@ SystemVerilogUvmObjectService::compare_detailed(
     }
     if (depth >= limits_.maximum_depth) {
       throw std::length_error{"UVM compare recursion depth exceeded"};
+    }
+    // Nested objects continue on a new stack segment when the stack is
+    // nearly used up, so the nesting depth is bounded by memory.
+    if (!support::stack_growth_detail::has_room()) {
+      support::with_stack([&] {
+        compare_object(lhs, rhs, std::move(path), depth, recursion);
+      });
+      return;
     }
     if (const auto mapped = left_to_right.find(lhs);
         mapped != left_to_right.end()) {

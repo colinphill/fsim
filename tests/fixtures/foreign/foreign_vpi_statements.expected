@@ -143,8 +143,10 @@
 #c operation line=116 value=10101010
 #c operation line=117 value=1000
 #c operation line=118 value=11111111111111111111111111111010
-#c display line=125 $display: 5
-#c display line=126 $write: "a\n" top.n "b"
+#c operation line=119 value=10101010
+#c operation line=120 value=101001101001
+#c display line=127 $display: 5
+#c display line=128 $write: "a\n" top.n "b"
 #c 10 force vpiForce line=40 top.q=0101
 #c 12 release vpiRelease line=41 top.q=0101
 #c 13 assign vpiAssignStmt line=42 top.r=1110

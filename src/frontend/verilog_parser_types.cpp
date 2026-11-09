@@ -494,11 +494,15 @@ std::optional<Type> VerilogParser::parse_named_packed_array_type()
             && element.spelling != "bit" && element.spelling != "reg")) {
         return std::nullopt;
     }
+    const auto over = qualified ? current().text + "::" + current(2).text
+                                : current().text;
     if (qualified) {
         index_ += 2U;
     }
     const auto name = advance();
-    return packed_array_of_type(std::move(element), name.span);
+    auto result = packed_array_of_type(std::move(element), name.span);
+    result.systemverilog_packed_over = over;
+    return result;
 }
 
 bool VerilogParser::aggregate_width_expression(

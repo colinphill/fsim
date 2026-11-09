@@ -1,0 +1,10 @@
+#c u1 port vhpiportdeclk r mode=in size=1 value=1
+#c u1 port vhpiportdeclk s mode=out size=1 value=1
+#c u1 assoc formal vhpiportdeclk r actual vhpisigdeclk sa1
+#c u1 assoc formal vhpiportdeclk s actual vhpisigdeclk sd1
+#c u1 unit cmp arch e
+#c u2 port vhpiportdeclk r mode=in size=1 value=1
+#c u2 port vhpiportdeclk s mode=out size=1 value=1
+#c u2 assoc formal vhpiportdeclk r actual vhpisigdeclk sa2
+#c u2 assoc formal vhpiportdeclk s actual vhpisigdeclk sd2
+#c u2 unit cmp arch e

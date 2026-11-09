@@ -86,3 +86,15 @@
 #c net top.upp a=1 t=404
 #c net top.upp a=x t=448
 #c net top.upp a=1 t=452
+#c put bit1 9.000 9.000
+#c net top.u15 a=1000 t=485
+#c net top.u15 a=1010 t=489
+#c callee net=1 port=0 peek=0 t=511
+#c callee net=1 port=1 peek=1 t=516
+#c group put 9.000 9.000 9.000
+#c net top.pl a=010 t=607
+#c net top.pl a=111 t=609
+#c net top.lc a=0001 t=705
+#c net top.lc a=0011 t=713
+#c net top.la a=1 t=726
+#c net top.lb a=1 t=745

@@ -1665,18 +1665,29 @@ SystemVerilogVpiValueError SystemVerilogVpiObjectRegistry::force_value(
         published = value;
         observers = snapshot_observers(value_observers_);
     }
-    const auto current = record.live_value
-        ? visible_value(record, handle)
-        : record.value;
-    if (!value_state_observers_.empty() && current) {
-        state_update = SystemVerilogVpiValueStateUpdate {
-            handle, *current, value
-        };
+    // A live value is asked of the simulation with the lock released: the
+    // kernel may publish changes (notify_live_value) while it answers.
+    const bool ask_live = record.live_value && live_source_;
+    const auto source = ask_live ? live_source_ : SystemVerilogVpiLiveValueSource {};
+    std::optional<SystemVerilogVpiStoredValue> current;
+    if (!ask_live) {
+        current = visible_value(record, handle);
+    }
+    const auto forcing = value;
+    if (!value_state_observers_.empty()) {
         state_observers = snapshot_observers(value_state_observers_);
     }
     previous_forced_value = record.forced_value;
     record.forced_value = std::move(value);
     lock.unlock();
+    if (ask_live) {
+        current = source(handle, false);
+    }
+    if (!state_observers.empty() && current) {
+        state_update = SystemVerilogVpiValueStateUpdate {
+            handle, *current, forcing
+        };
+    }
     if (state_update) {
         const auto state_error
             = notify_value_state_observers(state_observers, *state_update);
@@ -1842,28 +1853,54 @@ SystemVerilogVpiObjectRegistry::snapshot_values() const
 {
     materialize_all();
     SystemVerilogVpiObjectStateSnapshot snapshot;
-    std::scoped_lock lock { mutex_ };
-    if (!valid()) {
-        snapshot.error = SystemVerilogVpiObjectStateError::InvalidSimulation;
-        return snapshot;
-    }
-    snapshot.simulation_identity = simulation_identity_;
-    try {
-        snapshot.objects.reserve(records_.size());
-        for (std::size_t slot = 0; slot < records_.size(); ++slot) {
-            const auto& record = records_[slot];
-            if (!record.live || !record.type) {
-                continue;
+    // Live values are asked of the simulation with the lock released (the
+    // kernel may publish changes through notify_live_value while it
+    // answers).
+    struct Live {
+        std::size_t index { };
+        fsim_vpi_handle_v1 handle { };
+    };
+    std::vector<Live> live;
+    SystemVerilogVpiLiveValueSource source;
+    {
+        std::scoped_lock lock { mutex_ };
+        if (!valid()) {
+            snapshot.error = SystemVerilogVpiObjectStateError::InvalidSimulation;
+            return snapshot;
+        }
+        snapshot.simulation_identity = simulation_identity_;
+        source = live_source_;
+        try {
+            snapshot.objects.reserve(records_.size());
+            for (std::size_t slot = 0; slot < records_.size(); ++slot) {
+                const auto& record = records_[slot];
+                if (!record.live || !record.type) {
+                    continue;
+                }
+                const auto handle = encode_object(
+                    static_cast<std::uint32_t>(slot), record.epoch);
+                const bool ask_live = record.live_value && source;
+                if (ask_live) {
+                    live.push_back({ snapshot.objects.size(), handle });
+                }
+                snapshot.objects.push_back(SystemVerilogVpiObjectState {
+                    handle,
+                    record.full_name,
+                    *record.type,
+                    ask_live ? std::nullopt
+                             : visible_value(record, handle, true),
+                    record.forced_value,
+                });
             }
-            snapshot.objects.push_back(SystemVerilogVpiObjectState {
-                encode_object(
-                    static_cast<std::uint32_t>(slot), record.epoch),
-                record.full_name,
-                *record.type,
-                visible_value(record, encode_object(
-                    static_cast<std::uint32_t>(slot), record.epoch), true),
-                record.forced_value,
-            });
+        } catch (...) {
+            snapshot.objects.clear();
+            snapshot.error = SystemVerilogVpiObjectStateError::ResourceLimit;
+            return snapshot;
+        }
+    }
+    try {
+        for (const auto& entry : live) {
+            snapshot.objects[entry.index].value = source(entry.handle, true);
         }
     } catch (...) {
         snapshot.objects.clear();
@@ -1996,7 +2033,7 @@ SystemVerilogVpiValueReadResult SystemVerilogVpiObjectRegistry::read_value(
     const SystemVerilogVpiValueFormat format,
     const SystemVerilogVpiValueReadBuffers buffers) const
 {
-    std::scoped_lock lock { mutex_ };
+    std::unique_lock lock { mutex_ };
     if (!valid()) {
         return value_failure(SystemVerilogVpiValueError::InvalidSimulation);
     }
@@ -2008,6 +2045,18 @@ SystemVerilogVpiValueReadResult SystemVerilogVpiObjectRegistry::read_value(
     const auto& record = records_[slot];
     if (!record.type) {
         return value_failure(SystemVerilogVpiValueError::NotReadable);
+    }
+    if (record.live_value && live_source_) {
+        // The simulation answers with the lock released: the kernel may
+        // publish changes (notify_live_value) while it does.
+        const auto source = live_source_;
+        const auto type = *record.type;
+        lock.unlock();
+        const auto live = source(handle, false);
+        if (!live) {
+            return value_failure(SystemVerilogVpiValueError::NotBound);
+        }
+        return read_systemverilog_vpi_value(type, *live, format, buffers);
     }
     const auto visible = visible_value(record, handle);
     if (!visible) {

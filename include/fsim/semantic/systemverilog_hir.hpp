@@ -691,6 +691,11 @@ struct TypeReference {
     // named target whose shape is selected later, such as a type parameter's
     // (`T [1:0]`, IEEE 1800-2023 7.4.1): they come before the target's own.
     bool packed_over_named_type { };
+    // The named type whose packed dimensions were composed into this
+    // reference (`nib_t [1:0]`, IEEE 1800-2023 7.4.1); composing leaves a
+    // bare `logic`/`bit` vector, and this keeps the name for VPI typespecs
+    // (37.25). Unset when nothing was composed or the target stayed.
+    semantic::TypeReference composed_over;
 
     friend bool operator==(
         const TypeReference&, const TypeReference&) = default;
@@ -908,6 +913,10 @@ struct ClassRelation {
     std::string name;
     std::string declaration_identity;
     std::vector<ActualAssociation> actuals;
+    // The arguments of `extends B(args)` (8.17), in source order, and the
+    // formal each names ("" when positional).
+    std::vector<ExpressionId> constructor_arguments;
+    std::vector<std::string> constructor_argument_names;
     SourceSpanId source;
     OriginId origin;
     ResidualDependencies dependencies;

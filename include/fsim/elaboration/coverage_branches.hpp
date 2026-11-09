@@ -4,6 +4,7 @@
 #include "fsim/frontend/coverage_point_identity.hpp"
 #include "fsim/frontend/design.hpp"
 
+#include <limits>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -47,7 +48,7 @@ struct CoverageBranchLimits {
     std::size_t maximum_sources { 1U << 16U };
     std::size_t maximum_statements { 1U << 20U };
     std::size_t maximum_arms { 1U << 20U };
-    std::size_t maximum_nesting { 1U << 12U };
+    std::size_t maximum_nesting { std::numeric_limits<std::size_t>::max() };
 };
 
 enum class CoverageBranchError {

@@ -244,7 +244,7 @@ void SystemVerilogUvmRegisterModelService::add_submap(
       descendants.emplace_back(relation.child, local_depth + 1U);
   }
   if (descendant_depth > limits_.maximum_submap_depth ||
-      depth > limits_.maximum_submap_depth - descendant_depth + 1U)
+      depth - 1U > limits_.maximum_submap_depth - descendant_depth)
     fail_map(kMapLimit, "UVM register submap-depth limit exceeded");
   record_mutation();
   const SystemVerilogUvmRegisterSubmapSnapshot relation{

@@ -4,6 +4,7 @@
 #include "fsim/diagnostic/diagnostic.hpp"
 #include "fsim/systemc/scv_backend_protocol.hpp"
 
+#include <limits>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -84,7 +85,7 @@ struct ScvNativeSmartPtrInfo {
 struct ScvNativeSmartPtrLimits {
     std::size_t max_handles { 65536U };
     std::size_t max_name_bytes { 4096U };
-    std::size_t max_extension_depth { 64U };
+    std::size_t max_extension_depth { std::numeric_limits<std::uint32_t>::max() };
 };
 
 class ScvNativeSmartPtrRegistry {

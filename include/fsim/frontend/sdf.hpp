@@ -4,6 +4,7 @@
 #include "fsim/frontend/diagnostic.hpp"
 #include "fsim/frontend/source.hpp"
 
+#include <limits>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -37,7 +38,7 @@ enum class SdfTokenKind {
 struct SdfLexerLimits {
   std::size_t max_source_bytes{64U * 1024U * 1024U};
   std::size_t max_tokens{1'000'000U};
-  std::size_t max_parenthesis_depth{4096U};
+  std::size_t max_parenthesis_depth{std::numeric_limits<std::size_t>::max()};
   std::size_t max_token_bytes{1024U * 1024U};
   std::size_t max_numeric_bytes{4096U};
 

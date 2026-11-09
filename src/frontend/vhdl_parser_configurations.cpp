@@ -13,13 +13,7 @@ void VhdlParser::parse_vhdl_binding_port_map(
       TokenKind::LeftParen,
       "'(' after configuration port map",
       "FSIM-VHDL-PARSE-212");
-  while (!at_end() && !at(TokenKind::RightParen)) {
-    associations.push_back(
-        parse_vhdl_port_connection());
-    if (!match(TokenKind::Comma)) {
-      break;
-    }
-  }
+  parse_vhdl_port_associations(associations);
   expect(
       TokenKind::RightParen,
       "')' after configuration port map",

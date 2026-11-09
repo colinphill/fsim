@@ -638,12 +638,21 @@ SystemVerilogVpiAssertionApiError SystemVerilogVpiAssertionApi::observe(
         || !assertion_text_is_bounded(event)) {
         return SystemVerilogVpiAssertionApiError::InvalidRequest;
     }
-    const auto info = impl_->registry->lookup(object);
-    if (!info) {
-        return assertion_object_error(info.error);
-    }
-    if (info.value->kind != SystemVerilogVpiObjectKind::Assertion) {
-        return SystemVerilogVpiAssertionApiError::InvalidObject;
+    // The registry validates the object once: a record with a kind came
+    // from an earlier outcome of the same assertion.
+    const auto validated = [&] {
+        std::scoped_lock lock { impl_->mutex };
+        const auto found = impl_->records.find(object);
+        return found != impl_->records.end() && found->second.kind.has_value();
+    }();
+    if (!validated) {
+        const auto info = impl_->registry->lookup(object);
+        if (!info) {
+            return assertion_object_error(info.error);
+        }
+        if (info.value->kind != SystemVerilogVpiObjectKind::Assertion) {
+            return SystemVerilogVpiAssertionApiError::InvalidObject;
+        }
     }
 
     {

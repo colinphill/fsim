@@ -15,6 +15,8 @@
 
 namespace fsim::runtime {
 
+class RunStateArchive;
+
 class SystemVerilogUvmComponentService;
 class SystemVerilogUvmObjectionService;
 class SystemVerilogUvmReportService;
@@ -153,6 +155,12 @@ struct SystemVerilogUvmCommandLineLimits {
 /// Parsing completes before any factory, resource, or config state is changed.
 class SystemVerilogUvmCommandLineService final {
  public:
+  /// Run-state save and restore of which report settings the run has applied
+  /// (#188); the settings are the command line's. reset_run_state makes the
+  /// run apply them again from time zero.
+  void run_state_io(RunStateArchive& archive);
+  void reset_run_state();
+
   SystemVerilogUvmCommandLineService(
       SystemVerilogUvmFactoryService& factory,
       SystemVerilogUvmResourcePoolService& resources,

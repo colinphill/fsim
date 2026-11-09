@@ -5,6 +5,7 @@
 #include "fsim/runtime/uvm_activity.hpp"
 #include "fsim/runtime/uvm_component.hpp"
 
+#include <limits>
 #include <compare>
 #include <cstddef>
 #include <cstdint>
@@ -184,7 +185,7 @@ struct SystemVerilogUvmTlm2Limits {
   std::size_t maximum_name_bytes{1'024};
   std::size_t maximum_profile_bytes{4'096};
   std::size_t maximum_fanout{65'536};
-  std::size_t maximum_depth{256};
+  std::size_t maximum_depth{std::numeric_limits<std::size_t>::max()};
   std::size_t maximum_hops{256};
   std::size_t maximum_payload_bytes{1U << 24U};
   std::size_t maximum_byte_enables{1U << 20U};
@@ -256,6 +257,15 @@ struct SystemVerilogUvmTlm2TransactionSnapshot {
 
 class SystemVerilogUvmTlm2Service final {
  public:
+  /// True while the service holds no state: a run that never used it has
+  /// nothing to save (#188). Its handlers are the embedder's callbacks.
+  [[nodiscard]] bool run_state_idle() const noexcept {
+    return sockets_.empty() && transactions_.empty() && blocking_handlers_.empty()
+        && forward_handlers_.empty() && backward_handlers_.empty()
+        && debug_handlers_.empty() && dmi_handlers_.empty()
+        && dmi_invalidation_handlers_.empty();
+  }
+
   using BlockingHandler = std::function<void(
       SystemVerilogUvmTlm2GenericPayload&, SimulationTick&)>;
   using NonblockingHandler = std::function<SystemVerilogUvmTlm2Sync(

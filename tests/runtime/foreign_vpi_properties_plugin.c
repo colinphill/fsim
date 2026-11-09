@@ -23,6 +23,10 @@ static const char* type_name(PLI_INT32 type)
         return "vpiSeqFormalDecl";
     case vpiPropertySpec:
         return "vpiPropertySpec";
+    case vpiIntVar:
+        return "vpiIntVar";
+    case vpiReg:
+        return "vpiReg";
     case vpiPropertyInst:
         return "vpiPropertyInst";
     case vpiSequenceInst:
@@ -122,6 +126,21 @@ static void formals(vpiHandle declaration, PLI_INT32 iteration)
     }
 }
 
+// The local variables of a declaration (37.51, 37.53 vpiVariables).
+static void variables(vpiHandle declaration)
+{
+    vpiHandle const iterator = vpi_iterate(vpiVariables, declaration);
+    vpiHandle variable;
+    while (iterator != NULL && (variable = vpi_scan(iterator)) != NULL) {
+        vpiHandle const parent = vpi_handle(vpiParent, variable);
+        vpi_printf("#c variable %s type=%s name=%s parent=%s\n",
+            text(vpiFullName, variable),
+            type_name((PLI_INT32)vpi_get(vpiType, variable)),
+            text(vpiName, variable),
+            parent != NULL ? text(vpiFullName, parent) : "none");
+    }
+}
+
 static void property(vpiHandle declaration)
 {
     vpiHandle const spec = vpi_handle(vpiPropertySpec, declaration);
@@ -132,6 +151,7 @@ static void property(vpiHandle declaration)
         text(vpiFullName, declaration),
         type_name((PLI_INT32)vpi_get(vpiType, declaration)));
     formals(declaration, vpiPropFormalDecl);
+    variables(declaration);
     vpi_printf("#c disable %s\n", disable != NULL ? text(vpiName, disable) : "none");
     if (spec == NULL) {
         vpi_printf("#c no spec\n");
@@ -157,6 +177,7 @@ static void sequence(vpiHandle declaration)
         text(vpiFullName, declaration),
         type_name((PLI_INT32)vpi_get(vpiType, declaration)));
     formals(declaration, vpiSeqFormalDecl);
+    variables(declaration);
     vpi_printf("#c expr\n");
     if (expression != NULL) {
         dump(expression, 1, 1);

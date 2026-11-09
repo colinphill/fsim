@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/semantic/compiled_design_resolver.hpp"
+#include "fsim/support/stack_growth.hpp"
 #include "fsim/semantic/systemverilog_type_descriptor.hpp"
 #include "fsim/support/design_library.hpp"
 #include "fsim/support/index_distance.hpp"
@@ -768,6 +769,9 @@ sv::TypeReference retain_systemverilog_declarator(
         // A composed array of bits names no type, so no later lookup of the
         // spelling composes it again.
         if (!aggregate) {
+            // The name the dimensions were declared over survives for VPI
+            // typespecs (37.25).
+            replacement.composed_over = use.target;
             replacement.value_form = sv::TypeForm::packed_integral;
             replacement.target.target = { };
             replacement.target.spelling
@@ -3292,7 +3296,7 @@ std::optional<TypeId> CompiledDesignResolver::resolve_vhdl_named_type(
     // its type mark, denotes that type; homographs that denote the same
     // named entity are both made directly visible (IEEE 1076-2008 12.4 c).
     const auto denoted_type = [&](TypeId id) {
-        for (std::size_t depth { }; depth < 16U; ++depth) {
+        for (;;) {
             const auto renamed = find_type(id);
             if (!renamed || renamed->vhdl == nullptr) {
                 break;
@@ -4201,9 +4205,6 @@ bool vhdl_expression_iteration_independent(const SpecializedHirUnit& unit,
     const ExpressionId id, const std::span<const std::string> names,
     const std::size_t depth)
 {
-    if (depth > 256U) {
-        return false;
-    }
     const auto found = unit.find_expression(id);
     if (!found || found->vhdl == nullptr) {
         return false;
@@ -4213,8 +4214,8 @@ bool vhdl_expression_iteration_independent(const SpecializedHirUnit& unit,
     }
     const auto& value = *found->vhdl;
     const auto nested = [&](const ExpressionId operand) {
-        return vhdl_expression_iteration_independent(
-            unit, operand, names, depth + 1U);
+        return support::with_stack([&] { return vhdl_expression_iteration_independent(
+            unit, operand, names, depth + 1U); });
     };
     return !spelling_iteration_variant(value.text, names)
         && (!value.referenced_name
@@ -4781,7 +4782,9 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
         // in a generic package body) denotes that generic, which an outer
         // frame binds (IEEE 1076-2008 4.9, 6.5.3).
         auto current = formal;
-        for (std::size_t hop = 0U; hop < 8U; ++hop) {
+        // Formals bound to each other in a ring end the walk.
+        std::vector<DeclarationId> visited_formals { current };
+        for (;;) {
             std::optional<DeclarationId> outer;
             for (const auto& frame : active) {
                 const auto binding = std::ranges::find(
@@ -4806,10 +4809,13 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
                                   &CompiledActualBinding::formal)
                            != frame.end();
                    });
-            if (!outer_bound) {
+            if (!outer_bound
+                || std::ranges::find(visited_formals, *outer)
+                    != visited_formals.end()) {
                 break;
             }
             current = *outer;
+            visited_formals.push_back(current);
         }
         for (auto frame = active.rbegin(); frame != active.rend(); ++frame) {
             const auto binding = std::ranges::find(
@@ -4890,10 +4896,6 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
         if (!constraint.left_expression || !constraint.right_expression) {
             return std::nullopt;
         }
-        constexpr std::size_t maximum_range_direction_depth = 32U;
-        if (path.size() >= maximum_range_direction_depth) {
-            return std::nullopt;
-        }
         const auto path_key = std::pair {
             constraint.left_expression->value(),
             constraint.right_expression->value()
@@ -4969,7 +4971,7 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
         };
         const auto selection_steps = [&](ExpressionId id) {
             std::vector<std::string> steps;
-            for (std::size_t depth { }; depth < 16U; ++depth) {
+            for (;;) {
                 const auto selected = find_expression(*design_, effective_, id);
                 if (selected && selected->vhdl != nullptr
                     && indexed_object_call(*selected->vhdl)) {
@@ -5750,12 +5752,12 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
             return (range.left_expression && !range.left)
                 || (range.right_expression && !range.right);
         };
-        if (depth > 8U || std::ranges::any_of(subtype.constraints, residual)
+        if (std::ranges::any_of(subtype.constraints, residual)
             || std::ranges::any_of(subtype.element_constraints,
                 [&](const vhdl::ElementConstraint& element) {
                     return std::ranges::any_of(element.constraints, residual);
                 })) {
-            return depth <= 8U;
+            return true;
         }
         const auto type = subtype.type_mark.target.valid()
             ? find_type(*design_, effective_, subtype.type_mark.target)
@@ -5765,7 +5767,7 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
         }
         if (type->vhdl->form == vhdl::TypeForm::subtype
             || type->vhdl->form == vhdl::TypeForm::alias) {
-            return self(self, type->vhdl->base, depth + 1U);
+            return support::with_stack([&] { return self(self, type->vhdl->base, depth + 1U); });
         }
         return type->vhdl->form == vhdl::TypeForm::array
             && std::ranges::any_of(type->vhdl->array_dimensions,
@@ -5779,9 +5781,6 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
                                   std::vector<std::string>& path,
                                   const std::size_t depth,
                                   std::vector<CompiledBindingFrame>& active_frames) {
-        if (depth > 8U) {
-            return;
-        }
         const vhdl::TypeDefinition* definition { };
         auto id = level.type_mark.target;
         std::set<std::uint32_t> seen;
@@ -5863,8 +5862,8 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
                 }
             }
             if (element) {
-                close_instance_elements(
-                    root, *element, path, depth + 1U, active_frames);
+                support::with_stack([&] { return close_instance_elements(
+                    root, *element, path, depth + 1U, active_frames); });
             }
             path.pop_back();
         };
@@ -6536,7 +6535,6 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
                 std::optional<ExpressionId> expression;
                 std::optional<DeclarationId> declaration;
             };
-            constexpr auto maximum_enum_boundary_depth = std::size_t { 64U };
             std::function<EnumerationBoundaryValue(TypeId, ExpressionId,
                 std::set<ExpressionId>&, std::set<DeclarationId>&,
                 std::size_t)>
@@ -6627,8 +6625,7 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
                 std::set<DeclarationId>& active_declarations,
                 const std::size_t depth)
                 -> EnumerationBoundaryValue {
-                if (depth >= maximum_enum_boundary_depth
-                    || !active_declarations.insert(id).second) {
+                if (!active_declarations.insert(id).second) {
                     return { std::nullopt, true };
                 }
                 struct DeclarationGuard {
@@ -6654,15 +6651,15 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
                     const auto binding = enum_actual_binding(id);
                     if (binding.found) {
                         if (binding.expression) {
-                            return evaluate_enum_expression(
+                            return support::with_stack([&] { return evaluate_enum_expression(
                                 root, *binding.expression, active_expressions,
-                                active_declarations, depth + 1U);
+                                active_declarations, depth + 1U); });
                         }
                         if (binding.declaration) {
-                            return evaluate_enum_declaration(
+                            return support::with_stack([&] { return evaluate_enum_declaration(
                                 root, *binding.declaration,
                                 active_expressions, active_declarations,
-                                depth + 1U);
+                                depth + 1U); });
                         }
                         // An explicit binding owns the generic even when it
                         // has no expression. Do not substitute its default.
@@ -6672,9 +6669,9 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
                 if (!declaration->vhdl->initializer) {
                     return { std::nullopt, true };
                 }
-                return evaluate_enum_expression(root,
+                return support::with_stack([&] { return evaluate_enum_expression(root,
                     *declaration->vhdl->initializer, active_expressions,
-                    active_declarations, depth + 1U);
+                    active_declarations, depth + 1U); });
             };
             evaluate_enum_expression = [&](const TypeId root,
                 const ExpressionId id,
@@ -6682,8 +6679,7 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
                 std::set<DeclarationId>& active_declarations,
                 const std::size_t depth)
                 -> EnumerationBoundaryValue {
-                if (depth >= maximum_enum_boundary_depth
-                    || !active_expressions.insert(id).second) {
+                if (!active_expressions.insert(id).second) {
                     return { std::nullopt, true };
                 }
                 struct ExpressionGuard {
@@ -6732,9 +6728,9 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
                                 : EnumerationBoundaryValue {
                                       std::nullopt, true };
                         }
-                        return evaluate_enum_declaration(root, *selected,
+                        return support::with_stack([&] { return evaluate_enum_declaration(root, *selected,
                             active_expressions, active_declarations,
-                            depth + 1U);
+                            depth + 1U); });
                     }
                     return { enum_literal_ordinal(root, id), true };
                 }
@@ -6760,9 +6756,9 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
                     if (!qualified_root || *qualified_root != root) {
                         return { std::nullopt, true };
                     }
-                    const auto value = evaluate_enum_expression(root,
+                    const auto value = support::with_stack([&] { return evaluate_enum_expression(root,
                         source.operands.front(), active_expressions,
-                        active_declarations, depth + 1U);
+                        active_declarations, depth + 1U); });
                     return value.uses_enum_context
                         ? value
                         : EnumerationBoundaryValue {
@@ -9114,8 +9110,69 @@ bool CompiledDesignResolver::vhdl_builtin_package_member_imported(
     const std::string_view library, const std::string_view package,
     const std::string_view member, const ScopeId use_scope) const
 {
-    if (design_ == nullptr
-        || !builtin_standard_package_exports(library, package, member)) {
+    return builtin_standard_package_exports(library, package, member)
+        && vhdl_package_member_use_clause_names(
+            library, package, member, use_scope);
+}
+
+bool CompiledDesignResolver::vhdl_package_member_use_visible(
+    const std::string_view library, const std::string_view package,
+    const std::string_view member, const ScopeId use_scope,
+    const bool overloadable) const
+{
+    if (!vhdl_package_member_use_clause_names(
+            library, package, member, use_scope)) {
+        return false;
+    }
+    // A declaration of the same designator in a region around the use hides
+    // the use-visible one (IEEE 1076-2019 12.3), unless both are
+    // overloadable: subprograms and enumeration literals of different
+    // profiles or types are all visible. Only a nonoverloadable declaration
+    // (an object, type, component) can hide an overloadable one.
+    vhdl::Name name;
+    name.spelling = std::string { member };
+    name.canonical = name.spelling;
+    // The regions around the use, and the primary unit's (12.1); a
+    // declaration reached through a use clause is not one of them.
+    std::unordered_set<std::uint32_t> regions;
+    for (auto scope = use_scope; scope.valid()
+         && regions.insert(scope.value()).second;) {
+        const auto* record = find_scope(*design_, scope);
+        if (record == nullptr) {
+            break;
+        }
+        if (const auto owner = design_->find_unit(record->unit);
+            owner && owner->vhdl != nullptr) {
+            if (const auto entity = primary_vhdl_unit(*design_, *owner->vhdl)) {
+                regions.insert((**entity).scope.value());
+            }
+        }
+        if (!record->parent) {
+            break;
+        }
+        scope = *record->parent;
+    }
+    const auto hiding = resolve_vhdl(name, use_scope,
+        [&](const CompiledDeclarationView& declaration) {
+            if (declaration.vhdl == nullptr
+                || !regions.contains(declaration.vhdl->scope.value())) {
+                return false;
+            }
+            const auto form = declaration.vhdl->form;
+            const bool declared_overloadable
+                = declaration.vhdl->callable.has_value()
+                || form == vhdl::DeclarationForm::enumeration_literal;
+            return !(overloadable && declared_overloadable);
+        });
+    return hiding.status == CompiledResolutionStatus::not_found
+        || hiding.candidates.empty();
+}
+
+bool CompiledDesignResolver::vhdl_package_member_use_clause_names(
+    const std::string_view library, const std::string_view package,
+    const std::string_view member, const ScopeId use_scope) const
+{
+    if (design_ == nullptr) {
         return false;
     }
     const auto lookup_units = vhdl_lookup_units(
@@ -9619,19 +9676,16 @@ CompiledDesignResolver::resolve_vhdl_callable_candidates(
     if (std::ranges::none_of(visible.candidates, is_alias)) {
         return visible;
     }
-    thread_local std::size_t alias_depth { };
-    if (alias_depth > 8U) {
-        return { };
-    }
-    ++alias_depth;
-    struct DepthGuard {
-        std::size_t& depth;
-        ~DepthGuard() { --depth; }
-    } depth_guard { alias_depth };
     const auto signature_matches = [&](const vhdl::Declaration& alias,
                                        const DeclarationId target_id) {
         return vhdl_callable_matches_signature(
             *alias.alias_signature, alias.scope, target_id);
+    };
+    // An alias whose target name finds the alias again (`alias f is f
+    // [...]`) expands once: a nested expansion of it adds nothing.
+    thread_local std::vector<DeclarationId> expanding_aliases;
+    struct ExpandingGuard {
+        ~ExpandingGuard() { expanding_aliases.pop_back(); }
     };
     std::vector<DeclarationId> expanded;
     for (const auto candidate : visible.candidates) {
@@ -9639,6 +9693,12 @@ CompiledDesignResolver::resolve_vhdl_callable_candidates(
             expanded.push_back(candidate);
             continue;
         }
+        if (std::ranges::find(expanding_aliases, candidate)
+            != expanding_aliases.end()) {
+            continue;
+        }
+        expanding_aliases.push_back(candidate);
+        const ExpandingGuard expanding_guard;
         const auto alias = find_declaration(*design_, effective_, candidate);
         auto target_name = *alias->vhdl->alias_target;
         target_name.selected.reset();
@@ -10933,8 +10993,53 @@ CompiledDesignResolver::resolve_expression_name(
     if (!source.referenced_name) {
         return { CompiledResolutionStatus::not_found, { } };
     }
-    return resolve_vhdl(
+    auto resolution = resolve_vhdl(
         *source.referenced_name, source.scope, predicate);
+    // The literal's context type removes the homographs of other types.
+    if (!resolution.candidates.empty()) {
+        std::erase_if(resolution.candidates, [&](const DeclarationId id) {
+            return !vhdl_character_literal_fits_context(source, id);
+        });
+        if (resolution.candidates.empty()) {
+            return { CompiledResolutionStatus::not_found, { } };
+        }
+        resolution.status = status_for(resolution.candidates.size());
+    }
+    return resolution;
+}
+
+bool CompiledDesignResolver::vhdl_character_literal_fits_context(
+    const vhdl::Expression& expression, const DeclarationId declaration) const
+{
+    const auto& text = expression.text;
+    if (text.size() != 3U || text.front() != '\'' || text.back() != '\'') {
+        return true;
+    }
+    const auto view = find_declaration(*design_, effective_, declaration);
+    if (!view || view->vhdl == nullptr
+        || view->vhdl->form != vhdl::DeclarationForm::enumeration_literal
+        || !view->vhdl->subtype
+        || !view->vhdl->subtype->type_mark.target.valid()) {
+        return true;
+    }
+    const auto root_of = [&](const TypeId type) {
+        return effective_ != nullptr ? vhdl_root_type(*effective_, type)
+                                     : vhdl_root_type(*design_, type);
+    };
+    const auto root = root_of(view->vhdl->subtype->type_mark.target);
+    const auto type = find_type(*design_, effective_, root);
+    if (!type || type->vhdl == nullptr) {
+        return true;
+    }
+    if (expression.resolved_type) {
+        return root_of(*expression.resolved_type) == root;
+    }
+    if (!expression.resolved_builtin_type.empty()) {
+        return same_vhdl_identifier(
+            type->vhdl->name, expression.resolved_builtin_type);
+    }
+    // The pass found no context type; the lookup's choice stands.
+    return true;
 }
 
 CompiledDeclarationResolution

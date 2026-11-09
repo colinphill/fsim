@@ -12,10 +12,10 @@
 // scripts/check_run_state_classification.py reads them to fail when a member
 // has no writer (or a writer names a member the table does not list as saved).
 
-#include "fsim/runtime/run_state_archive.hpp"
+#include "run_state_archive.hpp"
 #include "fsim/runtime/run_state_image.hpp"
 #include "fsim/runtime/run_state_sections.hpp"
-#include "fsim/runtime/run_state_value_codecs.hpp"
+#include "run_state_value_codecs.hpp"
 #include "simir_events.hpp"
 #include "simir_internal.hpp"
 
@@ -49,32 +49,13 @@
 #define FSIM_RS_IDLE(scope, member) static_cast<void>(scope)
 #endif
 
-namespace fsim::runtime {
-
-/// A scheduled-task handle names a slot of the running scheduler, so a file
-/// holds only whether it was live; the owner of the record binds the new handle
-/// when the event is restored (Interpreter::Impl::bind_restored_event_handle).
-template <> struct RunStateCodec<ScheduledTaskHandle> {
-    using is_codec = void;
-    static void io(RunStateArchive& archive, ScheduledTaskHandle& handle)
-    {
-        std::uint8_t live = static_cast<bool>(handle) ? 1U : 0U;
-        archive.io(live);
-        if (archive.loading()) {
-            handle = ScheduledTaskHandle { };
-        }
-    }
-};
-
-} // namespace fsim::runtime
-
 namespace fsim::runtime::simir::run_state {
 
 using Impl = InterpreterEventAccess::Impl;
 
 /// Section versions: each subsystem bumps its own when its layout changes.
 inline constexpr std::uint32_t scheduler_version = 1U;
-inline constexpr std::uint32_t host_version = 2U;
+inline constexpr std::uint32_t host_version = 3U;
 inline constexpr std::uint32_t process_version = 1U;
 inline constexpr std::uint32_t kernel_version = 2U;
 

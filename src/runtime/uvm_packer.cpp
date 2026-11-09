@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/uvm_packer.hpp"
+#include "fsim/support/stack_growth.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -110,6 +111,12 @@ SystemVerilogUvmPackedPayload SystemVerilogUvmPacker::pack(
                     const std::size_t depth) {
     if (depth >= limits_.maximum_depth) {
       fail(kResource, "UVM packer nesting depth ceiling exceeded");
+    }
+    // Nested items continue on a new stack segment when the stack is nearly
+    // used up, so the nesting depth is bounded by memory.
+    if (!support::stack_growth_detail::has_room()) {
+      support::with_stack([&] { append_item(item, depth); });
+      return;
     }
     if (++result.item_count > limits_.maximum_items) {
       fail(kResource, "UVM packer item ceiling exceeded");
@@ -223,9 +230,14 @@ std::vector<SystemVerilogUvmPackItem> SystemVerilogUvmPacker::unpack(
   const auto root_count = read_size(limits_.maximum_items);
 
   std::function<SystemVerilogUvmPackItem(std::size_t)> read_item;
-  read_item = [&](const std::size_t depth) {
+  read_item = [&](const std::size_t depth) -> SystemVerilogUvmPackItem {
     if (depth >= limits_.maximum_depth) {
       fail(kResource, "UVM unpack nesting depth ceiling exceeded");
+    }
+    // Nested items continue on a new stack segment when the stack is nearly
+    // used up, so the nesting depth is bounded by memory.
+    if (!support::stack_growth_detail::has_room()) {
+      return support::with_stack([&] { return read_item(depth); });
     }
     if (++item_count > limits_.maximum_items) {
       fail(kResource, "UVM unpack item ceiling exceeded");

@@ -1632,6 +1632,14 @@ struct Interpreter::Impl : SchedulerBatchTask {
     // library.
     std::unordered_map<SignalId, std::vector<ProcessId>>
         vhdl_created_drivers;
+    // The dormant driver regions of the design (Process::DriverRegion::
+    // dormant), by process and signal: a foreign architecture's placeholder
+    // drivers before a program created them (IEEE 1076-2019 20.4.2). They
+    // have no driver record; add_host_driver registers one and removes the
+    // entry when the first created driver of the signal reuses the
+    // placeholder. Rebuilt from the artifact at registration; the created
+    // drivers that activate them are replayed on restart.
+    std::set<std::pair<ProcessId, SignalId>> dormant_driver_regions;
     std::unordered_map<SignalId, PackedLogic4> vhdl_resolved_values;
     std::unordered_map<SignalId, PackedLogic4> vhdl_driver_initial_values;
     mutable std::vector<SignalId> pending_vhdl_resolutions;
@@ -2122,6 +2130,9 @@ struct Interpreter::Impl : SchedulerBatchTask {
     /// was before start; reset_run_state() takes the time-zero image from it
     /// (IEEE 1800-2023 D.8). Empty when the embedder cannot reset.
     std::function<std::unique_ptr<Interpreter>()> reset_source;
+    /// The reset twin runs through this interpreter's class hooks
+    /// (Interpreter::set_reset_twin_class_hooks).
+    bool reset_twin_class_hooks { };
     /// The embedder's scheduler-event owners and handle takers
     /// (Interpreter::set_run_state_event_host).
     Interpreter::RunStateEventHost run_state_event_host;
@@ -2184,6 +2195,10 @@ struct Interpreter::Impl : SchedulerBatchTask {
     };
     std::vector<ProcessId> package_static_startup_signal_processes;
     bool validation_only { };
+    /// This interpreter is the twin of a reset (Interpreter::reset_run_state):
+    /// its start arms every process for time zero and runs none of them, the
+    /// kernel's first activation included.
+    bool reset_twin { };
     bool stopped_by_design { };
     // A `$stop` executed by a final procedure (IEEE 1800-2017 9.2.3).
     bool paused_in_final { };
@@ -2863,6 +2878,12 @@ struct Interpreter::Impl : SchedulerBatchTask {
     [[nodiscard]] std::size_t sva_tick_core(AssertionStorage& storage,
         sva::Monitor& monitor, const std::vector<bool>& guards, bool start,
         bool disabled);
+    /// Whether a new attempt of the directive may start ($assertoff and its
+    /// VPI form, IEEE 1800-2023 20.12): the attempt filter's answer.
+    [[nodiscard]] bool sva_attempt_allowed(AssertionStorage& storage);
+    /// What follows a tick: the attempt-start callbacks and the step events
+    /// the tick produced (cbAssertionStart, cbAssertionStep*; 39.4.2).
+    void sva_tick_reports(AssertionStorage& storage, sva::Monitor& monitor);
     void run_sampled_read(AssertionStorage&, const ReadSignal&);
     void execute_sva(ProcessState&, const SvaOperation&);
     void execute_pla(ProcessState&, const PlaEvaluate&);

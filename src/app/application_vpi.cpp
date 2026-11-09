@@ -880,9 +880,6 @@ namespace {
         using Kind = runtime::SystemVerilogVpiTypespecKind;
         using Descriptor = runtime::SystemVerilogVpiTypeDescriptor;
         using Category = runtime::SystemVerilogVpiValueCategory;
-        if (depth > 32U) {
-            return std::nullopt;
-        }
         const auto repeat = [&] {
             std::uint64_t count = 1U;
             for (const auto& range : typespec.ranges) {
@@ -3135,6 +3132,18 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             class_descriptor.member_names.push_back(property.name);
         }
 
+        // The declared typespecs of this class's array and container
+        // properties, recorded by elaboration (IEEE 1800-2023 37.17, 37.20).
+        std::map<std::string,
+            std::shared_ptr<const runtime::SystemVerilogVpiTypespec>>
+            property_typespecs;
+        for (const auto& elaborated : project.design.specializations()) {
+            for (const auto& named : elaborated.vpi_class_property_typespecs) {
+                if (named.package == declaration_identity && named.typespec) {
+                    property_typespecs.emplace(named.name, named.typespec);
+                }
+            }
+        }
         const auto publish_class = [&](fsim_vpi_handle_v1 parent) {
             runtime::SystemVerilogVpiObjectDescriptor descriptor;
             descriptor.kind = runtime::SystemVerilogVpiObjectKind::Class;
@@ -3169,6 +3178,14 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
                         runtime::make_systemverilog_vpi_interface_typespec(
                             declared.interface_type, declared.interface_modport,
                             { }));
+                }
+                // The descriptor of a built-in element array may already have
+                // derived a scalar typespec; the declared array typespec
+                // replaces it (a virtual interface property is not recorded).
+                if (const auto recorded
+                    = property_typespecs.find(source.properties[index].name);
+                    recorded != property_typespecs.end()) {
+                    property.type->typespec = recorded->second;
                 }
                 // A parameter declared in the class body is a local
                 // parameter (IEEE 1800-2023 37.31 detail 7); a static

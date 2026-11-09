@@ -890,6 +890,53 @@ SystemVerilogClassDeclaration VerilogParser::parse_class(
         }
         base_constructor_arguments.push_back(advance());
       } while (depth != 0U && !at_end());
+      // The same tokens, parsed once more for the class relation (VPI): the
+      // arguments between the parentheses, positional or `.name(expr)`.
+      // The synthesized `super.new(...)` parses them again and reports
+      // their errors, so this pass drops the diagnostics it adds.
+      if (base_constructor_arguments.size() > 2U && declaration.base) {
+        auto saved_tokens = std::move(tokens_);
+        const auto saved_index = index_;
+        const auto saved_diagnostics = diagnostics_.size();
+        tokens_ = base_constructor_arguments;
+        Token end;
+        end.kind = TokenKind::EndOfFile;
+        end.span = base_constructor_arguments.back().span;
+        tokens_.push_back(std::move(end));
+        index_ = 1U;
+        while (!at(TokenKind::RightParen) && !at_end()) {
+          std::string argument_name;
+          if (match(TokenKind::Dot)) {
+            if (!at(TokenKind::Identifier)) {
+              break;
+            }
+            argument_name = advance().text;
+            if (!match(TokenKind::LeftParen)) {
+              break;
+            }
+            declaration.base->constructor_arguments.push_back(
+                parse_expression());
+            declaration.base->constructor_argument_names.push_back(
+                std::move(argument_name));
+            if (!match(TokenKind::RightParen)) {
+              break;
+            }
+          } else {
+            declaration.base->constructor_arguments.push_back(
+                parse_expression());
+            declaration.base->constructor_argument_names.emplace_back();
+          }
+          if (!match(TokenKind::Comma)) {
+            break;
+          }
+        }
+        diagnostics_.erase(
+            diagnostics_.begin()
+                + static_cast<std::ptrdiff_t>(saved_diagnostics),
+            diagnostics_.end());
+        tokens_ = std::move(saved_tokens);
+        index_ = saved_index;
+      }
     }
     if (interface_class) {
       while (match(TokenKind::Comma)) {

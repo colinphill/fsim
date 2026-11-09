@@ -559,6 +559,7 @@ add_library(
   src/support/payload_checksum.cpp
   src/support/sha256.cpp
   src/support/sqlite_database.cpp
+  src/support/stack_growth.cpp
   src/support/teardown.cpp
 )
 add_library(fsim::base ALIAS fsim_base)
@@ -576,6 +577,35 @@ foreach(name IN ITEMS cli diagnostic object_cache platform project support)
   add_library(fsim::${name} ALIAS fsim_${name})
   target_link_libraries(fsim_${name} INTERFACE fsim_base)
 endforeach()
+
+# The compiler-owned VHDL subprogram signatures (IEEE 1076-2019 12.5): written
+# at build time from the package declarations in third_party/ieee-1076-2019
+# into the build tree.
+find_program(FSIM_PYTHON_EXECUTABLE NAMES python3 python REQUIRED)
+set(FSIM_INTRINSIC_SIGNATURES_SOURCE
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/vhdl_intrinsic_signatures.cpp")
+set(FSIM_INTRINSIC_SIGNATURE_PACKAGES
+  std/standard.vhdl std/textio.vhdl std/env.vhdl
+  ieee/std_logic_1164.vhdl ieee/std_logic_textio.vhdl
+  ieee/numeric_bit.vhdl ieee/numeric_bit_unsigned.vhdl
+  ieee/numeric_std.vhdl ieee/numeric_std_unsigned.vhdl
+  ieee/math_real.vhdl ieee/math_complex.vhdl)
+list(TRANSFORM FSIM_INTRINSIC_SIGNATURE_PACKAGES PREPEND
+  "${PROJECT_SOURCE_DIR}/third_party/ieee-1076-2019/")
+add_custom_command(
+  OUTPUT "${FSIM_INTRINSIC_SIGNATURES_SOURCE}"
+  COMMAND "${FSIM_PYTHON_EXECUTABLE}" -I
+    "${PROJECT_SOURCE_DIR}/scripts/generate_intrinsic_signatures.py"
+    --root "${PROJECT_SOURCE_DIR}/third_party/ieee-1076-2019"
+    --revisions "${PROJECT_SOURCE_DIR}/scripts/vhdl_intrinsic_revisions.tsv"
+    --output "${FSIM_INTRINSIC_SIGNATURES_SOURCE}"
+  DEPENDS
+    "${PROJECT_SOURCE_DIR}/scripts/generate_intrinsic_signatures.py"
+    "${PROJECT_SOURCE_DIR}/scripts/vhdl_intrinsic_revisions.tsv"
+    ${FSIM_INTRINSIC_SIGNATURE_PACKAGES}
+  COMMENT "Generating the compiler-owned VHDL subprogram signatures"
+  VERBATIM
+)
 
 add_library(fsim_semantic ${FSIM_SUBSYSTEM_LIBRARY_TYPE}
   src/semantic/compiled_design.cpp
@@ -595,13 +625,16 @@ add_library(fsim_semantic ${FSIM_SUBSYSTEM_LIBRARY_TYPE}
   src/semantic/systemverilog_hir.cpp
   src/semantic/sva_plan.cpp
   src/semantic/vhdl_hir.cpp
+  src/semantic/vhdl_standard_catalog.cpp
+  "${FSIM_INTRINSIC_SIGNATURES_SOURCE}"
   # The runtime parses run-time formats too (IEEE 1800-2017 21.3.3,
   # 21.3.4.3).
   src/frontend/input_format.cpp
   src/frontend/output_format.cpp)
 add_library(fsim::semantic ALIAS fsim_semantic)
 fsim_configure_subsystem_library(fsim_semantic)
-target_link_libraries(fsim_semantic PRIVATE fsim_boost_pfr_headers)
+# Deep recursion continues on support::with_stack segments (fsim_base).
+target_link_libraries(fsim_semantic PRIVATE fsim_base fsim_boost_pfr_headers)
 
 set(
   FSIM_FRONTEND_SOURCES

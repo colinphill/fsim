@@ -2,11 +2,6 @@
 #include "lowerer_internal.hpp"
 
 namespace fsim::elaboration {
-namespace {
-
-constexpr std::size_t maximum_hir_let_expansion_depth = 1'024U;
-
-} // namespace
 
 std::optional<semantic::ExpressionId> Lowerer::hir_let_actual(
     const semantic::ExpressionId expression_id) const
@@ -142,8 +137,7 @@ bool Lowerer::push_hir_let_frame(
     const semantic::ExpressionId expression_id,
     const semantic::sv::LetDeclaration& declaration) const
 {
-    if (hir_let_frames_.size() >= maximum_hir_let_expansion_depth
-        || std::ranges::any_of(
+    if (std::ranges::any_of(
             hir_let_frames_,
             [&](const HirLetFrame& frame) {
                 return frame.declaration == &declaration;

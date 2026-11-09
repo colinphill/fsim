@@ -434,7 +434,7 @@ std::optional<ContainerRegisterId> Lowerer::lower_hir_vhdl_shaped_create(
         std::vector<semantic::vhdl::RangeConstraint> ranges;
         auto current = subtype;
         std::unordered_set<std::uint32_t> visited;
-        for (std::size_t depth { }; depth < 32U; ++depth) {
+        for (;;) {
             for (const auto& constraint : current.constraints) {
                 if (constraint.kind == semantic::vhdl::RangeKind::array_index) {
                     ranges.push_back(constraint);
@@ -526,7 +526,7 @@ std::optional<ContainerRegisterId> Lowerer::lower_hir_vhdl_shaped_materialize(
 {
     // A qualified expression denotes its operand's value (9.3.5).
     auto value = value_id;
-    for (std::size_t depth { }; depth < 16U; ++depth) {
+    for (;;) {
         const auto qualified = specialized_hir_unit_->find_expression(value);
         if (!qualified || qualified->vhdl == nullptr
             || qualified->vhdl->kind != semantic::vhdl::ExpressionKind::call

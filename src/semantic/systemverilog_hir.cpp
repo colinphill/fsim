@@ -1282,6 +1282,7 @@ NamedPackedDimensions compose_named_packed_dimensions(
     // A composed array of bits names no type, so no later lookup of the
     // spelling composes it again.
     if (!aggregate) {
+        reference.composed_over = reference.target;
         reference.target.target = { };
         reference.target.spelling = shape->four_state ? "logic" : "bit";
     } else if (shape->target.target.valid()) {

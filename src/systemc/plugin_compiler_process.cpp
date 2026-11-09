@@ -73,7 +73,8 @@ bool TemporaryResponseFile::write(
     const CompilerCommand& command,
     const std::vector<std::wstring>& wide_arguments,
     std::string& error_message)  {
-        for (std::size_t attempt = 0; attempt < 100; ++attempt) {
+        // Each try takes a fresh serial, so the loop ends.
+        for (;;) {
             const auto serial =
                 response_temporary_counter.fetch_add(1, std::memory_order_relaxed);
             path_ = command.working_directory
@@ -143,9 +144,6 @@ bool TemporaryResponseFile::write(
             }
             return true;
         }
-        error_message = "cannot allocate a unique compiler response file";
-        path_.clear();
-        return false;
     }
 
 [[nodiscard]] ProcessResult run_process(const CompilerCommand& command) {

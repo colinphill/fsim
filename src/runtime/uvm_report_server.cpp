@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/uvm_report.hpp"
 
+#include "run_state_archive.hpp"
+
 #include <iomanip>
 #include <limits>
 #include <sstream>
@@ -293,6 +295,26 @@ std::string SystemVerilogUvmReportServer::summarize() const {
     throw std::length_error{"UVM report-server output exceeds its budget"};
   }
   return result;
+}
+
+void SystemVerilogUvmReportServer::run_state_io(RunStateArchive& archive) {
+  archive.io(severity_counts_);
+  archive.io(id_counts_);
+  archive.io(quit_count_);
+  archive.io(max_quit_count_);
+  archive.io(max_quit_overridable_);
+  archive.io(show_verbosity_);
+  archive.io(show_terminator_);
+  archive.io(enable_id_summary_);
+  archive.io(record_all_messages_);
+  archive.io(sink_failures_);
+}
+
+void SystemVerilogUvmReportServer::reset_run_state() noexcept {
+  reset_counts();
+  max_quit_count_ = 0;
+  max_quit_overridable_ = true;
+  sink_failures_ = 0;
 }
 
 }  // namespace fsim::runtime

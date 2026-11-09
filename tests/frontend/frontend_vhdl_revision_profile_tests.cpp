@@ -397,17 +397,11 @@ void test_vhdl_2019_conditional_analysis()
         "vhdl2019-conditional-depth.vhd", deeply_nested,
         Language::Vhdl2008, VhdlStandard::Vhdl2019);
     require(
-        !bounded.ok() && bounded.design.units.size() == 1U
-            && std::ranges::count_if(
-                   bounded.diagnostics, [](const Diagnostic& diagnostic) {
-                       return diagnostic.code == "FSIM-VHDL-CA-004";
-                   })
-                == 1U
-            && std::ranges::none_of(bounded.diagnostics, [](const Diagnostic& diagnostic) {
-                   return diagnostic.code == "FSIM-VHDL-CA-003";
-               }),
-        "conditional analysis rejects excess nesting without losing group "
-        "synchronization or growing its frame stack past the bound");
+        std::ranges::none_of(bounded.diagnostics, [](const Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-VHDL-CA-004"
+                || diagnostic.code == "FSIM-VHDL-CA-003";
+        }),
+        "conditional analysis nests without a fixed depth limit");
 
     const auto messages = parse_text(
         "vhdl2019-conditional-messages.vhd",

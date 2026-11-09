@@ -1533,9 +1533,8 @@ void Simulation::Impl::add_constraint_state_variables(
             auto declared = nested ? *leaf_type
                 : named != class_constraint_property_types->end()
                 ? named->second : property.type;
-            for (std::size_t depth = 0; depth < 16U
-                 && !declared.executable_width && !declared.packed_range;
-                 ++depth) {
+            std::vector<semantic::TypeId> typedef_path;
+            while (!declared.executable_width && !declared.packed_range) {
                 const auto& element
                     = declared.container_element_types.empty()
                     ? declared : declared.container_element_types.front();
@@ -1560,6 +1559,13 @@ void Simulation::Impl::add_constraint_state_variables(
                 if (definition == nullptr || !definition->members.empty()) {
                     break;
                 }
+                // A typedef chain that returns to a type already followed
+                // ends the walk.
+                if (std::ranges::find(typedef_path, definition->id)
+                    != typedef_path.end()) {
+                    break;
+                }
+                typedef_path.push_back(definition->id);
                 const auto spelling = declared.target.spelling;
                 declared = definition->base;
                 declared.target.spelling = spelling;
@@ -2406,10 +2412,17 @@ std::string Simulation::Impl::static_property_specialization(
         constructed_classes.push_back(handle);
     }
     const auto before = packed_class_snapshot();
+    // The library's root is a uvm_component, but it is the hierarchy's root,
+    // not a top component of it (IEEE 1800.2-2020 13.2): the native
+    // hierarchy answers its methods and never lists it among the children.
     const auto component_specialization = is_systemverilog_uvm_type(
-        built.compiled_systemverilog_class_specializations,
-        specialization,
-        "uvm_component");
+            built.compiled_systemverilog_class_specializations,
+            specialization,
+            "uvm_component")
+        && !is_systemverilog_uvm_type(
+            built.compiled_systemverilog_class_specializations,
+            specialization,
+            "uvm_root");
     bool object_initialized { };
     bool automatic_root_created { };
     runtime::SystemVerilogUvmRootHandle automatic_root { };
@@ -3610,15 +3623,19 @@ void Simulation::Impl::publish_vpi_assertion(
         : event.outcome == ConcurrentAssertionOutcome::vacuous
         ? runtime::SystemVerilogVpiAssertionOutcome::Vacuous
         : runtime::SystemVerilogVpiAssertionOutcome::Aborted;
-    published.name = event.name;
-    published.process = event.process;
-    published.instance_identity = event.instance_identity;
-    published.slot = event.slot;
-    published.source_span = event.source_span;
-    published.action_suppressed = event.action_suppressed;
-    published.attempt_start = event.attempt_start;
-    published.fail_line = event.fail_line;
-    published.fail_column = event.fail_column;
+    // Without an assertion callback the outcome only counts (vpiAssertion
+    // statistics); its text is copied for a callback alone.
+    if (vpi_callbacks && vpi_callbacks->has_assertion_registrations()) {
+        published.name = event.name;
+        published.process = event.process;
+        published.instance_identity = event.instance_identity;
+        published.slot = event.slot;
+        published.source_span = event.source_span;
+        published.action_suppressed = event.action_suppressed;
+        published.attempt_start = event.attempt_start;
+        published.fail_line = event.fail_line;
+        published.fail_column = event.fail_column;
+    }
     const auto error = vpi_assertions->observe(
         object->second, std::move(published));
     if (error != runtime::SystemVerilogVpiAssertionApiError::None) {
@@ -3704,7 +3721,22 @@ bool Simulation::Impl::perform_reset()
     //  3. The engine returns to time zero with the initial values and every
     //     scheduled event cancelled (D.8 b; 20.9 c, d); the application's own
     //     state goes with it.
-    if (!interpreter->reset_run_state()) {
+    // A design with the UVM library has package variables that hold objects
+    // (and a twin that cannot allocate them): the application's class heap,
+    // statics and UVM services are cleared first, and the twin's package
+    // initializers run through this run's class hooks, so the objects they
+    // make are the time-zero objects of the run (IEEE 1800-2023 D.8, 6.21).
+    const bool class_state_rebuilt = uvm_state_present();
+    if (class_state_rebuilt) {
+        class_heap.clear();
+        class_owner_parameter_values.clear();
+        class_static_store.reset_values();
+        reset_uvm_state();
+        interpreter->set_reset_twin_class_hooks(true);
+    }
+    const bool engine_reset = interpreter->reset_run_state();
+    interpreter->set_reset_twin_class_hooks(false);
+    if (!engine_reset) {
         throw std::runtime_error {
             interpreter->reset_failure().empty()
                 ? std::string { "FSIM-SAVE-0018: the engine cannot reset the "
@@ -3712,7 +3744,7 @@ bool Simulation::Impl::perform_reset()
                 : interpreter->reset_failure()
         };
     }
-    reset_application_state();
+    reset_application_state(class_state_rebuilt);
     //  4. $reset_count and $reset_value are the only state that survives (D.8).
     ++reset_count;
     reset_value = request.reset_value;
@@ -3727,15 +3759,24 @@ bool Simulation::Impl::perform_reset()
     return request.stop_value != 0;
 }
 
-void Simulation::Impl::reset_application_state()
+void Simulation::Impl::reset_application_state(const bool class_state_rebuilt)
 {
     // Class objects and their static members are variables (D.8: all
     // variables contain their initial values); a delayed vpi_put_value is a
     // scheduled event, which the engine's reset cancelled.
-    class_heap.clear();
-    class_owner_parameter_values.clear();
-    class_static_store.reset_values();
+    if (!class_state_rebuilt) {
+        class_heap.clear();
+        class_owner_parameter_values.clear();
+        class_static_store.reset_values();
+    }
     class_static_store.initialize_all();
+    // The UVM hierarchy, phases, objections, configuration, factory overrides
+    // and report counts are variables of the host services (D.8); they were
+    // cleared before the twin ran, and the testbench builds them again from
+    // time zero (#188).
+    if (class_state_rebuilt) {
+        reapply_uvm_command_line();
+    }
     if (vpi_values) {
         vpi_values->reset_records();
     }

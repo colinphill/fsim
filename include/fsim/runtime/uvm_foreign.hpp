@@ -35,6 +35,12 @@ struct SystemVerilogUvmForeignRecord {
 
 class SystemVerilogUvmForeignService final {
  public:
+  /// True while the service holds no state: a run that never used it has
+  /// nothing to save (#188). A foreign callback is a library's.
+  [[nodiscard]] bool run_state_idle() const noexcept {
+    return snapshots_.empty() && callbacks_.empty();
+  }
+
   SystemVerilogUvmForeignService(
       SystemVerilogUvmPhaseService& phases,
       SystemVerilogUvmObjectionService& objections,

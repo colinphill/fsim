@@ -215,6 +215,8 @@ struct SystemVerilogVpiCallbackManager::Impl {
             + 1U>
         dispatching { };
     std::atomic_bool has_registrations { false };
+    /// The same for the assertion reasons (cbAssertion*).
+    std::atomic_bool has_assertion_registrations { false };
 };
 
 namespace {
@@ -717,6 +719,10 @@ SystemVerilogVpiCallbackManager::register_callback(
         }
     }
     impl_->has_registrations.store(true, std::memory_order_release);
+    if (is_assertion(registration.kind)) {
+        impl_->has_assertion_registrations.store(
+            true, std::memory_order_release);
+    }
 
     const std::weak_ptr<Impl> weak = impl_;
     try {
@@ -978,6 +984,9 @@ SystemVerilogVpiCallbackManager::dispatch_assertion(
     if (!valid()) {
         return SystemVerilogVpiCallbackError::InvalidManager;
     }
+    if (!has_assertion_registrations()) {
+        return SystemVerilogVpiCallbackError::None;
+    }
     const auto info = impl_->registry->lookup(object);
     if (!info || info.value->kind != SystemVerilogVpiObjectKind::Assertion) {
         return SystemVerilogVpiCallbackError::InvalidObject;
@@ -1064,6 +1073,13 @@ bool SystemVerilogVpiCallbackManager::has_registrations() const noexcept
 {
     return impl_
         && impl_->has_registrations.load(std::memory_order_acquire);
+}
+
+bool SystemVerilogVpiCallbackManager::has_assertion_registrations()
+    const noexcept
+{
+    return impl_
+        && impl_->has_assertion_registrations.load(std::memory_order_acquire);
 }
 
 } // namespace fsim::runtime

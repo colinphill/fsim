@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/vpi_type_descriptor.hpp"
+#include "fsim/support/stack_growth.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
 #include "fsim/semantic/systemverilog_class_specialization.hpp"
 #include "fsim/support/index_distance.hpp"
@@ -759,7 +760,7 @@ std::shared_ptr<const runtime::SystemVerilogVpiTypespec> vpi_typespec(
                         valid = false;
                         return;
                     }
-                    self(self, association.value, depth + 1U);
+                    support::with_stack([&] { return self(self, association.value, depth + 1U); });
                 }
                 return;
             }
@@ -769,7 +770,7 @@ std::shared_ptr<const runtime::SystemVerilogVpiTypespec> vpi_typespec(
                 && ((depth == 0U && !type.fixed)
                     || (type.fixed && depth < nested_dimensions))) {
                 for (const auto operand : source.operands) {
-                    self(self, operand, depth + 1U);
+                    support::with_stack([&] { return self(self, operand, depth + 1U); });
                 }
                 return;
             }
@@ -2762,8 +2763,8 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                   };
             if (class_handle && package_initializer && expression
                 && expression->systemverilog != nullptr
-                && (expression->systemverilog->kind
-                        == semantic::sv::ExpressionKind::class_allocation
+                && (package_class_handle_startup_initializer(
+                        *expression->systemverilog)
                     || expression->systemverilog->kind
                         == semantic::sv::ExpressionKind::class_null)) {
                 // Package class handles are initialized before any process

@@ -222,7 +222,7 @@ void Lowerer::record_hir_coverage_fsm(const semantic::ExpressionId selector,
     // state, as the case statement compares elements exactly.
     const auto vhdl_bits = [&](semantic::ExpressionId id)
         -> std::optional<std::uint64_t> {
-        for (std::size_t depth = 0U; depth < 8U; ++depth) {
+        for (;;) {
             const auto expression = unit.find_expression(id);
             if (!expression || expression->vhdl == nullptr) {
                 return std::nullopt;
@@ -252,7 +252,6 @@ void Lowerer::record_hir_coverage_fsm(const semantic::ExpressionId selector,
             }
             id = *constant->vhdl->initializer;
         }
-        return std::nullopt;
     };
     // The value a state name, choice or assigned value denotes.
     const auto value_of = [&](const semantic::ExpressionId id)

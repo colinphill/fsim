@@ -1,0 +1,3 @@
+#c formal vhpislicenamek p(3 downto 2) size=2 actual vhpislicenamek a(3 downto 2)
+#c formal vhpislicenamek p(1 downto 0) size=2 actual vhpislicenamek a(1 downto 0)
+#c formal vhpiportdeclk q size=1 actual vhpiportdeclk b

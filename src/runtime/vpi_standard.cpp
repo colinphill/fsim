@@ -3,6 +3,7 @@
 #include "acc_internal.hpp"
 
 #include <array>
+#include <vector>
 #include <atomic>
 #include <cstdarg>
 #include <cstddef>
@@ -12,10 +13,10 @@
 
 namespace {
 
-constexpr std::size_t maximum_context_depth = 64U;
 constexpr std::size_t maximum_text_size = 1U << 20U;
-thread_local std::array<fsim_vpi_call_context_v1*, maximum_context_depth>
-    context_stack{};
+// The contexts entered on this thread, innermost last; it grows with the
+// nesting.
+thread_local std::vector<fsim_vpi_call_context_v1*> context_stack{};
 thread_local std::size_t context_depth{};
 // The outermost context entered on the simulation thread. A library may
 // query the design from a thread of its own while the simulation thread is
@@ -790,8 +791,15 @@ vpiHandle vpi_filter(
 
 FSIM_VPI_BRIDGE_API int FSIM_VPI_BRIDGE_CALL
 fsim_vpi_call_context_enter_v1(fsim_vpi_call_context_v1* const context) {
-  if (!valid_context(context) || context_depth >= context_stack.size()) {
+  if (!valid_context(context)) {
     return -1;
+  }
+  if (context_depth == context_stack.size()) {
+    try {
+      context_stack.push_back(nullptr);
+    } catch (...) {
+      return -1;
+    }
   }
   if (context_depth == 0U) {
     fsim_vpi_call_context_v1* expected = nullptr;

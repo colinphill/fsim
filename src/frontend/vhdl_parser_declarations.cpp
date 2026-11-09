@@ -1357,11 +1357,11 @@ void VhdlParser::parse_vhdl_attribute_declaration(DesignUnit &unit,
   // (IEEE 1076-2008 7.2, 8.6), but an attribute name (`e'attr`) reads it
   // elsewhere, where the unit's constants are not visible. Replace each
   // constant of this unit named by the value with its initial expression.
-  const auto bind_declared_constants = [&](auto &&self, Expression &expr,
-                                           const std::size_t depth) -> void {
-    if (depth > 16U) {
-      return;
-    }
+  // The constants being replaced on the path to `expr`; a constant whose
+  // initial expression names itself is replaced once.
+  std::vector<std::string> expanding;
+  const auto bind_declared_constants = [&](auto &&self,
+                                           Expression &expr) -> void {
     if (expr.kind == ExpressionKind::Identifier) {
       const auto constant = std::ranges::find_if(
           unit.parameters, [&](const ParameterDeclaration &parameter) {
@@ -1369,19 +1369,22 @@ void VhdlParser::parse_vhdl_attribute_declaration(DesignUnit &unit,
                 && parameter.name == vhdl_name(expr.text)
                 && parameter.default_value.kind != ExpressionKind::Invalid;
           });
-      if (constant != unit.parameters.end()) {
+      if (constant != unit.parameters.end()
+          && std::ranges::find(expanding, constant->name) == expanding.end()) {
         const auto span = expr.span;
+        expanding.push_back(constant->name);
         expr = constant->default_value;
         expr.span = span;
-        self(self, expr, depth + 1U);
+        self(self, expr);
+        expanding.pop_back();
       }
       return;
     }
     for (auto &operand : expr.operands) {
-      self(self, operand, depth + 1U);
+      self(self, operand);
     }
   };
-  bind_declared_constants(bind_declared_constants, value, 0U);
+  bind_declared_constants(bind_declared_constants, value);
   // The attribute may be declared in the unit, its entity, or a package
   // analyzed earlier (IEEE 1076-2008 7.2).
   if (!std::ranges::any_of(unit.vhdl_attributes, [&](const auto &attribute) {
@@ -1670,12 +1673,19 @@ void VhdlParser::apply_vhdl_disconnection_specifications(
 
 std::optional<std::string> VhdlParser::vhdl_base_type_mark(
     std::string name) const {
-  for (std::size_t depth = 0; depth < 64U; ++depth) {
+  std::vector<std::string> followed;
+  for (;;) {
     if (const auto found = vhdl_subtype_type_marks_.find(name);
         found != vhdl_subtype_type_marks_.end()) {
       if (found->second == name) {
         return name;
       }
+      // A chain of subtypes that returns to a name already followed has no
+      // base type mark.
+      if (std::ranges::find(followed, name) != followed.end()) {
+        return std::nullopt;
+      }
+      followed.push_back(name);
       name = found->second;
       continue;
     }
@@ -1694,7 +1704,6 @@ std::optional<std::string> VhdlParser::vhdl_base_type_mark(
     }
     return std::nullopt;
   }
-  return std::nullopt;
 }
 
 void VhdlParser::parse_subtype_declaration(DesignUnit &unit, const Token &start,

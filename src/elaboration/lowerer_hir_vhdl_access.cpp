@@ -717,7 +717,7 @@ Lowerer::HirVhdlAccessHeap* Lowerer::hir_vhdl_access_heap(
             // BIT_VECTOR'("1111"). Its positional value supplies bounds
             // using the designated array's index subtype; do not ask the
             // constant folder to erase that aggregate/value shape first.
-            for (std::size_t depth = 0U; depth < 16U; ++depth) {
+            for (;;) {
                 if (!inference_source || inference_source->vhdl == nullptr
                     || inference_source->vhdl->kind
                         != semantic::vhdl::ExpressionKind::call
@@ -782,7 +782,7 @@ Lowerer::HirVhdlAccessHeap* Lowerer::hir_vhdl_access_heap(
     // (9.3.7, 5.3.2.2).
     if (string_payload && !object_range && !value_range && initializer) {
         auto value_id = *initializer;
-        for (std::size_t depth = 0U; depth < 16U; ++depth) {
+        for (;;) {
             const auto qualified = specialized_hir_unit_->find_expression(
                 value_id);
             if (!qualified || qualified->vhdl == nullptr
@@ -834,7 +834,7 @@ Lowerer::HirVhdlAccessHeap* Lowerer::hir_vhdl_access_heap(
     // heap's own shape.
     const bool same_heap_initializer = !object_range && initializer && [&] {
         auto value_id = *initializer;
-        for (std::size_t depth = 0U; depth < 16U; ++depth) {
+        for (;;) {
             const auto qualified = specialized_hir_unit_->find_expression(
                 value_id);
             if (!qualified || qualified->vhdl == nullptr

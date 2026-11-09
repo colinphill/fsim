@@ -493,6 +493,10 @@ void Interpreter::Impl::StaticKernel::build_parallel_plan()
                 touch_slot(inst.x, false);
                 break;
             case KOp::wide_load:
+                if (inst.sub >= 4U) {
+                    // The sampled words and rings: no signal.
+                    break;
+                }
                 if (inst.sub == 3U) {
                     // A host signal, as load_host.
                     host_touches[inst.x].push_back({ group[unit], unit, false });
@@ -2903,6 +2907,8 @@ void Interpreter::Impl::StaticKernel::run_in_lane(Lane& lane,
         frame.bindings = state.native.bindings.data();
         frame.program = state.native.program;
         frame.instance = &state.program;
+        frame.call_stack = &state.program.call_entries;
+        frame.frame_stack = &state.program.frame_entries;
         frame.member = state.members.front();
         code = state.native.entry;
         registers = state.program.registers.data();
@@ -2912,6 +2918,8 @@ void Interpreter::Impl::StaticKernel::run_in_lane(Lane& lane,
         frame.bindings = fast.bindings;
         frame.program = fast.program;
         frame.instance = fast.body;
+        frame.call_stack = &fast.body->call_entries;
+        frame.frame_stack = &fast.body->frame_entries;
         frame.member = entry;
         code = fast.entry;
         registers = fast.registers;

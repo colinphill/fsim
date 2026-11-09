@@ -6,6 +6,7 @@
 #include "scoped_bindings.hpp"
 #include "systemverilog_template_bindings.hpp"
 #include "vhdl_lowering_index.hpp"
+#include "fsim/support/active_set.hpp"
 #include "fsim/elaboration/coverage_hir_points.hpp"
 #include "fsim/frontend/parser.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
@@ -157,17 +158,20 @@ using namespace elaboration_detail;
 // The runtime report location of a source span: its file and first line
 // and column.
 // A SystemVerilog type after following typedefs and parameter bindings to
-// a fixed point (at most eight steps).
+// a fixed point (a repeated type ends the walk).
 [[nodiscard]] inline semantic::sv::TypeReference
 fully_effective_systemverilog_type(
     const semantic::CompiledDesignResolver& resolver,
     semantic::sv::TypeReference type, const semantic::ScopeId scope)
 {
-    for (std::size_t depth { }; depth < 8U; ++depth) {
+    std::vector<semantic::sv::TypeReference> visited;
+    for (;;) {
         auto effective = resolver.effective_systemverilog_type(type, scope);
-        if (!effective || *effective == type) {
+        if (!effective || *effective == type
+            || std::ranges::find(visited, *effective) != visited.end()) {
             break;
         }
+        visited.push_back(type);
         type = std::move(*effective);
     }
     return type;
@@ -470,6 +474,18 @@ public:
         noexcept;
     void set_hir_container_declaration_bindings(
         const ContainerDeclarationBindings* bindings) noexcept;
+    // The signals that local ports of a component bound with a port map
+    // denote while the binding map's conversions are lowered (IEEE
+    // 1076-2019 14.5.4, 7.3.2.1): the instance's actual of each local port,
+    // and the bound entity's port a formal conversion reads. Keyed by
+    // declaration; the caller keeps the map alive.
+    using VhdlDeclarationSignals
+        = std::unordered_map<std::uint32_t, SignalId>;
+    void set_hir_vhdl_declaration_signals(
+        const VhdlDeclarationSignals* signals) noexcept
+    {
+        hir_vhdl_declaration_signals_ = signals;
+    }
     // Under code coverage, the state machines that lowered case statements
     // infer are recorded in `fsm_drafts` by process.
     void set_hir_code_coverage_context(const CoverageHirContext* coverage,
@@ -1690,7 +1706,9 @@ private:
     // object) through its index, slice and member selections.
     [[nodiscard]] std::optional<HirVhdlShape> hir_vhdl_shape(
         semantic::ExpressionId expression) const;
-    mutable std::size_t hir_vhdl_shape_depth_ { };
+    // The expressions and element types whose shape is being taken.
+    mutable support::ActiveSet<std::uint32_t> hir_vhdl_shape_active_;
+    mutable support::ActiveSet<std::uint32_t> hir_vhdl_subtype_shape_active_;
     // Expressions whose range is being taken from the shape service.
     mutable std::unordered_set<std::uint32_t> hir_vhdl_range_shapes_;
     // User attribute values whose open subtype is being completed.
@@ -2471,6 +2489,9 @@ private:
         logic_conversion,
         logic_mapping,
         logic_unknown_predicate,
+        logic_resolved,
+        logic_match,
+        numeric_find,
         reduction,
         numeric_to_integer,
         numeric_resize,
@@ -5543,6 +5564,7 @@ private:
     const ReadOnlyContainerBindings& read_only_container_objects_;
     std::vector<Diagnostic>& diagnostics_;
     const semantic::SpecializedHirUnit* specialized_hir_unit_ { };
+    const VhdlDeclarationSignals* hir_vhdl_declaration_signals_ { };
     const std::vector<const semantic::SpecializedHirUnit*>*
         ancestor_systemverilog_specializations_ { };
     const CoverageHirContext* coverage_hir_context_ { };
@@ -5574,6 +5596,14 @@ private:
         systemverilog_interface_exports_ { };
     [[nodiscard]] const semantic::SpecializedHirUnit* hir_callee_unit(
         std::string_view receiver) const;
+    // Records the read of `signal` into `destination` by the body of a
+    // callable that another instance defines (`u1.peek()`, run in the
+    // calling process) as a hierarchical read of that instance, so that SDF
+    // annotation gives it the delayed copy of a load port (IEEE 1364-2005
+    // 16.2.4: a reference to the port provides the delayed value wherever it
+    // occurs). The body is lowered once for the instance it belongs to, but
+    // the process that calls it is outside that instance.
+    void mark_callee_instance_read(RegisterId destination, SignalId signal);
     // Lowers in another specialization for its lifetime; a null unit keeps
     // the current one.
     class HirUnitSwap {
@@ -5792,6 +5822,14 @@ private:
     [[nodiscard]] std::string hir_callable_formal_debug_name(
         std::size_t callable, semantic::DeclarationId formal,
         std::string_view name);
+    // Records a formal, local or loop parameter of `callable`'s body in the
+    // process's frame-local table (`Process::frame_locals`), named
+    // `<subprogram>.<name>` with the invocation identity on a collision, for
+    // a VHPI program that reads a running call (IEEE 1076-2019 14.6): the
+    // table is no debug local, so no optimizer gate sees it.
+    void add_hir_frame_local(std::size_t callable, std::string_view name,
+        std::string type_name, RegisterId storage,
+        semantic::SourceSpanId source);
     std::vector<HirCallableBodyRecording::DebugName>*
         hir_callable_debug_name_log_ { };
     // `recording` renumbered for `callable` with its body at `target` and
@@ -5998,6 +6036,7 @@ private:
         procedural_continuous_assignments_by_target_;
     std::unordered_map<std::string, StringRegisterId> string_locals_;
     std::unordered_set<std::string> debug_local_names_;
+    std::unordered_set<std::string> frame_local_names_;
     std::vector<std::string> local_scope_;
     /// The SystemVerilog tasks and functions whose bodies are lowering,
     /// innermost last: the name and the local_scope_ depth the body's own

@@ -269,10 +269,10 @@ static void watch(const char* name)
 // The routine runs `ticks` simulation ticks after time zero.
 static void at(PLI_UINT32 ticks, PLI_INT32 (*routine)(p_cb_data))
 {
-    static s_vpi_time times[16];
+    static s_vpi_time times[32];
     static int used;
     s_cb_data callback;
-    if (used == 16) {
+    if (used == 32) {
         return;
     }
     times[used].type = vpiSimTime;
@@ -295,6 +295,60 @@ static void drive_top_port(PLI_INT32 bit)
     value.format = vpiIntVal;
     value.value.integer = bit;
     vpi_put_value(object, &value, NULL, vpiNoDelay);
+}
+
+// A delay put on bit 1 of the port a of u15, which two INTERCONNECT records
+// name (the first all four bits, the second bit 1 alone, both with 4 ns): the
+// put retimes the bit the second record owns and no other (IEEE 1800-2023
+// 38.32; the run of bits that record owns is its own copy driver).
+static PLI_INT32 put_bit_one(p_cb_data data)
+{
+    s_vpi_time da[2];
+    s_vpi_delay request = { da, 2, vpiScaledRealTime, 0, 0, 0 };
+    vpiHandle module = named("top.u15");
+    vpiHandle ports = module != NULL ? vpi_iterate(vpiPort, module) : NULL;
+    vpiHandle port = ports != NULL ? vpi_scan(ports) : NULL;
+    vpiHandle bits = port != NULL ? vpi_iterate(vpiBit, port) : NULL;
+    vpiHandle bit;
+    int position = 0;
+    (void)data;
+    /* The bits of a port come from the left: 3, 2, 1, 0 for a[3:0], so bit 1
+       is the third (a port bit has no vpiIndex). */
+    while (bits != NULL && (bit = vpi_scan(bits)) != NULL) {
+        if (position++ != 2) {
+            continue;
+        }
+        memset(da, 0, sizeof da);
+        da[0].type = vpiScaledRealTime;
+        da[0].real = 9.0;
+        da[1].type = vpiScaledRealTime;
+        da[1].real = 9.0;
+        vpi_put_delays(bit, &request);
+        memset(da, 0, sizeof da);
+        vpi_get_delays(bit, &request);
+        vpi_printf("#c put bit1 %.3f %.3f\n", da[0].real, da[1].real);
+        vpi_free_object(bits);
+        return 0;
+    }
+    vpi_printf("#c put bit1 missing\n");
+    return 0;
+}
+
+// A delay put on the INTERCONNECT path of a net whose group copies differ:
+// the path retimes the runs of bits its record owns (0 and 2) and not bit 1,
+// which a PORT record owns (IEEE 1364-2005 16.3, 16.2.4).
+static PLI_INT32 put_group_path(p_cb_data data)
+{
+    vpiHandle z = port_named(named("top.v2"), "z");
+    vpiHandle a = port_named(named("top.pl"), "a");
+    vpiHandle path = vpi_handle_multi(vpiInterModPath, z, a);
+    (void)data;
+    if (path == NULL) {
+        vpi_printf("#c group put missing\n");
+        return 0;
+    }
+    put("group put", path, 9.0, 9.0, 0);
+    return 0;
 }
 
 static PLI_INT32 drive_high(p_cb_data data)
@@ -423,6 +477,8 @@ static PLI_INT32 start(p_cb_data data)
     at(62000, drive_low);
     at(64000, sample_top_port);
     at(68500, sample_top_port);
+    at(470000, put_bit_one);
+    at(590000, put_group_path);
     return 0;
 }
 

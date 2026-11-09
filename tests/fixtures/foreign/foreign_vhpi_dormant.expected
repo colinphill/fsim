@@ -1,0 +1,7 @@
+#c elab foreign=1
+#c start y=U q=U w=20 drivers y=0 q=0 w=0
+#c 5 ns create process=1 driver=1 schedule=0 wdriver=1 wschedule=0
+#c 6 ns y=U q=U w=15 drivers y=1 q=0 w=1
+#c 8 ns y=1 q=U w=12 drivers y=1 q=0 w=1
+#c 10 ns schedule=0
+#c 13 ns y=X q=U w=12 drivers y=1 q=0 w=1

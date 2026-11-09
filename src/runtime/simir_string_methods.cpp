@@ -476,9 +476,11 @@ namespace {
 // the vector is padded on the left with 'Z' when its leftmost element is 'Z'
 // and with '0' otherwise, each group of 4 (3) elements is converted by
 // TO_X01Z, and a group with an unknown element is 'Z' when all its elements
-// are 'Z' and 'X' otherwise.
+// are 'Z' and 'X' otherwise. A SIGNED value (numeric_std) is first extended
+// to whole groups with its leftmost element.
 std::string vhdl_logic9_radix_string(
-    const std::string_view elements, const bool hexadecimal)
+    const std::string_view elements, const bool hexadecimal,
+    const bool sign_extend = false)
 {
     if (elements.empty()) {
         return { };
@@ -486,7 +488,7 @@ std::string vhdl_logic9_radix_string(
     const std::size_t bits = hexadecimal ? 4U : 3U;
     const std::size_t digits = (elements.size() + bits - 1U) / bits;
     std::string padded(digits * bits - elements.size(),
-        elements.front() == 'Z' ? 'Z' : '0');
+        sign_extend || elements.front() == 'Z' ? elements.front() : '0');
     padded.append(elements);
     std::string result;
     result.reserve(digits);
@@ -614,10 +616,17 @@ StringMethodResult execute_string_method(
             std::nullopt };
     }
     if (operation == StringMethodOperator::vhdl_logic9_hstring
-        || operation == StringMethodOperator::vhdl_logic9_ostring) {
+        || operation == StringMethodOperator::vhdl_logic9_ostring
+        || operation == StringMethodOperator::vhdl_logic9_hstring_signed
+        || operation == StringMethodOperator::vhdl_logic9_ostring_signed) {
+        const bool hexadecimal
+            = operation == StringMethodOperator::vhdl_logic9_hstring
+            || operation == StringMethodOperator::vhdl_logic9_hstring_signed;
+        const bool sign_extend
+            = operation == StringMethodOperator::vhdl_logic9_hstring_signed
+            || operation == StringMethodOperator::vhdl_logic9_ostring_signed;
         return { std::nullopt, std::nullopt,
-            vhdl_logic9_radix_string(source,
-                operation == StringMethodOperator::vhdl_logic9_hstring) };
+            vhdl_logic9_radix_string(source, hexadecimal, sign_extend) };
     }
     if (operation == StringMethodOperator::vhdl_string_fill) {
         if (!first || *first < 0

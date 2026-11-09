@@ -1,0 +1,8 @@
+#c stmt f.return vhpiReturnStmtK line 16 t=0
+#c   f a=3 b=4 t=34
+#c stmt p.loop vhpiVarAssignStmtK line 22 t=0
+#c   p n=3 s=0 i=1
+#c stmt p.loop vhpiVarAssignStmtK line 22 t=0
+#c   p n=3 s=1 i=2
+#c stmt p.loop vhpiVarAssignStmtK line 22 t=0
+#c   p n=3 s=3 i=3

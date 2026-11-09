@@ -674,6 +674,46 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
             });
         }
     }
+    // The std_logic signals several VHDL processes drive over common
+    // elements (IEEE 1076-2019 14.7.3.2): the kernel resolves them over
+    // their drivers (Slot::resolved). plan_static_kernel owns such a signal
+    // only when every writer is a member; the writers' merged regions are
+    // the plan's (StaticKernelRuntimeSpec::writer_regions).
+    std::vector<std::uint8_t> driven_over(signal_count, 0U);
+    if (spec.vhdl) {
+        std::vector<const StaticKernelWriterRegion*> ordered;
+        for (const auto& region : spec.writer_regions) {
+            if (region.signal < signal_count) {
+                ordered.push_back(&region);
+            }
+        }
+        std::ranges::sort(ordered, [](const auto* left, const auto* right) {
+            return std::tie(left->signal, left->offset)
+                < std::tie(right->signal, right->offset);
+        });
+        for (std::size_t at = 0U; at < ordered.size();) {
+            const auto signal = ordered[at]->signal;
+            const auto width = static_cast<std::uint64_t>(
+                impl_.get_signal(signal).initial_value.width());
+            std::uint64_t reach = 0U;
+            ProcessId reach_process = 0U;
+            bool first = true;
+            for (; at < ordered.size() && ordered[at]->signal == signal; ++at) {
+                const auto& region = *ordered[at];
+                const std::uint64_t begin = region.offset;
+                const std::uint64_t end
+                    = region.width == 0U ? width : begin + region.width;
+                if (!first && begin < reach && region.process != reach_process) {
+                    driven_over[signal] = 1U;
+                }
+                if (first || end > reach) {
+                    reach = end;
+                    reach_process = region.process;
+                }
+                first = false;
+            }
+        }
+    }
     for (const auto signal : spec.owned_signals) {
         if (signal >= signal_count || slot_of_signal_[signal] != no_slot) {
             throw std::invalid_argument("static kernel owns an invalid signal");
@@ -693,9 +733,18 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
             std::size_t sources = 0U;
             impl_.driver_values.at(signal).for_each_in_process_order(
                 [&](const DriverRecord&) { ++sources; });
+            for (const auto& [process, dormant] : impl_.dormant_driver_regions) {
+                sources += dormant == signal ? 1U : 0U;
+            }
             resolved = sources > 1U;
         }
-        const bool logic9 = spec.vhdl && !resolved
+        // A std_logic signal with several drivers over common elements keeps
+        // nine states (Slot::nine): the std_logic_1164 resolution.
+        const bool nine = spec.vhdl && !resolved && driven_over[signal] != 0U
+            && impl_.get_signal(signal).value_kind == ValueKind::logic9
+            && impl_.get_signal(signal).resolution == ResolutionKind::std_logic;
+        resolved = resolved || nine;
+        const bool logic9 = spec.vhdl && (nine || !resolved)
             && impl_.get_signal(signal).value_kind == ValueKind::logic9;
         const auto initial = Impl::coerce_value_kind(
             impl_.get_signal(signal).initial_value,
@@ -732,7 +781,48 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
                         copy_bits(arena_.data() + base + plane * slot.words, 0U,
                             codes.logic9_plane_words(plane), slot.width);
                     }
+                    if (nine && record.scalar_regions) {
+                        // The elements the driver's regions leave out have
+                        // no source from it (the host resolves only the
+                        // drivers of an element): code 1111.
+                        const auto driven = [&](const std::uint32_t bit) {
+                            return std::ranges::any_of(*record.scalar_regions,
+                                [bit](const Process::DriverRegion& region) {
+                                    return region.whole
+                                        || (bit >= region.offset
+                                            && bit - region.offset < region.width);
+                                });
+                        };
+                        for (std::uint32_t bit = 0U; bit < slot.width; ++bit) {
+                            if (driven(bit)) {
+                                continue;
+                            }
+                            for (std::uint32_t plane = 0U; plane < 4U; ++plane) {
+                                arena_[base + plane * slot.words + bit / 64U]
+                                    |= std::uint64_t { 1 } << (bit % 64U);
+                            }
+                        }
+                    }
                 });
+            // A dormant driver (a foreign architecture's placeholder before
+            // a program created the driver, IEEE 1076-2019 20.4.2) is a
+            // source of the plan's writer regions with no driver record: it
+            // has no driver for any element (code 1111) until the host
+            // registers it, whose write then reaches these planes.
+            for (const auto& [process, dormant] : impl_.dormant_driver_regions) {
+                if (dormant != signal) {
+                    continue;
+                }
+                slot.net_processes.push_back(process);
+                const auto base = arena_.size();
+                arena_.resize(base + 4U * slot.words, 0U);
+                for (std::uint32_t bit = 0U; bit < slot.width; ++bit) {
+                    for (std::uint32_t plane = 0U; plane < 4U; ++plane) {
+                        arena_[base + plane * slot.words + bit / 64U]
+                            |= std::uint64_t { 1 } << (bit % 64U);
+                    }
+                }
+            }
             // The next block starts as the current one, and the pending
             // flag after it is clear (Slot::net_processes).
             const auto block = arena_.size() - slot.offset;
@@ -741,6 +831,14 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
                 arena_.data() + slot.offset + block);
         }
         slots_.push_back(std::move(slot));
+        if (nine) {
+            // The initial value is the resolution of the drivers' initial
+            // values (IEEE 1076-2019 14.7.5.2), in both blocks.
+            const auto index = static_cast<std::uint32_t>(slots_.size() - 1U);
+            resolve_net_words(index, 0U, slots_[index].words - 1U);
+            resolve_net_words(index, 0U, slots_[index].words - 1U, true);
+            slots_[index].edge_seen = slot_edge_bit(index);
+        }
     }
     for (const auto signal : spec.boundary_outputs) {
         if (signal >= signal_count || slot_of_signal_[signal] == no_slot) {
@@ -2319,6 +2417,14 @@ Interpreter::Impl::StaticKernel::~StaticKernel()
     std::cerr << "fsim-kernel: deopts=" << profile_deopts_
               << " generic_runs=" << profile_generic_runs_
               << " fused_group_runs=" << profile_fused_runs_ << '\n';
+    if (verify_) {
+        std::cerr << "fsim-kernel: verified_thread_runs=" << verified_thread_runs_
+                  << " verified_member_runs=" << verified_member_runs_ << '\n';
+        for (const auto& [reason, count] : verify_skipped_members_) {
+            std::cerr << "fsim-kernel: verify_skipped reason=" << reason
+                      << " members=" << count << '\n';
+        }
+    }
     {
         // Two-state code: units that have it, runs that took it, members
         // that turned it off or wait for known registers.
@@ -2721,6 +2827,14 @@ Logic4 Interpreter::Impl::StaticKernel::slot_edge_bit(
 
 PackedLogic4 Interpreter::Impl::StaticKernel::read_signal(const SignalId signal)
 {
+    if (shadow_ != nullptr && shadow_->reference) {
+        // The replay sees a host signal as it was before the compiled run's
+        // blocking writes, and its own.
+        if (const auto found = shadow_->host_values.find(signal);
+            found != shadow_->host_values.end()) {
+            return found->second;
+        }
+    }
     const auto slot = slot_of_signal_[signal];
     if (slot != no_slot) {
         return slot_value(slot);
@@ -2802,6 +2916,12 @@ void Interpreter::Impl::StaticKernel::slot_changed(const std::uint32_t slot_inde
     const std::uint64_t changed_mask, const std::uint64_t* before,
     const std::uint32_t field_offset)
 {
+    if (shadow_ != nullptr && shadow_->reference) {
+        // FSIM_KERNEL_VERIFY's reference replay: the change is recorded, no
+        // reader is scheduled.
+        shadow_->changed.push_back(slot_index);
+        return;
+    }
     if (auto* const lane = worker_lane_) {
         if (lane->domain == no_slot) {
             log_change(*lane, slot_index, changed_mask, before, field_offset);
@@ -2861,6 +2981,13 @@ std::uint64_t Interpreter::Impl::StaticKernel::restore_override(
         --overrides_active_;
         return changed_mask;
     }
+    // The written value is the driver's: it reaches the host's stored layer
+    // first, where the force keeps the effective value, so that a release
+    // finds what the writers wrote meanwhile (IEEE 1800-2023 10.6.2;
+    // IEEE 1076-2019 14.7.3.2). Only an output slot has a host copy.
+    if (slot.output && initialized_ && !impl_.static_kernel_publishing) {
+        publish_slot(slot_index, true, false);
+    }
     const auto held = Impl::coerce_value_kind(
         impl_.apply_force(slot.signal, slot_value(slot_index)),
         slot.planes == 4U ? ValueKind::logic9 : ValueKind::logic4);
@@ -2870,6 +2997,11 @@ std::uint64_t Interpreter::Impl::StaticKernel::restore_override(
             arena_[slot.offset + plane * slot.words + word]
                 = word < words.size() ? words[word] : 0U;
         }
+    }
+    if (slot.output) {
+        // The host holds the written value; the held one is not a write.
+        std::copy_n(arena_.begin() + slot.offset, slot.planes * slot.words,
+            published_.begin() + slot.published);
     }
     const auto& mask = *impl_.forced_masks[slot.signal];
     std::uint64_t forced_bits { };
@@ -3021,6 +3153,15 @@ void Interpreter::Impl::StaticKernel::slot_changed_general(
         // is the next region.
         slot.publish_nba = slot.publish_nba
             || (nonblocking_committed_ && !in_host_nonblocking_region_);
+        // A debugger plan reports every change of an output as the reference
+        // evaluator does: each blocking write of one activation is its own
+        // change, not only the value the activation leaves (the signal
+        // change hooks and VPI value-change callbacks of a library-API
+        // simulation hear them all). The host's own commits and a foreign
+        // put are not the kernel's writes.
+        if (debug_points_ && activating_ && !impl_.static_kernel_publishing) {
+            publish_slot(slot_index, true, false);
+        }
     }
     if (slot_index < slot_wait_seen_.size() && slot_waitable_[slot_index] != 0U) {
         const auto seen = slot_wait_seen_[slot_index];
@@ -3124,7 +3265,7 @@ void Interpreter::Impl::StaticKernel::write_slot_word(
     auto& slot = slots_[slot_index];
     if (slot.resolved) {
         // A net with several sources holds their resolution.
-        const WordSnapshot before(arena_.data() + slot.offset, 2U * slot.words);
+        const WordSnapshot before(arena_.data() + slot.offset, slot.planes * slot.words);
         set_net_bits(slot_index, member_process_[member], offset, width,
             kernel_word::logic9_planes(value, width));
         if (!slot.silent
@@ -3214,7 +3355,7 @@ void Interpreter::Impl::StaticKernel::write_slot_value(
             "static kernel write width does not match its signal");
     }
     if (slot.resolved) {
-        const WordSnapshot before(arena_.data() + slot.offset, 2U * slot.words);
+        const WordSnapshot before(arena_.data() + slot.offset, slot.planes * slot.words);
         set_net_value(slot_index, member_process_[member], offset.value_or(0U), value);
         if (!std::equal(before.begin(), before.end(), arena_.begin() + slot.offset)) {
             slot_changed(slot_index, 0U, before.data());
@@ -3388,7 +3529,8 @@ void Interpreter::Impl::StaticKernel::set_net_bits(const std::uint32_t slot_inde
     }
     const auto& slot = slots_[slot_index];
     const auto words = slot.words;
-    const auto source_row = (2U + 4U * net_source_index(slot_index, process)) * words;
+    const auto source_row
+        = (slot.planes + 4U * net_source_index(slot_index, process)) * words;
     const std::array<std::uint64_t, 4> planes { codes.p0, codes.p1, codes.p2, codes.p3 };
     const auto word = offset / 64U;
     const auto shift = offset % 64U;
@@ -3436,7 +3578,8 @@ void Interpreter::Impl::StaticKernel::set_net_value(const std::uint32_t slot_ind
     const auto& slot = slots_[slot_index];
     const auto words = slot.words;
     const auto codes = Impl::coerce_value_kind(value, ValueKind::logic9);
-    const auto source_row = (2U + 4U * net_source_index(slot_index, process)) * words;
+    const auto source_row
+        = (slot.planes + 4U * net_source_index(slot_index, process)) * words;
     if (vhdl) {
         begin_net_pending(slot);
     }
@@ -3457,6 +3600,70 @@ void Interpreter::Impl::StaticKernel::set_net_value(const std::uint32_t slot_ind
     }
 }
 
+void Interpreter::Impl::StaticKernel::resolve_nine_word(std::uint64_t* const value,
+    const std::uint32_t words, const std::uint32_t rows, const std::uint32_t count,
+    const std::uint32_t word, const std::uint32_t width)
+{
+    // The std_logic_1164 resolution (IEEE 1076-2019 14.7.3.2) of the sources
+    // that drive each element, as runtime::resolve of Logic9 folds them: one
+    // source is the element as it is (also '-'); with several, 'U' wins,
+    // then 'X' and '-' (any of them), a strong 0 against a strong 1 is 'X',
+    // a strong value wins over the weak ones and 'Z', 'W' or both 'L' and
+    // 'H' give 'W', and the rest give 'L', 'H' or 'Z'. Generated code
+    // resolves the same way (static_kernel_codegen, emit_net_resolve_word).
+    // Codes: U 0000, X 0001, 0 0010, 1 0011, Z 0100, W 0101, L 0110, H 0111,
+    // - 1000; 1111 is an element the source has no driver for.
+    std::uint64_t seen = 0U;
+    std::uint64_t many = 0U;
+    std::uint64_t any_u = 0U;
+    std::uint64_t any_x = 0U;
+    std::uint64_t has_0 = 0U;
+    std::uint64_t has_1 = 0U;
+    std::uint64_t has_w = 0U;
+    std::uint64_t has_l = 0U;
+    std::uint64_t has_h = 0U;
+    std::array<std::uint64_t, 4> single { };
+    for (std::uint32_t source = 0U; source < count; ++source) {
+        const auto* planes = value + (rows + 4U * source) * words + word;
+        const std::array<std::uint64_t, 4> p { planes[0], planes[words],
+            planes[2U * words], planes[3U * words] };
+        const auto present = ~(p[0] & p[1] & p[2] & p[3]);
+        many |= seen & present;
+        seen |= present;
+        for (std::uint32_t plane = 0U; plane < 4U; ++plane) {
+            single[plane] |= p[plane] & present;
+        }
+        any_u |= ~p[3] & ~p[2] & ~p[1] & ~p[0];
+        any_x |= (~p[3] & ~p[2] & ~p[1] & p[0]) | (p[3] & ~p[2] & ~p[1] & ~p[0]);
+        has_0 |= ~p[3] & ~p[2] & p[1] & ~p[0];
+        has_1 |= ~p[3] & ~p[2] & p[1] & p[0];
+        has_w |= ~p[3] & p[2] & ~p[1] & p[0];
+        has_l |= ~p[3] & p[2] & p[1] & ~p[0];
+        has_h |= ~p[3] & p[2] & p[1] & p[0];
+    }
+    const auto unknown = ~any_u & (any_x | (has_0 & has_1));
+    const auto strong = ~any_u & ~unknown;
+    const auto zero = strong & has_0;
+    const auto one = strong & has_1;
+    const auto weak = strong & ~has_0 & ~has_1;
+    const auto w_out = weak & (has_w | (has_l & has_h));
+    const auto l_out = weak & ~w_out & has_l;
+    const auto h_out = weak & ~w_out & has_h;
+    const auto z_out = weak & ~w_out & ~has_l & ~has_h;
+    const std::array<std::uint64_t, 4> codes {
+        unknown | one | w_out | h_out,
+        zero | one | l_out | h_out,
+        z_out | w_out | l_out | h_out,
+        0U,
+    };
+    const auto bits = width - 64U * word;
+    const auto m = bits >= 64U ? ~std::uint64_t { 0 } : kernel_word::mask(bits);
+    for (std::uint32_t plane = 0U; plane < 4U; ++plane) {
+        value[plane * words + word]
+            = ((many & codes[plane]) | (~many & single[plane])) & m;
+    }
+}
+
 void Interpreter::Impl::StaticKernel::resolve_net_words(const std::uint32_t slot_index,
     const std::uint32_t first, const std::uint32_t last, const bool next)
 {
@@ -3465,6 +3672,12 @@ void Interpreter::Impl::StaticKernel::resolve_net_words(const std::uint32_t slot
     const auto count = static_cast<std::uint32_t>(slot.net_processes.size());
     auto* const value = arena_.data() + slot.offset
         + (next ? net_block_words(slot) : 0U);
+    if (slot.nine()) {
+        for (auto word = first; word <= last && word < words; ++word) {
+            resolve_nine_word(value, words, slot.planes, count, word, slot.width);
+        }
+        return;
+    }
     for (auto word = first; word <= last && word < words; ++word) {
         // Per element: the values a strong source drives (0, 1, both for
         // an unknown) and those a weak one does ('L', 'H', 'W'). Strong
@@ -3479,7 +3692,7 @@ void Interpreter::Impl::StaticKernel::resolve_net_words(const std::uint32_t slot
         for (std::uint32_t source = 0U; source < count; ++source) {
             // Codes: U 0000, X 0001, 0 0010, 1 0011, Z 0100, W 0101,
             // L 0110, H 0111, - 1000.
-            const auto* planes = value + (2U + 4U * source) * words + word;
+            const auto* planes = value + (slot.planes + 4U * source) * words + word;
             const auto p0 = planes[0];
             const auto p1 = planes[words];
             const auto p2 = planes[2U * words];
@@ -3508,13 +3721,34 @@ void Interpreter::Impl::StaticKernel::publish_net_sources(
     const auto& slot = slots_[slot_index];
     const auto words = slot.words;
     for (std::uint32_t source = 0U; source < slot.net_processes.size(); ++source) {
-        const auto* planes = arena_.data() + slot.offset + (2U + 4U * source) * words;
+        const auto* planes
+            = arena_.data() + slot.offset + (slot.planes + 4U * source) * words;
         const auto plane = [&](const std::uint32_t index) {
             return std::span<const std::uint64_t> { planes + index * words, words };
         };
+        std::vector<std::uint64_t> driven;
+        if (slot.nine()) {
+            // An element the process has no driver for reads 'Z' in the
+            // driver's public value (1111 is no driver, Slot::net_processes).
+            driven.assign(planes, planes + 4U * words);
+            for (std::uint32_t word = 0U; word < words; ++word) {
+                const auto absent = driven[word] & driven[words + word]
+                    & driven[2U * words + word] & driven[3U * words + word];
+                driven[word] &= ~absent;
+                driven[words + word] &= ~absent;
+                driven[3U * words + word] &= ~absent;
+            }
+            planes = driven.data();
+        }
+        const auto process = slot.net_processes[source];
+        // A dormant source has no driver yet (Interpreter::add_host_driver
+        // registers it): nothing of it reaches the host.
+        if (!impl_.dormant_driver_regions.empty()
+            && impl_.dormant_driver_regions.contains({ process, slot.signal })) {
+            continue;
+        }
         auto value = PackedLogic4::from_logic9_word_planes(
             slot.width, plane(0U), plane(1U), plane(2U), plane(3U));
-        const auto process = slot.net_processes[source];
         if (domain) {
             impl_.stage_update(process, slot.signal, std::move(value), *domain);
         } else {
@@ -3860,7 +4094,12 @@ void Interpreter::Impl::StaticKernel::note_unchanged_transactions(
             continue;
         }
         const auto signal = slots_[slot_index].signal;
-        const std::pair driver { member_process_[item.member], signal };
+        // A queued generic write names its Pending (which holds the writing
+        // member); the others name the member.
+        const auto writer = item.kind == 0U || item.kind == 3U || item.kind == 4U
+            ? item.member
+            : pending_generic_[item.member].member;
+        const std::pair driver { member_process_[writer], signal };
         if (std::ranges::find(drivers, driver) == drivers.end()) {
             drivers.push_back(driver);
         }
@@ -4227,6 +4466,17 @@ void Interpreter::Impl::StaticKernel::write_host(const std::uint32_t member,
     const std::optional<std::uint32_t> offset, const bool blocking,
     const SignalUpdateDomain domain)
 {
+    if (shadow_ != nullptr) {
+        VerifyHostWrite record;
+        record.kind = blocking ? 1U : 0U;
+        record.signal = signal;
+        record.offset = offset ? static_cast<std::int64_t>(*offset) : -1;
+        record.domain = static_cast<std::uint32_t>(domain);
+        record.value = value.to_msb_string();
+        if (shadow_host_write(std::move(record), blocking, &value)) {
+            return;
+        }
+    }
     // A fork child's updates are its own process's (Interpreter::
     // spawn_fork): the host orders the region's updates by process.
     const auto process = members_[member].process;
@@ -5469,6 +5719,8 @@ void Interpreter::Impl::StaticKernel::run(const std::uint32_t member_index)
         frame.kernel = this;
         frame.program = fast.program;
         frame.instance = fast.body;
+        frame.call_stack = &fast.body->call_entries;
+        frame.frame_stack = &fast.body->frame_entries;
         frame.writes = lane != nullptr ? &lane->writes : &writes_;
         frame.containers = container_info_.data();
         frame.member = member_index;
@@ -5612,76 +5864,74 @@ void Interpreter::Impl::StaticKernel::run_member(const std::uint32_t member_inde
     }
 }
 
-void Interpreter::Impl::StaticKernel::verify_run(const std::uint32_t member_index)
+// Writes appended by a run since `first`, as (slot, offset, Logic9-exact
+// value).
+Interpreter::Impl::StaticKernel::VerifyWrites
+Interpreter::Impl::StaticKernel::verify_writes(const std::size_t first)
 {
-    auto& member = members_[member_index];
-    auto& body = *member.compiled;
-    const auto registers = body.registers;
-    const auto wide = body.wide_registers;
-    const auto stack = member.call_stack;
-    const auto nba_size = writes_.count;
-    const auto generic_size = pending_generic_.size();
-    const auto arena = arena_;
-    const auto marks = write_marks_;
-    // Writes appended by a run, as (slot, offset, Logic9-exact value).
-    const auto writes = [&] {
-        std::vector<std::tuple<std::uint32_t, std::uint32_t, std::string>> out;
-        for (std::size_t index = nba_size; index < writes_.count; ++index) {
-            const auto& entry = writes_.data[index];
-            if (entry.kind == 0U || entry.kind == 4U) {
-                out.emplace_back(entry.slot, entry.offset,
-                    uword_value({ entry.a, entry.b }, entry.unknown, entry.width,
-                        ValueKind::logic9, weak_possible_.value_or(false) ? entry.weak : 0U)
-                        .to_msb_string());
-            } else if (entry.kind == 3U) {
-                const auto codes = net_constant_codes(entry);
-                const auto plane = [&](const std::uint64_t& word) {
-                    return std::span<const std::uint64_t> { &word, 1U };
-                };
-                out.emplace_back(entry.slot, entry.offset,
-                    PackedLogic4::from_logic9_word_planes(entry.width, plane(codes.p0),
-                        plane(codes.p1), plane(codes.p2), plane(codes.p3))
-                        .to_msb_string());
-            } else {
-                const auto& pending = pending_generic_[entry.member];
-                out.emplace_back(slot_of_signal_[pending.target], pending.offset,
-                    pending.value.promoted_to_logic9().to_msb_string());
+    VerifyWrites out;
+    for (std::size_t index = first; index < writes_.count; ++index) {
+        const auto& entry = writes_.data[index];
+        if (entry.kind == 0U || entry.kind == 4U) {
+            out.emplace_back(entry.slot, entry.offset,
+                uword_value({ entry.a, entry.b }, entry.unknown, entry.width,
+                    ValueKind::logic9, weak_possible_.value_or(false) ? entry.weak : 0U)
+                    .to_msb_string());
+        } else if (entry.kind == 3U) {
+            const auto codes = net_constant_codes(entry);
+            const auto plane = [&](const std::uint64_t& word) {
+                return std::span<const std::uint64_t> { &word, 1U };
+            };
+            out.emplace_back(entry.slot, entry.offset,
+                PackedLogic4::from_logic9_word_planes(entry.width, plane(codes.p0),
+                    plane(codes.p1), plane(codes.p2), plane(codes.p3))
+                    .to_msb_string());
+        } else {
+            const auto& pending = pending_generic_[entry.member];
+            out.emplace_back(slot_of_signal_[pending.target], pending.offset,
+                pending.value.promoted_to_logic9().to_msb_string());
+        }
+    }
+    // A wide store writes 64-bit chunks: adjacent writes to one slot
+    // compare as the one write they make up.
+    VerifyWrites merged;
+    for (auto& write : out) {
+        if (!merged.empty()) {
+            auto& [slot, offset, value] = merged.back();
+            if (slot == std::get<0>(write)
+                && offset + value.size() == std::get<1>(write)) {
+                value = std::get<2>(write) + value;
+                continue;
             }
         }
-        // A wide store writes 64-bit chunks: adjacent writes to one slot
-        // compare as the one write they make up.
-        std::vector<std::tuple<std::uint32_t, std::uint32_t, std::string>> merged;
-        for (auto& write : out) {
-            if (!merged.empty()) {
-                auto& [slot, offset, value] = merged.back();
-                if (slot == std::get<0>(write)
-                    && offset + value.size() == std::get<1>(write)) {
-                    value = std::get<2>(write) + value;
-                    continue;
-                }
-            }
-            merged.push_back(std::move(write));
+        merged.push_back(std::move(write));
+    }
+    return merged;
+}
+
+// The words of every resolved slot's blocks and pending flag: a VHDL
+// assignment resolves into them as it is made, in compiled and reference code
+// alike.
+std::vector<std::pair<std::uint32_t, std::vector<std::uint64_t>>>
+Interpreter::Impl::StaticKernel::verify_net_image()
+{
+    std::vector<std::pair<std::uint32_t, std::vector<std::uint64_t>>> out;
+    for (std::uint32_t index = 0U; index < slots_.size(); ++index) {
+        const auto& slot = slots_[index];
+        if (slot.resolved) {
+            const auto* const first = arena_.data() + slot.offset;
+            out.emplace_back(index, std::vector<std::uint64_t>(first,
+                first + 2U * net_block_words(slot) + 1U));
         }
-        return merged;
-    };
-    // The words of every resolved slot's blocks and pending flag: a VHDL
-    // assignment resolves into them as it is made, in compiled and
-    // reference code alike.
-    const auto net_image = [&] {
-        std::vector<std::pair<std::uint32_t, std::vector<std::uint64_t>>> out;
-        for (std::uint32_t index = 0U; index < slots_.size(); ++index) {
-            const auto& slot = slots_[index];
-            if (slot.resolved) {
-                const auto* const first = arena_.data() + slot.offset;
-                out.emplace_back(index, std::vector<std::uint64_t>(first,
-                    first + 2U * net_block_words(slot) + 1U));
-            }
-        }
-        return out;
-    };
-    run_compiled(member_index);
-    const auto compiled_writes = writes();
-    const auto compiled_nets = net_image();
+    }
+    return out;
+}
+
+// The registers of a compiled body as Logic9 strings (empty for an unused
+// one).
+std::vector<std::string>
+Interpreter::Impl::StaticKernel::verify_register_images(const CompiledBody& body)
+{
     std::vector<std::string> compiled_registers;
     for (std::size_t reg = 0U; reg < body.registers.size(); ++reg) {
         const auto width = body.register_widths[reg];
@@ -5705,52 +5955,15 @@ void Interpreter::Impl::StaticKernel::verify_run(const std::uint32_t member_inde
                                     ValueKind::logic9, weak)
                                     .to_msb_string());
     }
-    if (member.generic_mode) {
-        return;
-    }
-    // Replay from the same state on the reference evaluator.
-    writes_.count = static_cast<std::uint32_t>(nba_size);
-    pending_generic_.resize(generic_size);
-    arena_ = arena;
-    write_marks_ = marks;
-    member.call_stack = stack;
-    body.registers = registers;
-    body.wide_registers = wide;
-    for (std::size_t reg = 0U; reg < member.registers.size(); ++reg) {
-        const auto width = body.register_widths[reg];
-        if (width == 0U) {
-            continue;
-        }
-        const auto kind = reg < member.register_kinds.size()
-            ? member.register_kinds[reg] : ValueKind::logic4;
-        if (width > 64U) {
-            if (reg < body.wide_base.size() && body.wide_base[reg] != 0U) {
-                member.registers[reg] = wide_value(body, body.registers.data(),
-                    static_cast<std::uint32_t>(reg), kind);
-            } else if (reg < body.wide_registers.size()) {
-                member.registers[reg] = body.wide_registers[reg];
-            }
-            continue;
-        }
-        member.registers[reg] = Impl::coerce_value_kind(
-            PackedLogic4::from_aval_bval(width, body.registers[reg].a,
-                body.registers[reg].b),
-            kind);
-    }
-    {
-        // The compiled run emitted the run's reports; the replay's are the
-        // same messages (a difference shows in the writes or registers).
-        const InterpretingScope scope { *this, InterpretedCause::verify };
-        replaying_ = true;
-        try {
-            run_generic_from(member_index, member.body_begin);
-        } catch (...) {
-            replaying_ = false;
-            throw;
-        }
-        replaying_ = false;
-    }
-    const auto reference_writes = writes();
+    return compiled_registers;
+}
+
+// Compares the effect of two runs' writes (what commit_writes makes of them);
+// the empty string when they agree. `marks` is write_marks_ before the run.
+std::string Interpreter::Impl::StaticKernel::verify_effect_mismatch(
+    const VerifyWrites& compiled_writes, const VerifyWrites& reference_writes,
+    const std::vector<std::uint32_t>& marks)
+{
     // What commit_writes makes of a run's writes: the last value queued
     // for each (slot, bit), since a later assignment in the run replaces
     // an earlier one.
@@ -5822,8 +6035,103 @@ void Interpreter::Impl::StaticKernel::verify_run(const std::uint32_t member_inde
                 + describe(key.first, key.second, reference_effect);
         }
     }
+    return mismatch;
+}
+
+void Interpreter::Impl::StaticKernel::verify_run(const std::uint32_t member_index)
+{
+    auto& member = members_[member_index];
+    auto& body = *member.compiled;
+    const auto registers = body.registers;
+    const auto wide = body.wide_registers;
+    const auto stack = member.call_stack;
+    const auto nba_size = writes_.count;
+    const auto generic_size = pending_generic_.size();
+    const auto arena = arena_;
+    const auto marks = write_marks_;
+    // The compiled run's host and projected writes are recorded (the effects
+    // outside the slots); the replay below records its own and does not make
+    // them (VerifyShadow).
+    VerifyShadow verify_shadow;
+    struct ShadowReset {
+        VerifyShadow*& pointer;
+        ~ShadowReset() { pointer = nullptr; }
+    } const shadow_reset { shadow_ };
+    shadow_ = &verify_shadow;
+    run_compiled(member_index);
+    const auto compiled_writes = verify_writes(nba_size);
+    const auto compiled_nets = verify_net_image();
+    const auto compiled_registers = verify_register_images(body);
+    if (member.generic_mode) {
+        return;
+    }
+    // Replay from the same state on the reference evaluator.
+    writes_.count = static_cast<std::uint32_t>(nba_size);
+    pending_generic_.resize(generic_size);
+    arena_ = arena;
+    write_marks_ = marks;
+    member.call_stack = stack;
+    body.registers = registers;
+    body.wide_registers = wide;
+    for (std::size_t reg = 0U; reg < member.registers.size(); ++reg) {
+        const auto width = body.register_widths[reg];
+        if (width == 0U) {
+            continue;
+        }
+        const auto kind = reg < member.register_kinds.size()
+            ? member.register_kinds[reg] : ValueKind::logic4;
+        if (width > 64U) {
+            if (reg < body.wide_base.size() && body.wide_base[reg] != 0U) {
+                member.registers[reg] = wide_value(body, body.registers.data(),
+                    static_cast<std::uint32_t>(reg), kind);
+            } else if (reg < body.wide_registers.size()) {
+                member.registers[reg] = body.wide_registers[reg];
+            }
+            continue;
+        }
+        member.registers[reg] = Impl::coerce_value_kind(
+            PackedLogic4::from_aval_bval(width, body.registers[reg].a,
+                body.registers[reg].b),
+            kind);
+    }
+    {
+        // The compiled run emitted the run's reports; the replay's are the
+        // same messages (a difference shows in the writes or registers).
+        const InterpretingScope scope { *this, InterpretedCause::verify };
+        replaying_ = true;
+        verify_shadow.reference = true;
+        try {
+            run_generic_from(member_index, member.body_begin);
+        } catch (...) {
+            replaying_ = false;
+            verify_shadow.reference = false;
+            throw;
+        }
+        replaying_ = false;
+        verify_shadow.reference = false;
+    }
+    const auto reference_writes = verify_writes(nba_size);
+    std::string mismatch = verify_effect_mismatch(
+        compiled_writes, reference_writes, marks);
+    if (mismatch.empty()
+        && verify_shadow.compiled_host != verify_shadow.reference_host) {
+        mismatch = "host or projected writes: compiled "
+            + std::to_string(verify_shadow.compiled_host.size()) + " reference "
+            + std::to_string(verify_shadow.reference_host.size());
+        for (std::size_t index = 0U; index < verify_shadow.compiled_host.size()
+             && index < verify_shadow.reference_host.size(); ++index) {
+            if (!(verify_shadow.compiled_host[index]
+                    == verify_shadow.reference_host[index])) {
+                mismatch = "write " + std::to_string(index) + " of "
+                    + impl_.get_signal_cold(verify_shadow.compiled_host[index].signal).name
+                    + " compiled " + verify_shadow.compiled_host[index].value
+                    + " reference " + verify_shadow.reference_host[index].value;
+                break;
+            }
+        }
+    }
     if (mismatch.empty()) {
-        const auto reference_nets = net_image();
+        const auto reference_nets = verify_net_image();
         for (std::size_t index = 0U; index < compiled_nets.size(); ++index) {
             if (compiled_nets[index] != reference_nets[index]) {
                 mismatch = "resolved net "
@@ -5850,6 +6158,15 @@ void Interpreter::Impl::StaticKernel::verify_run(const std::uint32_t member_inde
                 + compiled_registers[reg] + " reference " + reference;
         }
     }
+    // Self-test of this check: FSIM_KERNEL_VERIFY_INJECT=member reports the
+    // first replayed activation as a mismatch.
+    static bool inject = [] {
+        const char* text = std::getenv("FSIM_KERNEL_VERIFY_INJECT");
+        return text != nullptr && std::string_view { text } == "member";
+    }();
+    if (mismatch.empty() && std::exchange(inject, false)) {
+        mismatch = "injected mismatch";
+    }
     if (!mismatch.empty()) {
         // A difference is a kernel bug: report it and fail the run.
         std::cerr << "fsim-kernel-verify: t=" << impl_.scheduler.now() << ' '
@@ -5875,6 +6192,7 @@ void Interpreter::Impl::StaticKernel::verify_run(const std::uint32_t member_inde
             + std::string { impl_.processes.program_view(member.process).name() }
             + " differs from the reference evaluator");
     }
+    ++verified_member_runs_;
     sync_compiled_registers(member_index);
 }
 
@@ -6085,40 +6403,6 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_operation(
             write_signal_owned(signal, std::move(value), offset, member_index,
                 pc);
         };
-        // A signal assignment (IEEE 1076-2019 10.5.2): a kernel-owned target
-        // takes only the single zero-delay inertial element the planner
-        // admits for it (applied in the round's update phase); a host
-        // target's transactions go to the member's host driver.
-        const auto projected_write = [&](const SignalId signal,
-                                         std::vector<ProjectedWaveformValue> elements,
-                                         const std::optional<std::uint32_t> offset,
-                                         const SimulationTick rejection,
-                                         const ProjectedDelayMode mode) {
-            if (!owned(signal)) {
-                write_host_projected(member_index, signal, elements,
-                    offset ? std::optional<std::size_t> { *offset } : std::nullopt,
-                    rejection, mode);
-                return;
-            }
-            if (elements.size() != 1U || elements.front().delay != 0U
-                || rejection != 0U || mode != ProjectedDelayMode::inertial) {
-                fail(member_index, pc,
-                    "static kernel delayed assignment targets a kernel-owned signal");
-            }
-            signal_write(signal, std::move(elements.front().value), offset, false,
-                SignalUpdateDomain::generic);
-        };
-        const auto waveform = [&](const std::vector<ProjectedWaveformElement>& source) {
-            std::vector<ProjectedWaveformValue> elements;
-            elements.reserve(source.size());
-            for (const auto& element : source) {
-                elements.push_back({ reg(element.source, pc),
-                    Impl::projected_element_delay(element,
-                        element.delay_source ? reg(*element.delay_source, pc)
-                                             : reg(element.source, pc)) });
-            }
-            return elements;
-        };
         const auto dynamic_offset = [&](const DynamicIndex& selection) {
             try {
                 return dynamic_index_offset(
@@ -6169,8 +6453,15 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_operation(
                 }
                 reg(op.destination, pc) = std::move(converted);
             } else if constexpr (std::is_same_v<T, ReadSignal>) {
+                // A SystemVerilog member reads a host signal in its four
+                // values ('H' as 1, 'L' as 0, 'U', 'W' and '-' as x; IEEE
+                // 1800-2023 21.2.1.3), whatever the register's kind: the
+                // compiled body's load_host does the same, and case equality
+                // (===) then sees the value an SV process reads.
                 reg(op.destination, pc) = Impl::coerce_value_kind(
-                    read_signal(op.signal), kind_of(op.destination));
+                    read_signal(op.signal),
+                    !member.vhdl && !owned(op.signal) ? ValueKind::logic4
+                                                      : kind_of(op.destination));
             } else if constexpr (std::is_same_v<T, UnaryNot>) {
                 reg(op.destination, pc) = unary_not(reg(op.source, pc));
             } else if constexpr (std::is_same_v<T, LogicalNot>) {
@@ -6492,32 +6783,19 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_operation(
                         (void)refresh_input(inputs_[input]);
                     }
                 }
-            } else if constexpr (std::is_same_v<T, WriteProjected>) {
-                projected_write(op.signal, { { reg(op.source, pc), op.delay } },
-                    std::nullopt, op.rejection, op.mode);
-            } else if constexpr (std::is_same_v<T, WriteProjectedSlice>) {
-                projected_write(op.signal, { { reg(op.source, pc), op.delay } },
-                    op.offset, op.rejection, op.mode);
-            } else if constexpr (std::is_same_v<T, WriteProjectedDynamicSlice>) {
-                const auto offset = dynamic_offset(op.selection);
-                projected_write(op.signal, { { reg(op.source, pc), op.delay } },
-                    offset, op.rejection, op.mode);
-            } else if constexpr (std::is_same_v<T, WriteProjectedWaveform>) {
-                auto elements = waveform(op.elements);
-                const auto rejection = Impl::projected_rejection(op.rejection, elements);
-                projected_write(op.signal, std::move(elements), std::nullopt,
-                    rejection, op.mode);
-            } else if constexpr (std::is_same_v<T, WriteProjectedWaveformSlice>) {
-                auto elements = waveform(op.elements);
-                const auto rejection = Impl::projected_rejection(op.rejection, elements);
-                projected_write(op.signal, std::move(elements), op.offset,
-                    rejection, op.mode);
-            } else if constexpr (std::is_same_v<T, WriteProjectedWaveformDynamicSlice>) {
-                auto elements = waveform(op.elements);
-                const auto rejection = Impl::projected_rejection(op.rejection, elements);
-                const auto offset = dynamic_offset(op.selection);
-                projected_write(op.signal, std::move(elements), offset,
-                    rejection, op.mode);
+            } else if constexpr (std::is_same_v<T, WriteProjected>
+                || std::is_same_v<T, WriteProjectedSlice>
+                || std::is_same_v<T, WriteProjectedDynamicSlice>
+                || std::is_same_v<T, WriteProjectedWaveform>
+                || std::is_same_v<T, WriteProjectedWaveformSlice>
+                || std::is_same_v<T, WriteProjectedWaveformDynamicSlice>) {
+                // A signal assignment (IEEE 1076-2019 10.5.2.2): the driver's
+                // projected output waveform, the kernel's for a kernel-owned
+                // target and the host's for a host signal.
+                projected_operation(member_index, pc,
+                    [&](const RegisterId register_id) {
+                        return reg(register_id, pc);
+                    });
             } else if constexpr (std::is_same_v<T, IntegerUnary>) {
                 try {
                     reg(op.destination, pc)
@@ -7755,6 +8033,11 @@ bool Interpreter::Impl::StaticKernel::activate()
             arm_vhdl_timer();
         }
     }
+    if ((!behavioral_ || !vhdl_threads_) && !projected_sites_.empty()) {
+        // A member's projected transactions (IEEE 1076-2019 10.5.2.2) mature
+        // through the same doorbell as a thread's wait.
+        arm_vhdl_timer();
+    }
     // The initializing activation runs the time-zero Active work of the
     // processes it replaces (declaration initializers, continuous
     // assignments), whose blocking writes host processes that start after
@@ -8477,7 +8760,7 @@ void Interpreter::Impl::StaticKernel::materialize(const SignalId signal)
     if (slot.resolved) {
         // The host holds the nine-value net; its sources resolve to it.
         if (Impl::coerce_value_kind(impl_.logical_signal_value(signal),
-                ValueKind::logic4)
+                slot.nine() ? ValueKind::logic9 : ValueKind::logic4)
             != value) {
             publish_net_sources(slot_index, std::nullopt);
         }
@@ -9925,9 +10208,8 @@ ReplanResult Interpreter::Impl::StaticKernel::graft_net_delay(const NetDelayGraf
     if (graft.signals.empty() || graft.processes.empty()) {
         return refuse("the graft adds no delayed copy or no driver");
     }
-    if (debug_points_) {
-        return refuse("a debugger plan keeps the kernel's plan");
-    }
+    // A debugger plan keeps the net a kernel slot (its debug points stay at
+    // their positions: the members' operations are rewritten in place).
     if (vhdl_ && !mixed_) {
         return refuse("a VHDL kernel keeps the kernel's plan");
     }

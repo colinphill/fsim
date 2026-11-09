@@ -1,12 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaboration_vhdl_configuration_hir.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
+#include "fsim/support/stack_growth.hpp"
+#include "fsim/support/vhdl_identifier.hpp"
 #include "hierarchy_builder_internal.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <iterator>
 #include <optional>
 #include <span>
+#include <string>
+#include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -38,12 +44,23 @@ namespace {
         return expression->vhdl->text;
     }
 
+    // The entity's associations of a component instance: the binding
+    // indication's map, with each local the binding names replaced by the
+    // instance's actual for it (the local is that actual, IEEE 1076-2019
+    // 14.5.4), or the instance's map alone under the default binding
+    // (7.3.3). A binding actual that is not a plain local (`f(c)`,
+    // `c(3 downto 2)`) keeps the local's name: the elaborated implied block
+    // binds that local to the actual's signal. A formal conversion
+    // (`f(s) => d`) is no association of the entity; it is collected in
+    // `formal_conversions` for the implied block to lower.
     std::vector<semantic::vhdl::Association>
     compose_compiled_vhdl_associations(
         const semantic::CompiledDesign& compiled,
         const std::span<const semantic::vhdl::Association> instance,
         const std::span<const semantic::vhdl::Association> binding,
-        const std::span<const semantic::DeclarationId> component_formals)
+        const std::span<const semantic::DeclarationId> component_formals,
+        std::vector<const semantic::vhdl::Association*>* const
+            formal_conversions)
     {
         if (binding.empty()) {
             return std::vector<semantic::vhdl::Association> {
@@ -54,6 +71,12 @@ namespace {
         result.reserve(binding.size() + instance.size());
         std::vector<bool> consumed(instance.size());
         for (const auto& mapped : binding) {
+            if (mapped.formal_conversion) {
+                if (formal_conversions != nullptr) {
+                    formal_conversions->push_back(&mapped);
+                }
+                continue;
+            }
             auto composed = mapped;
             const auto component_formal = compiled_vhdl_association_actual_name(
                 compiled, mapped);
@@ -126,36 +149,11 @@ namespace {
             }
             result.push_back(std::move(composed));
         }
-        for (std::size_t index = 0U; index < instance.size(); ++index) {
-            if (consumed[index]) {
-                continue;
-            }
-            auto residual = instance[index];
-            if (!residual.formal && index < component_formals.size()) {
-                const auto formal = compiled.find_declaration(
-                    component_formals[index]);
-                if (formal && formal->vhdl != nullptr) {
-                    residual.formal = semantic::vhdl::Name {
-                        formal->vhdl->name,
-                        formal->vhdl->name,
-                        residual.source,
-                        component_formals[index],
-                        { },
-                    };
-                }
-            }
-            if (!residual.formal
-                || std::ranges::none_of(
-                    result, [&](const auto& mapped) {
-                        return mapped.formal
-                            && vhdl_configuration_detail::
-                                configuration_name_equal(
-                                    mapped.formal->spelling,
-                                    residual.formal->spelling);
-                    })) {
-                result.push_back(std::move(residual));
-            }
-        }
+        // With a map aspect in the binding indication the entity's formals
+        // are associated by that map alone (7.3.2.1, 7.3.3): a local the
+        // map does not name reaches no formal (a local port so left is an
+        // error, 6.5.7.3, check_compiled_vhdl_binding_local_ports).
+        (void)consumed;
         return result;
     }
 
@@ -741,7 +739,9 @@ HierarchyBuilder::prepare_compiled_vhdl_component_associations(
     const semantic::vhdl::ComponentConfiguration* const selected_rule,
     const semantic::vhdl::Declaration* const component,
     const semantic::vhdl::Unit* const target_entity,
-    semantic::vhdl::Instance& effective_instance)
+    semantic::vhdl::Instance& effective_instance,
+    std::vector<const semantic::vhdl::Association*>* const
+        binding_formal_conversions)
 {
     if (selected_rule != nullptr && component != nullptr
         && component->component) {
@@ -749,12 +749,13 @@ HierarchyBuilder::prepare_compiled_vhdl_component_associations(
             = compose_compiled_vhdl_associations(
                 *compiled_, record.generic_map,
                 selected_rule->binding.generic_map,
-                component->component->generics);
+                component->component->generics, nullptr);
         effective_instance.port_map
             = compose_compiled_vhdl_associations(
                 *compiled_, record.port_map,
                 selected_rule->binding.port_map,
-                component->component->ports);
+                component->component->ports,
+                binding_formal_conversions);
     }
 
     std::vector<semantic::SourceSpanId> missing_generic_default_sources;
@@ -948,12 +949,246 @@ HierarchyBuilder::prepare_compiled_vhdl_component_associations(
                     component_formal->vhdl->initializer,
                     std::nullopt,
                     component_formal->vhdl->source,
+                    false,
+                    { },
                 });
         }
     };
     remap_surface(effective_instance.generic_map, false);
     remap_surface(effective_instance.port_map, true);
     return missing_generic_default_sources;
+}
+
+HierarchyBuilder::VhdlDeclarationSignals
+HierarchyBuilder::compiled_vhdl_component_port_signals(
+    CompiledVhdlLocalPortContext context, bool& failed)
+{
+    // The implied block of a component instance bound with a port map has
+    // the component's local ports, each the instance's actual for it (IEEE
+    // 1076-2019 14.5.4, 11.8.2): a local whose actual is a signal name is
+    // that signal; one whose actual is an expression or a part of a signal
+    // gets a signal of the implied block (`<instance>.$local_<port>`),
+    // connected to the actual by the same adapters an entity port's
+    // expression actual has (6.5.6.3). The binding map's conversions, which
+    // name the locals, read and drive these signals through this map.
+    const auto& record = context.record;
+    const auto& component = context.component;
+    const auto& working_specialization = context.working_specialization;
+    const auto& working_signals = context.working_signals;
+    failed = false;
+    VhdlDeclarationSignals signals;
+    if (!component.component) {
+        return signals;
+    }
+    const auto& ports = component.component->ports;
+    const std::unordered_set<std::uint32_t> no_defaults;
+    std::vector<const semantic::vhdl::Association*> positional;
+    for (const auto& association : record.port_map) {
+        if (!association.formal) {
+            positional.push_back(&association);
+        }
+    }
+    for (std::size_t index = 0U; index < ports.size(); ++index) {
+        const auto port = compiled_->find_declaration(ports[index]);
+        if (!port || port->vhdl == nullptr) {
+            continue;
+        }
+        const auto named = std::ranges::find_if(record.port_map,
+            [&](const semantic::vhdl::Association& association) {
+                return association.formal
+                    && vhdl_configuration_detail::configuration_name_equal(
+                        association.formal->spelling, port->vhdl->name);
+            });
+        const auto* const association = named != record.port_map.end()
+            ? &*named
+            : index < positional.size() ? positional[index]
+                                        : nullptr;
+        if (association == nullptr
+            || association->kind != semantic::vhdl::AssociationKind::expression
+            || !association->expression) {
+            continue;
+        }
+        const auto actual = working_specialization.find_expression(
+            *association->expression);
+        if (!actual || actual->vhdl == nullptr) {
+            continue;
+        }
+        if (actual->vhdl->kind != semantic::vhdl::ExpressionKind::name) {
+            semantic::SpecializedHirAssociationBinding binding;
+            binding.formal = ports[index];
+            binding.kind = semantic::SpecializedHirAssociationKind::expression;
+            binding.expression = association->expression;
+            binding.source = association->source;
+            auto local = materialize_compiled_vhdl_port_actual(binding,
+                &*actual, *port->vhdl, working_specialization,
+                working_specialization,
+                compiled_port_direction(port->vhdl->direction),
+                context.child_path, context.working_path,
+                context.architecture, no_defaults, working_signals,
+                context.working_read_only_signals, context.string_objects,
+                context.read_only_strings, context.container_objects,
+                context.read_only_containers, context.specialization_id,
+                context.concurrent_order, nullptr, ".$local_");
+            if (!local) {
+                failed = true;
+                return signals;
+            }
+            signals.emplace(ports[index].value(), local->signal);
+            continue;
+        }
+        auto name = std::string { actual->vhdl->referenced_name
+                ? actual->vhdl->referenced_name->text()
+                : std::string_view { actual->vhdl->text } };
+        if (actual->vhdl->referenced_name
+            && actual->vhdl->referenced_name->selected) {
+            const auto declaration = working_specialization.find_declaration(
+                *actual->vhdl->referenced_name->selected);
+            if (declaration && declaration->vhdl != nullptr) {
+                name = declaration->vhdl->name;
+            }
+        }
+        const auto signal = working_signals.find(name);
+        if (signal != working_signals.end()
+            && signal->second < design_.signals_.size()) {
+            signals.emplace(ports[index].value(), signal->second);
+        }
+    }
+    return signals;
+}
+
+bool HierarchyBuilder::check_compiled_vhdl_instance_formals(
+    const semantic::vhdl::Instance& record,
+    const semantic::vhdl::Declaration& component)
+{
+    if (!component.component) {
+        return true;
+    }
+    bool complete = true;
+    const auto check = [&](const std::span<const semantic::vhdl::Association>
+                               associations,
+                           const std::span<const semantic::DeclarationId>
+                               locals,
+                           const std::string_view kind) {
+        for (const auto& association : associations) {
+            if (!association.formal) {
+                continue;
+            }
+            // A formal is a local, a slice or element of one, or a
+            // conversion of one (`f(x)`): one of its identifiers names it.
+            const std::string_view spelling = association.formal->spelling;
+            bool local { };
+            for (std::size_t begin { }; begin < spelling.size() && !local;) {
+                const auto is_part = [&](const char c) {
+                    return std::isalnum(static_cast<unsigned char>(c)) != 0
+                        || c == '_' || c == '\\';
+                };
+                if (!is_part(spelling[begin])) {
+                    ++begin;
+                    continue;
+                }
+                auto end = begin;
+                while (end < spelling.size() && is_part(spelling[end])) {
+                    ++end;
+                }
+                const auto word = spelling.substr(begin, end - begin);
+                local = std::ranges::any_of(locals,
+                    [&](const semantic::DeclarationId id) {
+                        const auto declaration = compiled_->find_declaration(id);
+                        return declaration && declaration->vhdl != nullptr
+                            && support::same_vhdl_identifier(
+                                word, declaration->vhdl->name);
+                    });
+                begin = end;
+            }
+            if (local) {
+                continue;
+            }
+            report("FSIM-ELAB-VHCOMP-008",
+                std::string { "formal '" } + std::string { spelling }
+                    + "' of the " + std::string { kind } + " map of '"
+                    + record.name + "' is not a local " + std::string { kind }
+                    + " of component '" + component.name + "'",
+                compiled_source_span(*compiled_,
+                    association.source.valid() ? association.source
+                                               : record.source));
+            complete = false;
+        }
+    };
+    check(record.generic_map, component.component->generics, "generic");
+    check(record.port_map, component.component->ports, "port");
+    return complete;
+}
+
+bool HierarchyBuilder::check_compiled_vhdl_binding_local_ports(
+    const semantic::vhdl::Instance& record,
+    const semantic::vhdl::ComponentConfiguration& rule,
+    const semantic::vhdl::Declaration& component)
+{
+    // Every local port of the component instances a binding indication's
+    // port map applies to is associated as an actual with at least one
+    // formal, as the whole local port or a slice of it (IEEE 1076-2019
+    // 6.5.7.3); the linker's binding-map resolution bound the names of the
+    // locals, so a local port no actual part names is the error.
+    if (!component.component || rule.binding.port_map.empty()) {
+        return true;
+    }
+    // Locals are matched by name, as the port associations are: the linker
+    // may select the same-named port of another declaration of the
+    // component.
+    std::vector<std::string> named;
+    const auto visit = [&](const auto& self, const semantic::ExpressionId id)
+        -> void {
+        const auto expression = compiled_->find_expression(id);
+        if (!expression || expression->vhdl == nullptr) {
+            return;
+        }
+        if (expression->vhdl->kind == semantic::vhdl::ExpressionKind::name) {
+            auto name = std::string { expression->vhdl->referenced_name
+                    ? expression->vhdl->referenced_name->text()
+                    : std::string_view { expression->vhdl->text } };
+            if (expression->vhdl->referenced_name
+                && expression->vhdl->referenced_name->selected) {
+                const auto declaration = compiled_->find_declaration(
+                    *expression->vhdl->referenced_name->selected);
+                if (declaration && declaration->vhdl != nullptr) {
+                    name = declaration->vhdl->name;
+                }
+            }
+            named.push_back(std::move(name));
+        }
+        for (const auto operand : expression->vhdl->operands) {
+            support::with_stack([&] { self(self, operand); });
+        }
+        for (const auto& element : expression->vhdl->associations) {
+            support::with_stack([&] { self(self, element.value); });
+        }
+    };
+    for (const auto& association : rule.binding.port_map) {
+        if (association.kind == semantic::vhdl::AssociationKind::expression
+            && association.expression) {
+            visit(visit, *association.expression);
+        }
+    }
+    bool complete = true;
+    for (const auto port_id : component.component->ports) {
+        const auto port = compiled_->find_declaration(port_id);
+        if (!port || port->vhdl == nullptr
+            || std::ranges::any_of(named, [&](const std::string& name) {
+                   return support::same_vhdl_identifier(name, port->vhdl->name);
+               })) {
+            continue;
+        }
+        report("FSIM-ELAB-VHCOMP-017",
+            "local port '" + port->vhdl->name + "' of component '"
+                + component.name + "' instantiated as '" + record.name
+                + "' is not associated as an actual in the binding "
+                  "indication's port map",
+            compiled_source_span(*compiled_,
+                rule.binding.source.valid() ? rule.binding.source
+                                            : record.source));
+        complete = false;
+    }
+    return complete;
 }
 
 }

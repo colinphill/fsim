@@ -3,6 +3,7 @@
 
 #include "fsim/systemc/scv_smart_ptr.hpp"
 
+#include <limits>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -13,7 +14,7 @@ namespace fsim::systemc {
 
 struct ScvExtensionLimits {
     std::size_t max_nodes { 65536U };
-    std::size_t max_depth { 256U };
+    std::size_t max_depth { std::numeric_limits<std::uint32_t>::max() };
     std::size_t max_value_bits { 1024U * 1024U };
     std::size_t max_total_words { 1024U * 1024U };
     std::size_t max_string_bytes { 1024U * 1024U };

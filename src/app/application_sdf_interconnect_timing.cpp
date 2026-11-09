@@ -328,7 +328,10 @@ SdfInterconnectTimingResult apply_sdf_interconnect_timing(
                 annotation.source);
             valid = false;
         }
-        if (!target_identities.insert(annotation.target_identity).second) {
+        // A repeated INTERCONNECT applies in order of occurrence (replace or
+        // INCREMENT add), so it is no repeated target.
+        if (annotation.target_kind != SdfTimingTargetKind::Interconnect
+            && !target_identities.insert(annotation.target_identity).second) {
             diagnose(result.diagnostics, "FSIM-SDF-INTERCONNECT-001",
                 "SDF interconnect timing application repeats one timing target identity",
                 annotation.source);

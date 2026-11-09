@@ -7,6 +7,7 @@
 // its bounds from, an alias's object) and the selections applied to it.
 #include "lowerer_internal.hpp"
 
+#include <limits>
 #include <algorithm>
 #include <cstdlib>
 #include <iostream>
@@ -262,14 +263,25 @@ std::optional<Lowerer::HirVhdlShape> Lowerer::hir_vhdl_subtype_shape(
     }
     // The constraints the element subtypes of the type declare apply
     // below the object's own (IEEE 1076-2008 5.3.2.2, 5.3.3).
-    if (hir_vhdl_shape_depth_ >= 32U) {
+    // A type whose element subtypes lead back to it stops here.
+    const auto type_key = declared.type_mark.target.valid()
+        ? declared.type_mark.target.value()
+        : std::numeric_limits<std::uint32_t>::max();
+    if (type_key != std::numeric_limits<std::uint32_t>::max()
+        && !hir_vhdl_subtype_shape_active_.enter(type_key)) {
         return result;
     }
-    ++hir_vhdl_shape_depth_;
-    struct DepthGuard {
-        std::size_t& depth;
-        ~DepthGuard() { --depth; }
-    } guard { hir_vhdl_shape_depth_ };
+    struct TypeLeave {
+        support::ActiveSet<std::uint32_t>& set;
+        bool entered;
+        ~TypeLeave()
+        {
+            if (entered) {
+                set.leave();
+            }
+        }
+    } type_leave { hir_vhdl_subtype_shape_active_,
+        type_key != std::numeric_limits<std::uint32_t>::max() };
     std::vector<ElementConstraint> declared_below;
     const auto append_element = [&](const std::string& step,
                                     const semantic::vhdl::SubtypeIndication&
@@ -874,9 +886,15 @@ Lowerer::hir_vhdl_concatenation_subtype(
 std::optional<Lowerer::HirVhdlShape> Lowerer::hir_vhdl_shape(
     const semantic::ExpressionId expression_id) const
 {
-    if (specialized_hir_unit_ == nullptr || hir_vhdl_shape_depth_ >= 32U) {
+    if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
     }
+    // An expression whose shape depends on itself has none.
+    if (!hir_vhdl_shape_active_.enter(expression_id.value())) {
+        return std::nullopt;
+    }
+    const support::ActiveSet<std::uint32_t>::Entry shape_entry {
+        hir_vhdl_shape_active_ };
     auto key = hir_vhdl_query_key(expression_id, hir_process_scope_);
     if (key) {
         if (const auto found = hir_vhdl_shape_cache_.find(*key);
@@ -906,11 +924,6 @@ std::optional<Lowerer::HirVhdlShape> Lowerer::compute_hir_vhdl_shape(
     if (!expression || expression->vhdl == nullptr) {
         return std::nullopt;
     }
-    ++hir_vhdl_shape_depth_;
-    struct DepthGuard {
-        std::size_t& depth;
-        ~DepthGuard() { --depth; }
-    } guard { hir_vhdl_shape_depth_ };
     const auto& source = *expression->vhdl;
     const auto scope = source.scope;
     using Kind = semantic::vhdl::ExpressionKind;

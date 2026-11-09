@@ -466,6 +466,55 @@ struct Simulation::Impl {
         std::string_view allocation_scope);
     // The report object of the root, for reports outside any component.
     runtime::SystemVerilogClassHandle uvm_root_report_object { };
+    /// The root's report object, allocated on first use without running the
+    /// library constructor (reports outside any component go through it).
+    [[nodiscard]] runtime::SystemVerilogClassHandle uvm_root_report_handle();
+    /// `h` is the object `uvm_root::get()` and `uvm_top` hold: its methods are
+    /// the native component service's (IEEE 1800.2-2020 13.2, F.7).
+    [[nodiscard]] bool is_uvm_root_handle(
+        runtime::SystemVerilogClassHandle handle) const;
+    /// A method of the uvm_root object answered from the native hierarchy;
+    /// nullopt for a method it does not answer.
+    /// The signal of the library's uvm_default_printer variable (searched
+    /// once; the inner optional is empty when the design has none).
+    std::optional<std::optional<runtime::simir::SignalId>>
+        uvm_default_printer_signal;
+    /// The run's one object of a UVM library singleton class (`uvm_root`,
+    /// `uvm_cmdline_processor`, ...), made on the first request without
+    /// running the library constructor. The root and the command line
+    /// processor also go into the library's uvm_top and uvm_cmdline_proc
+    /// variables, as uvm_root::m_uvm_get_root and
+    /// uvm_cmdline_processor::get_inst do in 1800.2-2020.3.1.
+    [[nodiscard]] runtime::SystemVerilogClassHandle uvm_singleton(
+        const std::string& identity);
+    /// The signals of the library's variables that hold a singleton
+    /// (`uvm_top`, `uvm_cmdline_proc`), by variable name; searched once, the
+    /// optional is empty when the design has none.
+    std::map<std::string, std::optional<runtime::simir::SignalId>,
+        std::less<>> uvm_singleton_variable_signals;
+    /// The children of a component, or of the root, in name order.
+    [[nodiscard]] std::vector<runtime::SystemVerilogClassHandle>
+    uvm_sorted_children(runtime::SystemVerilogClassHandle component) const;
+    [[nodiscard]] std::vector<runtime::SystemVerilogClassHandle>
+    uvm_root_top_components() const;
+    /// The object `uvm_root::get()` returns (0 before its first use).
+    [[nodiscard]] runtime::SystemVerilogClassHandle uvm_root_object() const;
+    /// uvm_root::find_all from `start` (0: the root): the matching
+    /// components, children first in name order; the root closes the list
+    /// when the pattern matches the empty full name.
+    [[nodiscard]] std::vector<runtime::SystemVerilogClassHandle> uvm_find_all(
+        std::string_view pattern,
+        runtime::SystemVerilogClassHandle start) const;
+    /// uvm_root::print_topology: the table of the native hierarchy.
+    void print_uvm_topology(runtime::SystemVerilogClassHandle printer);
+    [[nodiscard]] std::optional<runtime::PackedLogic4> invoke_uvm_root_method(
+        std::string_view method,
+        std::vector<runtime::PackedLogic4>& actuals,
+        std::vector<std::string>& string_actuals,
+        std::span<const std::string> actual_names);
+    /// The one object of each UVM library singleton class, allocated on the
+    /// first `get()` (`uvm_root::get()` and its siblings, `@uvm-singleton:`).
+    std::map<std::string, runtime::SystemVerilogClassHandle> uvm_singletons;
 
     [[nodiscard]] std::optional<runtime::simir::SignalId>
     backdoor_signal(const std::string_view path) const noexcept;
@@ -901,11 +950,29 @@ struct Simulation::Impl {
     [[nodiscard]] bool perform_reset();
     /// The application's share of a reset (class objects and static members,
     /// delayed VPI writes), after the engine's.
-    void reset_application_state();
-    /// UVM component, phase, objection and sequence state lives in the
-    /// host services above; the run-state file does not carry it yet, so a
-    /// run that holds any refuses to save and to reset.
+    void reset_application_state(bool class_state_rebuilt);
+    /// A root, a phase object or a run_test is live (the UVM hierarchy and
+    /// phase machinery have started).
     [[nodiscard]] bool uvm_state_live() const;
+    /// The UVM services hold state that a run-state file carries (#188):
+    /// section "app.uvm".
+    [[nodiscard]] bool uvm_state_present() const;
+    /// Why the UVM state cannot be written or reset (empty when it can): a
+    /// callback of the embedding program lives in a service the section does
+    /// not carry (config_db waiters, resource callbacks, report hooks and
+    /// catchers, an objection or an observer in progress).
+    [[nodiscard]] std::string uvm_unsaved_state() const;
+    /// The services the section does not carry that hold state created
+    /// through the embedding API (their names).
+    [[nodiscard]] std::vector<std::string> uvm_unused_services() const;
+    /// Returns every UVM service and the maps above to the state before the
+    /// first object (IEEE 1800-2023 D.8).
+    void reset_uvm_state();
+    /// Applies the command line's factory overrides, configuration and report
+    /// settings again, as the start of a run did.
+    void reapply_uvm_command_line();
+    /// The one description of the UVM section, for both directions.
+    void uvm_run_state_io(runtime::RunStateArchive& archive);
 
     // ---- Run-state files (application_simulation_impl_save.cpp) ----
     /// The application's sections of a run-state image; the engine's are

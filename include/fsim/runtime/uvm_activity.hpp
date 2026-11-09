@@ -4,6 +4,7 @@
 #include "fsim/runtime/scheduler.hpp"
 #include "fsim/runtime/uvm_component.hpp"
 
+#include <limits>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -15,6 +16,8 @@
 #include <vector>
 
 namespace fsim::runtime {
+
+class RunStateArchive;
 
 enum class SystemVerilogUvmActivityKind : std::uint8_t {
   Graph,
@@ -69,7 +72,7 @@ struct SystemVerilogUvmActivityLimits {
   std::size_t maximum_events{1U << 20U};
   std::size_t maximum_observers{512};
   std::size_t maximum_callbacks_per_event{512};
-  std::size_t maximum_reentry_depth{64};
+  std::size_t maximum_reentry_depth{std::numeric_limits<std::size_t>::max()};
   std::size_t maximum_failures{65'536};
   std::size_t maximum_identity_bytes{4'096};
   std::size_t maximum_detail_bytes{16'384};
@@ -88,6 +91,14 @@ class SystemVerilogUvmActivityError final : public std::runtime_error {
 
 class SystemVerilogUvmActivityService final {
  public:
+  /// Run-state save and restore of the event log (#188), the return to the
+  /// empty log, and whether no observer is running (the one scratch member).
+  void run_state_io(RunStateArchive& archive);
+  void reset_run_state();
+  [[nodiscard]] bool run_state_idle() const noexcept {
+    return reentry_depth_ == 0;
+  }
+
   using Observer = std::function<void(const SystemVerilogUvmActivityEvent&)>;
 
   explicit SystemVerilogUvmActivityService(

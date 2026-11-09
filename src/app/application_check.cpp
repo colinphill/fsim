@@ -1125,7 +1125,7 @@ static std::optional<CompilationWorkspace> check_project_impl(
   if (!validate_vhdl_type_mark_visibility(checked, diagnostics)) {
     return std::nullopt;
   }
-  install_compiled_class_specializations(checked);
+  install_compiled_class_specializations(checked, diagnostics);
   checked.systemverilog_uvm_provenance.release = *uvm_release;
   checked.systemverilog_uvm_provenance.source_identity =
       uvm_source_identity(*uvm_release, checked.hdl_sources);

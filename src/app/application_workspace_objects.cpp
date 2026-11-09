@@ -659,7 +659,11 @@ std::optional<CompilationWorkspace> load_workspace_objects(
             result.mutable_vhdl(), environment.newest);
         result.refresh_lookup_indexes();
     }
-    install_compiled_class_specializations(result);
+    // Only the objects of the final design see every class a relation names;
+    // a single object read for its references, or the imported environment
+    // of a compile, has the libraries it extends still unlinked.
+    install_compiled_class_specializations(
+        result, diagnostics, validate_uvm_surface);
     if (validate_uvm_surface && !validate_uvm_environment(result, diagnostics)) {
         return std::nullopt;
     }

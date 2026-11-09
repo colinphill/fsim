@@ -185,8 +185,14 @@ void HierarchyBuilder::publish_systemverilog_concurrent_occurrence(
     SystemVerilogConcurrentProcessOccurrence& lowered,
     const semantic::sv::Unit& unit,
     SpecializationInfo& specialization,
-    const std::optional<std::uint32_t> program_owner)
+    const std::optional<std::uint32_t> program_owner,
+    const semantic::SourceSpanId statement_source)
 {
+    if (statement_source.valid()) {
+        specialization.statement_sources.emplace_back(
+            lowered.instance ? lowered.instance->id : lowered.process->id,
+            statement_source);
+    }
     if (lowered.instance) {
         auto& instance = *lowered.instance;
         instance.reactive = program_owner.has_value();
@@ -380,7 +386,7 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
             return false;
         }
         publish_systemverilog_concurrent_occurrence(
-            *lowered, unit, specialization, program_owner);
+            *lowered, unit, specialization, program_owner, statement_source);
         append_generated_processes(lowerer);
     }
     // Preserve the established elaboration order: concurrent drivers are
@@ -654,7 +660,8 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
                 }
             }
             publish_systemverilog_concurrent_occurrence(
-                *lowered, unit, specialization, program_owner);
+                *lowered, unit, specialization, program_owner,
+                statement_source);
             append_generated_processes(generated_lowerer);
         }
         for (const auto process_id : occurrence.region->processes) {
@@ -886,7 +893,10 @@ bool HierarchyBuilder::lower_deferred_generated_systemverilog(
                 return false;
             }
             publish_systemverilog_concurrent_occurrence(
-                *lowered, unit, specialization, program_owner);
+                *lowered, unit, specialization, program_owner,
+                statement && statement->systemverilog != nullptr
+                    ? statement->systemverilog->source
+                    : unit.source);
             append_generated();
             continue;
         }
@@ -962,7 +972,7 @@ bool HierarchyBuilder::lower_deferred_systemverilog_processes(
         auto& specialization
             = design_.specializations_[specialization_index];
         publish_systemverilog_concurrent_occurrence(
-            *lowered, unit, specialization, program_owner);
+            *lowered, unit, specialization, program_owner, statement_source);
         append_generated_systemverilog_processes(
             lowerer, unit, specialization, program_owner);
     }

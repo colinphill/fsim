@@ -2,6 +2,8 @@
 #include "fsim/semantic/compiled_design_vhdl_resolution.hpp"
 
 #include "fsim/semantic/compiled_design_resolver.hpp"
+#include "fsim/semantic/vhdl_intrinsic_signatures.hpp"
+#include "fsim/semantic/vhdl_standard_catalog.hpp"
 #include "fsim/support/vhdl_standard_enumeration.hpp"
 #include "fsim/support/vhdl_time.hpp"
 
@@ -13,6 +15,7 @@
 #include <deque>
 #include <map>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -62,6 +65,8 @@ constexpr std::string_view universal_real { "universal_real" };
 constexpr std::string_view string_literal_type { "@string-literal" };
 constexpr std::string_view aggregate_type { "@aggregate" };
 constexpr std::string_view null_type { "@null" };
+// A character literal that fits more than one overload (12.5).
+constexpr std::string_view ambiguous_literal { "@ambiguous-literal" };
 
 // The predefined types named by STD.STANDARD and IEEE.STD_LOGIC_1164. A
 // subtype names its base type (5.2.6, 16.3, 16.7).
@@ -1414,6 +1419,44 @@ private:
 
     // ---- Resolution (top-down) ---------------------------------------------
 
+    /// Types the character-literal actuals of a call from the overloads that
+    /// apply: the formal type all of them agree on is the literal's type
+    /// (12.5, 9.3.2); formals that differ among types the literal can have
+    /// make it ambiguous. The other actuals take no context.
+    void resolve_literal_actuals(const vhdl::Expression& record,
+        const std::vector<const Callable*>& chosen)
+    {
+        for (std::size_t index = 0; index < record.operands.size(); ++index) {
+            const auto operand = record.operands[index];
+            if (!is_character_literal(operand) || chosen.empty()) {
+                resolve(operand, std::nullopt);
+                continue;
+            }
+            std::vector<TypeKey> formal_types;
+            const auto& own = candidates(operand);
+            for (const auto* callable : chosen) {
+                const auto associated = associate(*callable->declaration,
+                    record.operands, record.argument_names);
+                if (!associated) {
+                    continue;
+                }
+                const auto key = formal_key(
+                    (*associated)[index], callable->instance);
+                if (std::ranges::find(own, key) != own.end()) {
+                    add(formal_types, key);
+                }
+            }
+            if (formal_types.size() > 1U) {
+                annotate_type(operand, builtin(ambiguous_literal));
+                resolve(operand, std::nullopt);
+            } else if (formal_types.size() == 1U) {
+                resolve(operand, formal_types.front());
+            } else {
+                resolve(operand, std::nullopt);
+            }
+        }
+    }
+
     void resolve_call(const vhdl::Expression& record,
         const std::optional<TypeKey>& expected)
     {
@@ -1473,9 +1516,7 @@ private:
                 visible.size() > 1U ? "context" : "profile");
         }
         if (chosen.size() != 1U) {
-            for (const auto operand : record.operands) {
-                resolve(operand, std::nullopt);
-            }
+            resolve_literal_actuals(record, chosen);
             return;
         }
         const auto formals = associate(*chosen.front()->declaration,
@@ -1486,6 +1527,187 @@ private:
                               (*formals)[index], chosen.front()->instance) }
                         : std::nullopt);
         }
+    }
+
+    /// The compiler-owned subprograms of IEEE.STD_LOGIC_1164 and
+    /// IEEE.NUMERIC_STD that take scalar actuals, with their scalar formal
+    /// types ('s' STD_ULOGIC, 'b' BIT, 'a' an array) and result type ('s',
+    /// 'b', 'B' BOOLEAN or 'i' INTEGER), one entry per overload. The design retains no declaration
+    /// of them, so these signatures give a literal actual its type (IEEE
+    /// 1076-2019 12.5).
+    struct IntrinsicSignature {
+        std::string_view name;
+        std::string_view formals;
+        char result;
+    };
+    static constexpr std::array<IntrinsicSignature, 16U> intrinsic_signatures {{
+        { "to_bit", "s", 'b' }, { "to_bit", "sb", 'b' },
+        { "to_stdulogic", "b", 's' }, { "to_x01", "s", 's' },
+        { "to_x01", "b", 'b' }, { "to_x01z", "s", 's' },
+        { "to_x01z", "b", 'b' }, { "to_ux01", "s", 's' },
+        { "to_ux01", "b", 'b' }, { "is_x", "s", 'B' },
+        { "rising_edge", "s", 'B' }, { "falling_edge", "s", 'B' },
+        { "std_match", "ss", 'B' }, { "to_01", "s", 's' },
+        { "find_leftmost", "as", 'i' }, { "find_rightmost", "as", 'i' },
+    }};
+
+    /// Types the literal actuals of a call to a compiler-owned subprogram
+    /// from the overloads of `intrinsic_signatures` that the actuals fit
+    /// (12.5, 9.3.2); false when the call is not one. A literal that fits
+    /// the formals of more than one overload, and whose context (the call's
+    /// result type) does not choose, is ambiguous: it is recorded as such,
+    /// so that no homograph is taken for it and the lowering reports it.
+    [[nodiscard]] bool resolve_intrinsic_call(const vhdl::Expression& record,
+        const std::optional<TypeKey>& expected)
+    {
+        if (!function_call(record) || !functions(record).empty()
+            || record.operands.empty()) {
+            return false;
+        }
+        const auto name = lowered(simple_name(record.text));
+        const auto* lookup = resolver(record.scope);
+        if (lookup == nullptr) {
+            return false;
+        }
+        const bool logic = lookup->vhdl_builtin_package_member_imported(
+            "ieee", "std_logic_1164", "std_ulogic", record.scope);
+        const bool numeric = lookup->vhdl_builtin_package_member_imported(
+            "ieee", "numeric_std", "unsigned", record.scope);
+        if (!logic
+            && !(numeric
+                && (name == "std_match" || name == "find_leftmost"
+                    || name == "find_rightmost"))) {
+            return false;
+        }
+        const auto formal_key_of = [&](const char formal) {
+            return builtin(formal == 's' ? "std_ulogic" : "bit");
+        };
+        const auto is_literal = [&](const ExpressionId id) {
+            const auto* operand = expression(id);
+            return operand != nullptr
+                && operand->kind == ExpressionKind::logic_literal;
+        };
+        std::vector<std::string_view> fitting;
+        bool known_name { };
+        for (const auto& signature : intrinsic_signatures) {
+            if (signature.name != name) {
+                continue;
+            }
+            known_name = true;
+            if (signature.formals.size() != record.operands.size()) {
+                continue;
+            }
+            bool fits = true;
+            for (std::size_t index = 0; fits && index < record.operands.size();
+                 ++index) {
+                if (signature.formals[index] == 'a') {
+                    // An array actual (UNSIGNED or SIGNED) is never a literal.
+                    fits = !is_literal(record.operands[index]);
+                    continue;
+                }
+                const auto& actual = candidates(record.operands[index]);
+                const auto formal = formal_key_of(signature.formals[index]);
+                const bool present
+                    = std::ranges::find(actual, formal) != actual.end();
+                fits = is_literal(record.operands[index])
+                    ? present
+                    : (actual.empty() || present);
+            }
+            // The context of the call selects among overloads by result
+            // type (12.5).
+            if (fits && expected) {
+                const auto result = signature.result == 's'
+                    ? builtin("std_ulogic")
+                    : signature.result == 'b' ? builtin("bit")
+                    : signature.result == 'i' ? builtin("integer")
+                                              : builtin("boolean");
+                fits = compatible(*expected, result);
+            }
+            if (fits) {
+                fitting.push_back(signature.formals);
+            }
+        }
+        if (!known_name) {
+            return false;
+        }
+        for (std::size_t index = 0; index < record.operands.size(); ++index) {
+            const auto operand = record.operands[index];
+            std::set<char> formals;
+            for (const auto candidate : fitting) {
+                formals.insert(candidate[index]);
+            }
+            formals.erase('a');
+            if (!is_literal(operand) || formals.empty()) {
+                resolve(operand, std::nullopt);
+                continue;
+            }
+            if (formals.size() == 1U) {
+                resolve(operand, formal_key_of(*formals.begin()));
+                continue;
+            }
+            // Fits more than one overload: ambiguous (12.5).
+            annotate_type(operand, builtin(ambiguous_literal));
+            resolve(operand, std::nullopt);
+        }
+        return true;
+    }
+
+    /// The operand of the condition operator `??` (9.2.9) is a literal of
+    /// BIT or STD_ULOGIC, the types it is defined for. A literal that is a
+    /// value of both is ambiguous (12.5); it is recorded as such, and the
+    /// lowering reports it.
+    void resolve_condition_literal(const vhdl::Expression& record)
+    {
+        const auto id = record.operands.front();
+        const auto* lookup = resolver(record.scope);
+        const auto& types = candidates(id);
+        const bool logic = lookup != nullptr
+            && lookup->vhdl_builtin_package_member_imported(
+                "ieee", "std_logic_1164", "std_ulogic", record.scope);
+        const bool is_bit = std::ranges::find(types, builtin("bit"))
+            != types.end();
+        const bool is_logic = logic
+            && std::ranges::find(types, builtin("std_ulogic")) != types.end();
+        if (is_bit && is_logic) {
+            annotate_type(id, builtin(ambiguous_literal));
+        } else if (is_logic) {
+            annotate_type(id, builtin("std_ulogic"));
+        } else if (is_bit) {
+            annotate_type(id, builtin("bit"));
+        }
+        resolve(id, std::nullopt);
+    }
+
+    [[nodiscard]] std::optional<TypeKey> attribute_argument_type(
+        const vhdl::Expression& record)
+    {
+        if (record.kind != ExpressionKind::call || record.operands.size() != 2U
+            || !record.text.starts_with("'")) {
+            return std::nullopt;
+        }
+        const auto attribute = lowered(std::string_view { record.text }
+                                           .substr(1U));
+        if (attribute != "image" && attribute != "pos" && attribute != "succ"
+            && attribute != "pred" && attribute != "leftof"
+            && attribute != "rightof") {
+            return std::nullopt;
+        }
+        const auto* prefix = expression(record.operands.front());
+        if (prefix == nullptr || !prefix->referenced_name) {
+            return std::nullopt;
+        }
+        const auto& name = *prefix->referenced_name;
+        if (name.selected) {
+            if (const auto* declared = declaration(*name.selected);
+                declared != nullptr && declared->declared_type
+                && (declared->form == vhdl::DeclarationForm::type
+                    || declared->form == vhdl::DeclarationForm::subtype)) {
+                const auto key = type_key(*declared->declared_type);
+                return key.known() ? std::optional { key } : std::nullopt;
+            }
+        }
+        const auto named = named_type_key(name.spelling, prefix->scope);
+        return named.known() ? std::optional { named } : std::nullopt;
     }
 
     void resolve_literal(const vhdl::Expression& record,
@@ -1557,6 +1779,16 @@ private:
                 resolve_call(*record, known_expected);
                 return;
             }
+            if (resolve_intrinsic_call(*record, known_expected)) {
+                return;
+            }
+            // The argument of T'IMAGE, T'POS, T'SUCC, T'PRED, T'LEFTOF and
+            // T'RIGHTOF has the type of the prefix T (16.2).
+            if (const auto argument = attribute_argument_type(*record)) {
+                resolve(record->operands.front(), std::nullopt);
+                resolve(record->operands[1], argument);
+                return;
+            }
             if (record->text.starts_with("@vhdl-qualified:")
                 && !record->operands.empty()) {
                 const auto& types = candidates(id);
@@ -1580,11 +1812,23 @@ private:
         case ExpressionKind::logic_literal:
             resolve_literal(*record, known_expected);
             return;
+        case ExpressionKind::string_literal:
+            // A string literal is a value of the array type of its context
+            // (9.3.2); its elements are that type's literals.
+            if (known_expected && array_class(*known_expected)) {
+                annotate_type(id, *known_expected);
+            }
+            return;
         case ExpressionKind::unary:
             if (record->operands.size() == 1U
                 && (record->text == "-" || record->text == "+"
                     || record->text == "abs" || record->text == "not")) {
                 resolve(record->operands.front(), known_expected);
+                return;
+            }
+            if (record->operands.size() == 1U && record->text == "??"
+                && is_character_literal(record->operands.front())) {
+                resolve_condition_literal(*record);
                 return;
             }
             break;
@@ -1735,8 +1979,128 @@ private:
                 || op == "xnor")) {
             operand_type = expected;
         }
-        resolve(record.operands.front(), operand_type);
-        resolve(record.operands.back(), operand_type);
+        std::optional<TypeKey> left = operand_type;
+        std::optional<TypeKey> right = operand_type;
+        if (!user_overloads) {
+            resolve_operator_operands(record, op, expected, left, right);
+        }
+        // A character literal operand takes the formal type of the
+        // retained operator overloads that apply (12.5).
+        if (user_overloads
+            && (is_character_literal(record.operands.front())
+                || is_character_literal(record.operands.back()))) {
+            std::vector<const Callable*> chosen;
+            const auto& visible = functions(record);
+            for (const auto& callable : visible) {
+                if (applicable(callable, record, expected)) {
+                    chosen.push_back(&callable);
+                }
+            }
+            if (!chosen.empty()) {
+                resolve_literal_actuals(record, chosen);
+                return;
+            }
+        }
+        resolve(record.operands.front(), left);
+        resolve(record.operands.back(), right);
+    }
+
+    /// The one concrete type an operand may have, if there is one.
+    [[nodiscard]] std::optional<TypeKey> sole_concrete(const ExpressionId id)
+    {
+        std::optional<TypeKey> result;
+        for (const auto& key : candidates(id)) {
+            const bool concrete = key.id.valid()
+                || (!key.builtin.empty() && key.builtin[0] != '@'
+                    && key.builtin != universal_integer
+                    && key.builtin != universal_real);
+            if (!concrete) {
+                continue;
+            }
+            if (result) {
+                return std::nullopt;
+            }
+            result = key;
+        }
+        return result;
+    }
+
+    [[nodiscard]] bool is_character_literal(const ExpressionId id) const
+    {
+        const auto* operand = expression(id);
+        return operand != nullptr
+            && operand->kind == ExpressionKind::logic_literal;
+    }
+
+    /// Operand types of a predefined or compiler-owned binary operator
+    /// whose context does not give them (9.2.2, 9.2.3, 9.2.4, 12.5): the
+    /// matching relations and the logical operators take operands of one
+    /// type, the concatenation takes the array type of its context for a
+    /// string and its element type for a character literal, and an
+    /// array-and-element arithmetic operator (NUMERIC_STD `u + '1'`) takes
+    /// the element type of the array operand.
+    void resolve_operator_operands(const vhdl::Expression& record,
+        const std::string_view op, const std::optional<TypeKey>& expected,
+        std::optional<TypeKey>& left, std::optional<TypeKey>& right)
+    {
+        const auto first = record.operands.front();
+        const auto second = record.operands.back();
+        if (op == "&" && expected && array_class(*expected)) {
+            const auto element = element_key(*expected);
+            for (const auto id : { first, second }) {
+                auto& slot = id == first ? left : right;
+                if (is_character_literal(id) && element.known()) {
+                    slot = element;
+                } else if (const auto* operand = expression(id);
+                           operand != nullptr
+                           && (operand->kind == ExpressionKind::string_literal
+                               || (operand->kind == ExpressionKind::binary
+                                   && lowered(operand->text) == "&"))) {
+                    slot = expected;
+                }
+            }
+            return;
+        }
+        const bool matching = op == "?=" || op == "?/=" || op == "?<"
+            || op == "?<=" || op == "?>" || op == "?>=";
+        const bool logical = op == "and" || op == "or" || op == "nand"
+            || op == "nor" || op == "xor" || op == "xnor";
+        if (matching || logical) {
+            if (!left && !right) {
+                std::optional<TypeKey> common = expected;
+                if (matching || !common) {
+                    common = is_character_literal(first)
+                        ? sole_concrete(second)
+                        : sole_concrete(first);
+                    if (is_character_literal(first)
+                        && is_character_literal(second)) {
+                        common.reset();
+                    }
+                }
+                left = common;
+                right = common;
+            }
+            return;
+        }
+        const bool arithmetic = op == "+" || op == "-" || op == "*"
+            || op == "/" || op == "mod" || op == "rem";
+        // (The context's type is the array's, not the element's, so it does
+        // not stand for the literal's type.)
+        if (arithmetic) {
+            for (const auto id : { first, second }) {
+                const auto other = id == first ? second : first;
+                if (!is_character_literal(id) || is_character_literal(other)) {
+                    continue;
+                }
+                const auto array = sole_concrete(other);
+                if (array && array_class(*array)) {
+                    const auto element = element_key(*array);
+                    if (element.known()) {
+                        (id == first ? left : right) = element;
+                    }
+                }
+            }
+        }
     }
 
     void resolve_aggregate(const vhdl::Expression& record,
@@ -1970,8 +2334,14 @@ private:
         default:
             break;
         }
+        // A case statement's selector gives each choice its type (10.9).
+        const bool selection = statement.kind == Kind::selection;
+        std::optional<TypeKey> selector;
+        if (selection && statement.condition) {
+            selector = target_type(*statement.condition);
+        }
         if (statement.condition) {
-            resolve(*statement.condition, boolean);
+            resolve(*statement.condition, selection ? selector : boolean);
         }
         for (const auto expression_id : { statement.target, statement.value,
                  statement.loop_initial, statement.loop_limit,
@@ -1988,7 +2358,7 @@ private:
         }
         for (const auto& alternative : statement.alternatives) {
             for (const auto choice : alternative.choices) {
-                resolve(choice, std::nullopt);
+                resolve(choice, selection ? selector : std::nullopt);
             }
         }
     }
@@ -2028,7 +2398,8 @@ bool resolve_vhdl_expression_types(CompiledDesign& design)
     } catch (...) {
         return false;
     }
-    VhdlResolution { design, expressions, statements }.run();
+    VhdlResolution resolution { design, expressions, statements };
+    resolution.run();
     return true;
 }
 

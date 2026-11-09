@@ -24,12 +24,12 @@ static_assert(fsim::library::kCompiledHirSchemaVersion == 3);
 static_assert(fsim::artifact::kDesignFormatVersion == 18);
 static_assert(fsim::app::kRuntimeStateSchema == 107);
 static_assert(fsim::app::kSemanticStateSchema == 5);
-static_assert(fsim::app::kDesignIrStateSchema == 6);
+static_assert(fsim::app::kDesignIrStateSchema == 8);
 static_assert(fsim::app::kCompiledHirBundleSchema == 3);
-static_assert(fsim::app::kSystemVerilogConstraintHirStateSchema == 22);
+static_assert(fsim::app::kSystemVerilogConstraintHirStateSchema == 24);
 static_assert(fsim::app::kSystemVerilogCoverageStateSchema == 7);
 static_assert(fsim::app::kSystemVerilogUvmStateSchema == 3);
-static_assert(fsim::app::kVhdlHirStateSchema == 11);
+static_assert(fsim::app::kVhdlHirStateSchema == 13);
 
 int main()
 {

@@ -1,0 +1,25 @@
+UVM_INFO uvm_reset.sv(96) @ 0: uvm_test_top.e [ENV] cfg=7
+start count=0 value=0
+DRV t=3 item 10 sum=10
+DRV t=13 item 20 sum=30
+UVM_INFO uvm_reset.sv(96) @ 0: uvm_test_top.e [ENV] cfg=7
+start count=1 value=5
+DRV t=3 item 10 sum=10
+DRV t=13 item 20 sum=30
+DRV t=23 item 30 sum=60
+DRV t=33 item 40 sum=100
+UVM_INFO uvm_reset.sv(102) @ 45: uvm_test_top.e [RESULT] sum=100
+UVM_ERROR uvm_reset.sv(103) @ 45: uvm_test_top.e [EXPECTED] one error for the summary
+
+--- UVM Report Summary ---
+
+** Report counts by severity
+UVM_INFO :    2
+UVM_WARNING :    0
+UVM_ERROR :    1
+UVM_FATAL :    0
+** Report counts by id
+[ENV]     1
+[EXPECTED]     1
+[RESULT]     1
+

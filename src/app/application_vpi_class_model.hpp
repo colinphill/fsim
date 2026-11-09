@@ -43,6 +43,11 @@ public:
             members;
         // The full name of a registry object.
         std::function<std::string(fsim_vpi_handle_v1)> full_name;
+        // The expression object of HIR expression `id`, a child of the
+        // object `parent` (an extends object's constructor arguments).
+        std::function<fsim_vpi_handle_v1(
+            semantic::ExpressionId, fsim_vpi_handle_v1)>
+            expression;
     };
 
     VpiClassModel(const semantic::sv::Hir& hir,
@@ -109,6 +114,9 @@ private:
         method,
         parameter,
         class_typedef,
+        // The assignment of a specialization's actual to a class parameter
+        // (37.32 vpiParamAssign): `member` is the parameter's index.
+        param_assign,
         // A constraint (37.34), and an item of one: a constraint
         // expression, ordering, distribution or leaf expression (37.34,
         // 37.38) whose `member` is its index in `nodes_`.
@@ -116,6 +124,8 @@ private:
         constraint_item,
     };
     static constexpr std::size_t none = static_cast<std::size_t>(-1);
+    // A lexical param assign packs its use above the parameter's index.
+    static constexpr std::size_t param_assign_stride = 4096U;
     // A lexical class has `specialization` none.
     struct Entry {
         Kind kind { Kind::typespec };
@@ -162,6 +172,11 @@ private:
         std::size_t specialization, std::size_t member);
     [[nodiscard]] fsim_vpi_handle_v1 typespec_of(
         std::size_t declaration, std::size_t specialization);
+    // The expression a lexical use of a class gives parameter `index` of
+    // `base`: the explicit actual of derived class `use`'s `extends`, else
+    // the parameter's default (37.32 detail 3).
+    [[nodiscard]] std::optional<semantic::ExpressionId> lexical_actual(
+        std::size_t use, std::size_t base, std::size_t index) const;
     [[nodiscard]] std::size_t default_specialization(
         std::size_t declaration) const;
     [[nodiscard]] fsim_vpi_handle_v1 extends_of(

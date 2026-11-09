@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "lowerer_internal.hpp"
+#include "fsim/support/stack_growth.hpp"
 
 #include <algorithm>
 #include <array>
@@ -86,9 +87,6 @@ Lowerer::HirVhdlFileImageResult Lowerer::lower_hir_vhdl_file_image(
         flatten = [&](const semantic::vhdl::SubtypeIndication& indication,
                       const std::size_t depth, const bool top,
                       std::vector<Leaf>& leaves) -> bool {
-        if (depth > 16U) {
-            return false;
-        }
         const auto subtype = hir_effective_vhdl_subtype(indication).value_or(indication);
         std::vector<std::string> names { simple_type_name(subtype.type_mark.spelling) };
         const semantic::vhdl::TypeDefinition* definition { };
@@ -136,7 +134,7 @@ Lowerer::HirVhdlFileImageResult Lowerer::lower_hir_vhdl_file_image(
         using Form = semantic::vhdl::TypeForm;
         if (definition != nullptr && definition->form == Form::record) {
             for (const auto& member : definition->record_elements) {
-                if (!flatten(member.subtype, depth + 1U, false, leaves)) {
+                if (!support::with_stack([&] { return flatten(member.subtype, depth + 1U, false, leaves); })) {
                     return false;
                 }
             }
@@ -168,7 +166,7 @@ Lowerer::HirVhdlFileImageResult Lowerer::lower_hir_vhdl_file_image(
                 }
             }
             std::vector<Leaf> member_leaves;
-            if (!flatten(member, depth + 1U, false, member_leaves)
+            if (!support::with_stack([&] { return flatten(member, depth + 1U, false, member_leaves); })
                 || member_leaves.empty()) {
                 return false;
             }

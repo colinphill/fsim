@@ -116,17 +116,19 @@ void substitute_formals(frontend::Expression& expression,
 // arguments' solved values, so its result is the expression of them.
 void inline_constraint_functions(frontend::Expression& expression,
     const std::vector<frontend::SystemVerilogClassMethod>& methods,
-    const std::size_t depth = 0U)
+    const std::vector<const frontend::SystemVerilogClassMethod*>& inlining = { })
 {
     for (auto& operand : expression.operands) {
-        inline_constraint_functions(operand, methods, depth);
+        inline_constraint_functions(operand, methods, inlining);
     }
-    if (expression.kind != frontend::ExpressionKind::Call || depth > 8U) {
+    if (expression.kind != frontend::ExpressionKind::Call) {
         return;
     }
     const auto method = std::ranges::find(
         methods, expression.text, &frontend::SystemVerilogClassMethod::name);
     if (method == methods.end()) return;
+    // A function already being inlined is recursive; its call stays.
+    if (std::ranges::find(inlining, &*method) != inlining.end()) return;
     const auto* value = single_returned_value(*method);
     const auto result_cast = integral_cast_text(method->return_type);
     if (value == nullptr || !result_cast
@@ -157,7 +159,9 @@ void inline_constraint_functions(frontend::Expression& expression,
     }
     auto body = *value;
     substitute_formals(body, actuals);
-    inline_constraint_functions(body, methods, depth + 1U);
+    auto inlined_path = inlining;
+    inlined_path.push_back(&*method);
+    inline_constraint_functions(body, methods, inlined_path);
     frontend::Expression result;
     result.kind = frontend::ExpressionKind::Call;
     result.text = *result_cast;
@@ -1494,6 +1498,17 @@ sv::ClassRelation SystemVerilogHirBuilder::class_relation(
                 input_actual.value, scope, output.origin);
         }
         output.actuals.push_back(std::move(actual));
+    }
+    for (std::size_t index = 0U; index < input.constructor_arguments.size();
+         ++index) {
+        if (const auto id = expression(
+                input.constructor_arguments[index], scope, output.origin)) {
+            output.constructor_arguments.push_back(*id);
+            output.constructor_argument_names.push_back(
+                index < input.constructor_argument_names.size()
+                    ? input.constructor_argument_names[index]
+                    : std::string { });
+        }
     }
     return output;
 }

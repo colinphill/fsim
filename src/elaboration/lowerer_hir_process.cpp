@@ -1133,6 +1133,43 @@ std::string Lowerer::hir_callable_formal_debug_name(
     return result;
 }
 
+void Lowerer::add_hir_frame_local(const std::size_t callable,
+    const std::string_view name, std::string type_name,
+    const RegisterId storage, const semantic::SourceSpanId source)
+{
+    if (specialized_hir_unit_ == nullptr
+        || callable >= hir_callable_frames_.size()) {
+        return;
+    }
+    const auto& frame = hir_callable_frames_[callable];
+    std::string callee = frame.debug_name;
+    if (callee.empty()) {
+        const auto declaration
+            = specialized_hir_unit_->find_declaration(frame.declaration);
+        if (!declaration || declaration->vhdl == nullptr) {
+            return;
+        }
+        callee = declaration->vhdl->name;
+    }
+    auto result = callee + "." + std::string { name };
+    if (!frame_local_names_.emplace(result).second) {
+        result += "@hir-callable-" + std::to_string(frame.invocation_identity);
+        frame_local_names_.emplace(result);
+    }
+    process_.frame_locals.push_back(DebugLocal {
+        std::move(result),
+        std::move(type_name),
+        storage,
+        register_width(storage),
+        runtime_source_location(hir_source_span(source)),
+        std::nullopt,
+        std::nullopt,
+        value_kind(register_domains_[storage]),
+        { },
+        frontend::SystemVerilogScalarKind::None,
+    });
+}
+
 bool Lowerer::initialize_hir_declarations(
     const std::span<const semantic::DeclarationId> declarations)
 {
@@ -2575,6 +2612,17 @@ bool Lowerer::initialize_hir_declarations(
                       return existing.name == name;
                   })
             : debug_local_names_.emplace(name).second;
+        // The parameter of a `for` loop and a local of a VHDL function are no
+        // debug locals; a running call's frame reads them from the
+        // frame-local table (IEEE 1076-2019 14.6 a, b).
+        if (first_initialization && active_hir_callable_
+            && declaration->vhdl != nullptr
+            && (loop_control
+                || hir_callable_frames_[*active_hir_callable_]
+                       .debug_name.empty())) {
+            add_hir_frame_local(*active_hir_callable_, binding->name,
+                type_name, destination, source);
+        }
         if (first_initialization && !loop_control && first_debug_name) {
             process_.debug_locals.push_back(DebugLocal {
                 std::move(name),
@@ -2694,7 +2742,7 @@ std::optional<Process> Lowerer::lower_hir_process(
         // the process (IEEE 1364-2005 16.2.4).
         const auto hierarchical_select_base
             = [&](semantic::ExpressionId current) -> std::optional<SignalId> {
-            for (std::size_t depth = 0U; depth < 16U; ++depth) {
+            for (;;) {
                 const auto record
                     = specialized_hir_unit_->find_expression(current);
                 if (!record || record->systemverilog == nullptr) {
@@ -2711,7 +2759,6 @@ std::optional<Process> Lowerer::lower_hir_process(
                 }
                 current = node.operands.front();
             }
-            return std::nullopt;
         };
         bool dynamic_terms { };
         for (const auto& sensitivity : input.sensitivities) {
@@ -4432,9 +4479,7 @@ bool Lowerer::lower_hir_output_actual_write(
         ? operands.front()
         : target;
     bool nested_select { };
-    for (std::size_t depth { };
-        selected && expression->systemverilog != nullptr && depth < 16U;
-        ++depth) {
+    while (selected && expression->systemverilog != nullptr) {
         const auto prefix = specialized_hir_unit_->find_expression(
             selected_root);
         if (!prefix || prefix->systemverilog == nullptr
@@ -4809,6 +4854,7 @@ void Lowerer::reset_hir_process_state()
     }
     string_locals_.clear();
     debug_local_names_.clear();
+    frame_local_names_.clear();
     local_scope_.clear();
     loop_controls_.clear();
     block_controls_.clear();

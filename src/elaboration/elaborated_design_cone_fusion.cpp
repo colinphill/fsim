@@ -558,10 +558,8 @@ ConeFusionPlan ElaboratedDesign::plan_cone_fusion() const
     constexpr auto no_cone = std::numeric_limits<ProcessId>::max();
     std::vector<ProcessId> cone(process_count, no_cone);
     std::vector<ProcessId> order;
-    for (std::size_t iteration = 0U;; ++iteration) {
-        if (iteration > 64U) {
-            return disable("formation_limit");
-        }
+    // Each repeat clears at least one internal signal, so the loop ends.
+    for (;;) {
         std::vector<std::size_t> pending(process_count, 0U);
         std::vector<ProcessId> participants;
         for (std::size_t index = 0U; index < process_count; ++index) {
@@ -697,6 +695,7 @@ ConeFusionPlan ElaboratedDesign::plan_cone_fusion() const
         fused.static_sensitivity.clear();
         fused.debug_locals.clear();
         fused.call_results.clear();
+        fused.frame_locals.clear();
         fused.expression_profiles = { };
         fused.register_value_kinds = { };
         fused.static_trigger_regions = { };

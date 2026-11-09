@@ -234,7 +234,12 @@ enum class StringMethodOperator : std::uint8_t {
     // the source string holds the element characters of the vector, leftmost
     // first, and the result string its hexadecimal or octal digits.
     vhdl_logic9_hstring,
-    vhdl_logic9_ostring
+    vhdl_logic9_ostring,
+    // The same for NUMERIC_STD and NUMERIC_BIT SIGNED values, which are
+    // extended on the left with their sign element instead (numeric_std
+    // TO_HSTRING and TO_OSTRING of UNRESOLVED_SIGNED).
+    vhdl_logic9_hstring_signed,
+    vhdl_logic9_ostring_signed
 };
 struct StringMethod {
     StringMethodOperator operation { };
@@ -1898,6 +1903,14 @@ struct Process {
     /// not see it. A run with the execution probes reads a slot at the
     /// callee's frame exit (`Interpreter::read_call_result`).
     std::vector<DebugLocal> call_results;
+    /// The formals and locals of the VHDL functions this process lowers, and
+    /// the parameters of its `for` loops (IEEE 1076-2019 14.6 a, b), in a
+    /// table of their own: it is no debug local, so no optimizer gate sees
+    /// it, and a VHPI program with the execution probes reads it by name
+    /// (`<subprogram>.<name>`, suffixed `@<line>:<column>` with the place of
+    /// the call that made the frame). A process the optimizers rewrote has
+    /// none.
+    std::vector<DebugLocal> frame_locals;
     std::vector<DebugStringLocal> debug_string_locals;
     std::vector<DebugContainerLocal> debug_container_locals;
     CopyOnWriteVector<ContainerType> container_register_types;
@@ -1923,6 +1936,14 @@ struct Process {
         std::uint32_t offset { };
         std::uint32_t width { };
         bool whole { };
+        /// A region that is no source of its signal until a program creates
+        /// the driver at run time: the placeholder process of a foreign
+        /// architecture holds one for each signal of the architecture (IEEE
+        /// 1076-2019 20.4.2, 23.6; its ports are sources from the start,
+        /// 6.4.2.3). It takes no part in resolution or initialization before
+        /// then (14.7.3.1); the first created driver of the signal that
+        /// reuses the placeholder activates it (Interpreter::add_host_driver).
+        bool dormant { };
         friend bool operator==(const DriverRegion&, const DriverRegion&) = default;
     };
     std::vector<DriverRegion> driver_regions;
@@ -2818,6 +2839,12 @@ public:
     /// as this one was before start (hooks excluded). Without one the run
     /// cannot reset.
     void set_reset_source(std::function<std::unique_ptr<Interpreter>()> source);
+    /// The twin a reset builds runs the package and class static initializers
+    /// of the design (start); with this set it runs them through this
+    /// interpreter's class hooks (allocation, properties, methods), so the
+    /// objects they make are the application's own, which the embedder cleared
+    /// just before the reset (IEEE 1800-2023 D.8, 6.21).
+    void set_reset_twin_class_hooks(bool share) noexcept;
     /// The embedder's share of the scheduler events of a run state (#128): the
     /// owners of the event kinds the embedder registered ("vpi_value_control",
     /// "uvm_objection", ...), bound into every save and restore beside the
@@ -3187,10 +3214,23 @@ public:
     /// register holds at its frame exit.
     [[nodiscard]] PackedLogic4 read_call_result(
         ProcessId process, std::size_t slot) const;
-    /// The common body of read_debug_local and read_call_result.
+    /// The register of slot `local_index` of the process program's
+    /// frame-local table (`Process::frame_locals`): a formal or local of a
+    /// VHDL function, or the parameter of a `for` loop; `newer_activations`
+    /// as for read_debug_local.
+    [[nodiscard]] PackedLogic4 read_frame_local(ProcessId process,
+        std::size_t local_index, std::size_t newer_activations = 0U) const;
+    /// The table of a process program that read_local_register reads.
+    enum class LocalTable : std::uint8_t {
+        debug,
+        call_result,
+        frame,
+    };
+    /// The common body of read_debug_local, read_call_result and
+    /// read_frame_local.
     [[nodiscard]] PackedLogic4 read_local_register(ProcessId process,
         std::size_t local_index, std::size_t newer_activations,
-        bool call_result) const;
+        LocalTable table) const;
     /// Deposit a value into a debug local (a variable of a process): the
     /// value has the local's width (VHPI vhpi_put_value, IEEE 1076-2019
     /// 22.5.2).

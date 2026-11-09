@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/elaboration/dpi_c_type.hpp"
+#include "fsim/support/stack_growth.hpp"
+#include "fsim/support/active_set.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -541,7 +543,6 @@ std::optional<DpiCType> dpi_c_type(
 
 namespace {
 
-constexpr std::size_t dpi_type_depth_limit = 64U;
 
 bool dpi_builtin_keyword(const std::string_view text)
 {
@@ -666,7 +667,7 @@ std::optional<DpiCType> dpi_struct_c_type(
         auto element = declared;
         element.unpacked_dimensions.clear();
         element.container_form.reset();
-        auto type = dpi_reference_c_type(element, context, depth + 1U);
+        auto type = support::with_stack([&] { return dpi_reference_c_type(element, context, depth + 1U); });
         if (!type || type->string || type->open_packed || type->width == 0U
             || type->width > bit_limit
             || bits + count * type->width > bit_limit) {
@@ -691,6 +692,13 @@ std::optional<DpiCType> dpi_reference_c_type(
     const semantic::sv::TypeReference& type, const DpiTypeContext& context,
     const std::size_t depth)
 {
+    // A type that holds itself has no C type.
+    thread_local support::ActiveSet<semantic::sv::TypeReference> active;
+    if (!active.enter(type)) {
+        return std::nullopt;
+    }
+    const support::ActiveSet<semantic::sv::TypeReference>::Entry entry {
+        active };
     auto result = dpi_reference_c_type_impl(type, context, depth);
     static const bool trace = std::getenv("FSIM_DPI_TYPE_TRACE") != nullptr;
     if (trace) {
@@ -723,7 +731,7 @@ std::optional<DpiCType> dpi_reference_c_type_impl(
     const semantic::sv::TypeReference& type, const DpiTypeContext& context,
     const std::size_t depth)
 {
-    if (depth > dpi_type_depth_limit || type.container_form
+    if (type.container_form
         || !type.unpacked_dimensions.empty() || type.virtual_interface
         || !type.class_identity.empty()) {
         return std::nullopt;
@@ -796,7 +804,7 @@ std::optional<DpiCType> dpi_reference_c_type_impl(
         bool four_state { };
         for (const auto& member : definition->members) {
             const auto member_type
-                = dpi_reference_c_type(member.type, context, depth + 1U);
+                = support::with_stack([&] { return dpi_reference_c_type(member.type, context, depth + 1U); });
             if (!member_type || member_type->string
                 || member_type->scalar
                     != frontend::SystemVerilogScalarKind::None) {
@@ -829,7 +837,7 @@ std::optional<DpiCType> dpi_reference_c_type_impl(
         && definition->form != Form::static_array
         && definition->base != type) {
         // A typedef, enumeration or type parameter maps like its base.
-        element = dpi_reference_c_type(definition->base, context, depth + 1U);
+        element = support::with_stack([&] { return dpi_reference_c_type(definition->base, context, depth + 1U); });
     }
     // An unpacked structure has no packed dimensions (IEEE 1800-2023 7.2):
     // a range on its reference is the members' summed width, which leaves
@@ -919,8 +927,12 @@ std::optional<DpiTypeIssue> dpi_type_issue(
     using Form = semantic::sv::TypeForm;
     auto type = context.named_type(name);
     // A typedef may name another typedef; follow the chain to the form.
-    for (std::size_t depth = 0U; type && depth < dpi_type_depth_limit;
-         ++depth) {
+    std::vector<semantic::sv::TypeReference> visited;
+    while (type) {
+        if (std::ranges::find(visited, *type) != visited.end()) {
+            return std::nullopt;
+        }
+        visited.push_back(*type);
         if (type->container_form) {
             return *type->container_form == Form::static_array
                 ? std::nullopt

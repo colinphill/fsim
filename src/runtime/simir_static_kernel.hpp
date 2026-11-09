@@ -724,6 +724,15 @@ inline void static_kernel_container_operands(
         } else if constexpr (std::is_same_v<T, ClassMethodCall>) {
             static_kernel_inline_constraint_containers(
                 op.inline_constraints, visit);
+            // A queue of class handles a library method fills (kind 6 in,
+            // kind 7 in and out) is a container register.
+            for (std::size_t index = 0U; index < op.actuals.size()
+                 && index < op.actual_kinds.size(); ++index) {
+                if (op.actual_kinds[index] == 6U
+                    || op.actual_kinds[index] == 7U) {
+                    visit(op.actuals[index]);
+                }
+            }
         } else if constexpr (std::is_same_v<T, ScopeRandomize>) {
             for (const auto& container : op.containers) {
                 visit(container.container);
@@ -1109,8 +1118,8 @@ template <typename OperationAt, typename Types, typename NineValued = std::nullp
 /// Operations a VHDL delta-mode member may use: the pure value operations,
 /// control flow with fixed or dynamic call stacks and automatic frames,
 /// VHDL integer arithmetic and checks, assertions and report statements,
-/// current-value reads, zero-delay signal assignments and shared-variable
-/// writes.
+/// current-value reads, signal assignments of one element (delayed ones
+/// edit the kernel's projected output waveform) and shared-variable writes.
 [[nodiscard]] inline bool static_kernel_vhdl_operation_supported(
     const Operation& operation)
 {
@@ -1133,10 +1142,12 @@ template <typename OperationAt, typename Types, typename NineValued = std::nullp
         } else if constexpr (std::is_same_v<T, WriteProjected>
             || std::is_same_v<T, WriteProjectedSlice>
             || std::is_same_v<T, WriteProjectedDynamicSlice>) {
-            // A single zero-delay inertial element on a driver that never has
-            // pending transactions is staged in the current delta.
-            return value.delay == 0U && value.rejection == 0U
-                && value.mode == ProjectedDelayMode::inertial;
+            // One element, delayed or not (IEEE 1076-2019 10.5.2.2): the
+            // kernel holds the driver's projected output waveform
+            // (StaticKernel::projected_edit). A waveform of several elements
+            // is a behavioral member's.
+            (void)value;
+            return true;
         } else if constexpr (std::is_same_v<T, CallableFramePush>) {
             return value.strings.empty() && value.containers.empty();
         } else if constexpr (std::is_same_v<T, CallableFramePop>) {
@@ -1467,21 +1478,14 @@ template <typename OperationAt, typename Types, typename NineValued = std::nullp
             // A driver disconnection (IEEE 1076-2019 10.5.2.2) edits the
             // projected output waveform of the member's host driver.
             return vhdl_disconnect_signal(value.method_identity);
-        } else if constexpr (std::is_same_v<T, WriteProjected>
-            || std::is_same_v<T, WriteProjectedSlice>
-            || std::is_same_v<T, WriteProjectedDynamicSlice>) {
-            if (value.delay != 0U || value.rejection != 0U
-                || value.mode != ProjectedDelayMode::inertial) {
-                return value.signal;
-            }
-            return std::nullopt;
-        } else if constexpr (std::is_same_v<T, WriteProjectedWaveform>
-            || std::is_same_v<T, WriteProjectedWaveformSlice>
-            || std::is_same_v<T, WriteProjectedWaveformDynamicSlice>
+        } else if constexpr (
+            // A VHDL delayed, transport or waveform assignment (IEEE
+            // 1076-2019 10.5.2.2) edits the projected output waveform the
+            // kernel holds for a kernel signal (StaticKernel::projected_edit).
             // SystemVerilog delayed, gate-delay and inertial updates (IEEE
             // 1800-2023 10.3.3, 28.16): the host holds the driver's pending
             // updates and matures them.
-            || std::is_same_v<T, WriteAfter>
+            std::is_same_v<T, WriteAfter>
             || std::is_same_v<T, WriteAfterSlice>
             || std::is_same_v<T, WriteAfterDynamicSlice>
             || std::is_same_v<T, WriteAfterDynamicPartSlice>

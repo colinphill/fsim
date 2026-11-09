@@ -810,7 +810,9 @@ std::size_t ElaboratedDesign::bind_primitive_delay_slots()
     // delays is retimed like a primitive's output.
     for (const auto& delay : sdf_net_delays_) {
         if (delay.delayed) {
-            drivers.push_back(delay.driver);
+            for (const auto driver : delay.drivers()) {
+                drivers.push_back(driver);
+            }
         }
     }
     if (drivers.empty()) {
@@ -2350,7 +2352,11 @@ ElaboratedDesign::from_state_with_process_rows(
             || (!delay.error.empty() && delay.error.size() != 12U)
             || (delay.delayed
                 && (delay.load_signal >= state.signals.size()
-                    || delay.driver >= process_count))) {
+                    || delay.driver >= process_count
+                    || std::ranges::any_of(delay.run_drivers,
+                        [&](const auto driver) {
+                            return driver >= process_count;
+                        })))) {
             return std::nullopt;
         }
     }

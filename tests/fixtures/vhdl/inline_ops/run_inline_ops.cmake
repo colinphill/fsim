@@ -7,6 +7,9 @@
 # hand in the source. Arguments: FSIM_CASE (the file's base name),
 # FSIM_LANGUAGE (vhdl, sv or mixed: <case>.sv and <case>_vhdl.vhd, with
 # FSIM_TOP) and FSIM_STANDARD (VHDL only); optionally
+# FSIM_SOURCE (the base name of the sources when several cases run one
+# source with different elaboration generics; default FSIM_CASE) and
+# FSIM_GENERICS (a list of NAME=VALUE top-level generics or parameters), and
 # FSIM_FORBID_GENERIC, a list of operation kinds (SimIR type names such as
 # DynamicPartSelect) that must not run through the operation helper in the
 # kernel run: the kernel reports them with FSIM_PROFILE_PHASES as
@@ -23,7 +26,10 @@
 # other than the library operations (display, report, coverage, string,
 # random, real-number math). FSIM_FORBID_NOT_COMPILED likewise lists reasons
 # (compile failures such as register_width) that must not keep a member off
-# the compiled kernel: `reason=tier:not_compiled:<reason>`. FSIM_KERNEL_ENV is a
+# the compiled kernel: `reason=tier:not_compiled:<reason>`. FSIM_FORBID_DEOPT,
+# when set, fails the case when the kernel run reports any deoptimization
+# (a compiled member continuing on the reference evaluator;
+# FSIM_PROFILE_KERNEL's `deopts=` count). FSIM_KERNEL_ENV is a
 # list of NAME=VALUE environment settings for the kernel runs (plan options of
 # the kernel, such as FSIM_KERNEL_NO_MIRRORS, which leaves every host signal
 # unmirrored).
@@ -43,11 +49,18 @@ foreach(variable IN ITEMS FSIM_STATIC_KERNEL FSIM_KERNEL_VERIFY
     FSIM_PROFILE_PHASES FSIM_PROFILE_KERNEL FSIM_VERIFY_ARTIFACT)
   unset(ENV{${variable}})
 endforeach()
+if(NOT DEFINED FSIM_SOURCE)
+  set(FSIM_SOURCE "${FSIM_CASE}")
+endif()
+set(generic_arguments "")
+foreach(generic IN LISTS FSIM_GENERICS)
+  list(APPEND generic_arguments --generic "${generic}")
+endforeach()
 
 if("${FSIM_LANGUAGE}" STREQUAL "vhdl")
-  set(source "${FSIM_CASE}.vhd")
+  set(source "${FSIM_SOURCE}.vhd")
   set(compile_arguments compile -q --standard "${FSIM_STANDARD}" "${source}")
-  set(elaborate_arguments elaborate -q work.top --no-aot)
+  set(elaborate_arguments elaborate -q work.top ${generic_arguments} --no-aot)
   # A report ends in ';', which is also a list separator here, so it is not
   # part of the match.
   if("${FSIM_CASE}" STREQUAL "shared_variable" OR "${FSIM_CASE}" STREQUAL "shared_part")
@@ -61,16 +74,16 @@ elseif("${FSIM_LANGUAGE}" STREQUAL "mixed")
   if(NOT DEFINED FSIM_TOP)
     message(FATAL_ERROR "FSIM_TOP must name the top level of a mixed case")
   endif()
-  set(source "${FSIM_CASE}.sv")
-  set(second_source "${FSIM_CASE}_vhdl.vhd")
+  set(source "${FSIM_SOURCE}.sv")
+  set(second_source "${FSIM_SOURCE}_vhdl.vhd")
   set(compile_arguments compile -q "${source}")
   set(second_compile_arguments compile -q --standard 2008 "${second_source}")
-  set(elaborate_arguments elaborate -q --top "${FSIM_TOP}" --no-aot)
+  set(elaborate_arguments elaborate -q --top "${FSIM_TOP}" ${generic_arguments} --no-aot)
   set(report_regex "inl [^\n]*")
 else()
-  set(source "${FSIM_CASE}.sv")
+  set(source "${FSIM_SOURCE}.sv")
   set(compile_arguments compile -q "${source}")
-  set(elaborate_arguments elaborate -q --top top --no-aot)
+  set(elaborate_arguments elaborate -q --top top ${generic_arguments} --no-aot)
   set(report_regex "inl [^\n]*")
 endif()
 
@@ -95,7 +108,10 @@ function(run_fsim_step STEP_NAME)
       "stdout:\n${stdout}\nstderr:\n${stderr}\nworkspace: ${case_dir}")
   endif()
   # The report texts, without source locations.
-  string(REGEX MATCHALL "${report_regex}" reports "${stdout}\n${stderr}")
+  # The kernel's own profile lines (fsim-kernel:, fsim-profile:) are not
+  # reports, though one of them begins with "wide ".
+  string(REGEX REPLACE "(^|\n)fsim-(kernel|profile):[^\n]*" "\\1" scanned "${stdout}\n${stderr}")
+  string(REGEX MATCHALL "${report_regex}" reports "${scanned}")
   list(JOIN reports "\n" reports)
   set(${STEP_NAME}_reports "${reports}" PARENT_SCOPE)
   set(${STEP_NAME}_stderr "${stderr}" PARENT_SCOPE)
@@ -112,6 +128,9 @@ if(DEFINED FSIM_FORBID_GENERIC OR DEFINED FSIM_FORBID_REASON
     OR FSIM_LIBRARY_ONLY)
   set(ENV{FSIM_PROFILE_PHASES} 1)
 endif()
+if(FSIM_FORBID_DEOPT)
+  set(ENV{FSIM_PROFILE_KERNEL} 1)
+endif()
 set(kernel_env_names "")
 foreach(entry IN LISTS FSIM_KERNEL_ENV)
   if(NOT entry MATCHES "^([A-Z0-9_]+)=(.*)$")
@@ -122,6 +141,7 @@ foreach(entry IN LISTS FSIM_KERNEL_ENV)
 endforeach()
 run_fsim_step(kernel simulate --engine v4)
 unset(ENV{FSIM_PROFILE_PHASES})
+unset(ENV{FSIM_PROFILE_KERNEL})
 set(ENV{FSIM_KERNEL_VERIFY} 1)
 run_fsim_step(verified simulate --engine v4)
 unset(ENV{FSIM_KERNEL_VERIFY})
@@ -168,6 +188,14 @@ foreach(reason IN LISTS FSIM_FORBID_NOT_COMPILED)
       "stderr:\n${kernel_stderr}\nworkspace: ${case_dir}")
   endif()
 endforeach()
+
+if(FSIM_FORBID_DEOPT)
+  if(NOT "${kernel_stderr}" MATCHES "fsim-kernel: deopts=0 ")
+    message(FATAL_ERROR
+      "${FSIM_CASE}: the kernel run reports a deoptimization (or no profile)\n"
+      "stderr:\n${kernel_stderr}\nworkspace: ${case_dir}")
+  endif()
+endif()
 
 foreach(kind IN LISTS FSIM_FORBID_EFFECT)
   if("${kernel_stderr}" MATCHES "reason=effect:${kind}[ \n]")

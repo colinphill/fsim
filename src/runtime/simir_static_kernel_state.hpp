@@ -96,6 +96,13 @@ constexpr std::uint32_t partition_tag = std::uint32_t { 1 } << 31U;
 /// Tags a dispatch group in edge readers and the triggered list.
 constexpr std::uint32_t dispatch_group_tag = std::uint32_t { 1 } << 31U;
 
+/// A numeric register an operation writes, and the width of the value it
+/// gives it (0: the width the register has from its other definitions).
+struct WrittenRegister {
+    RegisterId reg { };
+    std::uint32_t width { };
+};
+
 /// A copy of a slot's words taken before a write, for change detection. Up
 /// to 16 words (1024 two-plane bits) live in the object; wider slots use the
 /// heap. Local to one write, so worker lanes and nested writes never share it.
@@ -380,6 +387,13 @@ struct NodeLevels {
     const std::vector<std::vector<std::uint32_t>>& successors);
 
 } // namespace static_kernel_detail
+
+/// A pending transaction of a kernel-held projected output waveform, as the
+/// host's driver queries see it.
+struct StaticKernelProjectedPending {
+    SimulationTick time { };
+    Logic9 value { Logic9::x };
+};
 
 class Interpreter::Impl::StaticKernel {
 public:
@@ -1023,19 +1037,31 @@ private:
         /// A SystemVerilog net on a VHDL inout whose sources overlap: the slot
         /// holds four states, the resolution of the sources' values, and
         /// every write resolves it (resolve_net_words, and generated code).
+        /// Also a std_logic VHDL signal that several processes drive over
+        /// common elements (IEEE 1076-2019 14.7.3.2): the slot then holds
+        /// nine states (planes 4, the code planes of an unresolved
+        /// nine-value slot), the std_logic_1164 resolution of the values of
+        /// the sources that drive each element.
         bool resolved { };
+        /// A resolved slot of nine states (a std_logic signal).
+        [[nodiscard]] bool nine() const noexcept
+        {
+            return resolved && planes == 4U;
+        }
         /// A resolved slot's sources, in the host's driver order: source k's
         /// value is four Logic9 code planes of `words` words each at arena
-        /// offset + (2 + 4 k) * words, right after the slot's two planes.
-        /// With K sources these (2 + 4 K) * words words are the slot's
-        /// current block; the next block of the same layout follows at
-        /// offset + (2 + 4 K) * words, and one flag word after it, at
-        /// offset + 2 * (2 + 4 K) * words (the pending flag). A VHDL
-        /// assignment resolves into the next block at the write (the flag
-        /// copies the current block there first); the update phase copies
-        /// the next block over the current one (commit_writes). A
-        /// SystemVerilog write lands in the current block and, while the
-        /// flag is set, in the next one.
+        /// offset + (P + 4 k) * words, right after the slot's P value planes
+        /// (two, or four for a slot of nine states). With K sources these
+        /// (P + 4 K) * words words are the slot's current block; the next
+        /// block of the same layout follows at offset + (P + 4 K) * words,
+        /// and one flag word after it, at offset + 2 * (P + 4 K) * words
+        /// (the pending flag). A VHDL assignment resolves into the next
+        /// block at the write (the flag copies the current block there
+        /// first); the update phase copies the next block over the current
+        /// one (commit_writes). A SystemVerilog write lands in the current
+        /// block and, while the flag is set, in the next one. In a slot of
+        /// nine states a source's element that its process does not drive
+        /// holds the code 1111 (no driver): the resolution skips it.
         std::vector<ProcessId> net_processes;
     };
 
@@ -1279,6 +1305,16 @@ private:
     std::uint32_t run_generic_from(std::uint32_t member, std::uint32_t pc,
         std::uint32_t until = static_kernel_detail::no_slot);
     void verify_run(std::uint32_t member);
+    using VerifyWrites
+        = std::vector<std::tuple<std::uint32_t, std::uint32_t, std::string>>;
+    [[nodiscard]] VerifyWrites verify_writes(std::size_t first);
+    [[nodiscard]] std::vector<std::pair<std::uint32_t, std::vector<std::uint64_t>>>
+    verify_net_image();
+    [[nodiscard]] std::vector<std::string> verify_register_images(
+        const CompiledBody& body);
+    [[nodiscard]] std::string verify_effect_mismatch(
+        const VerifyWrites& compiled_writes, const VerifyWrites& reference_writes,
+        const std::vector<std::uint32_t>& marks);
     /// Copies the reference registers into the compiled register file, or
     /// keeps the member on the reference evaluator.
     void sync_compiled_registers(std::uint32_t member);
@@ -1460,11 +1496,50 @@ private:
     void execute_sva_outcome(Word* registers,
         const static_kernel_detail::KInst& inst, std::uint32_t member);
     /// KOp::sva_sampled_load on the bytecode tier.
-    void execute_sva_sampled_load(Word* registers,
-        const static_kernel_detail::KInst& inst, std::uint32_t member);
+    void execute_sva_sampled_load(const static_kernel_detail::CompiledBody& body,
+        Word* registers, const static_kernel_detail::KInst& inst,
+        std::uint32_t member);
+    struct MemberAssertionStorage;
+    /// The monitor of the directive of instruction `inst`, created at its
+    /// first tick (reading the bounds from the registers) and bound to its
+    /// table entry.
+    [[nodiscard]] sva::Monitor& sva_tick_monitor(
+        const static_kernel_detail::CompiledBody& body, Word* registers,
+        const static_kernel_detail::KInst& inst, std::uint32_t member,
+        MemberAssertionStorage& storage);
+    /// FSIM_KERNEL_SVA_CHECK: phase 0 copies the directive's block into a
+    /// reference monitor; phase 1 ticks the reference on the same inputs and
+    /// compares the blocks (throws on a difference).
+    void sva_check_run(const static_kernel_detail::CompiledBody& body,
+        const static_kernel_detail::CompiledBody& program, Word* registers,
+        const static_kernel_detail::KInst& inst, std::uint32_t member,
+        std::uint32_t phase);
+    std::map<const sva::Monitor*, std::unique_ptr<sva::Monitor>> sva_check_refs_;
     /// fsim_sk_sva_tick / fsim_sk_sva_bind for generated code.
     static void native_sva_tick(StaticKernelNativeFrame* frame,
         Word* registers, std::uint32_t at);
+    /// The generated automaton's host calls (KOp::sva_tick with a plan):
+    /// the block base after creating and binding the monitor, growth of a
+    /// block region (sva::AttemptStorage::reserve_region), the attempt-start
+    /// and step reports after a tick, the $assertoff filter, and the
+    /// differential check.
+    static std::int64_t* native_sva_ensure(StaticKernelNativeFrame* frame,
+        Word* registers, std::uint32_t at);
+    static void native_sva_grow(StaticKernelNativeFrame* frame,
+        std::uint32_t at, std::uint32_t region, std::uint64_t needed);
+    static void native_sva_post(StaticKernelNativeFrame* frame, std::uint32_t at);
+    static std::uint32_t native_sva_filter(StaticKernelNativeFrame* frame,
+        std::uint32_t at);
+    static void native_sva_check(StaticKernelNativeFrame* frame,
+        Word* registers, std::uint32_t at, std::uint32_t phase);
+    /// FSIM_KERNEL_VERIFY: records the generated tick for the reference
+    /// replay (the same VerifySvaTick execute_sva_tick records).
+    static void native_sva_verify(StaticKernelNativeFrame* frame,
+        Word* registers, std::uint32_t at);
+    /// FSIM_KERNEL_VERIFY: records the outcome pop just made by generated
+    /// code (`value` the outcome code) for the reference replay.
+    static void native_sva_verify_outcome(StaticKernelNativeFrame* frame,
+        std::uint32_t at, std::uint64_t value);
     static std::int64_t* native_sva_bind(StaticKernelNativeFrame* frame,
         std::uint32_t at);
     /// Lays out sva_blocks_ and sva_member_base_ from the members'
@@ -1480,6 +1555,14 @@ private:
     void generic_load_operands(CompiledBody& body, const Word* registers,
         const static_kernel_detail::KInst& inst, std::uint32_t member,
         const std::vector<RegisterId>& reads);
+    void generic_load_written(CompiledBody& body, const Word* registers,
+        const static_kernel_detail::KInst& inst, std::uint32_t member,
+        const std::vector<RegisterId>& reads,
+        const std::vector<static_kernel_detail::WrittenRegister>& writes);
+    bool generic_store_results(CompiledBody& body, Word* registers,
+        const static_kernel_detail::KInst& inst, std::uint32_t member,
+        const std::vector<static_kernel_detail::WrittenRegister>& writes,
+        bool two_state_code);
     bool generic_store_result(CompiledBody& body, Word* registers,
         const static_kernel_detail::KInst& inst, std::uint32_t member,
         std::optional<RegisterId> write, bool two_state_code);
@@ -1843,6 +1926,13 @@ private:
     void apply_input(Input& input, PackedLogic4 value, bool event = false);
     [[noreturn]] void fail(std::uint32_t member, InstructionIndex instruction,
         const std::string& message) const;
+    /// Makes room for a call at `depth` on a compiled body's call stack
+    /// (the capacity-growth helper of generated code).
+    void grow_call_stack(static_kernel_detail::NativeCallStack& stack,
+        std::uint64_t depth, std::uint32_t member, std::uint32_t instruction);
+    void grow_frame_stack(static_kernel_detail::NativeCallStack& stack,
+        std::uint64_t depth, std::uint64_t pairs, std::uint32_t member,
+        std::uint32_t instruction);
 
     Impl& impl_;
     /// sensitive_program's programs.
@@ -1942,6 +2032,7 @@ private:
         // Every frame of a member's code (not the worker lanes': a thread
         // member runs on the leader).
         frame.assertion_starts = impl_.assertion_starts_bound ? 1U : 0U;
+        frame.assertion_filter = impl_.fork_spawn_filter ? 1U : 0U;
         if (sva_table_used_) {
             refresh_sva_table();
             frame.sva = &sva_table_;
@@ -2077,8 +2168,9 @@ private:
             std::string text;
         };
         std::vector<DeliveredResult> delivered;
-        /// Compiled members: the synthetic call stack (pointer, entries)
-        /// saved while the thread is suspended.
+        /// Compiled members: the call stack saved while the thread is
+        /// suspended: {depth, frame pairs}, the depth return targets, then
+        /// the frame pairs (CompiledBody::frame_entries).
         std::vector<Word> stack;
         /// The last debug point the thread passed (a source position for
         /// its process_suspend notification); no_slot before the first.
@@ -2136,6 +2228,10 @@ private:
         /// matured bits are written in the writer's stable order among the
         /// threads that resume at the same time (IEEE 1800-2023 4.7).
         bool net_delay { };
+        /// A projected transaction's maturity (projected_edit): `thread` is
+        /// the site (projected_sites_). It lives in vhdl_timers_ and expires
+        /// in the update phase of its time (IEEE 1076-2019 14.7.5.3).
+        bool projected { };
         friend bool operator>(const Timer& left, const Timer& right)
         {
             if (left.time != right.time) {
@@ -2206,6 +2302,69 @@ private:
         PendingNetDelayWrites pending;
     };
     std::vector<NetDelaySite> net_delay_sites_;
+    /// One transaction of a scalar element's projected output waveform
+    /// (IEEE 1076-2019 14.7.2): its time and its value as a std_logic code
+    /// character ('U', 'X', '0', '1', 'Z', 'W', 'L', 'H', '-').
+    struct ProjectedTransaction {
+        SimulationTick time { };
+        std::uint8_t code { };
+    };
+    /// The projected output waveforms of one member's driver of one kernel
+    /// slot, a list per bit (every bit is a scalar element, a multi-bit VHDL
+    /// scalar keeps and rejects its transactions together, 10.5.2.2).
+    struct ProjectedSite {
+        std::uint32_t member { };
+        std::uint32_t slot { };
+        std::vector<std::vector<ProjectedTransaction>> bits;
+    };
+    std::vector<ProjectedSite> projected_sites_;
+    /// Site by member << 32 | slot.
+    std::unordered_map<std::uint64_t, std::uint32_t> projected_site_of_;
+public:
+    /// The pending (not yet matured) transactions of `process`'s projected
+    /// output waveform of kernel signal `signal`, per bit of the signal and
+    /// in time order (for VHPI driver queries).
+    [[nodiscard]] std::vector<std::vector<StaticKernelProjectedPending>>
+    projected_pending(ProcessId process, SignalId signal) const;
+private:
+    /// Whether `member` assigns `signal` with a delayed, transport or
+    /// waveform assignment (so every assignment of it goes through the
+    /// projected waveform, which a later assignment preempts, 10.5.2.2).
+    [[nodiscard]] bool member_projects(std::uint32_t member, SignalId signal) const;
+    mutable std::unordered_map<std::uint64_t, bool> member_projects_cache_;
+    /// The projected assignment of operation `pc` of `member`, whose
+    /// registers `read` returns: edits the driver's projected output waveform
+    /// (kernel-owned target, projected_edit) or the host driver's (host
+    /// target, write_host_projected).
+    void projected_operation(std::uint32_t member, std::uint32_t pc,
+        const std::function<PackedLogic4(RegisterId)>& read);
+    /// Records a projected assignment for FSIM_KERNEL_VERIFY; true when the
+    /// reference replay must not make it.
+    [[nodiscard]] bool shadow_projected(SignalId signal,
+        std::optional<std::uint32_t> offset,
+        const std::vector<ProjectedWaveformValue>& elements,
+        SimulationTick rejection, ProjectedDelayMode mode);
+    void projected_write(std::uint32_t member, std::uint32_t pc, SignalId signal,
+        const std::vector<ProjectedWaveformValue>& elements,
+        std::optional<std::uint32_t> offset, SimulationTick rejection,
+        ProjectedDelayMode mode);
+    void projected_edit(std::uint32_t member, std::uint32_t pc, SignalId signal,
+        const std::vector<ProjectedWaveformValue>& elements,
+        std::optional<std::uint32_t> offset, SimulationTick rejection,
+        ProjectedDelayMode mode);
+    /// The transactions of site `site` that reach their time: the driver's
+    /// new values, written in this update phase.
+    void projected_mature(std::uint32_t site, SimulationTick now);
+    /// A slot updated outside the round's commit (a matured projected
+    /// transaction): its wired formals follow it and its conversions are
+    /// queued, as commit_round does for the round's writes.
+    void follow_slot_update(std::uint32_t slot);
+    [[nodiscard]] bool projected_timer_live(const Timer& timer) const;
+    /// KOp::net_delay with sub 1: projected_operation of the operation y,
+    /// reading the register file.
+    void execute_projected_write(const static_kernel_detail::CompiledBody& body,
+        const Word* registers, const static_kernel_detail::KInst& inst,
+        std::uint32_t member);
     /// Site by part << 56 | member << 32 | operation index.
     std::unordered_map<std::uint64_t, std::uint32_t> net_delay_site_of_;
     [[nodiscard]] static std::uint64_t net_delay_site_key(
@@ -2446,7 +2605,6 @@ private:
     struct MemberContainerAccess;
     struct MemberRandomizeStorage;
     struct MemberVhdlApiStorage;
-    struct MemberAssertionStorage;
     /// A VHDL-2019 member's report or assertion violation (Impl::report_vhdl)
     /// at the kernel's time.
     void report_vhdl(std::uint32_t member, std::uint32_t pc,
@@ -2537,7 +2695,118 @@ private:
         std::uint32_t pc);
     [[nodiscard]] std::optional<std::uint32_t> run_behavioral_compiled(
         std::uint32_t thread, std::uint32_t start);
+    /// FSIM_KERNEL_VERIFY for threads: the state a compiled activation (from
+    /// a resume entry to the next suspension) starts from, so that the same
+    /// activation can be replayed on the reference evaluator.
+    struct VerifyThreadState {
+        decltype(CompiledBody::registers) registers;
+        decltype(CompiledBody::wide_registers) wide;
+        /// The call stack's return targets at the start.
+        std::vector<std::uint64_t> stack;
+        /// The frame stack's words (two per pair) and its pairs.
+        std::vector<std::uint64_t> frames;
+        std::uint64_t frame_pairs { };
+        std::vector<std::uint64_t> arena;
+        std::vector<std::uint32_t> marks;
+        std::size_t writes { };
+        std::size_t generic { };
+    };
+    /// The reason a member's activations are not replayed (named under
+    /// FSIM_PROFILE_KERNEL), or null when they are.
+    [[nodiscard]] const char* verify_thread_skip_reason(std::uint32_t member);
+    void verify_thread_activation(std::uint32_t member, std::uint32_t start,
+        std::uint32_t stopped, const VerifyThreadState& before);
+    /// Per member: the decided skip reason (null: replayed) and whether it
+    /// is decided.
+    std::vector<const char*> verify_thread_reason_;
+    std::vector<std::uint8_t> verify_thread_decided_;
+    /// Per member: the registers that are live across its suspensions (read
+    /// before written after some resume point), the only ones whose values
+    /// at a suspension matter.
+    std::vector<std::vector<std::uint64_t>> verify_live_registers_;
+    [[nodiscard]] const std::vector<std::uint64_t>& verify_live_registers(
+        std::uint32_t member);
+    /// Members skipped per reason, for the profile.
+    std::map<std::string, std::uint32_t> verify_skipped_members_;
+    /// The effects a replayed activation has outside the kernel's slots,
+    /// recorded as the compiled run makes them and as the shadowed reference
+    /// replay would (host writes, delayed writes, and the results of
+    /// operations the compiled run executes through the generic bridge).
+    struct VerifyHostWrite {
+        std::uint32_t kind { };
+        SignalId signal { };
+        std::int64_t offset { -1 };
+        std::uint32_t domain { };
+        std::string value;
+        friend bool operator==(const VerifyHostWrite&, const VerifyHostWrite&)
+            = default;
+    };
+    struct VerifyGenericRecord {
+        std::uint32_t pc { };
+        std::vector<std::string> reads;
+        std::vector<std::pair<RegisterId, PackedLogic4>> results;
+        /// A container the operation wrote (a $fread into an array): its
+        /// index in containers_ and its elements afterwards.
+        std::uint32_t container { static_kernel_detail::no_container };
+        std::vector<PackedLogic4> elements;
+        /// Immediate writes of kernel-owned signals the operation made (a
+        /// $fscanf into a variable); the replay makes them too, so later
+        /// operations read them.
+        std::vector<std::pair<SignalId, PackedLogic4>> commits;
+    };
+    /// A concurrent assertion's monitor tick of the compiled run (IEEE
+    /// 1800-2023 16.14): the operation, the operand registers it read and the
+    /// pending count it returned; the replay does not tick the monitor again.
+    struct VerifySvaTick {
+        std::uint32_t pc { };
+        std::vector<std::string> operands;
+        PackedLogic4 result;
+    };
+    struct VerifyShadow {
+        /// The reference replay is running: its effects are recorded, not
+        /// made.
+        bool reference { };
+        std::vector<VerifyGenericRecord> generic;
+        std::size_t consumed { };
+        /// The operand images of the generic operation about to run (taken
+        /// before it runs: it may write a register it reads).
+        std::vector<std::string> pending_reads;
+        std::vector<std::pair<SignalId, PackedLogic4>> pending_commits;
+        std::vector<VerifySvaTick> sva;
+        std::size_t sva_consumed { };
+        /// The result of each inline outcome pop of the compiled run, in
+        /// order (a directive's loop pops once per pending outcome): the
+        /// replay takes the next one for the pop of the same operation.
+        std::vector<std::pair<std::uint32_t, PackedLogic4>> sva_outcomes;
+        std::size_t sva_outcomes_consumed { };
+        std::vector<VerifyHostWrite> compiled_host;
+        std::vector<VerifyHostWrite> reference_host;
+        /// Host signals' values as the replay sees them: before the
+        /// compiled run's blocking writes, then the replay's own.
+        std::map<SignalId, PackedLogic4> host_values;
+        std::vector<std::uint32_t> changed;
+    };
+    VerifyShadow* shadow_ { };
+    /// Records a host write; true when the reference replay must not make it.
+    [[nodiscard]] bool shadow_host_write(VerifyHostWrite record, bool blocking,
+        const PackedLogic4* value);
+    void shadow_note_reads(std::uint32_t member, const std::vector<RegisterId>& reads);
+    void shadow_record_generic(std::uint32_t member, std::uint32_t pc,
+        const std::vector<static_kernel_detail::WrittenRegister>& writes);
     void sync_behavioral_registers(std::uint32_t member, std::uint32_t keep);
+    /// The registers of compiled behavioral members to and from the reference
+    /// registers the run-state image holds.
+    void export_compiled_frames(std::uint32_t member_index,
+        const CompiledBody& body, const std::vector<Word>& image,
+        const std::uint64_t* words, std::uint64_t pairs,
+        std::vector<Member::Frame>& out) const;
+    [[nodiscard]] std::uint32_t compiled_frame_count(const CompiledBody& body,
+        const std::uint64_t* words, std::uint64_t pairs) const;
+    [[nodiscard]] std::optional<PackedLogic4> exact_register(
+        const CompiledBody& body, std::uint32_t member, RegisterId reg,
+        const Word* registers = nullptr) const;
+    void save_thread_registers();
+    void restore_thread_registers();
     void prepare_behavioral();
     [[nodiscard]] bool start_after_procedures();
     /// Runs the declaration initializers that are thread members, before
@@ -2775,6 +3044,8 @@ private:
         std::vector<std::uint64_t> wide_concat;
         /// The operand registers of the generic instruction running.
         std::vector<RegisterId> generic_reads;
+        /// The registers the generic instruction running writes.
+        std::vector<static_kernel_detail::WrittenRegister> generic_writes;
     };
     /// Output a worker's unit made, which the leader emits in the replay at
     /// the unit's place in the serial order: text, a %t argument (formatted
@@ -3077,6 +3348,10 @@ private:
     void push_write(const StaticKernelWrite& write);
     std::uint64_t profile_deopts_ { };
     std::uint64_t profile_generic_runs_ { };
+    /// FSIM_KERNEL_VERIFY: thread activations replayed on the reference.
+    std::uint64_t verified_thread_runs_ { };
+    /// FSIM_KERNEL_VERIFY: member activations replayed on the reference.
+    std::uint64_t verified_member_runs_ { };
     /// Interpretive work, always counted (engine v4 gate: all zero in a
     /// compiled simulation): bytecode member runs, operations stepped by the
     /// reference evaluator, and deoptimizations.
@@ -3175,11 +3450,17 @@ private:
     /// block over that block's sources.
     void resolve_net_words(std::uint32_t slot, std::uint32_t first,
         std::uint32_t last, bool next = false);
+    /// Word `word` of the value planes at `value` (`words` words per plane)
+    /// of a resolved slot of nine states, resolved over its `count` sources,
+    /// whose planes follow the `rows` value planes (Slot::net_processes).
+    static void resolve_nine_word(std::uint64_t* value, std::uint32_t words,
+        std::uint32_t rows, std::uint32_t count, std::uint32_t word,
+        std::uint32_t width);
     /// A resolved slot's blocks: words of one block, the first word of the
     /// next block, and its pending flag (Slot::net_processes).
     [[nodiscard]] std::size_t net_block_words(const Slot& slot) const noexcept
     {
-        return (2U + 4U * slot.net_processes.size()) * slot.words;
+        return (slot.planes + 4U * slot.net_processes.size()) * slot.words;
     }
     [[nodiscard]] std::uint64_t& net_pending(const Slot& slot) noexcept
     {

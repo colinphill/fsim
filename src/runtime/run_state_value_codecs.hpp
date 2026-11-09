@@ -2,13 +2,14 @@
 #pragma once
 
 // Run-state codecs (run_state_archive.hpp) for the runtime value types that are
-// not aggregates the generic walker can read: a container value and the class
-// heap's handle container. Both the engine sections (src/runtime) and the
+// not aggregates the generic walker can read: a scheduled-task handle, a
+// container value and the class heap's handle container. Both the engine sections (src/runtime) and the
 // application sections (src/app) include this header so one description serves
 // every user (IEEE 1800-2023 D.9).
 
 #include "fsim/runtime/class_heap.hpp"
-#include "fsim/runtime/run_state_archive.hpp"
+#include "run_state_archive.hpp"
+#include "fsim/runtime/scheduler.hpp"
 #include "fsim/runtime/simir_container_value.hpp"
 
 #include <iterator>
@@ -18,6 +19,21 @@
 #include <vector>
 
 namespace fsim::runtime {
+
+/// A scheduled-task handle names a slot of the running scheduler, so a file
+/// holds only whether it was live; the owner of the record binds the new handle
+/// when the event is restored (Interpreter::Impl::bind_restored_event_handle).
+template <> struct RunStateCodec<ScheduledTaskHandle> {
+    using is_codec = void;
+    static void io(RunStateArchive& archive, ScheduledTaskHandle& handle)
+    {
+        std::uint8_t live = static_cast<bool>(handle) ? 1U : 0U;
+        archive.io(live);
+        if (archive.loading()) {
+            handle = ScheduledTaskHandle { };
+        }
+    }
+};
 
 /// ContainerValue has constructors, so it is not an aggregate.
 template <> struct RunStateCodec<simir::ContainerValue> {

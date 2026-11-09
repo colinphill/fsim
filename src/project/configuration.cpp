@@ -169,6 +169,16 @@ std::optional<std::string> valid_trace_compression(
     return "trace compression must be 'auto', 'none', or 'deterministic'";
 }
 
+std::optional<std::string> valid_engine_or_empty(
+    const std::string_view value)
+{
+    if (value.empty() || value == "interpreter" || value == "compiled" || value == "debug"
+        || value == "v4") {
+        return std::nullopt;
+    }
+    return "engine must be 'interpreter', 'compiled', 'debug', or 'v4'";
+}
+
 std::optional<std::string> valid_timescale(const std::string_view value)
 {
     return validate_default_timescale(value);
@@ -301,6 +311,9 @@ constexpr std::array kKeys {
     KeyRule { { "simulate.duration", text, "",
         "time to simulate, e.g. 10us; empty runs to the end" },
         valid_duration },
+    KeyRule { { "simulate.engine", text, "",
+        "execution engine: interpreter, compiled, debug, v4; empty takes the command's own; --engine wins" },
+        valid_engine_or_empty },
     KeyRule { { "simulate.foreign_probes", boolean, "false",
         "statement, call and suspend callbacks for VPI/VHPI libraries" },
         nullptr },

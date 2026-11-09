@@ -326,7 +326,12 @@ namespace {
     }
   }
   const auto is_variable = [&](std::size_t id) {
-    for (std::size_t depth = 0; depth < 4U && id < nodes.size(); ++depth) {
+    std::vector<std::size_t> followed;
+    while (id < nodes.size()) {
+      if (std::ranges::find(followed, id) != followed.end()) {
+        return std::optional<std::size_t> {};
+      }
+      followed.push_back(id);
       if (nodes[id].operation == Operator::Variable) {
         return nodes[id].variable == variable ? std::optional { id }
                                               : std::nullopt;
@@ -563,7 +568,7 @@ node_interval(const SystemVerilogConstraintExpression& expression,
     const SystemVerilogConstraintVariableId variable,
     const SystemVerilogConstraintValueIntervals& intervals,
     const std::size_t depth) {
-  if (id >= expression.nodes.size() || depth > 32U) return std::nullopt;
+  if (id >= expression.nodes.size()) return std::nullopt;
   const auto& node = expression.nodes[id];
   const auto width = node.profile.width;
   if (width == 0U || width > 64U) return std::nullopt;
@@ -887,7 +892,7 @@ node_interval(const SystemVerilogConstraintExpression& expression,
     // conditional (`(b ? x : y) == 5` offers 5 to both x and y).
     const auto reads_variable = [&](const auto& self, const std::size_t id,
                                     const std::size_t depth) -> bool {
-      if (depth >= 4U || id >= nodes.size()) return false;
+      if (id >= nodes.size()) return false;
       const auto& node = nodes[id];
       if (node.operation == Operator::Variable) {
         return node.variable == variable;

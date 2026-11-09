@@ -9,8 +9,9 @@
 // resolves to holds or fails, and the attempt reports its root's verdict.
 
 #include "fsim/runtime/sva_engine.hpp"
+#include "fsim/support/stack_growth.hpp"
 
-#include "fsim/runtime/run_state_archive.hpp"
+#include "run_state_archive.hpp"
 
 #include <algorithm>
 #include <array>
@@ -33,8 +34,6 @@ using semantic::sva::PropertyKind;
 namespace {
 
 constexpr std::int64_t unbounded = std::numeric_limits<std::int64_t>::max();
-// A running sequence attempt may hold at most this many distinct threads.
-constexpr std::size_t maximum_threads = 1U << 16U;
 
 struct Step {
     Op op { Op::check };
@@ -225,7 +224,6 @@ private:
     std::size_t position_ { };
 };
 
-constexpr unsigned maximum_record_depth = 4096U;
 
 struct Throughout {
     std::uint32_t guard { };
@@ -286,7 +284,8 @@ struct Thread {
 };
 
 // A thread as record words: pc, clock, flags, switch_time, due_lo, due_hi,
-// then the counted counters, throughout pairs (guard, from), groups and join
+// then the counted counters, throughout entries (guard, from, line, column),
+// groups and join
 // references (join, side).
 void encode_thread(const Thread& thread, std::vector<std::int64_t>& out)
 {
@@ -302,6 +301,8 @@ void encode_thread(const Thread& thread, std::vector<std::int64_t>& out)
     for (const auto& entry : thread.throughout) {
         out.push_back(entry.guard);
         out.push_back(entry.from);
+        out.push_back(entry.line);
+        out.push_back(entry.column);
     }
     out.push_back(static_cast<std::int64_t>(thread.groups.size()));
     out.insert(out.end(), thread.groups.begin(), thread.groups.end());
@@ -337,7 +338,10 @@ void encode_thread(const Thread& thread, std::vector<std::int64_t>& out)
     thread.throughout.reserve(throughout);
     for (std::size_t index = 0; index < throughout; ++index) {
         const auto guard = in.index(std::numeric_limits<std::uint32_t>::max());
-        thread.throughout.push_back({ guard, in.next() });
+        const auto from = in.next();
+        const auto line = in.index(std::numeric_limits<std::uint32_t>::max());
+        const auto column = in.index(std::numeric_limits<std::uint32_t>::max());
+        thread.throughout.push_back({ guard, from, line, column });
     }
     const auto groups = in.count();
     thread.groups.reserve(groups);
@@ -551,11 +555,6 @@ private:
     void keep(Thread thread)
     {
         if (kept_.insert(thread.key()).second) {
-            if (threads_.size() >= maximum_threads) {
-                throw std::runtime_error {
-                    "concurrent property evaluation exceeded its thread limit"
-                };
-            }
             threads_.push_back(std::move(thread));
         }
     }
@@ -937,8 +936,11 @@ public:
                 "concurrent property attempt record is corrupt"
             };
         };
-        if (depth > maximum_record_depth) {
-            throw corrupt();
+        // Nested records continue on a new stack segment when the stack is
+        // nearly used up, so the nesting depth is bounded by memory.
+        if (!support::stack_growth_detail::has_room()) {
+            return support::with_stack(
+                [&] { return decode(plan, in, depth); });
         }
         const auto node = in.index(plan.properties.size());
         const auto start = in.next();
@@ -1565,6 +1567,9 @@ void Monitor::build(const std::vector<std::int64_t>& bounds)
     storage_.set(layout::h_flags,
         (plan_->every_match ? layout::flag_every_match : 0)
             | (plan_->multiclocked() ? layout::flag_multiclocked : 0));
+    if (!bounds.empty()) {
+        storage_.set_bounds(bounds);
+    }
 }
 
 void Monitor::run_state_io(RunStateArchive& archive)
@@ -1597,6 +1602,27 @@ void Monitor::run_state_io(RunStateArchive& archive)
     storage_.bind_slot(std::move(slot));
 }
 
+std::unique_ptr<Monitor> Monitor::reference_copy() const
+{
+    auto copy = std::make_unique<Monitor>(plan_text_, bounds_);
+    if (!copy->load_block(storage_.words())) {
+        return nullptr;
+    }
+    return copy;
+}
+
+bool Monitor::load_block(std::vector<std::int64_t> words)
+{
+    auto adopted = AttemptStorage::adopt(std::move(words));
+    if (!adopted || adopted->clocks() != storage_.clocks()) {
+        return false;
+    }
+    auto slot = storage_.slot();
+    storage_ = std::move(*adopted);
+    storage_.bind_slot(std::move(slot));
+    return true;
+}
+
 void Monitor::tick(const std::vector<bool>& guards, const bool start,
     const bool disabled, const std::int64_t time)
 {
@@ -1615,6 +1641,7 @@ void Monitor::tick(const std::vector<bool>& guards, const bool start,
             const bool ticked = plan_->guard(plan_->clock_guards[clock])
                 && storage_.clock_time(clock) != time;
             plan_->ticked[clock] = ticked;
+            storage_.clock_ticked(clock) = ticked ? 1 : 0;
             if (ticked) {
                 ++storage_.clock_ticks(clock);
                 storage_.clock_time(clock) = time;

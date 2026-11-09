@@ -1278,11 +1278,18 @@ class VhdlExecutableBuilder final {
       // Type marks may not be linked yet; then a mark's base is found by
       // following the package's subtype declarations by spelling.
       const auto base_spelling = [&](std::string spelling_name) {
-        for (std::size_t depth { }; depth < 16U; ++depth) {
+        std::vector<std::string> followed;
+        for (;;) {
           if (const auto dot = spelling_name.rfind('.');
               dot != std::string::npos) {
             spelling_name.erase(0U, dot + 1U);
           }
+          // A subtype chain that returns to a name already followed ends
+          // the walk.
+          if (std::ranges::find(followed, spelling_name) != followed.end()) {
+            break;
+          }
+          followed.push_back(spelling_name);
           const auto found = std::ranges::find_if(package->declarations,
               [&](const semantic::DeclarationId id) {
                 const auto* declaration = hir_.find_declaration(id);

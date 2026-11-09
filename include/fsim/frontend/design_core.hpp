@@ -588,6 +588,10 @@ struct Type {
     // IEEE 1800-2023 7.4.1), outermost first. The HIR builder applies them
     // to the shape the name selects.
     std::vector<PackedRangeExpression> systemverilog_named_type_dimensions;
+    // The packed typedef the parser expanded packed dimensions over
+    // (`nib_t [1:0]`, 7.4.1): the dimensions are already composed into this
+    // type, and the name is kept for the VPI typespec chain (37.25).
+    std::string systemverilog_packed_over;
     // The unpacked dimensions of an interface port array (`a_if p [N]`),
     // whose elements bind to the connected interface array's elements.
     std::vector<PackedRangeExpression> systemverilog_interface_array_dimensions;
@@ -2123,6 +2127,12 @@ struct SystemVerilogClassParameterActual {
 struct SystemVerilogClassBase {
     std::string name;
     std::vector<SystemVerilogClassParameterActual> parameter_actuals;
+    // The arguments of `extends B(args)`, passed to the base constructor
+    // (IEEE 1800-2023 8.17), in source order; the VPI extends object lists
+    // them (37.32 vpiArgument). A named argument `.x(e)` keeps its name in
+    // the parallel list ("" for a positional one).
+    std::vector<Expression> constructor_arguments;
+    std::vector<std::string> constructor_argument_names;
     SourceSpan span;
     // Populated by class-name resolution. This is a canonical declaration
     // identity, not a source-level selected-name spelling.

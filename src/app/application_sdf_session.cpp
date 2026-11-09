@@ -188,8 +188,13 @@ std::optional<elaboration::SdfNetDelayInfo> net_delay_record(
             result.error.assign(errors->begin(), errors->end());
         }
     }
+    // The records of one source and load apply in order of occurrence, each
+    // with its own delays (the session replaces or adds when it keeps them),
+    // so an INTERCONNECT does not take the delays in effect for its target.
     const auto effective
-        = precedence.find_target(annotation.target_kind, annotation.target_identity);
+        = annotation.target_kind == SdfTimingTargetKind::Interconnect
+        ? std::span<const SdfEffectiveTimingValue> { }
+        : precedence.find_target(annotation.target_kind, annotation.target_identity);
     result.delays.assign(12U, 0U);
     if (effective.empty()) {
         const auto profile = expand_sdf_transition_delays(annotation.after_ticks);
@@ -744,15 +749,38 @@ std::optional<SdfSessionPlan> plan_sdf_session_inputs(
                     records.push_back(std::move(*record));
                 }
                 for (auto& each : records) {
-                    const auto same = std::ranges::find(net_delays,
-                        each.identity, &elaboration::SdfNetDelayInfo::identity);
+                    const auto same_terminal = [](const auto& left,
+                                                   const auto& right) {
+                        return left.select_width == right.select_width
+                            && left.select_left == right.select_left
+                            && left.select_right == right.select_right;
+                    };
+                    const auto same = std::ranges::find_if(net_delays,
+                        [&](const elaboration::SdfNetDelayInfo& earlier) {
+                            return earlier.identity == each.identity
+                                && same_terminal(earlier.source, each.source)
+                                && same_terminal(
+                                    earlier.destination, each.destination);
+                        });
+                    const bool increment = annotation.delay_mode
+                        == SdfDelayApplicationMode::Increment;
                     // A repeated record applies at its later place (IEEE
-                    // 1364-2005 16.3: in order of occurrence).
+                    // 1364-2005 16.3: in order of occurrence): it replaces
+                    // the delay of the earlier one of the same terminals, or
+                    // with INCREMENT adds to it. A record of other bits of
+                    // the same source and load stays beside the earlier
+                    // one; an INCREMENT adds to the bits' delays when the
+                    // load is split.
                     if (same != net_delays.end()) {
-                        if (annotation.delay_mode
-                            == SdfDelayApplicationMode::Increment)
+                        if (increment)
                             add_to_previous(each, *same);
                         net_delays.erase(same);
+                    } else if (increment
+                        && std::ranges::any_of(net_delays,
+                            [&](const elaboration::SdfNetDelayInfo& earlier) {
+                                return earlier.identity == each.identity;
+                            })) {
+                        each.increment = true;
                     }
                     net_delays.push_back(std::move(each));
                 }

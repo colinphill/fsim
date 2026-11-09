@@ -1,0 +1,14 @@
+c=0000 d=0000 @0 ns
+c=1111 d=1111 @2 ns
+c=1100 d=1111 @4 ns
+c=0100 d=1000 @6 ns
+wide(2)=11..11 wide(1)=00 wide(3)=00
+sign 1 digits=60
+sign 2 digits=60
+sign 3 digits=60
+sign 4 digits=60
+sign 5 digits=60
+sign 6 digits=60
+postponed x=3 @1 ns
+postponed x=4 @2 ns
+y=2 @3 ns

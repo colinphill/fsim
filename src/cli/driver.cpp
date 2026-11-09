@@ -450,6 +450,9 @@ namespace {
         if (invocation.foreign_probes.has_value()) {
             config.run.foreign_probes = *invocation.foreign_probes;
         }
+        if (invocation.engine.has_value()) {
+            config.run.engine = invocation.engine;
+        }
         if (invocation.vhpi_end_of_step_timers.has_value()) {
             config.run.vhpi_end_of_step_timers
                 = *invocation.vhpi_end_of_step_timers;
@@ -548,6 +551,9 @@ namespace {
         }
         if (invocation.foreign_probes.has_value()) {
             config.run.foreign_probes = *invocation.foreign_probes;
+        }
+        if (invocation.engine.has_value()) {
+            config.run.engine = invocation.engine;
         }
         if (invocation.vhpi_end_of_step_timers.has_value()) {
             config.run.vhpi_end_of_step_timers
@@ -2603,6 +2609,12 @@ void apply_configuration_defaults(
         if (!invocation.max_deltas) {
             invocation.max_deltas = number("simulate.max_deltas");
         }
+        if (!invocation.engine) {
+            if (const auto engine = text("simulate.engine");
+                engine && !engine->empty()) {
+                invocation.engine = engine;
+            }
+        }
         if (!invocation.foreign_probes) {
             invocation.foreign_probes = boolean("simulate.foreign_probes");
         }
@@ -2656,6 +2668,16 @@ void apply_configuration_defaults(
         fill_list(invocation.include_directories, "systemc.include_directories");
         fill_list(invocation.systemc_libraries, "systemc.link_libraries");
         fill_list(invocation.systemc_link_options, "systemc.link_options");
+        break;
+    case Command::tcl:
+        // A console session runs with the configured engine; the other
+        // simulate keys (save, restart, duration) belong to a batch run.
+        if (!invocation.engine) {
+            if (const auto engine = text("simulate.engine");
+                engine && !engine->empty()) {
+                invocation.engine = engine;
+            }
+        }
         break;
     default:
         break;

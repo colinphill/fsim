@@ -5,6 +5,7 @@
 // lives in a container register holding its shape and one packed payload;
 // see runtime::simir::VhdlShaped.
 #include "lowerer_internal.hpp"
+#include "fsim/support/stack_growth.hpp"
 
 #include <cstdlib>
 #include <iostream>
@@ -48,11 +49,11 @@ semantic::vhdl::SubtypeIndication Lowerer::hir_vhdl_chain_element_subtype(
     const std::string_view step) const
 {
     std::vector<const semantic::vhdl::SubtypeIndication*> owners;
-    std::vector<semantic::vhdl::SubtypeIndication> bases;
-    bases.reserve(32U);
+    // A deque keeps the addresses `current` and `owners` hold.
+    std::deque<semantic::vhdl::SubtypeIndication> bases;
     const semantic::vhdl::SubtypeIndication* current = &owner;
     std::unordered_set<std::uint32_t> visited;
-    for (std::size_t depth { }; depth < 32U && current != nullptr; ++depth) {
+    while (current != nullptr) {
         if (!current->element_constraints.empty()) {
             owners.push_back(current);
         }
@@ -99,7 +100,7 @@ std::optional<std::size_t> Lowerer::hir_vhdl_symbolic_slice_length(
         }
         const auto a = specialized_hir_unit_->find_expression(left);
         const auto b = specialized_hir_unit_->find_expression(right);
-        if (depth > 16U || !a || !b || a->vhdl == nullptr || b->vhdl == nullptr
+        if (!a || !b || a->vhdl == nullptr || b->vhdl == nullptr
             || a->vhdl->kind != b->vhdl->kind || a->vhdl->text != b->vhdl->text
             || a->vhdl->operands.size() != b->vhdl->operands.size()
             || hir_referenced_declaration(left)
@@ -107,8 +108,8 @@ std::optional<std::size_t> Lowerer::hir_vhdl_symbolic_slice_length(
             return false;
         }
         for (std::size_t index { }; index < a->vhdl->operands.size(); ++index) {
-            if (!self(self, a->vhdl->operands[index],
-                    b->vhdl->operands[index], depth + 1U)) {
+            if (!support::with_stack([&] { return self(self, a->vhdl->operands[index],
+                    b->vhdl->operands[index], depth + 1U); })) {
                 return false;
             }
         }
@@ -160,7 +161,7 @@ std::optional<std::size_t> Lowerer::hir_vhdl_vector_element_width(
     using Builtin = semantic::vhdl::BuiltinTypeIdentity;
     auto current = subtype;
     std::unordered_set<std::uint32_t> visited;
-    for (std::size_t depth { }; depth < 32U; ++depth) {
+    for (;;) {
         switch (current.builtin_type) {
         case Builtin::std_standard_bit_vector:
         case Builtin::std_standard_boolean_vector:
@@ -206,7 +207,6 @@ std::optional<std::size_t> Lowerer::hir_vhdl_vector_element_width(
         }
         current = type->vhdl->base;
     }
-    return std::nullopt;
 }
 
 std::optional<Lowerer::HirVhdlShapedProfile>
@@ -225,7 +225,7 @@ Lowerer::hir_vhdl_shaped_profile(
     auto builtin = semantic::vhdl::BuiltinTypeIdentity::none;
     auto current = subtype;
     std::unordered_set<std::uint32_t> visited;
-    for (std::size_t depth { }; depth < 32U; ++depth) {
+    for (;;) {
         if (profile.constraints.empty()) {
             for (const auto& constraint : current.constraints) {
                 if (constraint.kind == semantic::vhdl::RangeKind::array_index) {
@@ -1660,7 +1660,7 @@ Lowerer::lower_hir_vhdl_shaped_container(
             return false;
         }
         auto type_id = subtype->type_mark.target;
-        for (std::size_t depth { }; depth < 32U && type_id.valid(); ++depth) {
+        while (type_id.valid()) {
             const auto type = specialized_hir_unit_->find_type(type_id);
             if (!type || type->vhdl == nullptr) {
                 return false;
@@ -1812,7 +1812,7 @@ Lowerer::hir_vhdl_shaped_open_profile(
     // The array type itself, without the index constraints of subtypes.
     auto current = subtype;
     std::unordered_set<std::uint32_t> visited;
-    for (std::size_t depth { }; depth < 32U; ++depth) {
+    for (;;) {
         if (current.builtin_type != semantic::vhdl::BuiltinTypeIdentity::none) {
             semantic::vhdl::SubtypeIndication open;
             open.type_mark = current.type_mark;
@@ -1842,7 +1842,6 @@ Lowerer::hir_vhdl_shaped_open_profile(
         }
         current = type->vhdl->base;
     }
-    return std::nullopt;
 }
 
 bool Lowerer::hir_vhdl_elaborated_constant(
@@ -1871,7 +1870,7 @@ bool Lowerer::hir_vhdl_elaborated_constant(
     // Only a scalar: records and arrays keep their own paths.
     const bool composite = [&] {
         auto type_id = declaration.subtype->type_mark.target;
-        for (std::size_t depth { }; depth < 32U && type_id.valid(); ++depth) {
+        while (type_id.valid()) {
             const auto type = specialized_hir_unit_->find_type(type_id);
             if (!type || type->vhdl == nullptr) {
                 return true;
@@ -2145,7 +2144,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_shaped_allocator(
     } else {
         // `new T'(v)`: the value supplies the bounds (9.3.7).
         auto value_id = *initializer;
-        for (std::size_t depth { }; depth < 16U; ++depth) {
+        for (;;) {
             const auto qualified = specialized_hir_unit_->find_expression(
                 value_id);
             if (!qualified || qualified->vhdl == nullptr

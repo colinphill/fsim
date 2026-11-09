@@ -215,7 +215,8 @@ static void start(const vhpiCbDataT* data)
     p = vhpi_handle_by_name("top.p", NULL);
     printf("#c capabilities=%d\n",
         vhpi_get(vhpiCapabilitiesP, vhpi_handle(vhpiTool, NULL))
-            == (vhpiProvidesHierarchy | vhpiProvidesForeignModel
+            == (vhpiProvidesHierarchy | vhpiProvidesStaticAccess
+                | vhpiProvidesPostAnalysis | vhpiProvidesForeignModel
                 | vhpiProvidesAdvancedForeignModel));
     // A short buffer yields the size it needs (IEEE 1076-2019 23.19).
     memset(&value, 0, sizeof value);

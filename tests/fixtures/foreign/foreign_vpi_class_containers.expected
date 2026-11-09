@@ -1,0 +1,47 @@
+#c q type=vpiRegArray size=2 arraytype=4
+#c q[0] type=vpiIntVar value=10
+#c q[1] type=vpiIntVar value=20
+#c q by index 1 value=20
+#c dyn type=vpiRegArray size=3 arraytype=2
+#c dyn[0] type=vpiIntVar value=0
+#c dyn[1] type=vpiIntVar value=0
+#c dyn[2] type=vpiIntVar value=0
+#c aa type=vpiRegArray size=1 arraytype=3
+#c aa[0] type=vpiIntVar value=50
+#c aa by index 5 value=50
+#c bs type=vpiRegArray size=2 arraytype=1
+#c bs[0] type=vpiBitVar value=5
+#c bs[1] type=vpiBitVar value=-6
+#c by type=vpiRegArray size=2 arraytype=1
+#c by[0] type=vpiByteVar value=1
+#c by[1] type=vpiByteVar value=2
+#c sh type=vpiRegArray size=2 arraytype=1
+#c sh[0] type=vpiShortIntVar value=300
+#c sh[1] type=vpiShortIntVar value=400
+#c col type=vpiRegArray size=2 arraytype=1
+#c col[0] type=vpiEnumVar value=1
+#c col[1] type=vpiEnumVar value=0
+#c peers type=vpiRegArray size=2 arraytype=1
+#c peers[0] class obj=set
+#c peers[1] class obj=null
+#c ps type=vpiRegArray size=2 arraytype=1
+#c ps[0] struct members=2
+#c ps[0] member 0 type=vpiIntVar value=7
+#c ps[0] member 1 type=vpiByteVar value=3
+#c ps[1] struct members=2
+#c ps[1] member 0 type=vpiIntVar value=0
+#c ps[1] member 1 type=vpiByteVar value=0
+#c nest type=vpiRegArray size=2 arraytype=1
+#c nest[0] array size=0
+#c nest[1] array size=2
+#c nest[1][0] type=vpiIntVar value=9
+#c nest[1][1] type=vpiIntVar value=8
+#c rl type=vpiRegArray size=2 arraytype=1
+#c rl[0] type=vpiRealVar value=1.5
+#c rl[1] type=vpiRealVar value=2.5
+#c put rl[0] value=3.25
+#c put dyn[1] value=77
+#c array bs 100 200
+#c array dyn refused
+#c sizechange q size=3
+#c t2 done

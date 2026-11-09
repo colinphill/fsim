@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/uvm_command_line.hpp"
+
+#include "run_state_archive.hpp"
 #include "fsim/support/glob_match.hpp"
 
 #include "fsim/runtime/uvm_component.hpp"
@@ -830,6 +832,22 @@ SystemVerilogUvmCommandLineService::apply_report_settings(
     report_settings_applied_[setting_index] = true;
   }
   return result;
+}
+
+void SystemVerilogUvmCommandLineService::run_state_io(
+    RunStateArchive& archive) {
+  archive.io(initial_report_settings_applied_);
+  archive.io(report_settings_applied_);
+  if (archive.loading() && archive.ok()
+      && report_settings_applied_.size()
+          != settings_.verbosity_settings.size()) {
+    archive.fail("the applied UVM report settings do not fit the command line");
+  }
+}
+
+void SystemVerilogUvmCommandLineService::reset_run_state() {
+  initial_report_settings_applied_ = false;
+  report_settings_applied_.assign(settings_.verbosity_settings.size(), false);
 }
 
 }  // namespace fsim::runtime

@@ -257,6 +257,9 @@ public:
     /// Once any registration succeeds it remains true for the manager's
     /// lifetime, including after a one-shot callback fires or is removed.
     [[nodiscard]] bool has_registrations() const noexcept;
+    /// The same bit for the assertion reasons (cbAssertion*): an outcome
+    /// with none registered only updates the assertion statistics.
+    [[nodiscard]] bool has_assertion_registrations() const noexcept;
 
     // Public only so translation-unit helpers can name the opaque state type.
     struct Impl;

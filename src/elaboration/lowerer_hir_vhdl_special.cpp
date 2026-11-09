@@ -318,7 +318,7 @@ std::optional<semantic::DeclarationId> find_vhdl_object(
         }
         return semantic::find_by_id(unit.design().vhdl_hir.declarations(), id);
     };
-    for (std::size_t depth { }; found && depth < 16U; ++depth) {
+    while (found) {
         const auto* alias = declaration_of(*found);
         if (alias == nullptr || !plain_object_alias(*alias)) {
             break;
@@ -1206,7 +1206,7 @@ Lowerer::hir_vhdl_lazy_global_constant(
         return std::nullopt;
     }
     auto root_id = expression_id;
-    for (std::size_t depth { }; depth < 16U; ++depth) {
+    for (;;) {
         const auto expression = specialized_hir_unit_->find_expression(root_id);
         if (!expression || expression->vhdl == nullptr) {
             return std::nullopt;

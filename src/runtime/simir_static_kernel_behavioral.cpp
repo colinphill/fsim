@@ -10,6 +10,7 @@
 #include "fsim/runtime/foreign_call_process.hpp"
 #include "simir_container_ops.hpp"
 #include "simir_execution_shared.hpp"
+#include "simir_static_kernel_compiled_internal.hpp"
 #include "simir_static_kernel_state.hpp"
 
 #include "fsim/runtime/output_format.hpp"
@@ -19,17 +20,39 @@
 #include "fsim/runtime/systemverilog_string.hpp"
 
 #include <algorithm>
+#include <cxxabi.h>
+#include <cstdlib>
 #include <iostream>
 #include <limits>
 #include <numeric>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
+#include <type_traits>
+#include <typeinfo>
 #include <utility>
 #include <vector>
 
 namespace fsim::runtime::simir {
 
 using namespace static_kernel_detail;
+
+namespace {
+
+/// An operation's type name without its namespaces, for verify messages.
+std::string operation_type_name(const Operation& operation)
+{
+    return visit_operation([](const auto& op) {
+        int status = 0;
+        char* name = abi::__cxa_demangle(typeid(op).name(), nullptr, nullptr, &status);
+        std::string text = name != nullptr ? name : "?";
+        std::free(name);
+        return text.substr(text.rfind(':') + 1U);
+    }, operation);
+}
+
+} // namespace
 
 std::uint32_t Interpreter::Impl::StaticKernel::spawn_thread(
     const std::uint32_t member, const std::uint32_t pc,
@@ -2036,6 +2059,10 @@ struct Interpreter::Impl::StaticKernel::MemberFileStorage final
     // it (step_operation).
     void commit(const SignalId signal, PackedLogic4 value) override
     {
+        if (kernel.shadow_ != nullptr && !kernel.shadow_->reference
+            && kernel.owned(signal)) {
+            kernel.shadow_->pending_commits.emplace_back(signal, value);
+        }
         if (!kernel.owned(signal)) {
             kernel.write_host(member, signal, std::move(value), std::nullopt,
                 true, SignalUpdateDomain::systemverilog_active);
@@ -2197,23 +2224,9 @@ void Interpreter::Impl::StaticKernel::execute_sva_tick(const CompiledBody& body,
     // start and disabled read straight from the register file (IEEE
     // 1800-2023 16.14). The first tick creates the monitor from the plan and
     // the bound registers and binds it to its block table entry.
-    auto& member = members_[member_index];
-    const auto& op = operation_get<SvaOperation>(member.operations()[inst.x]);
+    const auto& op = operation_get<SvaOperation>(members_[member_index].operations()[inst.x]);
     MemberAssertionStorage storage { *this, member_index, inst.x };
-    auto* found = impl_.sva_monitor_find(storage.process(), op.site);
-    if (found == nullptr) {
-        // The bounds (per-instance constants) are read once, at creation.
-        for (const auto bound : op.bounds) {
-            member.registers[bound]
-                = register_operand(body, registers, member_index, inst.y, bound);
-        }
-        found = &impl_.sva_monitor_bind(storage, op);
-    }
-    if (sva_blocks_ && member_index < sva_member_base_.size()
-        && !found->slot_bound()) {
-        found->bind_slot(
-            sva::BlockSlot { sva_blocks_, sva_member_base_[member_index] + inst.aux });
-    }
+    auto* const found = &sva_tick_monitor(body, registers, inst, member_index, storage);
     const auto known_one = [](const Word word, const std::uint32_t bit) {
         return ((word.a >> bit) & 1U) != 0U && ((word.b >> bit) & 1U) == 0U;
     };
@@ -2236,6 +2249,47 @@ void Interpreter::Impl::StaticKernel::execute_sva_tick(const CompiledBody& body,
     const bool disabled = known_one(registers[inst.y + op.disabled], 0U);
     const auto pending = impl_.sva_tick_core(storage, *found, guards, start, disabled);
     registers[inst.d] = { static_cast<std::uint64_t>(pending), 0U };
+    if (shadow_ != nullptr && !shadow_->reference) {
+        // FSIM_KERNEL_VERIFY: the tick, for the replay to take.
+        VerifySvaTick tick;
+        tick.pc = inst.x;
+        const auto image = [&](const RegisterId reg) {
+            return Impl::coerce_value_kind(
+                register_operand(body, registers, member_index, inst.y, reg),
+                ValueKind::logic9).to_msb_string();
+        };
+        if (op.guard_count != 0U) {
+            tick.operands.push_back(image(op.guards));
+        }
+        tick.operands.push_back(image(op.start));
+        tick.operands.push_back(image(op.disabled));
+        tick.result = PackedLogic4::from_aval_bval(
+            32, static_cast<std::uint32_t>(pending), 0U);
+        shadow_->sva.push_back(std::move(tick));
+    }
+}
+
+sva::Monitor& Interpreter::Impl::StaticKernel::sva_tick_monitor(
+    const CompiledBody& body, Word* registers, const KInst& inst,
+    const std::uint32_t member_index, MemberAssertionStorage& storage)
+{
+    auto& member = members_[member_index];
+    const auto& op = operation_get<SvaOperation>(member.operations()[inst.x]);
+    auto* found = impl_.sva_monitor_find(storage.process(), op.site);
+    if (found == nullptr) {
+        // The bounds (per-instance constants) are read once, at creation.
+        for (const auto bound : op.bounds) {
+            member.registers[bound]
+                = register_operand(body, registers, member_index, inst.y, bound);
+        }
+        found = &impl_.sva_monitor_bind(storage, op);
+    }
+    if (sva_blocks_ && member_index < sva_member_base_.size()
+        && !found->slot_bound()) {
+        found->bind_slot(
+            sva::BlockSlot { sva_blocks_, sva_member_base_[member_index] + inst.aux });
+    }
+    return *found;
 }
 
 std::int64_t* Interpreter::Impl::StaticKernel::sva_block(const KInst& inst,
@@ -2285,6 +2339,174 @@ void Interpreter::Impl::StaticKernel::native_sva_tick(
     }
 }
 
+namespace {
+
+/// The first difference between two attempt blocks of one directive, as text
+/// (empty: equal), over the words that are state: the header counters, the
+/// attempt rows with their records, and the queued outcomes, start times,
+/// step events and step requests in order. Offsets, capacities, heap
+/// positions and unused words are not state.
+[[nodiscard]] std::string sva_block_difference(const std::vector<std::int64_t>& generated,
+    const std::vector<std::int64_t>& host, const bool starts)
+{
+    using namespace sva::layout;
+    struct Counter {
+        const char* name;
+        Header field;
+    };
+    static constexpr Counter counters[] {
+        { "tick", h_tick },
+        { "flags", h_flags },
+        { "steps_active", h_steps_active },
+        { "next_serial", h_next_serial },
+        { "time", h_time },
+        { "attempts", h_attempts_count },
+        { "outcomes", h_outcomes_count },
+        { "events", h_events_count },
+        { "requests", h_requests_count },
+    };
+    const auto text = [](const std::int64_t value) { return std::to_string(value); };
+    for (const auto& counter : counters) {
+        if (generated[counter.field] != host[counter.field]) {
+            return std::string { counter.name } + ": generated "
+                + text(generated[counter.field]) + ", host " + text(host[counter.field]);
+        }
+    }
+    if (starts && generated[h_started_count] != host[h_started_count]) {
+        return "started: generated " + text(generated[h_started_count]) + ", host "
+            + text(host[h_started_count]);
+    }
+    const auto attempts = static_cast<std::size_t>(generated[h_attempts_count]);
+    for (std::size_t index = 0U; index < attempts; ++index) {
+        const auto row = [&](const std::vector<std::int64_t>& words, const std::size_t at) {
+            return words[static_cast<std::size_t>(words[h_attempts_off]) + index * attempt_stride + at];
+        };
+        for (const auto at : { a_started, a_length, a_serial, a_flags }) {
+            if (row(generated, at) != row(host, at)) {
+                return "attempt " + std::to_string(index) + " word " + std::to_string(at)
+                    + ": generated " + text(row(generated, at)) + ", host " + text(row(host, at));
+            }
+        }
+        const auto length = static_cast<std::size_t>(row(host, a_length));
+        for (std::size_t word = 0U; word < length; ++word) {
+            const auto read = [&](const std::vector<std::int64_t>& words) {
+                return words[static_cast<std::size_t>(words[h_heap_off])
+                    + static_cast<std::size_t>(row(words, a_blob)) + word];
+            };
+            if (read(generated) != read(host)) {
+                return "attempt " + std::to_string(index) + " record word "
+                    + std::to_string(word) + ": generated " + text(read(generated))
+                    + ", host " + text(read(host));
+            }
+        }
+    }
+    const auto ring = [&](const char* name, const Header off, const Header head,
+                          const Header count, const Header cap, const std::size_t stride)
+        -> std::string {
+        for (std::size_t entry = 0U; entry < static_cast<std::size_t>(generated[count]); ++entry) {
+            for (std::size_t word = 0U; word < stride; ++word) {
+                const auto read = [&](const std::vector<std::int64_t>& words) {
+                    const auto slot = (static_cast<std::size_t>(words[head]) + entry)
+                        & (static_cast<std::size_t>(words[cap]) - 1U);
+                    return words[static_cast<std::size_t>(words[off]) + slot * stride + word];
+                };
+                if (read(generated) != read(host)) {
+                    return std::string { name } + " " + std::to_string(entry) + " word "
+                        + std::to_string(word) + ": generated " + text(read(generated))
+                        + ", host " + text(read(host));
+                }
+            }
+        }
+        return { };
+    };
+    if (auto difference = ring("outcome", h_outcomes_off, h_outcomes_head, h_outcomes_count,
+            h_outcomes_cap, outcome_stride);
+        !difference.empty()) {
+        return difference;
+    }
+    if (auto difference = ring("step event", h_events_off, h_events_head, h_events_count,
+            h_events_cap, event_stride);
+        !difference.empty()) {
+        return difference;
+    }
+    if (starts) {
+        if (auto difference = ring("start", h_started_off, h_started_head, h_started_count,
+                h_started_cap, started_stride);
+            !difference.empty()) {
+            return difference;
+        }
+    }
+    for (std::size_t request = 0U; request < static_cast<std::size_t>(generated[h_requests_count]);
+         ++request) {
+        for (std::size_t word = 0U; word < request_stride; ++word) {
+            const auto read = [&](const std::vector<std::int64_t>& words) {
+                return words[static_cast<std::size_t>(words[h_requests_off])
+                    + request * request_stride + word];
+            };
+            if (read(generated) != read(host)) {
+                return "step request " + std::to_string(request) + ": generated "
+                    + text(read(generated)) + ", host " + text(read(host));
+            }
+        }
+    }
+    return { };
+}
+
+} // namespace
+
+void Interpreter::Impl::StaticKernel::sva_check_run(const CompiledBody& body,
+    const CompiledBody& program, Word* registers, const KInst& inst,
+    const std::uint32_t member_index, const std::uint32_t phase)
+{
+    (void)program;
+    const auto& op = operation_get<SvaOperation>(members_[member_index].operations()[inst.x]);
+    MemberAssertionStorage storage { *this, member_index, inst.x };
+    auto* const site_monitor = impl_.sva_monitor_find(storage.process(), op.site);
+    if (site_monitor == nullptr) {
+        throw std::logic_error { "assertion check without a monitor" };
+    }
+    if (phase == 0U) {
+        auto copy = site_monitor->reference_copy();
+        if (!copy) {
+            throw std::runtime_error { "assertion check cannot copy the attempt block" };
+        }
+        sva_check_refs_[site_monitor] = std::move(copy);
+        return;
+    }
+    const auto found = sva_check_refs_.find(site_monitor);
+    if (found == sva_check_refs_.end()) {
+        return;
+    }
+    const auto reference = std::move(found->second);
+    sva_check_refs_.erase(found);
+    const auto known_one = [](const Word word, const std::uint32_t bit) {
+        return ((word.a >> bit) & 1U) != 0U && ((word.b >> bit) & 1U) == 0U;
+    };
+    std::vector<bool> guards(op.guard_count);
+    if (op.guard_count != 0U) {
+        const auto index = inst.y + op.guards;
+        const auto base = body.register_widths[index] <= 64U
+            ? index : body.wide_base[index] & ~wide_unknown_flag;
+        for (std::uint32_t guard = 0U; guard < op.guard_count; ++guard) {
+            guards[guard] = known_one(registers[base + guard / 64U], guard % 64U);
+        }
+    }
+    bool start = known_one(registers[inst.y + op.start], 0U);
+    const bool disabled = known_one(registers[inst.y + op.disabled], 0U);
+    if (start && impl_.fork_spawn_filter) {
+        // The same question the generated tick asked ($assertoff, 20.12).
+        start = impl_.sva_attempt_allowed(storage);
+    }
+    reference->tick(guards, start, disabled, static_cast<std::int64_t>(kernel_now()));
+    const auto difference = sva_block_difference(site_monitor->storage().words(),
+        reference->storage().words(), impl_.assertion_starts_bound);
+    if (!difference.empty()) {
+        throw std::runtime_error { "FSIM_KERNEL_SVA_CHECK: the generated attempt automaton of "
+            "assertion site " + std::to_string(op.site) + " differs from the host monitor at "
+            "time " + std::to_string(kernel_now()) + ": " + difference };
+    }
+}
+
 std::int64_t* Interpreter::Impl::StaticKernel::native_sva_bind(
     StaticKernelNativeFrame* frame, const std::uint32_t at)
 {
@@ -2297,6 +2519,155 @@ std::int64_t* Interpreter::Impl::StaticKernel::native_sva_bind(
         frame->status = 1U;
         return nullptr;
     }
+}
+
+// The generated attempt automaton's host calls (KOp::sva_tick with a plan;
+// task #186). All of them run on the directive's monitor, which owns the
+// block the generated code works on.
+std::int64_t* Interpreter::Impl::StaticKernel::native_sva_ensure(
+    StaticKernelNativeFrame* frame, Word* registers, const std::uint32_t at)
+{
+    auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
+    try {
+        const auto& program = *static_cast<const CompiledBody*>(frame->program);
+        const auto& inst = program.code[at];
+        MemberAssertionStorage storage { kernel, frame->member, inst.x };
+        auto& monitor = kernel.sva_tick_monitor(
+            *static_cast<CompiledBody*>(frame->instance), registers, inst,
+            frame->member, storage);
+        return monitor.mutable_block_base();
+    } catch (...) {
+        kernel.scratch().native_exception = std::current_exception();
+        frame->status = 1U;
+        return nullptr;
+    }
+}
+
+void Interpreter::Impl::StaticKernel::native_sva_grow(
+    StaticKernelNativeFrame* frame, const std::uint32_t at,
+    const std::uint32_t region, const std::uint64_t needed)
+{
+    auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
+    try {
+        const auto& program = *static_cast<const CompiledBody*>(frame->program);
+        const auto& inst = program.code[at];
+        auto& member = kernel.members_[frame->member];
+        const auto& op = operation_get<SvaOperation>(member.operations()[inst.x]);
+        MemberAssertionStorage storage { kernel, frame->member, inst.x };
+        auto* const found = kernel.impl_.sva_monitor_find(storage.process(), op.site);
+        if (found == nullptr) {
+            throw std::logic_error { "assertion block growth without a monitor" };
+        }
+        found->reserve_region(region, static_cast<std::size_t>(needed));
+    } catch (...) {
+        kernel.scratch().native_exception = std::current_exception();
+        frame->status = 1U;
+    }
+}
+
+void Interpreter::Impl::StaticKernel::native_sva_post(
+    StaticKernelNativeFrame* frame, const std::uint32_t at)
+{
+    auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
+    try {
+        const auto& program = *static_cast<const CompiledBody*>(frame->program);
+        const auto& inst = program.code[at];
+        const auto& op = operation_get<SvaOperation>(
+            kernel.members_[frame->member].operations()[inst.x]);
+        MemberAssertionStorage storage { kernel, frame->member, inst.x };
+        auto* const found = kernel.impl_.sva_monitor_find(storage.process(), op.site);
+        if (found == nullptr) {
+            return;
+        }
+        kernel.impl_.sva_tick_reports(storage, *found);
+    } catch (...) {
+        kernel.scratch().native_exception = std::current_exception();
+        frame->status = 1U;
+    }
+}
+
+std::uint32_t Interpreter::Impl::StaticKernel::native_sva_filter(
+    StaticKernelNativeFrame* frame, const std::uint32_t at)
+{
+    auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
+    try {
+        const auto& program = *static_cast<const CompiledBody*>(frame->program);
+        const auto& inst = program.code[at];
+        MemberAssertionStorage storage { kernel, frame->member, inst.x };
+        return kernel.impl_.sva_attempt_allowed(storage) ? 1U : 0U;
+    } catch (...) {
+        kernel.scratch().native_exception = std::current_exception();
+        frame->status = 1U;
+        return 0U;
+    }
+}
+
+void Interpreter::Impl::StaticKernel::native_sva_verify(
+    StaticKernelNativeFrame* frame, Word* registers, const std::uint32_t at)
+{
+    auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
+    try {
+        if (kernel.shadow_ == nullptr || kernel.shadow_->reference) {
+            return;
+        }
+        const auto& program = *static_cast<const CompiledBody*>(frame->program);
+        const auto& body = *static_cast<CompiledBody*>(frame->instance);
+        const auto& inst = program.code[at];
+        const auto member_index = frame->member;
+        const auto& op = operation_get<SvaOperation>(
+            kernel.members_[member_index].operations()[inst.x]);
+        VerifySvaTick tick;
+        tick.pc = inst.x;
+        const auto image = [&](const RegisterId reg) {
+            return Impl::coerce_value_kind(
+                kernel.register_operand(body, registers, member_index, inst.y, reg),
+                ValueKind::logic9).to_msb_string();
+        };
+        if (op.guard_count != 0U) {
+            tick.operands.push_back(image(op.guards));
+        }
+        tick.operands.push_back(image(op.start));
+        tick.operands.push_back(image(op.disabled));
+        tick.result = PackedLogic4::from_aval_bval(
+            32, static_cast<std::uint32_t>(registers[inst.d].a), 0U);
+        kernel.shadow_->sva.push_back(std::move(tick));
+    } catch (...) {
+        kernel.scratch().native_exception = std::current_exception();
+        frame->status = 1U;
+    }
+}
+
+// FSIM_KERNEL_SVA_CHECK: the generated automaton's differential check. A
+// reference monitor of the same plan holds a copy of the block before each
+// tick (phase 0); after the generated tick (phase 1) it ticks on the same
+// inputs and its block must equal the generated code's, word for word where
+// the words are state (the rings' unused slots and the heaps' free words are
+// not).
+void Interpreter::Impl::StaticKernel::native_sva_check(
+    StaticKernelNativeFrame* frame, Word* registers, const std::uint32_t at,
+    const std::uint32_t phase)
+{
+    auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
+    try {
+        const auto& program = *static_cast<const CompiledBody*>(frame->program);
+        kernel.sva_check_run(*static_cast<CompiledBody*>(frame->instance), program,
+            registers, program.code[at], frame->member, phase);
+    } catch (...) {
+        kernel.scratch().native_exception = std::current_exception();
+        frame->status = 1U;
+    }
+}
+
+void Interpreter::Impl::StaticKernel::native_sva_verify_outcome(
+    StaticKernelNativeFrame* frame, const std::uint32_t at, const std::uint64_t value)
+{
+    auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
+    if (kernel.shadow_ == nullptr || kernel.shadow_->reference) {
+        return;
+    }
+    const auto& program = *static_cast<const CompiledBody*>(frame->program);
+    kernel.shadow_->sva_outcomes.emplace_back(program.code[at].x,
+        PackedLogic4::from_aval_bval(32, static_cast<std::uint32_t>(value), 0U));
 }
 
 // The member's registers for the reference's container operations
@@ -2578,6 +2949,12 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
         }
         return member.registers[id];
     };
+    // A real, time or integral payload operand (systemverilog_scalar.hpp)
+    // holds no 'U' or weak elements: a register a VHDL member tracks reads
+    // in its four-state form, as the reference holds it.
+    const auto numeric_register = [&](const RegisterId id) {
+        return Impl::coerce_value_kind(packed_register(id), ValueKind::logic4);
+    };
     const auto container_register = [&](const ContainerRegisterId id)
         -> std::uint32_t& {
         if (id >= member.container_registers.size()) {
@@ -2740,7 +3117,7 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             // conversions (IEEE 1800-2023 6.12, 11.3.1), as the reference
             // evaluates them.
             const auto result = systemverilog_scalar_binary_payload(op.operation,
-                packed_register(op.lhs), op.lhs_kind, packed_register(op.rhs),
+                numeric_register(op.lhs), op.lhs_kind, numeric_register(op.rhs),
                 op.rhs_kind, op.result_kind);
             if (!result) {
                 fail(member_index, pc,
@@ -2756,11 +3133,13 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             if (op.function < SystemVerilogMathFunction::Time) {
                 // The math and conversion functions (IEEE 1800-2023 20.5,
                 // 20.8), as the reference evaluates them.
-                const auto* second
-                    = op.second_width == 0U ? nullptr : &packed_register(op.second);
+                std::optional<PackedLogic4> second;
+                if (op.second_width != 0U) {
+                    second = numeric_register(op.second);
+                }
                 const auto result = systemverilog_math_payload(op.function,
-                    packed_register(op.first), op.first_kind, op.first_signed,
-                    second, op.second_kind, op.second_signed);
+                    numeric_register(op.first), op.first_kind, op.first_signed,
+                    second ? &*second : nullptr, op.second_kind, op.second_signed);
                 if (!result) {
                     fail(member_index, pc,
                         "SystemVerilog math function failed (error "
@@ -4510,9 +4889,10 @@ void Interpreter::Impl::StaticKernel::debug_stop(const std::uint32_t paused)
 bool Interpreter::Impl::StaticKernel::debug_member(
     const ProcessId process) const noexcept
 {
+    // Every member serves its process's locals (a registered or
+    // combinational member's as well as a thread's), on the tier it runs.
     return std::ranges::any_of(members_, [&](const Member& member) {
-        return member.process == process
-            && member.kind == StaticKernelMemberKind::behavioral;
+        return member.process == process;
     });
 }
 
@@ -4560,20 +4940,24 @@ PackedLogic4 Interpreter::Impl::StaticKernel::debug_register(
         throw std::logic_error { "SimIR debug local has no outer activation" };
     }
     PackedLogic4 value;
-    if (member.compiled && !member.generic_mode) {
+    // The reference registers hold a member's state until its first compiled
+    // run (a registered or combinational member's first run is
+    // reference-evaluated) and in generic mode.
+    if (member.compiled && !member.generic_mode
+        && !(member.fresh && member.kind != StaticKernelMemberKind::behavioral)) {
         const auto& body = *member.compiled;
         if (reg >= body.register_widths.size()
             || body.register_widths[reg] == 0U) {
             throw std::logic_error { "SimIR debug local has not been initialized" };
         }
-        const auto register_width = body.register_widths[reg];
-        value = register_width > 64U && reg < body.wide_base.size()
-                && body.wide_base[reg] != 0U
-            ? wide_value(body, body.registers.data(), reg, ValueKind::logic4)
-            : register_width > 64U
-            ? body.wide_registers.at(reg)
-            : uword_value(body.registers[reg], 0U, register_width,
-                  ValueKind::logic4);
+        // The register's own kind and its 'U' and weak masks: a VHDL local
+        // holds nine-value elements.
+        auto exact = exact_register(body,
+            static_cast<std::uint32_t>(found - members_.begin()), reg);
+        if (!exact) {
+            throw std::logic_error { "SimIR debug local has not been initialized" };
+        }
+        value = std::move(*exact);
     } else {
         if (reg >= member.registers.size()) {
             throw std::out_of_range { "invalid SimIR register ID" };
@@ -4634,6 +5018,21 @@ void Interpreter::Impl::StaticKernel::debug_write_register(
         throw std::logic_error { "debug process is not a kernel member" };
     }
     auto& member = *found;
+    if (member.kind != StaticKernelMemberKind::behavioral) {
+        // A registered or combinational member: its reference registers and
+        // its compiled ones are kept coherent (set_member_register), with the
+        // register's own kind.
+        if (member.compiled && reg < member.compiled->register_widths.size()
+            && member.compiled->register_widths[reg] != 0U
+            && member.compiled->register_widths[reg] != value.width()) {
+            throw std::invalid_argument {
+                "invalid SimIR scalar debug-local payload"
+            };
+        }
+        set_member_register(
+            static_cast<std::uint32_t>(found - members_.begin()), reg, value);
+        return;
+    }
     if (member.compiled && !member.generic_mode) {
         auto& body = *member.compiled;
         if (reg >= body.register_widths.size()
@@ -4764,13 +5163,19 @@ void Interpreter::Impl::StaticKernel::run_thread(const std::uint32_t index)
         const auto reg = *waiting.timeout_result;
         const bool timed_out = waiting.deadline
             && *waiting.deadline <= kernel_now();
-        if (reg >= member.registers.size()) {
-            fail(member_index, waiting.pc, "invalid register ID");
+        if (member.compiled && !member.generic_mode) {
+            // A compiled body keeps its own register file.
+            set_thread_register(member_index, waiting.pc, reg,
+                PackedLogic4::from_msb_string(timed_out ? "1" : "0"));
+        } else {
+            if (reg >= member.registers.size()) {
+                fail(member_index, waiting.pc, "invalid register ID");
+            }
+            member.registers[reg] = Impl::coerce_value_kind(
+                PackedLogic4::from_msb_string(timed_out ? "1" : "0"),
+                reg < member.register_kinds.size() ? member.register_kinds[reg]
+                                                   : ValueKind::logic4);
         }
-        member.registers[reg] = Impl::coerce_value_kind(
-            PackedLogic4::from_msb_string(timed_out ? "1" : "0"),
-            reg < member.register_kinds.size() ? member.register_kinds[reg]
-                                               : ValueKind::logic4);
         waiting.timeout_result.reset();
     }
     // Mailbox values delivered while the thread waited (15.4), in the
@@ -4890,14 +5295,63 @@ std::optional<std::uint32_t> Interpreter::Impl::StaticKernel::run_behavioral_com
     auto& member = members_[member_index];
     auto& body = *member.compiled;
     auto& thread = threads_[index];
-    // The synthetic call stack lives in the shared register file; it holds
-    // the running thread's return targets.
+    // The body's call stack (its depth word in the register file, the
+    // return targets in its growable store) holds the running thread's
+    // return targets.
     if (body.call_stack_base != 0U) {
         const auto base = body.call_stack_base;
         body.registers[base] = { thread.stack.empty() ? 0U : thread.stack.front().a, 0U };
-        for (std::size_t entry = 1U; entry < thread.stack.size(); ++entry) {
-            body.registers[base + entry] = thread.stack[entry];
+        if (thread.stack.size() > 1U) {
+            body.call_entries.reserve(thread.stack.size() - 1U);
         }
+        const auto depth = thread.stack.empty() ? 0U : thread.stack.front().a;
+        for (std::size_t entry = 1U; entry <= depth && entry < thread.stack.size();
+             ++entry) {
+            body.call_entries.entries[entry - 1U] = thread.stack[entry].a;
+        }
+        if (body.frame_stack_base != 0U) {
+            // The thread's frames follow its return targets (one register-file
+            // pair per word; the first word's `b` counts them).
+            const auto pairs = thread.stack.empty() ? 0U : thread.stack.front().b;
+            body.registers[body.frame_stack_base] = { pairs, 0U };
+            if (pairs != 0U) {
+                body.frame_entries.reserve(2U * pairs);
+                for (std::uint64_t pair = 0U; pair < pairs; ++pair) {
+                    const auto word = thread.stack[1U + depth + pair];
+                    body.frame_entries.entries[2U * pair] = word.a;
+                    body.frame_entries.entries[2U * pair + 1U] = word.b;
+                }
+            }
+        }
+    }
+    // FSIM_KERNEL_VERIFY: the activation's start, for its replay below, and
+    // the shadow that records the compiled run's effects outside the slots.
+    std::optional<VerifyThreadState> verify_before;
+    VerifyShadow verify_shadow;
+    struct ShadowReset {
+        VerifyShadow*& pointer;
+        ~ShadowReset() { pointer = nullptr; }
+    } const shadow_reset { shadow_ };
+    if (verify_ && !member.generic_mode
+        && verify_thread_skip_reason(member_index) == nullptr) {
+        verify_before.emplace();
+        verify_before->registers = body.registers;
+        if (body.call_stack_base != 0U) {
+            const auto depth = body.registers[body.call_stack_base].a;
+            verify_before->stack.assign(body.call_entries.entries,
+                body.call_entries.entries + depth);
+            if (body.frame_stack_base != 0U) {
+                verify_before->frame_pairs = body.registers[body.frame_stack_base].a;
+                verify_before->frames.assign(body.frame_entries.entries,
+                    body.frame_entries.entries + 2U * verify_before->frame_pairs);
+            }
+        }
+        verify_before->wide = body.wide_registers;
+        verify_before->arena = arena_;
+        verify_before->marks = write_marks_;
+        verify_before->writes = writes_.count;
+        verify_before->generic = pending_generic_.size();
+        shadow_ = &verify_shadow;
     }
     behavioral_entry_ = start;
     behavioral_suspended_.reset();
@@ -4938,7 +5392,18 @@ std::optional<std::uint32_t> Interpreter::Impl::StaticKernel::run_behavioral_com
             member.call_stack.clear();
             for (std::uint64_t entry = 0U; entry < depth; ++entry) {
                 member.call_stack.push_back(static_cast<InstructionIndex>(
-                    body.registers[body.call_stack_base + 1U + entry].a));
+                    body.call_entries.entries[entry]));
+            }
+            if (body.frame_stack_base != 0U) {
+                // The compiled frames continue as the reference's.
+                const auto pairs = body.registers[body.frame_stack_base].a;
+                export_compiled_frames(member_index, body, body.registers,
+                    body.frame_entries.entries, pairs, member.frames);
+                member.frame_bytes = 0U;
+                for (const auto& frame : member.frames) {
+                    member.frame_bytes += frame.bytes;
+                }
+                body.registers[body.frame_stack_base] = { };
             }
         }
         // Other threads of the member suspended in compiled code carry
@@ -4949,7 +5414,9 @@ std::optional<std::uint32_t> Interpreter::Impl::StaticKernel::run_behavioral_com
                 continue;
             }
             state.call_stack.clear();
-            for (std::size_t entry = 1U; entry < state.stack.size(); ++entry) {
+            for (std::size_t entry = 1U;
+                 entry < state.stack.size() && entry <= state.stack.front().a;
+                 ++entry) {
                 state.call_stack.push_back(
                     static_cast<InstructionIndex>(state.stack[entry].a));
             }
@@ -4962,15 +5429,779 @@ std::optional<std::uint32_t> Interpreter::Impl::StaticKernel::run_behavioral_com
     if (!behavioral_suspended_) {
         fail(member_index, start, "behavioral thread ran past its operations");
     }
+    if (verify_before) {
+        verify_thread_activation(member_index, start, *behavioral_suspended_,
+            *verify_before);
+    }
     if (body.call_stack_base != 0U) {
         const auto base = body.call_stack_base;
         const auto depth = body.registers[base].a;
-        thread.stack.assign(1U + depth, { });
-        for (std::size_t entry = 0U; entry <= depth; ++entry) {
-            thread.stack[entry] = body.registers[base + entry];
+        const auto pairs = body.frame_stack_base != 0U
+            ? body.registers[body.frame_stack_base].a : 0U;
+        thread.stack.assign(1U + depth + pairs, { });
+        thread.stack[0] = { depth, pairs };
+        for (std::size_t entry = 0U; entry < depth; ++entry) {
+            thread.stack[1U + entry] = { body.call_entries.entries[entry], 0U };
+        }
+        for (std::uint64_t pair = 0U; pair < pairs; ++pair) {
+            thread.stack[1U + depth + pair]
+                = { body.frame_entries.entries[2U * pair],
+                      body.frame_entries.entries[2U * pair + 1U] };
         }
     }
     return behavioral_suspended_;
+}
+
+const char* Interpreter::Impl::StaticKernel::verify_thread_skip_reason(
+    const std::uint32_t member_index)
+{
+    verify_thread_reason_.resize(members_.size(), nullptr);
+    verify_thread_decided_.resize(members_.size(), 0U);
+    if (verify_thread_decided_[member_index] != 0U) {
+        return verify_thread_reason_[member_index];
+    }
+    verify_thread_decided_[member_index] = 1U;
+    const char* reason = nullptr;
+    // What the reference replay shadows: signal and host writes, delayed
+    // writes, notifications, frames and the call stack; operations the
+    // compiled body runs through the generic bridge (output, files, strings,
+    // containers, foreign calls) ran once with their real effects and are
+    // replayed from their recorded results, and so are the assertion monitors'
+    // ticks. What it cannot repeat:
+    if (debug_points_) {
+        // A debugger plan stops threads at statements, outside the replay.
+        reason = "debug_points";
+    }
+    verify_thread_reason_[member_index] = reason;
+    if (reason != nullptr) {
+        ++verify_skipped_members_[reason];
+    }
+    return reason;
+}
+
+bool Interpreter::Impl::StaticKernel::shadow_host_write(VerifyHostWrite record,
+    const bool blocking, const PackedLogic4* const value)
+{
+    auto& shadow = *shadow_;
+    if (!shadow.reference) {
+        if (blocking && value != nullptr) {
+            // The value the replay reads until its own write.
+            shadow.host_values.try_emplace(record.signal, read_signal(record.signal));
+        }
+        shadow.compiled_host.push_back(std::move(record));
+        return false;
+    }
+    if (blocking && value != nullptr) {
+        auto next = read_signal(record.signal);
+        if (record.offset >= 0) {
+            next = insert_value(std::move(next), *value,
+                static_cast<std::uint32_t>(record.offset));
+        } else {
+            next = *value;
+        }
+        shadow.host_values.insert_or_assign(record.signal, std::move(next));
+    }
+    shadow.reference_host.push_back(std::move(record));
+    return true;
+}
+
+void Interpreter::Impl::StaticKernel::shadow_note_reads(
+    const std::uint32_t member_index, const std::vector<RegisterId>& reads)
+{
+    // The operands as the operation sees them, before it runs.
+    const auto& member = members_[member_index];
+    shadow_->pending_reads.clear();
+    shadow_->pending_commits.clear();
+    for (const auto reg : reads) {
+        shadow_->pending_reads.push_back(reg < member.registers.size()
+                ? Impl::coerce_value_kind(member.registers[reg], ValueKind::logic9)
+                      .to_msb_string()
+                : std::string { });
+    }
+}
+
+void Interpreter::Impl::StaticKernel::shadow_record_generic(
+    const std::uint32_t member_index, const std::uint32_t pc,
+    const std::vector<WrittenRegister>& writes)
+{
+    auto& member = members_[member_index];
+    VerifyGenericRecord record;
+    record.pc = pc;
+    record.reads = std::move(shadow_->pending_reads);
+    shadow_->pending_reads.clear();
+    record.commits = std::move(shadow_->pending_commits);
+    shadow_->pending_commits.clear();
+    for (const auto& written : writes) {
+        if (written.reg < member.registers.size()) {
+            record.results.emplace_back(written.reg, member.registers[written.reg]);
+        }
+    }
+    if (const auto* binary = operation_get_if<FileBinaryRead>(&member.operations()[pc])) {
+        // A $fread into an array writes its elements (kernel storage); the
+        // replay writes the same ones.
+        std::uint32_t index = no_container;
+        if (binary->target_kind == FileBinaryTargetKind::container_register) {
+            if (binary->target < member.container_registers.size()) {
+                index = member.container_registers[binary->target];
+            }
+        } else if (binary->target_kind == FileBinaryTargetKind::container_object) {
+            if (binary->target < container_of_object_.size()) {
+                index = container_of_object_[binary->target];
+            }
+        }
+        if (index != no_container) {
+            record.container = index;
+            const auto& target = containers_[index];
+            for (std::uint32_t ordinal = 0U; ordinal < target.count; ++ordinal) {
+                record.elements.push_back(container_element(target, ordinal));
+            }
+        }
+    }
+    shadow_->generic.push_back(std::move(record));
+}
+
+const std::vector<std::uint64_t>&
+Interpreter::Impl::StaticKernel::verify_live_registers(const std::uint32_t member_index)
+{
+    verify_live_registers_.resize(members_.size());
+    auto& live = verify_live_registers_[member_index];
+    if (!live.empty()) {
+        return live;
+    }
+    // A register's value at a suspension matters only if some later
+    // activation reads it before writing it: the compiled body keeps
+    // temporaries that are dead there in whatever form suits it (a constant
+    // folded into its consumer, a four-state value where only four-state
+    // slots read it). Backward liveness over the operations, with the
+    // suspensions as ordinary fall-through.
+    const auto& member = members_[member_index];
+    const auto& body = *member.compiled;
+    const auto operations = member.operations().size();
+    const auto registers = member.registers.size();
+    const std::size_t words = (registers + 63U) / 64U + 1U;
+    live.assign(words, 0U);
+    std::vector<std::vector<RegisterId>> reads(operations);
+    std::vector<std::vector<WrittenRegister>> writes(operations);
+    std::vector<std::uint32_t> return_targets;
+    for (std::size_t pc = 0U; pc < operations; ++pc) {
+        std::optional<RegisterId> ignored;
+        static_kernel_compiled_detail::operation_registers(
+            member.operations()[pc], reads[pc], ignored);
+        static_kernel_compiled_detail::operation_written_registers(
+            member.operations()[pc], writes[pc]);
+        if (const auto* call = operation_get_if<Call>(&member.operations()[pc])) {
+            return_targets.push_back(call->return_target);
+        }
+    }
+    std::vector<std::uint64_t> in(operations * words, 0U);
+    std::vector<std::uint32_t> next;
+    const auto successors = [&](const std::size_t pc) {
+        next.clear();
+        visit_operation([&](const auto& op) {
+            using T = std::decay_t<decltype(op)>;
+            if constexpr (std::is_same_v<T, Jump>) {
+                next.push_back(op.target);
+            } else if constexpr (std::is_same_v<T, Branch>) {
+                next.push_back(op.when_true);
+                next.push_back(op.when_false);
+            } else if constexpr (std::is_same_v<T, Call>) {
+                next.push_back(op.target);
+            } else if constexpr (std::is_same_v<T, Return>) {
+                next.insert(next.end(), return_targets.begin(), return_targets.end());
+            } else if constexpr (std::is_same_v<T, Fork>) {
+                next.insert(next.end(), op.branches.begin(), op.branches.end());
+                next.push_back(static_cast<std::uint32_t>(pc) + 1U);
+            } else if constexpr (std::is_same_v<T, DisableBlock>) {
+                next.push_back(static_cast<std::uint32_t>(pc) + 1U);
+                if (op.scopes.empty()) {
+                    next.push_back(op.end);
+                }
+            } else if constexpr (std::is_same_v<T, Halt>
+                || std::is_same_v<T, ForkEnd> || std::is_same_v<T, WaitForever>
+                || std::is_same_v<T, WaitSensitivity>) {
+            } else {
+                next.push_back(static_cast<std::uint32_t>(pc) + 1U);
+            }
+        }, member.operations()[pc]);
+        std::erase_if(next, [&](const std::uint32_t target) {
+            return target >= operations;
+        });
+    };
+    // WaitSensitivity ends a pass and the next one starts at the top.
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (std::size_t pc = operations; pc-- > 0U;) {
+            successors(pc);
+            std::vector<std::uint64_t> out(words, 0U);
+            for (const auto target : next) {
+                for (std::size_t word = 0U; word < words; ++word) {
+                    out[word] |= in[target * words + word];
+                }
+            }
+            if (operation_holds<WaitSensitivity>(member.operations()[pc])) {
+                for (std::size_t word = 0U; word < words; ++word) {
+                    out[word] |= in[word];
+                }
+            }
+            for (const auto& written : writes[pc]) {
+                if (written.reg < registers) {
+                    out[written.reg / 64U] &= ~(std::uint64_t { 1U } << (written.reg % 64U));
+                }
+            }
+            for (const auto reg : reads[pc]) {
+                if (reg < registers) {
+                    out[reg / 64U] |= std::uint64_t { 1U } << (reg % 64U);
+                }
+            }
+            for (std::size_t word = 0U; word < words; ++word) {
+                if (in[pc * words + word] != out[word]) {
+                    in[pc * words + word] = out[word];
+                    changed = true;
+                }
+            }
+        }
+    }
+    // The registers live where a thread resumes or starts.
+    const auto add = [&](const std::size_t pc) {
+        if (pc < operations) {
+            for (std::size_t word = 0U; word < words; ++word) {
+                live[word] |= in[pc * words + word];
+            }
+        }
+    };
+    add(0U);
+    for (const auto& inst : body.code) {
+        if (inst.op == KOp::suspend) {
+            add(std::size_t { inst.x } + 1U);
+        }
+    }
+    for (std::size_t pc = 0U; pc < operations; ++pc) {
+        if (const auto* fork = operation_get_if<Fork>(&member.operations()[pc])) {
+            for (const auto branch : fork->branches) {
+                add(branch);
+            }
+        }
+    }
+    return live;
+}
+
+void Interpreter::Impl::StaticKernel::verify_thread_activation(
+    const std::uint32_t member_index, const std::uint32_t start,
+    const std::uint32_t stopped, const VerifyThreadState& before)
+{
+    auto& member = members_[member_index];
+    auto& body = *member.compiled;
+    auto& shadow = *shadow_;
+    const auto& live = verify_live_registers(member_index);
+    // What the compiled activation did.
+    const auto compiled_writes = verify_writes(before.writes);
+    const auto compiled_registers = verify_register_images(body);
+    const auto after_registers = body.registers;
+    const auto after_wide = body.wide_registers;
+    const auto compiled_arena = arena_;
+    const auto compiled_frames = body.frame_stack_base == 0U
+        ? 0U
+        : compiled_frame_count(body, body.frame_entries.entries,
+              after_registers[body.frame_stack_base].a);
+    const auto compiled_stack = [&] {
+        std::vector<InstructionIndex> out;
+        if (body.call_stack_base != 0U) {
+            const auto depth = after_registers[body.call_stack_base].a;
+            for (std::uint64_t entry = 0U; entry < depth; ++entry) {
+                out.push_back(
+                    static_cast<InstructionIndex>(body.call_entries.entries[entry]));
+            }
+        }
+        return out;
+    }();
+    // Replay it from the same state on the reference evaluator, with its
+    // effects shadowed: slot changes are recorded, not delivered; host and
+    // delayed writes are recorded, not made; generic operations take the
+    // results the compiled run recorded.
+    writes_.count = static_cast<std::uint32_t>(before.writes);
+    pending_generic_.resize(before.generic);
+    arena_ = before.arena;
+    write_marks_ = before.marks;
+    body.registers = before.registers;
+    body.wide_registers = before.wide;
+    // The registers as the compiled run started: exact values, with the 'U'
+    // and weak masks.
+    for (std::size_t reg = 0U; reg < member.registers.size(); ++reg) {
+        if (auto value = exact_register(body, member_index, static_cast<RegisterId>(reg))) {
+            member.registers[reg] = std::move(*value);
+        }
+    }
+    // Per operation: 1 a suspension, 2 an operation the compiled body runs
+    // through the generic bridge, 3 the same, run only when a library has
+    // bound the attempt-start callback.
+    const auto size = static_cast<std::uint32_t>(member.operations().size());
+    std::vector<std::uint8_t> role(size, 0U);
+    for (const auto& inst : body.code) {
+        if (inst.op == KOp::suspend && inst.x < size) {
+            role[inst.x] = 1U;
+        } else if (inst.op == KOp::generic && inst.x < size) {
+            role[inst.x] = inst.aux == 2U ? 3U : 2U;
+        } else if (inst.op == KOp::sva_tick && inst.x < size) {
+            role[inst.x] = 4U;
+        } else if (inst.op == KOp::sva_outcome && inst.x < size) {
+            role[inst.x] = 5U;
+        }
+    }
+    // The call stack and frames are the replay's own.
+    auto saved_stack = std::exchange(member.call_stack,
+        std::vector<InstructionIndex> { });
+    auto saved_frames = std::exchange(member.frames, decltype(member.frames) { });
+    auto saved_bytes = std::exchange(member.frame_bytes,
+        decltype(member.frame_bytes) { });
+    auto saved_arrays = std::exchange(member.saved_arrays,
+        decltype(member.saved_arrays) { });
+    auto saved_marks = std::exchange(member.saved_array_marks,
+        decltype(member.saved_array_marks) { });
+    for (const auto entry : before.stack) {
+        member.call_stack.push_back(static_cast<InstructionIndex>(entry));
+    }
+    if (body.frame_stack_base != 0U) {
+        export_compiled_frames(member_index, body, before.registers,
+            before.frames.data(), before.frame_pairs, member.frames);
+        for (const auto& frame : member.frames) {
+            member.frame_bytes += frame.bytes;
+        }
+    }
+    const auto image = [&](const RegisterId reg) {
+        return reg < member.registers.size()
+            ? Impl::coerce_value_kind(member.registers[reg], ValueKind::logic9)
+                  .to_msb_string()
+            : std::string { };
+    };
+    shadow.reference = true;
+    std::string mismatch;
+    std::uint32_t pc = start;
+    {
+        const InterpretingScope scope { *this, InterpretedCause::verify };
+        replaying_ = true;
+        try {
+            std::size_t steps = 0U;
+            std::vector<RegisterId> reads;
+            std::optional<RegisterId> write;
+            while (mismatch.empty() && role[pc] != 1U) {
+                if (++steps > run_step_limit) {
+                    fail(member_index, pc, "static kernel thread did not terminate");
+                }
+                if (role[pc] >= 4U) {
+                    // A concurrent assertion's monitor (IEEE 1800-2023
+                    // 16.14) is not ticked again: the tick of the compiled
+                    // run (its operands compared, its result taken) or its
+                    // inline outcome pop stands.
+                    const auto* sva = operation_get_if<SvaOperation>(
+                        &member.operations()[pc]);
+                    if (sva == nullptr) {
+                        mismatch = "assertion operation " + std::to_string(pc)
+                            + " is not an assertion";
+                        break;
+                    }
+                    if (role[pc] == 4U) {
+                        if (shadow.sva_consumed >= shadow.sva.size()
+                            || shadow.sva[shadow.sva_consumed].pc != pc) {
+                            mismatch = "assertion tick " + std::to_string(pc)
+                                + " runs in the reference but not in the compiled body";
+                            break;
+                        }
+                        const auto& tick = shadow.sva[shadow.sva_consumed++];
+                        std::vector<RegisterId> operands;
+                        if (sva->guard_count != 0U) {
+                            operands.push_back(sva->guards);
+                        }
+                        operands.push_back(sva->start);
+                        operands.push_back(sva->disabled);
+                        for (std::size_t index = 0U; index < operands.size()
+                             && index < tick.operands.size(); ++index) {
+                            if (image(operands[index]) != tick.operands[index]) {
+                                mismatch = "assertion operand r"
+                                    + std::to_string(operands[index]) + " of tick "
+                                    + std::to_string(pc) + " compiled "
+                                    + tick.operands[index] + " reference "
+                                    + image(operands[index]);
+                                break;
+                            }
+                        }
+                        if (mismatch.empty() && sva->result < member.registers.size()) {
+                            member.registers[sva->result] = tick.result;
+                        }
+                    } else if (shadow.sva_outcomes_consumed < shadow.sva_outcomes.size()
+                        && shadow.sva_outcomes[shadow.sva_outcomes_consumed].first == pc) {
+                        // The outcome of the compiled run's pop of the same
+                        // operation (a loop pops once per pending outcome).
+                        const auto& pop = shadow.sva_outcomes[shadow.sva_outcomes_consumed++];
+                        if (sva->result < member.registers.size()) {
+                            member.registers[sva->result] = pop.second;
+                        }
+                    } else {
+                        mismatch = "assertion outcome pop " + std::to_string(pc)
+                            + " runs in the reference but not in the compiled body";
+                        break;
+                    }
+                    ++pc;
+                    continue;
+                }
+                if (role[pc] >= 2U) {
+                    static_kernel_compiled_detail::operation_registers(member.operations()[pc], reads, write);
+                    if (shadow.consumed < shadow.generic.size()
+                        && shadow.generic[shadow.consumed].pc == pc) {
+                        const auto& record = shadow.generic[shadow.consumed++];
+                        for (std::size_t index = 0U; index < reads.size()
+                             && index < record.reads.size(); ++index) {
+                            if (image(reads[index]) != record.reads[index]) {
+                                mismatch = "operand r" + std::to_string(reads[index])
+                                    + " of operation " + std::to_string(pc)
+                                    + " compiled " + record.reads[index]
+                                    + " reference " + image(reads[index]);
+                                break;
+                            }
+                        }
+                        if (mismatch.empty()) {
+                            for (const auto& [result_register, result_value] :
+                                record.results) {
+                                member.registers[result_register] = result_value;
+                            }
+                            for (const auto& [signal, value] : record.commits) {
+                                const auto slot = slot_of_signal_[signal];
+                                if (member.vhdl && slot != no_slot) {
+                                    write_slot_immediate(slot, value, std::nullopt,
+                                        member_index, pc);
+                                } else if (!member.vhdl) {
+                                    write_signal_owned(signal, value, std::nullopt,
+                                        member_index, pc);
+                                }
+                            }
+                            if (record.container != no_container) {
+                                auto& target = containers_[record.container];
+                                for (std::uint32_t ordinal = 0U;
+                                     ordinal < target.count
+                                     && ordinal < record.elements.size();
+                                     ++ordinal) {
+                                    if (!(record.elements[ordinal]
+                                            == container_element(target, ordinal))) {
+                                        write_container_element(target, ordinal,
+                                            record.elements[ordinal], member_index,
+                                            pc);
+                                    }
+                                }
+                            }
+                        }
+                        ++pc;
+                        continue;
+                    }
+                    if (role[pc] == 3U) {
+                        ++pc;
+                        continue;
+                    }
+                    if (!operation_holds<DynamicPartInsert>(member.operations()[pc])) {
+                        mismatch = "operation " + std::to_string(pc) + " ("
+                            + operation_type_name(member.operations()[pc])
+                            + ") runs in the reference but not in the compiled body";
+                        break;
+                    }
+                    // A pure register operation the bridge left to inline code.
+                }
+                if (behavioral_step(member_index, pc)) {
+                    ++pc;
+                } else {
+                    pc = step_generic(member_index, pc);
+                }
+                if (pc >= size) {
+                    fail(member_index, pc,
+                        "behavioral thread left its operation stream");
+                }
+            }
+        } catch (...) {
+            replaying_ = false;
+            shadow.reference = false;
+            member.call_stack = std::move(saved_stack);
+            member.frames = std::move(saved_frames);
+            member.frame_bytes = std::move(saved_bytes);
+            member.saved_arrays = std::move(saved_arrays);
+            member.saved_array_marks = std::move(saved_marks);
+            throw;
+        }
+        replaying_ = false;
+    }
+    shadow.reference = false;
+    const auto reference_stack = member.call_stack;
+    const auto reference_frames = static_cast<std::uint32_t>(member.frames.size());
+    member.call_stack = std::move(saved_stack);
+    member.frames = std::move(saved_frames);
+    member.frame_bytes = std::move(saved_bytes);
+    member.saved_arrays = std::move(saved_arrays);
+    member.saved_array_marks = std::move(saved_marks);
+    const auto reference_writes = verify_writes(before.writes);
+    // The suspension (and with it the wait, its timeout and the entry the
+    // thread resumes at) is the same operation.
+    if (mismatch.empty() && pc != stopped) {
+        mismatch = "suspension: compiled at " + std::to_string(stopped)
+            + " reference at " + std::to_string(pc);
+    }
+    if (mismatch.empty() && shadow.sva_outcomes_consumed != shadow.sva_outcomes.size()) {
+        mismatch = "assertion outcome pops: compiled ran "
+            + std::to_string(shadow.sva_outcomes.size()) + " reference reached "
+            + std::to_string(shadow.sva_outcomes_consumed);
+    }
+    if (mismatch.empty() && shadow.sva_consumed != shadow.sva.size()) {
+        mismatch = "assertion ticks: compiled ran " + std::to_string(shadow.sva.size())
+            + " reference reached " + std::to_string(shadow.sva_consumed);
+    }
+    if (mismatch.empty() && shadow.consumed != shadow.generic.size()) {
+        mismatch = "generic operations: compiled ran "
+            + std::to_string(shadow.generic.size()) + " reference reached "
+            + std::to_string(shadow.consumed);
+    }
+    if (mismatch.empty()) {
+        mismatch = verify_effect_mismatch(compiled_writes, reference_writes,
+            before.marks);
+    }
+    // Immediate writes: the slots' words (and with them every notification
+    // they cause) and the elements of private arrays.
+    const auto arena_mismatch = [&]() -> std::string {
+        // The first differing word, as "word W compiled C reference R".
+        const auto differs = [&](const std::size_t offset, const std::size_t count) {
+            const auto first = compiled_arena.begin() + static_cast<std::ptrdiff_t>(offset);
+            const auto [compiled, reference] = std::mismatch(first,
+                first + static_cast<std::ptrdiff_t>(count),
+                arena_.begin() + static_cast<std::ptrdiff_t>(offset));
+            if (compiled == first + static_cast<std::ptrdiff_t>(count)) {
+                return std::string { };
+            }
+            return "word " + std::to_string(compiled - first) + " compiled "
+                + std::to_string(*compiled) + " reference " + std::to_string(*reference);
+        };
+        for (std::uint32_t index = 0U; index < slots_.size(); ++index) {
+            const auto& slot = slots_[index];
+            const std::size_t count = slot.resolved
+                ? 2U * net_block_words(slot) + 1U
+                : std::size_t { slot.planes } * slot.words;
+            if (slot.offset + count > arena_.size()) {
+                continue;
+            }
+            if (auto difference = differs(slot.offset, count); !difference.empty()) {
+                return "slot " + impl_.get_signal_cold(slot.signal).name
+                    + " words differ (" + difference + ")";
+            }
+        }
+        for (const auto& container : containers_) {
+            if (container.storage != StaticKernelContainerStorage::elements) {
+                continue;
+            }
+            const std::size_t count = std::size_t { 2U } * container.element_words
+                * container.count;
+            if (container.element_offset + count > arena_.size()) {
+                continue;
+            }
+            if (auto difference = differs(container.element_offset, count);
+                !difference.empty()) {
+                return "private array " + std::to_string(container.object)
+                    + " words differ (" + std::to_string(container.count) + " elements of "
+                    + std::to_string(container.element_words) + " words, "
+                    + difference + ")";
+            }
+        }
+        return { };
+    };
+    if (mismatch.empty()) {
+        mismatch = arena_mismatch();
+        if (!mismatch.empty() && shadow.compiled_host == shadow.reference_host) {
+            mismatch += "; the host writes agree ("
+                + std::to_string(shadow.compiled_host.size()) + ")";
+        }
+    }
+    if (mismatch.empty() && shadow.compiled_host != shadow.reference_host) {
+        mismatch = "host writes: compiled " + std::to_string(shadow.compiled_host.size())
+            + " reference " + std::to_string(shadow.reference_host.size());
+        for (std::size_t index = 0U; index < shadow.compiled_host.size()
+             && index < shadow.reference_host.size(); ++index) {
+            if (!(shadow.compiled_host[index] == shadow.reference_host[index])) {
+                mismatch = "host write " + std::to_string(index) + " of "
+                    + impl_.get_signal_cold(shadow.compiled_host[index].signal).name
+                    + " compiled " + shadow.compiled_host[index].value
+                    + " reference " + shadow.reference_host[index].value;
+                break;
+            }
+        }
+    }
+    if (mismatch.empty() && body.call_stack_base != 0U
+        && reference_stack != compiled_stack) {
+        mismatch = "call stack depth: compiled "
+            + std::to_string(compiled_stack.size()) + " reference "
+            + std::to_string(reference_stack.size());
+    }
+    if (mismatch.empty() && body.frame_stack_base != 0U
+        && reference_frames != compiled_frames) {
+        mismatch = "frame depth: compiled " + std::to_string(compiled_frames)
+            + " reference " + std::to_string(reference_frames);
+    }
+    for (std::size_t reg = 0U; reg < member.registers.size() && mismatch.empty();
+         ++reg) {
+        if (body.register_widths[reg] == 0U || compiled_registers[reg].empty()
+            || ((live[reg / 64U] >> (reg % 64U)) & 1U) == 0U) {
+            continue;
+        }
+        const auto reference = image(static_cast<RegisterId>(reg));
+        if (compiled_registers[reg] != reference) {
+            mismatch = "register " + std::to_string(reg) + " compiled "
+                + compiled_registers[reg] + " reference " + reference;
+        }
+    }
+    // Self-test of this check: FSIM_KERNEL_VERIFY_INJECT=thread reports the
+    // first verified activation as a mismatch.
+    static bool inject = [] {
+        const char* text = std::getenv("FSIM_KERNEL_VERIFY_INJECT");
+        return text != nullptr && std::string_view { text } == "thread";
+    }();
+    if (mismatch.empty() && std::exchange(inject, false)) {
+        mismatch = "injected mismatch";
+    }
+    if (!mismatch.empty()) {
+        // A difference is a kernel bug: report it and fail the run.
+        std::cerr << "fsim-kernel-verify: t=" << impl_.scheduler.now() << " thread "
+                  << impl_.processes.program_view(member.process).name() << ' '
+                  << mismatch << '\n';
+        throw std::runtime_error("FSIM_KERNEL_VERIFY: compiled thread "
+            + std::string { impl_.processes.program_view(member.process).name() }
+            + " differs from the reference evaluator");
+    }
+    ++verified_thread_runs_;
+    // The compiled activation stands.
+    arena_ = compiled_arena;
+    body.registers = after_registers;
+    body.wide_registers = after_wide;
+}
+
+std::optional<PackedLogic4> Interpreter::Impl::StaticKernel::exact_register(
+    const CompiledBody& body, const std::uint32_t member_index, const RegisterId reg,
+    const Word* registers) const
+{
+    // A compiled register's exact value, with its kind and its 'U' and weak
+    // masks; none for a register the body does not use (or holds in no
+    // storage).
+    if (reg >= body.register_widths.size()) {
+        return std::nullopt;
+    }
+    const auto width = body.register_widths[reg];
+    if (width == 0U) {
+        return std::nullopt;
+    }
+    if (width > 64U && !(reg < body.wide_base.size() && body.wide_base[reg] != 0U)
+        && reg >= body.wide_registers.size()) {
+        return std::nullopt;
+    }
+    return register_operand(body,
+        registers != nullptr ? registers : body.registers.data(), member_index, 0U,
+        reg);
+}
+
+void Interpreter::Impl::StaticKernel::export_compiled_frames(
+    const std::uint32_t member_index, const CompiledBody& body,
+    const std::vector<Word>& image, const std::uint64_t* words,
+    const std::uint64_t pairs, std::vector<Member::Frame>& out) const
+{
+    // The reference's frames for the frames compiled code holds (a header
+    // pair with the identity, then the saved register-file pairs of the
+    // frame's push): each saved register's exact value, read from the
+    // register image `image` with the frame's pairs laid over it.
+    const auto& member = members_[member_index];
+    out.clear();
+    std::vector<Word> frame_image;
+    for (std::uint64_t at = 0U; at < pairs;) {
+        const auto identity = static_cast<std::uint32_t>(words[2U * at]);
+        // The identity's push lists every item (a pop leaves out kept ones).
+        const CompiledBody::FrameSave* save = nullptr;
+        for (const auto& candidate : body.frame_saves) {
+            if (candidate.identity == identity
+                && (save == nullptr
+                    || candidate.item_end - candidate.item_begin
+                        > save->item_end - save->item_begin)) {
+                save = &candidate;
+            }
+        }
+        if (save == nullptr || at + save->pairs > pairs) {
+            break;
+        }
+        frame_image = image;
+        for (auto item = save->item_begin; item < save->item_end; ++item) {
+            const auto& entry = body.frame_items[item];
+            for (std::uint32_t pair = 0U; pair < entry.count; ++pair) {
+                const auto index = 2U * (at + 1U + entry.offset + pair);
+                frame_image[entry.index + pair] = { words[index], words[index + 1U] };
+            }
+        }
+        Member::Frame frame;
+        frame.identity = identity;
+        for (auto reg = save->register_begin; reg < save->register_end; ++reg) {
+            const auto id = static_cast<RegisterId>(
+                body.frame_registers[reg] & 0x7fffffffU);
+            frame.ids.push_back(id);
+            auto value = exact_register(body, member_index, id, frame_image.data());
+            frame.values.push_back(value ? std::move(*value) : member.registers[id]);
+            frame.bytes += sizeof(PackedLogic4)
+                + frame.values.back().aval_words().size_bytes()
+                + frame.values.back().bval_words().size_bytes();
+        }
+        out.push_back(std::move(frame));
+        at += save->pairs;
+    }
+}
+
+std::uint32_t Interpreter::Impl::StaticKernel::compiled_frame_count(
+    const CompiledBody& body, const std::uint64_t* words,
+    const std::uint64_t pairs) const
+{
+    std::uint32_t count = 0U;
+    for (std::uint64_t at = 0U; at < pairs; ++count) {
+        const auto identity = static_cast<std::uint32_t>(words[2U * at]);
+        std::uint32_t size = 0U;
+        for (const auto& candidate : body.frame_saves) {
+            if (candidate.identity == identity) {
+                size = candidate.pairs;
+                break;
+            }
+        }
+        if (size == 0U) {
+            break;
+        }
+        at += size;
+    }
+    return count;
+}
+
+void Interpreter::Impl::StaticKernel::save_thread_registers()
+{
+    // A compiled behavioral member keeps its registers (a loop counter, a
+    // process variable) in the compiled register file, which the saved
+    // image does not hold: the reference copies, exact with their 'U' and
+    // weak masks, are what is saved (run_state_io).
+    for (std::uint32_t index = 0U; index < members_.size(); ++index) {
+        auto& member = members_[index];
+        if (member.kind != StaticKernelMemberKind::behavioral || !member.compiled
+            || member.generic_mode) {
+            continue;
+        }
+        const auto& body = *member.compiled;
+        for (std::size_t reg = 0U; reg < member.registers.size(); ++reg) {
+            if (auto value = exact_register(body, index, static_cast<RegisterId>(reg))) {
+                member.registers[reg] = std::move(*value);
+            }
+        }
+    }
+}
+
+void Interpreter::Impl::StaticKernel::restore_thread_registers()
+{
+    // The restored reference registers become the compiled register file.
+    for (std::uint32_t index = 0U; index < members_.size(); ++index) {
+        const auto& member = members_[index];
+        if (member.kind == StaticKernelMemberKind::behavioral && member.compiled
+            && !member.generic_mode) {
+            sync_compiled_registers(index);
+        }
+    }
 }
 
 void Interpreter::Impl::StaticKernel::sync_behavioral_registers(
@@ -4978,25 +6209,16 @@ void Interpreter::Impl::StaticKernel::sync_behavioral_registers(
 {
     auto& member = members_[member_index];
     const auto& body = *member.compiled;
+    // Exact values, with the registers' kinds and the 'U' and weak masks of a
+    // tracked nine-value register: the reference evaluator continues from
+    // them.
     for (std::size_t reg = 0U; reg < member.registers.size(); ++reg) {
-        if (reg == keep || reg >= body.register_widths.size()) {
+        if (reg == keep) {
             continue;
         }
-        const auto width = body.register_widths[reg];
-        if (width == 0U) {
-            continue;
+        if (auto value = exact_register(body, member_index, static_cast<RegisterId>(reg))) {
+            member.registers[reg] = std::move(*value);
         }
-        if (width > 64U) {
-            if (reg < body.wide_base.size() && body.wide_base[reg] != 0U) {
-                member.registers[reg] = wide_value(body, body.registers.data(),
-                    static_cast<std::uint32_t>(reg), ValueKind::logic4);
-            } else if (reg < body.wide_registers.size()) {
-                member.registers[reg] = body.wide_registers[reg];
-            }
-            continue;
-        }
-        member.registers[reg] = uword_value(body.registers[reg], 0U, width,
-            ValueKind::logic4);
     }
 }
 
@@ -5025,6 +6247,15 @@ void Interpreter::Impl::StaticKernel::collect_timers()
         while (!vhdl_timers_.empty() && vhdl_timers_.top().time <= now) {
             const auto timer = vhdl_timers_.top();
             vhdl_timers_.pop();
+            if (timer.projected) {
+                // A projected transaction reaches its time: the driver's new
+                // value is this update phase's, before the processes whose
+                // wait expired at this time run (IEEE 1076-2019 14.7.5.3).
+                if (projected_timer_live(timer)) {
+                    projected_mature(timer.thread, now);
+                }
+                continue;
+            }
             const auto& thread = threads_[timer.thread];
             if (thread.alive && !thread.queued && thread.epoch == timer.epoch) {
                 ready_thread(timer.thread);
@@ -5037,6 +6268,13 @@ void Interpreter::Impl::StaticKernel::arm_vhdl_timer()
 {
     while (!vhdl_timers_.empty()) {
         const auto& top = vhdl_timers_.top();
+        if (top.projected) {
+            if (projected_timer_live(top)) {
+                break;
+            }
+            vhdl_timers_.pop();
+            continue;
+        }
         const auto& thread = threads_[top.thread];
         if (thread.alive && !thread.queued && thread.epoch == top.epoch) {
             break;
@@ -5086,6 +6324,25 @@ void Interpreter::Impl::StaticKernel::vhdl_timer_due(const SimulationTick time)
     }
     vhdl_timers_released_ = true;
     impl_.queue_next_delta(host_process_);
+    // The projected transactions that reach their time are this update phase's
+    // (IEEE 1076-2019 14.7.5.3): the drivers' new values are written, and
+    // published to the host's observers, here, before the delta in which the
+    // processes they wake run.
+    const auto now = kernel_now();
+    bool matured = false;
+    for (std::uint32_t site = 0U; site < projected_sites_.size(); ++site) {
+        const bool due = std::ranges::any_of(projected_sites_[site].bits,
+            [&](const std::vector<ProjectedTransaction>& list) {
+                return !list.empty() && list.front().time <= now;
+            });
+        if (due) {
+            projected_mature(site, now);
+            matured = true;
+        }
+    }
+    if (matured) {
+        publish_pending_outputs();
+    }
 }
 
 void Interpreter::Impl::StaticKernel::arm_timer()
@@ -5173,8 +6430,10 @@ void Interpreter::Impl::StaticKernel::append_timer_times(
     }
     for (auto queue = vhdl_timers_; !queue.empty(); queue.pop()) {
         const auto& timer = queue.top();
-        if (timer.thread < threads_.size() && threads_[timer.thread].alive
-            && threads_[timer.thread].epoch == timer.epoch) {
+        if (timer.projected
+                ? projected_timer_live(timer)
+                : (timer.thread < threads_.size() && threads_[timer.thread].alive
+                    && threads_[timer.thread].epoch == timer.epoch)) {
             times.push_back(timer.time);
         }
     }
@@ -5210,7 +6469,7 @@ PackedLogic4 Interpreter::Impl::StaticKernel::net_delay_driver_value(
     // The member's own source of a net with several (Slot::net_processes).
     const auto words = slot.words;
     const auto* planes = arena_.data() + slot.offset
-        + (2U + 4U * net_source_index(slot_index, process)) * words;
+        + (slot.planes + 4U * net_source_index(slot_index, process)) * words;
     const auto plane = [&](const std::uint32_t index) {
         return std::span<const std::uint64_t> { planes + index * words, words };
     };
@@ -5224,6 +6483,16 @@ void Interpreter::Impl::StaticKernel::net_delay_write(
     const std::uint32_t member_index, const std::uint32_t pc,
     const WriteNetDelay& operation, const PackedLogic4& source)
 {
+    if (shadow_ != nullptr) {
+        VerifyHostWrite record;
+        record.kind = 3U;
+        record.signal = operation.signal;
+        record.offset = operation.offset ? static_cast<std::int64_t>(*operation.offset) : -1;
+        record.value = source.to_msb_string();
+        if (shadow_host_write(std::move(record), false, nullptr)) {
+            return;
+        }
+    }
     const auto signal = operation.signal;
     if (signal >= slot_of_signal_.size()) {
         fail(member_index, pc,
@@ -5328,6 +6597,520 @@ void Interpreter::Impl::StaticKernel::net_delay_write(
                         true });
                 },
                 [](PendingNetDelayWrites::Wake&) { });
+        }
+    }
+}
+
+bool Interpreter::Impl::StaticKernel::member_projects(
+    const std::uint32_t member_index, const SignalId signal) const
+{
+    const auto key = (std::uint64_t { member_index } << 32U) | signal;
+    if (const auto cached = member_projects_cache_.find(key);
+        cached != member_projects_cache_.end()) {
+        return cached->second;
+    }
+    const auto remember = [&](const bool value) {
+        member_projects_cache_.emplace(key, value);
+        return value;
+    };
+    for (const auto& operation : members_[member_index].operations()) {
+        const bool found = visit_operation([&](const auto& op) -> bool {
+            using T = std::decay_t<decltype(op)>;
+            if constexpr (std::is_same_v<T, WriteProjected>
+                || std::is_same_v<T, WriteProjectedSlice>
+                || std::is_same_v<T, WriteProjectedDynamicSlice>) {
+                return op.signal == signal
+                    && (op.delay != 0U || op.rejection != 0U
+                        || op.mode != ProjectedDelayMode::inertial);
+            } else if constexpr (std::is_same_v<T, WriteProjectedWaveform>
+                || std::is_same_v<T, WriteProjectedWaveformSlice>
+                || std::is_same_v<T, WriteProjectedWaveformDynamicSlice>) {
+                return op.signal == signal;
+            } else {
+                return false;
+            }
+        }, operation);
+        if (found) {
+            return remember(true);
+        }
+    }
+    return remember(false);
+}
+
+void Interpreter::Impl::StaticKernel::projected_operation(
+    const std::uint32_t member_index, const std::uint32_t pc,
+    const std::function<PackedLogic4(RegisterId)>& read)
+{
+    SignalId signal { };
+    std::optional<std::uint32_t> offset;
+    std::vector<ProjectedWaveformValue> elements;
+    SimulationTick rejection { };
+    auto mode = ProjectedDelayMode::inertial;
+    const auto dynamic_offset = [&](const DynamicIndex& selection) {
+        try {
+            return dynamic_index_offset(read(selection.index), selection);
+        } catch (const std::invalid_argument& error) {
+            fail(member_index, pc, error.what());
+        }
+    };
+    visit_operation([&](const auto& op) {
+        using T = std::decay_t<decltype(op)>;
+        if constexpr (std::is_same_v<T, WriteProjected>
+            || std::is_same_v<T, WriteProjectedSlice>
+            || std::is_same_v<T, WriteProjectedDynamicSlice>) {
+            signal = op.signal;
+            rejection = op.rejection;
+            mode = op.mode;
+            elements.push_back({ read(op.source), op.delay });
+            if constexpr (std::is_same_v<T, WriteProjectedSlice>) {
+                offset = static_cast<std::uint32_t>(op.offset);
+            } else if constexpr (std::is_same_v<T, WriteProjectedDynamicSlice>) {
+                offset = dynamic_offset(op.selection);
+            }
+        } else if constexpr (std::is_same_v<T, WriteProjectedWaveform>
+            || std::is_same_v<T, WriteProjectedWaveformSlice>
+            || std::is_same_v<T, WriteProjectedWaveformDynamicSlice>) {
+            signal = op.signal;
+            mode = op.mode;
+            for (const auto& element : op.elements) {
+                elements.push_back({ read(element.source),
+                    Impl::projected_element_delay(element,
+                        element.delay_source ? read(*element.delay_source)
+                                             : read(element.source)) });
+            }
+            rejection = Impl::projected_rejection(op.rejection, elements);
+            if constexpr (std::is_same_v<T, WriteProjectedWaveformSlice>) {
+                offset = static_cast<std::uint32_t>(op.offset);
+            } else if constexpr (std::is_same_v<T, WriteProjectedWaveformDynamicSlice>) {
+                offset = dynamic_offset(op.selection);
+            }
+        }
+    }, members_[member_index].operations()[pc]);
+    projected_write(member_index, pc, signal, elements, offset, rejection, mode);
+}
+
+bool Interpreter::Impl::StaticKernel::shadow_projected(const SignalId signal,
+    const std::optional<std::uint32_t> offset,
+    const std::vector<ProjectedWaveformValue>& elements,
+    const SimulationTick rejection, const ProjectedDelayMode mode)
+{
+    // A projected assignment edits the driver's waveform and schedules its
+    // transactions: recorded, and in the reference replay not made.
+    if (elements.size() == 1U && elements.front().delay == 0U && rejection == 0U
+        && mode == ProjectedDelayMode::inertial) {
+        // A single zero-delay inertial element of a driver without pending
+        // transactions (the compiled code's plain store, which the planner
+        // and the compiler only use for such a driver) lands in the same
+        // update phase as a plain staged write: one record for both.
+        VerifyHostWrite plain;
+        plain.kind = 0U;
+        plain.signal = signal;
+        plain.offset = offset ? static_cast<std::int64_t>(*offset) : -1;
+        plain.domain = static_cast<std::uint32_t>(SignalUpdateDomain::generic);
+        plain.value = elements.front().value.to_msb_string();
+        return shadow_host_write(std::move(plain), false, nullptr);
+    }
+    VerifyHostWrite record;
+    record.kind = 4U;
+    record.signal = signal;
+    record.offset = offset ? static_cast<std::int64_t>(*offset) : -1;
+    record.domain = static_cast<std::uint32_t>(mode);
+    for (const auto& element : elements) {
+        record.value += element.value.to_msb_string() + "@"
+            + std::to_string(element.delay) + ";";
+    }
+    record.value += "|" + std::to_string(rejection);
+    return shadow_host_write(std::move(record), false, nullptr);
+}
+
+void Interpreter::Impl::StaticKernel::projected_write(
+    const std::uint32_t member_index, const std::uint32_t pc, const SignalId signal,
+    const std::vector<ProjectedWaveformValue>& elements,
+    const std::optional<std::uint32_t> offset, const SimulationTick rejection,
+    const ProjectedDelayMode mode)
+{
+    if (signal >= slot_of_signal_.size()) {
+        fail(member_index, pc, "static kernel projected write targets no signal");
+    }
+    if (!owned(signal)) {
+        // A host signal: the host's driver holds the waveform. In the
+        // reference replay the assignment is recorded, not made.
+        if (shadow_ != nullptr && shadow_projected(signal, offset, elements, rejection, mode)) {
+            return;
+        }
+        write_host_projected(member_index, signal, elements,
+            offset ? std::optional<std::size_t> { *offset } : std::nullopt,
+            rejection, mode);
+        return;
+    }
+    if (elements.size() == 1U && elements.front().delay == 0U && rejection == 0U
+        && mode == ProjectedDelayMode::inertial
+        && !member_projects(member_index, signal)) {
+        // A single zero-delay inertial element of a driver that never has
+        // pending transactions: applied in the round's update phase
+        // (commit_round).
+        if (slot_of_signal_[signal] == no_slot) {
+            fail(member_index, pc,
+                "static kernel VHDL write targets an aggregate proxy");
+        }
+        Pending pending;
+        pending.kind = offset ? PendingKind::slice : PendingKind::whole;
+        pending.member = member_index;
+        pending.instruction = pc;
+        pending.target = signal;
+        pending.offset = offset.value_or(0U);
+        pending.value = elements.front().value;
+        push_generic_pending(std::move(pending));
+        return;
+    }
+    projected_edit(member_index, pc, signal, elements, offset, rejection, mode);
+}
+
+void Interpreter::Impl::StaticKernel::projected_edit(
+    const std::uint32_t member_index, const std::uint32_t pc, const SignalId signal,
+    const std::vector<ProjectedWaveformValue>& elements,
+    const std::optional<std::uint32_t> offset, const SimulationTick rejection,
+    const ProjectedDelayMode mode)
+{
+    // IEEE 1076-2019 10.5.2.2: the new transactions edit the projected output
+    // waveform of the member's driver, per scalar element, by the rules of
+    // 10.5.2.2 a), b) and, for inertial delay, 1) to 5).
+    const auto slot_index = slot_of_signal_[signal];
+    if (slot_index == no_slot) {
+        fail(member_index, pc, "static kernel projected write targets an aggregate proxy");
+    }
+    if (elements.empty()) {
+        fail(member_index, pc, "a projected waveform must contain at least one element");
+    }
+    const auto& slot = slots_[slot_index];
+    const auto width = static_cast<std::uint32_t>(elements.front().value.width());
+    const auto first = offset.value_or(0U);
+    for (const auto& element : elements) {
+        if (element.value.width() != width) {
+            fail(member_index, pc, "projected-waveform element widths do not match");
+        }
+    }
+    if (width == 0U || first > slot.width || width > slot.width - first
+        || (!offset && width != slot.width)) {
+        fail(member_index, pc, "projected write range is outside its target signal");
+    }
+    const auto now = kernel_now();
+    const auto first_delay = elements.front().delay;
+    if (shadow_ != nullptr && shadow_->reference) {
+        // The reference replay does not edit the waveform or arm timers; its
+        // zero-delay element is queued like the compiled run's.
+        static_cast<void>(shadow_projected(signal, offset, elements, rejection, mode));
+        if (first_delay == 0U) {
+            Pending pending;
+            pending.kind = offset ? PendingKind::slice : PendingKind::whole;
+            pending.member = member_index;
+            pending.instruction = pc;
+            pending.target = signal;
+            pending.offset = offset.value_or(0U);
+            pending.value = elements.front().value;
+            push_generic_pending(std::move(pending));
+        }
+        return;
+    }
+    if (shadow_ != nullptr) {
+        static_cast<void>(shadow_projected(signal, offset, elements, rejection, mode));
+    }
+    if (mode == ProjectedDelayMode::inertial && rejection > first_delay) {
+        fail(member_index, pc,
+            "projected-waveform rejection limit exceeds its first delay");
+    }
+    for (std::size_t index = 0U; index < elements.size(); ++index) {
+        if (index != 0U && elements[index].delay <= elements[index - 1U].delay) {
+            fail(member_index, pc, "projected-waveform delays must be strictly ascending");
+        }
+        if (elements[index].delay > std::numeric_limits<SimulationTick>::max() - now) {
+            fail(member_index, pc,
+                "simulation time overflow while scheduling projected waveform");
+        }
+    }
+    const auto key = (std::uint64_t { member_index } << 32U) | slot_index;
+    auto found = projected_site_of_.find(key);
+    if (found == projected_site_of_.end()) {
+        found = projected_site_of_.emplace(key,
+            static_cast<std::uint32_t>(projected_sites_.size())).first;
+        auto& made = projected_sites_.emplace_back();
+        made.member = member_index;
+        made.slot = slot_index;
+        made.bits.resize(slot.width);
+    }
+    const auto site_index = found->second;
+    auto& site = projected_sites_[site_index];
+    // The elements' bit codes, element by element (bit 0 last in the string).
+    std::vector<std::string> codes;
+    codes.reserve(elements.size());
+    for (const auto& element : elements) {
+        codes.push_back(element.value.promoted_to_logic9().to_msb_string());
+    }
+    const auto code_of = [&](const std::size_t element, const std::uint32_t bit) {
+        return static_cast<std::uint8_t>(codes[element][width - 1U - bit]);
+    };
+    const auto first_time = now + first_delay;
+    // Which old transactions an inertial assignment keeps: by element, or,
+    // for a multi-bit VHDL scalar written whole, by the whole transaction
+    // (10.5.2.2 compares value components of transactions, not of bits).
+    std::optional<std::vector<bool>> scalar_retained;
+    if (mode == ProjectedDelayMode::inertial && first == 0U && width == slot.width) {
+        const auto scalar = impl_.vhdl_scalar_widths.find(signal);
+        if (scalar != impl_.vhdl_scalar_widths.end() && scalar->second == width) {
+            std::size_t old_count = std::numeric_limits<std::size_t>::max();
+            bool aligned = true;
+            for (std::uint32_t bit = 0U; bit < width && aligned; ++bit) {
+                std::size_t kept { };
+                while (kept < site.bits[bit].size()
+                    && site.bits[bit][kept].time < first_time) {
+                    ++kept;
+                }
+                if (old_count == std::numeric_limits<std::size_t>::max()) {
+                    old_count = kept;
+                } else if (kept != old_count) {
+                    aligned = false;
+                }
+            }
+            for (std::size_t index = 0U; aligned && index < old_count; ++index) {
+                for (std::uint32_t bit = 1U; bit < width; ++bit) {
+                    if (site.bits[bit][index].time != site.bits[0][index].time) {
+                        aligned = false;
+                        break;
+                    }
+                }
+            }
+            if (aligned && old_count != 0U
+                && old_count != std::numeric_limits<std::size_t>::max()) {
+                const auto threshold = first_time - rejection;
+                const auto equals_next = [&](const std::size_t index) {
+                    for (std::uint32_t bit = 0U; bit < width; ++bit) {
+                        const auto here = site.bits[bit][index].code;
+                        const auto next = index + 1U < old_count
+                            ? site.bits[bit][index + 1U].code
+                            : code_of(0U, bit);
+                        if (here != next) {
+                            return false;
+                        }
+                    }
+                    return true;
+                };
+                std::vector<bool> retained(old_count + 1U, true);
+                for (std::size_t index = 0U; index < old_count; ++index) {
+                    retained[index] = site.bits[0][index].time < threshold;
+                }
+                for (std::size_t index = old_count; index-- > 0U;) {
+                    if (!retained[index] && retained[index + 1U] && equals_next(index)) {
+                        retained[index] = true;
+                    }
+                }
+                retained.pop_back();
+                scalar_retained = std::move(retained);
+            }
+        }
+    }
+    for (std::uint32_t bit = 0U; bit < width; ++bit) {
+        auto& list = site.bits[first + bit];
+        // a) Old transactions at or after the earliest new one are deleted.
+        const auto first_deleted = std::ranges::lower_bound(list, first_time, {},
+            &ProjectedTransaction::time);
+        list.erase(first_deleted, list.end());
+        const auto old_count = list.size();
+        // b) The new transactions are appended in order.
+        for (std::size_t element = 0U; element < elements.size(); ++element) {
+            list.push_back({ now + elements[element].delay, code_of(element, bit) });
+        }
+        if (mode != ProjectedDelayMode::inertial || old_count == 0U) {
+            continue;
+        }
+        // Inertial delay: 1) the new transactions are marked; 2) an old
+        // transaction before the first new time minus the rejection limit is
+        // marked; 3) an unmarked old transaction that immediately precedes a
+        // marked one of the same value is marked; 4) the transaction that
+        // gives the driver its current value has already matured and is not
+        // in the list; 5) the unmarked are deleted.
+        std::vector<bool> marked(list.size(), false);
+        for (std::size_t index = old_count; index < list.size(); ++index) {
+            marked[index] = true;
+        }
+        if (scalar_retained && scalar_retained->size() == old_count) {
+            for (std::size_t index = 0U; index < old_count; ++index) {
+                marked[index] = (*scalar_retained)[index];
+            }
+        } else {
+            const auto threshold = first_time - rejection;
+            for (std::size_t index = 0U; index < old_count; ++index) {
+                marked[index] = list[index].time < threshold;
+            }
+            for (std::size_t index = list.size() - 1U; index-- > 0U;) {
+                if (!marked[index] && marked[index + 1U]
+                    && list[index].code == list[index + 1U].code) {
+                    marked[index] = true;
+                }
+            }
+        }
+        for (std::size_t index = old_count; index-- > 0U;) {
+            if (!marked[index]) {
+                list.erase(list.begin() + static_cast<std::ptrdiff_t>(index));
+            }
+        }
+    }
+    // The transaction at the current time is this delta's update: queued
+    // like a zero-delay assignment (committed with the round). The later ones
+    // mature through timers.
+    for (std::uint32_t bit = 0U; bit < width; ++bit) {
+        auto& list = site.bits[first + bit];
+        if (!list.empty() && list.front().time == now) {
+            list.erase(list.begin());
+        }
+    }
+    if (elements.front().delay == 0U) {
+        Pending pending;
+        pending.kind = offset ? PendingKind::slice : PendingKind::whole;
+        pending.member = member_index;
+        pending.instruction = pc;
+        pending.target = signal;
+        pending.offset = offset.value_or(0U);
+        pending.value = elements.front().value;
+        push_generic_pending(std::move(pending));
+    }
+    for (const auto& element : elements) {
+        if (element.delay == 0U) {
+            continue;
+        }
+        Timer timer;
+        timer.time = now + element.delay;
+        timer.order = member_process_[member_index];
+        timer.sequence = timer_sequence_++;
+        timer.thread = site_index;
+        timer.projected = true;
+        vhdl_timers_.push(timer);
+    }
+}
+
+std::vector<std::vector<StaticKernelProjectedPending>>
+Interpreter::Impl::StaticKernel::projected_pending(
+    const ProcessId process, const SignalId signal) const
+{
+    std::vector<std::vector<StaticKernelProjectedPending>> result;
+    if (signal >= slot_of_signal_.size() || slot_of_signal_[signal] == no_slot) {
+        return result;
+    }
+    for (const auto& site : projected_sites_) {
+        if (site.slot != slot_of_signal_[signal]
+            || member_process_[site.member] != process) {
+            continue;
+        }
+        result.resize(site.bits.size());
+        for (std::size_t bit = 0U; bit < site.bits.size(); ++bit) {
+            for (const auto& transaction : site.bits[bit]) {
+                result[bit].push_back({ transaction.time,
+                    PackedLogic4::from_logic9_msb_string(
+                        std::string(1U, static_cast<char>(transaction.code)))
+                        .get_logic9(0U) });
+            }
+        }
+        break;
+    }
+    return result;
+}
+
+bool Interpreter::Impl::StaticKernel::projected_timer_live(const Timer& timer) const
+{
+    if (timer.thread >= projected_sites_.size()) {
+        return false;
+    }
+    for (const auto& list : projected_sites_[timer.thread].bits) {
+        for (const auto& transaction : list) {
+            if (transaction.time == timer.time) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+void Interpreter::Impl::StaticKernel::projected_mature(
+    const std::uint32_t site_index, const SimulationTick now)
+{
+    auto& site = projected_sites_[site_index];
+    const auto width = static_cast<std::uint32_t>(site.bits.size());
+    // The new value of each bit that has a transaction at or before now.
+    std::vector<std::uint8_t> next(width, std::uint8_t { 0U });
+    for (std::uint32_t bit = 0U; bit < width; ++bit) {
+        auto& list = site.bits[bit];
+        std::size_t matured { };
+        while (matured < list.size() && list[matured].time <= now) {
+            next[bit] = list[matured].code;
+            ++matured;
+        }
+        list.erase(list.begin(), list.begin() + static_cast<std::ptrdiff_t>(matured));
+    }
+    // Each run of bits that changed is one write of the driver.
+    for (std::uint32_t bit = 0U; bit < width;) {
+        if (next[bit] == 0U) {
+            ++bit;
+            continue;
+        }
+        const auto low = bit;
+        std::string text;
+        while (bit < width && next[bit] != 0U) {
+            text.insert(text.begin(), static_cast<char>(next[bit]));
+            ++bit;
+        }
+        // A watched signal's transaction that leaves the value as it is is
+        // still a transaction, and its driver is active (IEEE 1076-2019
+        // 14.7.3.1); a changed value is published, and the host's commit
+        // reports both.
+        const auto& slot = slots_[site.slot];
+        const bool watched = std::ranges::binary_search(transaction_slots_, site.slot);
+        const WordSnapshot before(arena_.data() + slot.offset,
+            (slot.resolved ? 2U : slot.planes) * slot.words);
+        write_slot_immediate(site.slot, PackedLogic4::from_logic9_msb_string(text),
+            low, site.member, 0U);
+        follow_slot_update(site.slot);
+        if (watched
+            && std::equal(before.begin(), before.end(), arena_.begin() + slot.offset)) {
+            impl_.note_signal_transaction(slot.signal, false,
+                SignalChangeOrigin { ProcessSchedulingDomain::generic,
+                    SchedulerPhase::active });
+            if (impl_.driver_transaction_hook) {
+                impl_.driver_transaction_hook(member_process_[site.member], slot.signal);
+            }
+        }
+    }
+    if (!conversion_queue_.empty() && !running_conversions_) {
+        run_conversions();
+    }
+}
+
+void Interpreter::Impl::StaticKernel::follow_slot_update(const std::uint32_t slot_index)
+{
+    // The formals wired to the slot, and those converted from it, take its
+    // new value in the same update phase (IEEE 1076-2019 14.7.3.3); wires
+    // chain.
+    std::vector<std::uint32_t> updated { slot_index };
+    for (std::size_t at = 0U; at < updated.size(); ++at) {
+        const auto slot = updated[at];
+        if (slot < slot_wires_.size()) {
+            const auto [begin, end] = slot_wires_[slot];
+            for (auto index = begin; index < end; ++index) {
+                const auto& wire = wires_[index];
+                const auto& target = slots_[wire.target];
+                const WordSnapshot before(arena_.data() + target.offset,
+                    static_cast<std::size_t>(target.planes) * target.words);
+                if (copy_wire(wire)) {
+                    slot_changed(wire.target, 0U, before.data());
+                    updated.push_back(wire.target);
+                }
+            }
+        }
+        if (slot < slot_conversions_.size()) {
+            for (const auto member : slot_conversions_[slot]) {
+                if (conversion_queued_[member] == 0U) {
+                    conversion_queued_[member] = 1U;
+                    conversion_queue_.push_back(member);
+                }
+            }
         }
     }
 }

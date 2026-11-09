@@ -248,8 +248,8 @@ void test_vhdl_vhpi_types_and_constraints() {
           deep_type.value,
           VhdlVhpiTypeDescriptor{
               VhdlVhpiScalarKind::Integer, 0, deep, false, 0})
-          == VhdlVhpiTypeError::DepthLimit,
-      "VHPI recursive constraint depth limit was not enforced");
+          != VhdlVhpiTypeError::DepthLimit,
+      "VHPI recursive constraint nesting has no fixed depth limit");
 
   require_vhpi_type(
       types.publish(integer_type.value, integer_descriptor)

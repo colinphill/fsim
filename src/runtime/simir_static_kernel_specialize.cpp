@@ -303,7 +303,6 @@ using SpecializeCache = std::unordered_map<const void*,
 /// steps, or emit more than this many operations, in the specializer.
 constexpr std::size_t specialize_step_budget = 400'000U;
 constexpr std::size_t specialize_size_budget = 16'384U;
-constexpr std::size_t specialize_call_depth = 32U;
 
 } // namespace
 
@@ -1772,8 +1771,7 @@ bool Interpreter::Impl::StaticKernel::specialize_member(
                     split = true;
                     ended = true;
                 } else if constexpr (std::is_same_v<T, Call>) {
-                    if (state.stack.size() >= specialize_call_depth
-                        || std::ranges::find(state.stack, op.return_target)
+                    if (std::ranges::find(state.stack, op.return_target)
                             != state.stack.end()) {
                         abandoned = true;
                         ended = true;
