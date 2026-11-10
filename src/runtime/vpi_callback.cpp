@@ -766,7 +766,8 @@ SystemVerilogVpiCallbackManager::register_callback(
             // SystemVerilog NBA region, ahead of every nonblocking update.
             position->second.scheduler_handle
                 = impl_->scheduler->schedule_systemverilog_after_cancelable(
-                    scheduled_delay, SchedulerPhase::update, StableOrder { },
+                    scheduled_delay, SchedulerPhase::update,
+                    nonblocking_region_first,
                     foreign_callback_task([weak, id](Scheduler&) {
                         if (const auto state = weak.lock()) {
                             dispatch_callback(state, id, std::nullopt);

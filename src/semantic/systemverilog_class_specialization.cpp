@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/semantic/systemverilog_class_specialization.hpp"
 #include "fsim/semantic/systemverilog_structure_image.hpp"
+#include "fsim/semantic/systemverilog_type_state.hpp"
 #include "fsim/support/index_distance.hpp"
 #include "fsim/support/stack_growth.hpp"
 
@@ -1457,6 +1458,15 @@ private:
             if (!resolve_range(dimension, environment, owner, source)) {
                 return std::nullopt;
             }
+        }
+        // A named type is 4-state when the type it names is (IEEE 1800-2023
+        // 6.18, 6.19), also a typedef of another unit linked above.
+        if (!input.four_state) {
+            input.four_state = named_type_four_state(input,
+                [this](const TypeId id) {
+                    return type_parameter_types_.contains(id)
+                        ? nullptr : record_for(types_, id);
+                });
         }
         TypeBinding resolved { std::move(input), { } };
         resolved.canonical = resolved.type.class_specialization.empty()

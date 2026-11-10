@@ -317,6 +317,28 @@ endmodule
         && size_diagnostic->message
             == "module string initializer exceeds the string length limit");
 
+    // A $sformatf value that is no integral value (a locator returns a
+    // queue, IEEE 1800-2023 7.12.1) is refused with a diagnostic, never an
+    // assignment skipped in silence.
+    const auto locator_parsed = fsim::frontend::parse_text(
+        "sv-string-locator-format.sv",
+        R"(
+module locator_format_top;
+  int q[$];
+  string result;
+  initial begin
+    q = '{1, 2};
+    result = $sformatf("%0d", q.min());
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(locator_parsed.ok());
+    const auto locator = compile_and_elaborate(
+        locator_parsed.design, "sv:work.locator_format_top");
+    assert(!locator.ok()
+        && has_diagnostic(locator, "FSIM-ELAB-SVSTRING-019"));
+
     auto boundary_vhdl = fsim::frontend::parse_text(
         "sv-string-boundary.vhd",
         R"(

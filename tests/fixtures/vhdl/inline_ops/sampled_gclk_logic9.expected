@@ -1,0 +1,2 @@
+# SPDX-License-Identifier: Apache-2.0
+inl gclk9 steady=120 changing=240 rising=100 falling=90 vsteady=120 vchanging=240

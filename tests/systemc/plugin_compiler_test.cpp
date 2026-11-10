@@ -440,12 +440,7 @@ int main(const int argc, char** argv) {
     filesystem::create_directories(transitive_dependency.parent_path(), error);
     assert(!error);
     const auto fsim_include = filesystem::weakly_canonical(
-        filesystem::path{__FILE__}
-            .parent_path()
-            .parent_path()
-            .parent_path()
-            / "include",
-        error);
+        filesystem::path{FSIM_TEST_SOURCE_ROOT} / "include", error);
     assert(!error);
     assert(filesystem::is_regular_file(fsim_include / "systemc"));
     write_text(

@@ -296,6 +296,14 @@ void Resolver::retain_task_profile(
           expression.span);
       return std::nullopt;
     }
+    // `C#(4)::new` constructs that specialization (IEEE 1800-2023 8.8,
+    // 8.25).
+    if (const auto selection = resolve_class_selection(name, scope,
+            expression.systemverilog_class_selection.get());
+        selection && selects_specialization(name, *selection)) {
+      expression.systemverilog_class_owner =
+          std::make_shared<const Type>(selection->type);
+    }
     expression.text = "@sv-new";
     return resolve_expression(
         expression, scope, constructed,
@@ -1229,12 +1237,25 @@ void Resolver::retain_task_profile(
         const auto method = specialize_selected_method(
             *match->method, *owner, scope);
         const auto intrinsic = selected_uvm_intrinsic(*owner, name);
+        // The unadorned name of a parameterized class selects the method
+        // in the specialization the caller runs in (8.25.1).
+        const bool specialized = std::ranges::any_of(
+                owner->declaration->parameters,
+                [](const ParameterDeclaration& parameter) {
+                  return !parameter.local;
+                })
+            ? selects_specialization(
+                  std::string_view{expression.text}.substr(0, selected),
+                  *owner)
+            : true;
         expression.text = "@sv-static-method:"
             + (intrinsic.empty()
                    ? match->method->canonical_identity
                    : intrinsic);
-        expression.systemverilog_class_owner =
-            std::make_shared<const Type>(owner->type);
+        if (specialized) {
+          expression.systemverilog_class_owner =
+              std::make_shared<const Type>(owner->type);
+        }
         retain_call_profile(expression, method, false);
         for (std::size_t index = 0;
              index < expression.operands.size(); ++index) {
@@ -2053,9 +2074,15 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
             kind,
             statement.task_arguments.size(),
             statement.span);
+        // In a class, a call through a specialization keeps the
+        // specialization only in the expression form (IEEE 1800-2023
+        // 8.25.1).
         if (match && match->method && match->method->is_static
             && kind == SystemVerilogClassMethodKind::Function
-            && scope.class_owner == nullptr
+            && (scope.class_owner == nullptr
+                || selects_specialization(
+                    std::string_view{statement.task_name}.substr(0, selected),
+                    *owner))
             && selected_uvm_intrinsic(*owner, name).empty()
             && !uvm_library_method(match->method->canonical_identity)) {
           // A static function called as a statement discards its result
@@ -2077,6 +2104,12 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
         }
         if (match && match->method && match->method->is_static) {
           const auto intrinsic = selected_uvm_intrinsic(*owner, name);
+          // The UVM library's own methods run on its native services.
+          const bool specialized = intrinsic.empty()
+              && !uvm_library_method(match->method->canonical_identity)
+              && selects_specialization(
+                  std::string_view{statement.task_name}.substr(0, selected),
+                  *owner);
           statement.task_name = "@sv-static-task:"
               + (intrinsic.empty()
                      ? match->method->canonical_identity
@@ -2088,6 +2121,20 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
               method,
               owner->declaration,
               &owner->type);
+          // `C#(4)::t();` or `typedef C#(4) T; T::t();` runs the method in
+          // that specialization, on its static properties (IEEE 1800-2023
+          // 8.25.1, 8.10): the statement keeps the selection as its value,
+          // as the expression form of a static call keeps it.
+          if (specialized) {
+            Expression selection{ExpressionKind::Call,
+                "@sv-static-call-selection", {}, statement.span};
+            selection.systemverilog_source_order
+                = statement.systemverilog_source_order;
+            selection.systemverilog_class_owner =
+                std::make_shared<const Type>(owner->type);
+            resolve_class_owner_constants(selection, scope, 0U);
+            statement.value = std::move(selection);
+          }
           for (std::size_t index = 0;
                index < statement.task_arguments.size(); ++index) {
             if (index < method.arguments.size()) {

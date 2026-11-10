@@ -466,7 +466,9 @@ void Interpreter::Impl::run_sampled_read(
     const auto& slot_value = sampled_values[operation.signal];
     // A SystemVerilog reader sees a std_logic value through the Logic4
     // mapping (IEEE 1800-2023 21.2.1.3): 'H' is 1, 'L' is 0, 'U', 'W' and '-'
-    // are x. The history keeps the nine codes ($stable compares them).
+    // are x. The history keeps the nine codes, which the other domains'
+    // readers (PSL) compare; a SystemVerilog value change function compares
+    // the values it reads (16.9.3: strength is not part of the value).
     const auto reader_value = [&](const PackedLogic4& value) {
         return value.is_logic9()
                 && storage.domain() == ProcessSchedulingDomain::systemverilog
@@ -483,9 +485,14 @@ void Interpreter::Impl::run_sampled_read(
             storage.write(operation.destination, reader_value(future));
             return;
         }
-        const auto equal = future == slot_value;
-        const auto future_lsb = future.get(0U);
-        const auto sampled_lsb = slot_value.get(0U);
+        // The comparing forms compare the values the reader reads, as the
+        // value change functions do (16.9.4 defines them by $sampled and
+        // $future_gclk): a SystemVerilog reader's through the Logic4 mapping.
+        const auto future_read = reader_value(future);
+        const auto sampled_value_read = reader_value(slot_value);
+        const auto equal = future_read == sampled_value_read;
+        const auto future_lsb = future_read.get(0U);
+        const auto sampled_lsb = sampled_value_read.get(0U);
         const auto value = operation.kind == SignalReadKind::rising
             ? future_lsb == Logic4::one && sampled_lsb != Logic4::one
             : operation.kind == SignalReadKind::falling
@@ -576,16 +583,28 @@ void Interpreter::Impl::run_sampled_read(
     const bool current_time_step_has_sample
         = sample || same_sampled_time_step;
     const auto count = static_cast<std::size_t>(ring[SampledRing::count]);
-    const PackedLogic4 current = count == 0U
+    const PackedLogic4 last_sample = count == 0U
         ? sampled_defaults[operation.signal]
         : sampled_ring_value(ring, count - 1U);
     if (operation.kind == SignalReadKind::sampled) {
-        storage.write(operation.destination, reader_value(current));
+        storage.write(operation.destination, reader_value(last_sample));
         return;
     }
-    const PackedLogic4 previous = count < 2U
-        ? sampled_defaults[operation.signal]
-        : sampled_ring_value(ring, count - 2U);
+    // A value change function compares the sampled value of this time step
+    // with the sample of the most recent strictly prior time step in which
+    // the clocking event occurred, or with the default before the first one
+    // (IEEE 1800-2023 16.9.3). In a time step of a tick the ring's last
+    // entry is this step's sample and the one before it the prior tick's; in
+    // any other SystemVerilog time step (procedural code, an assertion of
+    // another clock) the time step's sampled value is compared with the
+    // ring's last entry. The other domains (PSL) keep the clock's samples.
+    const bool between_ticks = operation.clock && !current_time_step_has_sample
+        && process_domain == ProcessSchedulingDomain::systemverilog;
+    const PackedLogic4 current
+        = reader_value(between_ticks ? slot_value : last_sample);
+    const PackedLogic4 previous = reader_value(between_ticks ? last_sample
+            : count < 2U ? sampled_defaults[operation.signal]
+                         : sampled_ring_value(ring, count - 2U));
     PackedLogic4 result;
     if (operation.kind == SignalReadKind::past) {
         const auto current_sample_count

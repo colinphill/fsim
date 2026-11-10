@@ -1411,8 +1411,46 @@ semantic::ScopeId SystemVerilogHirBuilder::class_parent_scope(
                 : std::string_view { unit.library };
             return parent == std::string { library } + "::" + unit.name;
         });
-    if (enclosing_unit != hir_.units().end())
+    // A $unit class sees the packages imported where it is declared,
+    // among them the one holding the compilation unit's own declarations
+    // (IEEE 1800-2023 3.12.1, 26.3), so the names its members use select
+    // their declarations here.
+    const auto add_compilation_unit_imports = [&](sv::Unit& unit) {
+        for (const auto& input_import : input.compilation_unit_imports) {
+            const bool known = std::ranges::any_of(unit.imports,
+                [&](const sv::Import& existing) {
+                    return existing.package.spelling == input_import.package
+                        && (existing.member
+                                   ? existing.member->spelling
+                                   : std::string { })
+                        == input_import.name;
+                });
+            if (known) {
+                continue;
+            }
+            sv::Import imported {
+                name(input_import.package, input_import.span, unit.scope),
+                input_import.name.empty()
+                    ? std::nullopt
+                    : std::optional<sv::Name> { name(
+                          input_import.name, input_import.span, unit.scope) },
+                input_import.name.empty(),
+                source(input_import.span) };
+            imported.source_order = input_import.systemverilog_source_order;
+            unit.imports.push_back(std::move(imported));
+        }
+    };
+    if (enclosing_unit != hir_.units().end()) {
+        if (enclosing_unit->kind == sv::UnitKind::compilation_unit) {
+            for (auto& unit : hir_.mutable_units()) {
+                if (unit.id == enclosing_unit->id) {
+                    add_compilation_unit_imports(unit);
+                    return unit.scope;
+                }
+            }
+        }
         return enclosing_unit->scope;
+    }
     const auto scope = ensure_compilation_unit(
         input.span,
         input.library,
@@ -1424,11 +1462,13 @@ semantic::ScopeId SystemVerilogHirBuilder::class_parent_scope(
     // 1800-2023 3.14.2.3).
     for (auto& unit : hir_.mutable_units()) {
         if (unit.scope == scope
-            && unit.kind == sv::UnitKind::compilation_unit
-            && unit.compilation.time_unit.empty()
-            && unit.compilation.time_precision.empty()) {
-            unit.compilation.time_unit = input.time_unit;
-            unit.compilation.time_precision = input.time_precision;
+            && unit.kind == sv::UnitKind::compilation_unit) {
+            if (unit.compilation.time_unit.empty()
+                && unit.compilation.time_precision.empty()) {
+                unit.compilation.time_unit = input.time_unit;
+                unit.compilation.time_precision = input.time_precision;
+            }
+            add_compilation_unit_imports(unit);
         }
     }
     return scope;

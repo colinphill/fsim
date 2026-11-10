@@ -1617,6 +1617,8 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SV-SEM-200` | error | An executable concurrent-property predicate is outside the supported packed scalar/vector expression subset. |
 | `FSIM-SV-SEM-470` | error | A concurrent assertion statement in an always or initial procedure has no clocking event: no clock is inferred from the procedure (a blocking timing control, not exactly one event control, or not exactly one event expression that is an edge expression, event variable or clocking block the body leaves unused; IEEE 1800-2023 16.14.6) and the scope has no default clocking. |
 | `FSIM-SV-SEM-471` | error | The clocking event of a procedural concurrent assertion uses an automatic variable of the procedure (IEEE 1800-2023 16.14.6). |
+| `FSIM-SV-SEM-472` | error | A concurrent assertion outside a procedure, whose property has local variables, has no clocking event: neither its property nor its sequences give a clock and the scope has no default clocking, so no clock can be inferred (IEEE 1800-2023 16.16, 16.14.6). |
+| `FSIM-SV-SEM-473` | error | A sampled value function other than `$sampled` (`$past`, `$rose`, `$fell`, `$stable`, `$changed`) in a disable condition (`disable iff`, `default disable iff`) or in a clock expression of an assertion, sequence or property has no clocking argument: there it shall be explicitly clocked, not take an inferred clock (IEEE 1800-2023 16.9.3, 16.12, 16.15). |
 | `FSIM-SV-SEM-201` | error | An executable concurrent-property clock is not one direct design-unit object with an optional edge. |
 | `FSIM-SV-SEM-203` | error | A covergroup declaration is used outside SystemVerilog-2017. |
 | `FSIM-SV-SEM-204` | error | A covergroup closing name does not match its declaration name. |
@@ -1839,7 +1841,7 @@ scheduler.
 | `FSIM-SV-SEM-394` | error | A void function return statement incorrectly supplies a value (IEEE 1800-2017 13.4.1). |
 | `FSIM-SV-SEM-395` | error | A Verilog (not SystemVerilog) ANSI task or function port declaration omits its direction (IEEE 1364-2005 10.2.1, 10.3.1). |
 | `FSIM-SV-SEM-396` | error | A non-ANSI port or classic task argument declared with a net or data type is declared again, or its direction and data declarations have different packed ranges or an atom/real/aggregate data type over a ranged direction declaration (IEEE 1800-2017 23.2.2.1, 13.3). |
-| `FSIM-SV-SEM-397` | error | An automatic variable is written by a nonblocking assignment, named in its intra-assignment event, or used by a procedural continuous assignment, `force`, `deassign` or `release` (IEEE 1800-2017 6.21). |
+| `FSIM-SV-SEM-397` | error | An automatic variable is written by a nonblocking assignment, named in its intra-assignment event, or used by a procedural continuous assignment, `force`, `deassign` or `release` (IEEE 1800-2017 6.21). Elaboration also reports the nonblocking write of a local declared `automatic` in a static block, task or function, or of a local of an automatic subroutine (IEEE 1800-2023 10.4.2). |
 | `FSIM-SV-SEM-398` | error | A net is declared as a dynamic array, queue, or associative array (IEEE 1800-2017 6.7.1). |
 | `FSIM-SV-SEM-399` | error | A package `export P::name` or `export P::*` names a package from which the exporting package imports nothing of that name (IEEE 1800-2017 26.6). |
 | `FSIM-SV-SEM-400` | error | A program block contains an `always` procedure or a module, interface, or program instance (IEEE 1800-2017 24.3). |
@@ -2788,7 +2790,7 @@ scheduler.
 | `FSIM-ELAB-SVSTRING-016` | error | A retained module variable is not in the supported runtime string domain. |
 | `FSIM-ELAB-SVSTRING-017` | error | A module string initializer is not a supported bounded static string expression. |
 | `FSIM-ELAB-SVSTRING-018` | error | A runtime string method has an unsupported receiver, argument, or result context. |
-| `FSIM-ELAB-SVSTRING-019` | error | `$swrite`, `$sformat`, or `$sformatf` has a nonliteral, malformed, oversized, under-supplied, or unsupported bounded format/value list. |
+| `FSIM-ELAB-SVSTRING-019` | error | `$swrite`, `$sformat`, or `$sformatf` has a nonliteral, malformed, oversized, under-supplied, or unsupported bounded format/value list, or a value argument that is neither a string nor an integral value of a known type. A refused call is always reported; its assignment is never skipped in silence. |
 | `FSIM-ELAB-SVSTRING-020` | error | `$swrite` or `$sformat` does not name a direct writable string target with positional arguments. |
 | `FSIM-ELAB-SVTYPENAME-001` | error | `$typename` does not have exactly one statically typed SystemVerilog expression or type, or its result exceeds bounded string storage. |
 | `FSIM-ELAB-SVTYPEPARAM-001` | error | A required SystemVerilog type parameter or local type parameter has no data-type actual/default. |
@@ -2814,7 +2816,7 @@ scheduler.
 | `FSIM-ELAB-SVCAST-004` | error | Reserved non-emitting identity formerly used for four-state-to-two-state cast rejection. |
 | `FSIM-ELAB-SVCAST-005` | error | An assignment pattern relies on static-cast contextual typing before the SystemVerilog-2023 profile. |
 | `FSIM-ELAB-SVCAST-006` | error | A SystemVerilog size cast has a nonintegral value operand. |
-| `FSIM-ELAB-SVASSIGN-001` | error | A SystemVerilog-2023 nonblocking assignment targets an element of a dynamically sized array variable. |
+| `FSIM-ELAB-SVASSIGN-001` | error | A SystemVerilog-2023 nonblocking assignment targets an element of a dynamically sized array variable: an element selected, at any level of the target, from a dynamic array, queue or associative array (IEEE 1800-2023 10.4.2, 6.21; the variable-size arrays of 7.4 Table 7-1 and 6.24.3). |
 | `FSIM-ELAB-SVASSIGN-002` | error | An assignment-pattern target is empty, malformed, or contains a keyed association instead of positional lvalues. |
 | `FSIM-ELAB-SVASSIGN-003` | error | A blocking or nonblocking procedural assignment targets a net; its target must be a variable (IEEE 1800-2017 10.4). |
 | `FSIM-ELAB-SVASSIGN-004` | error | A whole unpacked array is assigned a scalar or packed value instead of an unpacked array value (IEEE 1800-2017 7.6). |
@@ -2823,6 +2825,7 @@ scheduler.
 | `FSIM-ELAB-SVASSERT-002` | error | A deferred immediate assertion action cannot be lowered to its scheduler-region handoff. |
 | `FSIM-ELAB-SVASSERT-003` | error | An automatic or dynamic variable is the actual of a `ref` or `const ref` formal of a deferred assertion action (IEEE 1800-2023 16.4). |
 | `FSIM-ELAB-SVASSERT-004` | error | A final deferred assertion action calls a user subroutine that cannot be called in the Postponed region: it writes a net or variable other than its automatic locals, has an output or inout formal, makes a nonblocking or timed assignment, or suspends or schedules an event (IEEE 1800-2023 16.4, 4.4.2.9). Decided statically from the callee bodies. |
+| `FSIM-ELAB-SVASSERT-005` | error | An assertion control task (`$assertcontrol`, `$asserton` and the others) has named arguments, `$assertcontrol` has no control_type, or a list item does not name a scope or an assertion (IEEE 1800-2023 20.11). |
 | `FSIM-ELAB-SVSTREAM-001` | error | A streaming assignment target is malformed, uses the wrong language, or is nested inside another assignment target. |
 | `FSIM-ELAB-SVSTREAM-002` | error | The source of a streaming assignment contains fewer bits than its target requires. |
 | `FSIM-ELAB-SVTOLERANCE-001` | error | An inside tolerance range is used outside the exact SystemVerilog-2023 profile. |

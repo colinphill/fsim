@@ -1372,10 +1372,20 @@ std::vector<const vhdl::Unit*> vhdl_lookup_units(
         }
         use_scope = *scope->parent;
     }
+    // The use site's own units decide what its use clauses make visible
+    // (IEEE 1076-2008 12.3, 12.4): those of the unit being specialized do
+    // not reach a declaration of a package it uses. The selected unit joins
+    // the lookup only when the use site names no unit, or as the secondary
+    // unit of a primary unit it names (below).
     const auto selected = design.find_unit(selected_unit);
-    append(selected && selected->vhdl != nullptr
-            ? selected->vhdl
-            : nullptr);
+    if (selected && selected->vhdl != nullptr) {
+        const auto primary = primary_vhdl_unit(design, *selected->vhdl);
+        if (result.empty()
+            || (primary
+                && std::ranges::find(result, *primary) != result.end())) {
+            append(selected->vhdl);
+        }
+    }
 
     // Secondary units inherit visibility from their primary unit. Keep both
     // owners in the lookup set because a projected specialization can retain
@@ -3632,8 +3642,21 @@ CompiledDesignResolver::compute_vhdl_type_identity(
         const bool allow_unqualified_standard
             = owner_vhdl->kind != vhdl::UnitKind::context
             && !standard_package_owner;
+        // `standard.T`, whose prefix denotes package STD.STANDARD where a
+        // use clause `use std.standard;` makes that name directly visible
+        // and no declaration of the name hides it (IEEE 1076-2019 8.3,
+        // 12.3, 12.4): T of STD.STANDARD.
+        std::string standard_expanded;
+        if (const auto parts = vhdl_name_parts(spelling);
+            parts.size() == 2U
+            && vhdl_standard_package_name_visible(parts[0], *lookup_scope)) {
+            standard_expanded = "std.standard.";
+            standard_expanded += parts[1];
+        }
         const auto scalar = builtin_standard_scalar_type_identity(
-            spelling, owner_vhdl->predefined_environment,
+            standard_expanded.empty() ? spelling
+                                      : std::string_view { standard_expanded },
+            owner_vhdl->predefined_environment,
             allow_unqualified_standard);
         if (scalar != CompiledVhdlStandardScalarIdentity::none) {
             return { CompiledResolutionStatus::unique, std::nullopt,
@@ -3647,6 +3670,79 @@ CompiledDesignResolver::compute_vhdl_type_identity(
     }
     return { CompiledResolutionStatus::unique, std::nullopt, builtin,
         CompiledVhdlStandardScalarIdentity::none };
+}
+
+std::optional<support::VhdlIntrinsicEnumeration>
+CompiledDesignResolver::resolve_vhdl_intrinsic_enumeration(
+    std::string_view spelling, const ScopeId use_scope) const
+{
+    using Intrinsic = support::VhdlIntrinsicEnumeration;
+    using Scalar = CompiledVhdlStandardScalarIdentity;
+    spelling = vhdl::without_builtin_prefix(spelling);
+    if (design_ == nullptr || spelling.empty()) {
+        return std::nullopt;
+    }
+    const auto identity = resolve_vhdl_type_identity(spelling,
+        use_scope.valid() ? std::optional { use_scope } : std::nullopt);
+    // A type of STD.STANDARD the predefined environment declares (13.2).
+    if (identity.standard_scalar_type == Scalar::boolean) {
+        return Intrinsic::boolean;
+    }
+    if (identity.standard_scalar_type == Scalar::bit) {
+        return Intrinsic::bit;
+    }
+    if (identity.standard_scalar_type == Scalar::character) {
+        return Intrinsic::character;
+    }
+    // A retained declaration, an ambiguous name or another compiler-owned
+    // type.
+    if (identity.status != CompiledResolutionStatus::not_found) {
+        return std::nullopt;
+    }
+    // A member of the compiler-provided IEEE.STD_LOGIC_1164 the name
+    // denotes: through its expanded name, as a declaration of the package's
+    // own region, or by a use clause that is not hidden (12.3, 12.4).
+    constexpr std::string_view library { "ieee" };
+    constexpr std::string_view package { "std_logic_1164" };
+    const auto parts = vhdl_name_parts(spelling);
+    if (parts.empty() || parts.size() > 3U) {
+        return std::nullopt;
+    }
+    // Of the package's declarations, the type STD_ULOGIC and its resolved
+    // subtype STD_LOGIC denote STD_ULOGIC (16.7).
+    const auto member = parts.back();
+    if (!same_vhdl_identifier(member, "std_ulogic")
+        && !same_vhdl_identifier(member, "std_logic")) {
+        return std::nullopt;
+    }
+    bool visible { };
+    if (parts.size() == 3U) {
+        visible = same_vhdl_identifier(parts[0], library)
+            && same_vhdl_identifier(parts[1], package)
+            && builtin_standard_package_exports(library, package, member);
+    } else if (parts.size() == 2U) {
+        vhdl::Name name;
+        name.spelling = std::string { spelling };
+        name.canonical = name.spelling;
+        visible = same_vhdl_identifier(parts[0], package)
+            && vhdl_standard_package_member_visible(name, use_scope);
+    } else {
+        visible = std::ranges::any_of(
+                      vhdl_lookup_units(*design_, selected_unit_, use_scope),
+                      [&](const vhdl::Unit* const unit) {
+                          return unit != nullptr
+                              && unit->kind == vhdl::UnitKind::package
+                              && unit->primary_name.empty()
+                              && same_vhdl_identifier(
+                                  normalized_library(unit->library), library)
+                              && same_vhdl_identifier(unit->name, package)
+                              && standard_package_exports(*unit, member);
+                      })
+            || (builtin_standard_package_exports(library, package, member)
+                && vhdl_package_member_use_visible(
+                    library, package, member, use_scope, false));
+    }
+    return visible ? std::optional { Intrinsic::std_ulogic } : std::nullopt;
 }
 
 std::optional<sv::TypeReference>
@@ -4364,13 +4460,48 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
         const std::optional<std::int64_t> folded,
         const std::optional<ExpressionId> residual,
         const std::span<const CompiledBindingFrame> active) {
+        // A character literal of BOOLEAN, BIT, CHARACTER or STD_ULOGIC is its
+        // position in the type its context gives it (9.3.2, 12.5), whatever
+        // value a fold of its spelling alone took ('1' is STD_ULOGIC's
+        // position 3, not the BIT value 1).
+        if (residual) {
+            if (const auto literal
+                = find_expression(*design_, effective_, *residual);
+                literal && literal->vhdl != nullptr
+                && literal->vhdl->kind == vhdl::ExpressionKind::logic_literal) {
+                if (const auto type = support::find_vhdl_intrinsic_enumeration(
+                        literal->vhdl->resolved_builtin_type)) {
+                    if (const auto position
+                        = support::vhdl_intrinsic_enumeration_position(
+                            *type, literal->vhdl->text)) {
+                        return position;
+                    }
+                }
+            }
+        }
         if (folded) {
             return folded;
         }
-        auto value = residual && effective_ != nullptr
-            ? effective_->evaluate_integral_expression(
-                  *residual, vhdl_frames_integral_binding(active))
-            : std::nullopt;
+        std::optional<std::int64_t> value;
+        if (residual && effective_ != nullptr) {
+            // An enumeration-valued attribute bound (`X01Z'LEFT`) is its
+            // position in the type, which the integral evaluation does not
+            // give for STD_ULOGIC.
+            if (const auto attribute
+                = find_expression(*design_, effective_, *residual);
+                attribute && attribute->vhdl != nullptr
+                && attribute->vhdl->kind == vhdl::ExpressionKind::call
+                && attribute->vhdl->text.starts_with('\'')) {
+                const auto frames_binding
+                    = vhdl_frames_integral_binding(active);
+                value = effective_->evaluate_vhdl_position(
+                    *residual, &frames_binding);
+            }
+            if (!value) {
+                value = effective_->evaluate_integral_expression(
+                    *residual, vhdl_frames_integral_binding(active));
+            }
+        }
         if (!value && residual && boundary_fallback_ != nullptr
             && *boundary_fallback_) {
             value = (*boundary_fallback_)(*residual);
@@ -9096,6 +9227,60 @@ bool CompiledDesignResolver::vhdl_standard_package_member_visible(
     return false;
 }
 
+bool CompiledDesignResolver::vhdl_standard_package_name_visible(
+    const std::string_view name, const ScopeId use_scope) const
+{
+    if (design_ == nullptr) {
+        return false;
+    }
+    vhdl::Name simple;
+    simple.spelling = std::string { name };
+    simple.canonical = simple.spelling;
+    if (resolve_vhdl(simple, use_scope).status
+        != CompiledResolutionStatus::not_found) {
+        return false;
+    }
+    // STANDARD is the primary unit of that name in library STD (16.3): a
+    // use clause `use std.standard;` makes its simple name visible, as
+    // `use std.all;` makes every primary unit of the library visible.
+    if (!same_vhdl_identifier(name, "standard")) {
+        return false;
+    }
+    const auto names_standard = [&](const auto& self,
+                                    const vhdl::Unit& owner) -> bool {
+        for (const auto& item : owner.context) {
+            for (const auto& selected : item.selected_names) {
+                const auto parts = vhdl_name_parts(vhdl_spelling(selected));
+                if (item.kind == vhdl::ContextKind::use_clause) {
+                    if (parts.size() == 2U
+                        && vhdl::use_name_has_library_prefix(
+                            owner, parts.size(), parts.front())
+                        && same_vhdl_identifier(
+                            effective_vhdl_library(
+                                parts.front(), owner.library),
+                            "std")
+                        && (same_vhdl_identifier(parts.back(), name)
+                            || same_vhdl_identifier(parts.back(), "all"))) {
+                        return true;
+                    }
+                } else if (item.kind == vhdl::ContextKind::context_reference
+                    && visit_referenced_vhdl_contexts(*design_, parts,
+                        owner.library, [&](const vhdl::Unit& context) {
+                            return self(self, context);
+                        })) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+    return std::ranges::any_of(
+        vhdl_lookup_units(*design_, selected_unit_, use_scope),
+        [&](const vhdl::Unit* const unit) {
+            return unit != nullptr && names_standard(names_standard, *unit);
+        });
+}
+
 bool CompiledDesignResolver::vhdl_builtin_type_visible(
     std::string_view spelling, const ScopeId use_scope) const
 {
@@ -10031,8 +10216,228 @@ CompiledDesignResolver::resolve_vhdl_callables(
             }
         }
     }
+    // A visible explicit homograph of a generic type's operator hides that
+    // operator where it is visible (12.3), and with it the actual type's
+    // operation the operator denotes.
+    const auto visible_count = candidates.size();
+    for (const auto declaration :
+        vhdl_generic_type_actual_operations(name, use_scope)) {
+        const auto hidden = std::ranges::any_of(
+            std::span { candidates }.first(visible_count),
+            [&](const auto& known) {
+                return known.body == declaration || known.key == declaration
+                    || vhdl_callable_profiles_homographic(
+                        known.body, declaration);
+            });
+        if (hidden) {
+            continue;
+        }
+        for (auto candidate : resolve_vhdl_callable(declaration).candidates) {
+            if (std::ranges::none_of(candidates, [&](const auto& known) {
+                    return known.body == candidate.body;
+                })) {
+                candidates.push_back(std::move(candidate));
+            }
+        }
+    }
     normalize_vhdl_callable_resolutions(candidates);
     return { status_for(candidates.size()), std::move(candidates) };
+}
+
+std::vector<DeclarationId>
+CompiledDesignResolver::vhdl_generic_type_actual_operations(
+    const vhdl::Name& name, const ScopeId use_scope) const
+{
+    // An operator of a generic type (IEEE 1076-2019 5.8) is an operation
+    // of the subtype its actual denotes (6.5.3.1, 14.3.3.3): a generic
+    // type's "=" in a generic-mapped package (4.9) is the "=" of the
+    // actual's type. An explicit homograph declared with that type, in its
+    // declarative region, hides the type's predefined operator (12.3), so
+    // it is the type's operation wherever the instance compares values of
+    // the generic type, whatever the instantiation's own context makes
+    // visible. Overload resolution then decides by profile (12.5).
+    std::vector<DeclarationId> result;
+    const auto parts = vhdl_name_parts(vhdl_spelling(name));
+    if (design_ == nullptr || parts.size() != 1U
+        || !vhdl::operator_designator(parts.front()) || !use_scope.valid()
+        || (binding_frames_.empty()
+            && (effective_ == nullptr
+                || effective_->specialization().actual_identities.empty()))) {
+        return result;
+    }
+    std::optional<std::vector<const vhdl::Unit*>> lookup_units;
+    // The generic types whose generic clause encloses the use (12.1).
+    const auto visible_generic_type = [&](const DeclarationId formal) {
+        const auto declaration = find_declaration(*design_, effective_, formal);
+        if (!declaration || declaration->vhdl == nullptr
+            || declaration->vhdl->form != vhdl::DeclarationForm::generic_type) {
+            return false;
+        }
+        const auto* scope = find_scope(*design_, declaration->vhdl->scope);
+        const auto owner
+            = scope != nullptr ? design_->find_unit(scope->unit) : std::nullopt;
+        if (!owner || owner->vhdl == nullptr) {
+            return false;
+        }
+        if (!lookup_units) {
+            lookup_units
+                = vhdl_lookup_units(*design_, selected_unit_, use_scope);
+        }
+        return std::ranges::find(*lookup_units, owner->vhdl)
+            != lookup_units->end();
+    };
+    // The actual of a formal generic: the innermost frame binding it, or
+    // the specialization's own generic map.
+    struct Actual {
+        const vhdl::SubtypeIndication* type { };
+        std::optional<DeclarationId> declaration;
+    };
+    const auto actual_of
+        = [&](const DeclarationId formal) -> std::optional<Actual> {
+        for (auto frame = binding_frames_.rbegin();
+             frame != binding_frames_.rend(); ++frame) {
+            const auto binding = std::ranges::find(
+                *frame, formal, &CompiledActualBinding::formal);
+            if (binding != frame->end()) {
+                return Actual { binding->vhdl_type ? &*binding->vhdl_type
+                                                   : nullptr,
+                    binding->actual_declaration };
+            }
+        }
+        if (effective_ != nullptr) {
+            const auto& actuals = effective_->specialization().actual_identities;
+            const auto actual = std::ranges::find(
+                actuals, formal, &SpecializedHirActualIdentity::declaration);
+            if (actual != actuals.end()) {
+                return Actual { actual->vhdl_type ? &*actual->vhdl_type
+                                                  : nullptr,
+                    actual->actual_declaration };
+            }
+        }
+        return std::nullopt;
+    };
+    // The type, not a subtype of it, whose declaration declares its
+    // predefined operators (5.1).
+    const auto declared_type = [&](TypeId type) -> std::optional<TypeId> {
+        std::vector<TypeId> visited;
+        while (type.valid()
+            && std::ranges::find(visited, type) == visited.end()) {
+            visited.push_back(type);
+            const auto view = find_type(*design_, effective_, type);
+            if (!view || view->vhdl == nullptr) {
+                return std::nullopt;
+            }
+            if (view->vhdl->form != vhdl::TypeForm::subtype
+                || view->vhdl->scalar_type) {
+                return type;
+            }
+            type = view->vhdl->base.type_mark.target;
+        }
+        return std::nullopt;
+    };
+    const auto generic_type_declaration = [&](const DeclarationId id) {
+        const auto declaration = find_declaration(*design_, effective_, id);
+        return declaration && declaration->vhdl != nullptr
+            && declaration->vhdl->form == vhdl::DeclarationForm::generic_type;
+    };
+    // The declared type a formal generic type denotes. An actual that is
+    // itself a generic type of an enclosing unit denotes what that unit's
+    // actual denotes (4.9, 14.3.3.3). A declared type keeps its own
+    // identity: the effective subtype of an integer type would be that of
+    // its predefined base (5.2.3.1).
+    const auto actual_type
+        = [&](const DeclarationId formal) -> std::optional<TypeId> {
+        std::vector<DeclarationId> visited;
+        for (auto current = formal;
+             std::ranges::find(visited, current) == visited.end();) {
+            visited.push_back(current);
+            const auto actual = actual_of(current);
+            if (!actual) {
+                return std::nullopt;
+            }
+            const auto target = actual->type != nullptr
+                ? actual->type->type_mark.target
+                : TypeId { };
+            const auto marked = target.valid()
+                ? find_type(*design_, effective_, target)
+                : std::nullopt;
+            if (marked && marked->vhdl != nullptr) {
+                if (!generic_type_declaration(marked->vhdl->declaration)) {
+                    return declared_type(target);
+                }
+                current = marked->vhdl->declaration;
+                continue;
+            }
+            if (actual->declaration) {
+                if (generic_type_declaration(*actual->declaration)) {
+                    current = *actual->declaration;
+                    continue;
+                }
+                const auto declaration = find_declaration(
+                    *design_, effective_, *actual->declaration);
+                if (declaration && declaration->vhdl != nullptr
+                    && declaration->vhdl->declared_type) {
+                    return declared_type(*declaration->vhdl->declared_type);
+                }
+            }
+            if (actual->type != nullptr) {
+                if (const auto effective
+                    = effective_vhdl_subtype(*actual->type, use_scope);
+                    effective && effective->type_mark.target.valid()) {
+                    return declared_type(effective->type_mark.target);
+                }
+            }
+            return std::nullopt;
+        }
+        return std::nullopt;
+    };
+    std::vector<DeclarationId> formals;
+    const auto consider = [&](const DeclarationId formal) {
+        if (std::ranges::find(formals, formal) == formals.end()
+            && visible_generic_type(formal)) {
+            formals.push_back(formal);
+        }
+    };
+    for (const auto& frame : binding_frames_) {
+        for (const auto& binding : frame) {
+            consider(binding.formal);
+        }
+    }
+    if (effective_ != nullptr) {
+        for (const auto& actual :
+            effective_->specialization().actual_identities) {
+            consider(actual.declaration);
+        }
+    }
+    std::vector<ScopeId> regions;
+    for (const auto formal : formals) {
+        const auto type = actual_type(formal);
+        const auto view
+            = type ? find_type(*design_, effective_, *type) : std::nullopt;
+        const auto declaration = view && view->vhdl != nullptr
+            ? find_declaration(*design_, effective_, view->vhdl->declaration)
+            : std::nullopt;
+        if (!declaration || declaration->vhdl == nullptr
+            || !declaration->vhdl->scope.valid()
+            || std::ranges::find(regions, declaration->vhdl->scope)
+                != regions.end()) {
+            continue;
+        }
+        const auto region = declaration->vhdl->scope;
+        regions.push_back(region);
+        for (const auto candidate :
+            resolve_vhdl_callable_candidates(name, region).candidates) {
+            const auto callable
+                = find_declaration(*design_, effective_, candidate);
+            if (callable && callable->vhdl != nullptr
+                && callable->vhdl->scope == region && callable->vhdl->callable
+                && callable->vhdl->callable->function
+                && std::ranges::find(result, candidate) == result.end()) {
+                result.push_back(candidate);
+            }
+        }
+    }
+    return result;
 }
 
 CompiledVhdlCallableResolutionResult

@@ -585,7 +585,7 @@ string(REGEX REPLACE "[ \t\r\n]" "" FSIM_COMPACT_APPLICATION_CHECK
   "${FSIM_APPLICATION_CHECK_TEXT}")
 set(FSIM_PREVIOUS_STAGE_OFFSET -1)
 foreach(FSIM_COMPILE_STAGE IN ITEMS
-    "prepare_compiled_systemverilog_environment(checked.parsed,*imported,diagnostics)"
+    "prepare_compiled_systemverilog_environment(checked.parsed,environment,diagnostics)"
     "build_systemverilog_hir(checked.parsed,"
     "install_compiled_environment(checked,*imported,diagnostics)"
     "resolve_compiled_systemverilog_environment(checked,diagnostics)")

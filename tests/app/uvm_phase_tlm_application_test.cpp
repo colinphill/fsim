@@ -4,6 +4,9 @@
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/artifact/design.hpp"
 #include "fsim/artifact/object.hpp"
+#if defined(FSIM_HAS_LLVM)
+#include "fsim/compiler/static_kernel_codegen.hpp"
+#endif
 #include "fsim/diagnostic/diagnostic.hpp"
 #include "fsim/project/project.hpp"
 #include "fsim/runtime/vcd_writer.hpp"
@@ -1231,8 +1234,35 @@ int main(int argc, char **argv) {
         == fsim::project::to_string(
             fsim::project::parse_systemverilog_uvm_release(release).value()));
     assert(!metadata->uvm_source_identity.empty());
+    // `elaborate --aot`: the static kernel builds its code into the
+    // optimization's cache (<work>/<optimization>/cache), set up as the
+    // compiled simulation below sets it up, so that run starts from it.
+    const bool aot = argc == 7 && std::string_view{argv[6]} == "--aot";
+    if (argc != 6 && !aot) {
+      std::cerr << "elaborate accepts only --aot after the optimization\n";
+      return 2;
+    }
+    if (aot) {
+#if defined(FSIM_HAS_LLVM)
+      auto reloaded = fsim::app::load_design_artifact(design, diagnostics);
+      if (!reloaded || diagnostics.has_error())
+        print_diagnostics(diagnostics);
+      assert(reloaded && !diagnostics.has_error());
+      // The optimization's cache, as `fsim elaborate --aot` takes it from
+      // the configuration.
+      reloaded->cache_path = config.build.cache_path;
+      const fsim::compiler::StaticKernelAheadOfTimeScope static_kernel_aot{
+          config.build.jobs};
+      const fsim::app::Simulation populated(
+          std::move(*reloaded), 1'000, fsim::app::SimulationEngine::compiled);
+#else
+      std::cerr << "elaborate --aot requires an LLVM-enabled build\n";
+      return 2;
+#endif
+    }
     std::cout << kExpectedTranscript << " release=" << release
-              << " stage=elaborate optimization=" << optimization_name << '\n';
+              << " stage=elaborate optimization=" << optimization_name
+              << (aot ? " aot=1" : "") << '\n';
     return 0;
   }
 
@@ -1243,6 +1273,9 @@ int main(int argc, char **argv) {
     if (!loaded || diagnostics.has_error())
       print_diagnostics(diagnostics);
     assert(loaded && !diagnostics.has_error());
+    // The run uses the optimization's cache, as `fsim simulate` takes it
+    // from the configuration.
+    loaded->cache_path = config.build.cache_path;
     const auto result = exercise(std::move(*loaded), engine,
                                  work / (optimization_name + '-' + argv[7]),
                                  release);

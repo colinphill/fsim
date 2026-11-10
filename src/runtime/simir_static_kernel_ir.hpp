@@ -270,16 +270,24 @@ enum class KOp : std::uint8_t {
     /// Preponed value, x the offset in Impl::sampled_value_words; clear: a
     /// clocked history read, x the ring's start in sampled_ring_words,
     /// offset the signal's width, z the $past depth, imm_a/imm_b the
-    /// signal's default (an empty history).
+    /// signal's default (an empty history). For $rose, $fell, $stable and
+    /// $changed y is 1 + the signal's offset in Impl::sampled_value_words:
+    /// in a time step that is not a tick of the clock (the ring's last
+    /// sample is of an earlier one) they compare the Preponed value with
+    /// the ring's last sample (16.9.3).
     sva_sampled_load,
     /// An automatic callable's frame (VHDL, a recursive callable): saves
     /// the registers of CompiledBody::frame_saves[aux] (a header word pair
     /// holding the identity, then every saved register-file pair) on the
     /// body's growable frame stack; the depth word x counts pairs. Only a
-    /// full store asks the runtime to grow it (the capacity helper).
+    /// full store asks the runtime to grow it (the capacity helper). Sub 1:
+    /// the callable's frame also lists strings, containers or private
+    /// arrays, values the runtime library owns, which the runtime then
+    /// saves (StaticKernel::frame_storage of operation y).
     frame_push,
     /// Restores the registers of frame_saves[aux] (the saved pairs, except
-    /// those of the registers the call's results keep) and pops the frame.
+    /// those of the registers the call's results keep) and pops the frame;
+    /// sub 1 as for frame_push.
     frame_pop,
 };
 
@@ -488,7 +496,10 @@ struct SvaNativeStep {
 
 struct SvaNativeSequence {
     std::vector<SvaNativeStep> code;
+    /// The thread's counter words: the repetition counters, then the
+    /// valuation of the plan's local variables from locals_base (16.10).
     std::uint32_t counters { };
+    std::uint32_t locals_base { };
     /// CompiledPlan::state_base: the first state id of the sequence's
     /// program counters.
     std::uint32_t state_base { };
@@ -499,6 +510,11 @@ struct SvaNativeSequence {
 struct SvaNativeProperty {
     semantic::sva::PropertyKind kind { semantic::sva::PropertyKind::sequence };
     bool overlapped { };
+    /// sync_accept_on / sync_reject_on.
+    bool synchronous { };
+    /// A multiclocked plan (16.13): the clock that flows into the property
+    /// (semantic::sva::Property::clock).
+    std::uint32_t clock { };
     std::uint32_t sequence { };
     /// The one child (-1 when none): the consequent of an implication, the
     /// operand of a negation.
@@ -516,6 +532,12 @@ struct SvaNativeProperty {
     std::int32_t hi_slot { -1 };
     std::uint32_t line { };
     std::uint32_t column { };
+    /// The if/else condition is expression `guard` over the instance's local
+    /// variables rather than a sampled guard (16.10).
+    bool guard_expression { };
+    /// The initialization assignments of the property's local variables
+    /// (expressions), run when an instance's evaluation begins.
+    std::vector<std::uint32_t> initializers;
     friend bool operator==(const SvaNativeProperty&, const SvaNativeProperty&)
         = default;
 };
@@ -530,6 +552,22 @@ struct SvaNativePlan {
     std::vector<std::uint32_t> clock_guards;
     /// The source position of each guard (step events' matched expression).
     std::vector<std::pair<std::uint32_t, std::uint32_t>> guard_positions;
+    /// The local variables (IEEE 1800-2023 16.10; CompiledPlan): each
+    /// local's word offset and size in a valuation and its width in bits,
+    /// the valuation's words, each expression's target (0 a check, else the
+    /// assigned local plus one) and the local sets of the join ends. A plan
+    /// with expressions evaluates them through the block's memo; a plan
+    /// whose only use is the request operations (KOp::sva_tick sub 1 to 4)
+    /// has these and no sequences.
+    std::vector<std::uint32_t> local_offset;
+    std::vector<std::uint32_t> local_size;
+    std::vector<std::uint32_t> local_width;
+    std::uint32_t locals_words { };
+    std::vector<std::uint32_t> expression_target;
+    std::vector<std::vector<std::uint32_t>> local_sets;
+    /// The memo's entry words (layout::memo_e_locals + locals_words + the
+    /// widest result), 0 without expressions.
+    std::uint32_t memo_stride { };
     friend bool operator==(const SvaNativePlan&, const SvaNativePlan&) = default;
 };
 

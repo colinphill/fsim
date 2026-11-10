@@ -34,6 +34,7 @@ for case_name in \
     active_inactive_nba \
     active_inactive_nba_verilog \
     nba_batch_before_active \
+    nba_execution_order \
     derived_clock_nba \
     strobe_end_of_slot \
     strobe_end_of_slot_verilog \

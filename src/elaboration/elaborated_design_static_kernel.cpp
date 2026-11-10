@@ -243,8 +243,9 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     // every process is a behavioral thread or hosted, its debug points
     // executable (below), and dead logic and delta collapse stay off so that
     // every process runs. Foreign libraries and traces need no plan of their
-    // own: they observe and write kernel-owned signals at run time (S19).
-    const bool host_all = systemc || access.host_signals;
+    // own: they observe and write kernel-owned signals at run time (S19),
+    // as does a simulation built through the library API.
+    const bool host_all = systemc;
     // The access plan replaces the whole-design coverage, specify and
     // VCD-control gates (docs/engine-v4-semantics.md S19, S21);
     // FSIM_STATIC_KERNEL_ACCESS_PLAN=0 restores them.
@@ -2467,6 +2468,10 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     if (host_signals) {
         std::ranges::fill(host_touched, 1U);
     }
+    // The wake bits of concurrent assertion monitors (SvaOperation::
+    // wake_signal): no process writes them, but the host toggles them at
+    // the start of a time step, so the kernel scans them as written inputs.
+    std::vector<std::uint8_t> host_deposited(signal_count, 0U);
     stage("alias");
     // A member's delayed, transport or waveform signal assignment keeps its
     // target a host signal, an attribute query its prefix and a force its
@@ -2475,12 +2480,14 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     SharedBodyOperationScan host_signal_operations {
         [](const Operation& operation) {
             return static_kernel_host_signal(operation).has_value()
-                || operation_holds<MonitorInstall>(operation);
+                || operation_holds<MonitorInstall>(operation)
+                || operation_holds<SvaOperation>(operation);
         }
     };
     // Each candidate's touched signals are collected on the --jobs threads
     // into its own list, then marked in process order.
     std::vector<std::vector<SignalId>> touched_by_process(process_count);
+    std::vector<std::vector<SignalId>> deposited_by_process(process_count);
     std::vector worker_host_signal_operations(
         support::parallel_workers(process_count), host_signal_operations);
     support::parallel_for(process_count,
@@ -2521,6 +2528,18 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 target && *target < signal_count) {
                 touched.push_back(*target);
             }
+            // A monitor's abort net, whose changes the host's commit path
+            // follows, and its wake bit, which the host toggles (IEEE
+            // 1800-2023 16.12.14; SvaOperation::wake_signal).
+            if (const auto* sva = operation_get_if<SvaOperation>(&operation)) {
+                if (sva->abort_signal && *sva->abort_signal < signal_count) {
+                    touched.push_back(*sva->abort_signal);
+                }
+                if (sva->wake_signal && *sva->wake_signal < signal_count) {
+                    touched.push_back(*sva->wake_signal);
+                    deposited_by_process[index].push_back(*sva->wake_signal);
+                }
+            }
 
             // A member's $monitor or $strobe: the host's monitor watches
             // its signals through the host commit path and reads them when
@@ -2538,6 +2557,11 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     for (const auto& touched : touched_by_process) {
         for (const auto signal : touched) {
             host_touched[signal] = 1U;
+        }
+    }
+    for (const auto& deposited : deposited_by_process) {
+        for (const auto signal : deposited) {
+            host_deposited[signal] = 1U;
         }
     }
     // A package static initializer runs before the kernel's first
@@ -2624,6 +2648,24 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                         if (value.signal < signal_count) {
                             host_touched[value.signal] = 1U;
                         }
+                    }
+                } else if constexpr (std::is_same_v<T, SvaOperation>) {
+                    // A monitor's disable net: its commit disables the
+                    // monitor's attempts (static_kernel_host_signal).
+                    if (value.disable_signal
+                        && *value.disable_signal < signal_count) {
+                        host_touched[*value.disable_signal] = 1U;
+                    }
+                    // Its abort net and wake bit (SvaOperation::
+                    // wake_signal).
+                    if (value.abort_signal
+                        && *value.abort_signal < signal_count) {
+                        host_touched[*value.abort_signal] = 1U;
+                    }
+                    if (value.wake_signal
+                        && *value.wake_signal < signal_count) {
+                        host_touched[*value.wake_signal] = 1U;
+                        host_deposited[*value.wake_signal] = 1U;
                     }
                 } else if constexpr (requires { value.signal; }) {
                     if constexpr (std::is_same_v<
@@ -5077,6 +5119,17 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         }
         if (!accessors[object].empty()
             || container.storage != StaticKernelContainerStorage::elements) {
+            if (plan_profile) {
+                std::cerr << "fsim-kernel-plan: container object="
+                          << container_objects_[object].name << " storage="
+                          << (container.storage
+                                     == StaticKernelContainerStorage::packed_signal
+                                 ? "packed_signal"
+                                 : container.storage
+                                     == StaticKernelContainerStorage::element_signals
+                                 ? "element_signals" : "elements")
+                          << '\n';
+            }
             spec->containers.push_back(std::move(container));
         }
         if (owned_family[object] != 0U) {
@@ -5299,6 +5352,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         if (!forces && !host_all && owned[signal] == 0U
             && virtual_owned[signal] == 0U
             && node.writers.empty() && alias_written[signal] == 0U
+            && host_deposited[signal] == 0U
             && std::ranges::any_of(node.readers, [&](const auto& reader) {
                    return reader.process < process_count && member[reader.process] != 0U;
                })) {

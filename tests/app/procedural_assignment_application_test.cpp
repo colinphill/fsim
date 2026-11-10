@@ -11,11 +11,13 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <set>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -42,6 +44,8 @@ struct Change {
 struct Capture {
   fsim::runtime::RunResult result;
   std::vector<Change> changes;
+  // The changes in the order the hook heard them, with their writers.
+  std::vector<fsim::test::WrittenChange> written;
   std::vector<std::pair<std::string, std::string>> final_values;
   std::string vcd;
   std::string debugger;
@@ -248,10 +252,31 @@ Capture run_once(
                 value.to_msb_string(),
                 time,
                 delta});
-        vcd.set_time(time);
-        vcd.change(vcd_signals[index], value);
+        capture.written.push_back(
+            {
+                std::string{names[index]},
+                value.to_msb_string(),
+                time,
+                delta,
+                simulation.signal_change_writer()});
       });
   capture.result = simulation.run();
+  // The changes of different objects in one delta cycle come in either
+  // engine's order (IEEE 1800-2023 4.7): the log is ordered by delta cycle
+  // and object, each object's changes in recorded order, and the trace is
+  // written from it after the run. The order 4.6 fixes is checked on
+  // `written` (verify_mode).
+  fsim::test::order_changes_by_delta_and_object(
+      capture.changes, [](const Change& change) {
+        return std::tie(change.time, change.delta, change.signal);
+      });
+  for (const auto& change : capture.changes) {
+    const auto index = static_cast<std::size_t>(std::distance(
+        names.begin(), std::ranges::find(names, change.signal)));
+    vcd.set_time(change.time);
+    vcd.change(vcd_signals[index],
+        fsim::runtime::PackedLogic4::from_msb_string(change.value));
+  }
   std::ostringstream debugger_output;
   std::ostringstream debugger_error;
   fsim::app::DebuggerControl debugger{
@@ -488,6 +513,14 @@ void verify_mode(
     fsim::test::report_change_mismatch(
         "verify_mode", reference.changes, actual->changes);
     assert(reference.changes == actual->changes);
+    // The changes one process makes in one delta cycle keep their order
+    // (IEEE 1800-2023 4.6 a), b)): the blocking writes of each initial
+    // block, `same_slot <= 1'b0; same_slot <= 1'b1;`, `zero_slot`'s two
+    // updates.
+    std::size_t compared{};
+    assert(fsim::test::same_writer_order_matches(
+        "verify_mode", reference.written, actual->written, compared));
+    assert(compared > 0U);
     assert(reference.final_values == actual->final_values);
     assert(reference.vcd == actual->vcd);
     assert(reference.debugger == actual->debugger);

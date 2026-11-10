@@ -2879,11 +2879,16 @@ void ApplicationTestFixture::test_class_simulation_integration()
                 { "class_top.source_impossible_result", 0 },
                 { "class_top.source_impossible_pre", 20 },
                 { "class_top.source_impossible_post", 10 },
-                { "class_top.source_broken_pre_result", 0 },
-                { "class_top.source_broken_pre_count", 0 },
-                { "class_top.source_broken_post_result", 0 },
-                { "class_top.source_broken_post_pre", 0 },
-                { "class_top.source_broken_post_count", 0 },
+                // A failing immediate assertion in pre_randomize or
+                // post_randomize reports $error and the callback goes on
+                // (IEEE 1800-2023 16.3); randomize() still succeeds and
+                // returns 1 (18.6.1, 18.6.3), so each hook ends at 99 and
+                // the inherited pre_randomize adds its 10.
+                { "class_top.source_broken_pre_result", 1 },
+                { "class_top.source_broken_pre_count", 99 },
+                { "class_top.source_broken_post_result", 1 },
+                { "class_top.source_broken_post_pre", 10 },
+                { "class_top.source_broken_post_count", 99 },
                 { "class_top.source_selected_randomize_result", 1 },
                 { "class_top.source_selected_randomize_value", 77 },
                 { "class_top.source_inline_randomize_result", 1 },
@@ -2955,6 +2960,8 @@ void ApplicationTestFixture::test_class_simulation_integration()
             assert(random_debug_error.str().empty());
             assert(random_debug_output.str().find("randc enabled 1 revision 4") != std::string::npos && random_debug_output.str().find("cycle 1 used 1") != std::string::npos && random_debug_output.str().find("constraint " + derived_identity + "::generated_small enabled 1") != std::string::npos);
         }
+        // Those randomize() calls succeed (16.3, 18.6.1): each object's
+        // random variables were randomized once.
         for (const auto name :
             { "class_top.broken_pre_object", "class_top.broken_post_object" }) {
             const auto failed_object = simulation.find_signal(name);
@@ -2963,12 +2970,12 @@ void ApplicationTestFixture::test_class_simulation_integration()
             assert(simulation.class_heap()
                        .random_state(failed_handle, derived_identity + "::value")
                        .revision
-                == 0);
+                == 1);
             assert(simulation.class_heap()
                        .random_state(failed_handle,
                            derived_identity + "::generated_value")
                        .revision
-                == 0);
+                == 1);
         }
         assert(completion_called);
         assert(simulation.read_class_property(handle, "value")

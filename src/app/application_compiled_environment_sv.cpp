@@ -1093,6 +1093,21 @@ private:
                     }
                 }
                 selected = method(owner->canonical_identity, member);
+                // `C#(4)::t();` runs the method in that specialization
+                // (8.25.1); the statement keeps the selection as its value,
+                // as the expression form of the call keeps it.
+                if (selected != nullptr && selected->static_method
+                    && hash != std::string_view::npos
+                    && !support::is_uvm_library_identity(owner->canonical_identity)
+                    && input.systemverilog_task_class_selection) {
+                    frontend::Expression selection { frontend::ExpressionKind::Call,
+                        "@sv-static-call-selection", { }, input.span };
+                    selection.systemverilog_source_order = input.systemverilog_source_order;
+                    selection.systemverilog_class_owner = frontend::systemverilog_class_scope_owner(
+                        *input.systemverilog_task_class_selection, owner->canonical_identity);
+                    if (selection.systemverilog_class_owner)
+                        input.value = std::move(selection);
+                }
             }
         } else if (!scope.class_identity.empty()) {
             selected = method(scope.class_identity, input.task_name);

@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: Apache-2.0
+boolloop low_high false true false false false false 0 f
+boolloop low_high true false true true true true 1 t
+boolloop left_right false true false false false false 0 f
+boolloop left_right true false true true true true 1 t
+boolloop high_downto_low true false true true true true 1 t
+boolloop high_downto_low false true false false false false 0 f
+boolloop range false true false false false false 0 f
+boolloop range true false true true true true 1 t
+boolloop reverse_range true false true true true true 1 t
+boolloop reverse_range false true false false false false 0 f
+boolloop subtype false true false false false false 0 f
+boolloop subtype true false true true true true 1 t
+boolloop subtype_range false true false false false false 0 f
+boolloop subtype_range true false true true true true 1 t
+boolloop subtype_reverse_range true false true true true true 1 t
+boolloop subtype_reverse_range false true false false false false 0 f
+boolloop subtype_low_high false true false false false false 0 f
+boolloop subtype_low_high true false true true true true 1 t
+boolloop descending_subtype true false true true true true 1 t
+boolloop descending_subtype false true false false false false 0 f
+boolloop descending_left_right true false true true true true 1 t
+boolloop descending_left_right false true false false false false 0 f
+boolloop single true false true true true true 1 t
+boolloop type_mark false true false false false false 0 f
+boolloop type_mark true false true true true true 1 t
+boolloop literals false true false false false false 0 f
+boolloop literals true false true true true true 1 t
+boolloop hits 13 14

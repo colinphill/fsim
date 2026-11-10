@@ -130,6 +130,15 @@ void run_io(RunStateArchive& ar, Impl& impl)
     // The monitors of concurrent assertions: each is its plan, its bounds and
     // its flat attempt block (sva::Monitor::run_state_io), by (process, site).
     FSIM_RS_IO("interp.impl", sva_monitors, ar, impl);
+    // The disable nets each monitor registered when it was created (16.12).
+    FSIM_RS_IO("interp.impl", sva_disable_watches, ar, impl);
+    FSIM_RS_IO("interp.impl", sva_disable_watched, ar, impl);
+    // The wake bits and abort nets each monitor registered when it was
+    // created, and the wakes due at the next time step (16.12.14).
+    FSIM_RS_IO("interp.impl", sva_wakes, ar, impl);
+    FSIM_RS_IO("interp.impl", sva_abort_watches, ar, impl);
+    FSIM_RS_IO("interp.impl", sva_abort_watched, ar, impl);
+    FSIM_RS_IO("interp.impl", sva_wakes_due, ar, impl);
     if (ar.loading() && ar.ok() && impl.static_kernel) {
         // The restored monitors are new objects: the kernel binds each to
         // its block table entry again at its next tick or outcome pop.

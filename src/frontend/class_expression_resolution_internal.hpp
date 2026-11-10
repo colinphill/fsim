@@ -265,6 +265,12 @@ class Resolver final {
   [[nodiscard]] std::optional<ClassSelection> resolve_class_selection(
       std::string_view spelling, const Scope& scope,
       const Type* parsed = nullptr) const;
+  // Whether a class scope prefix denotes a specialization: one with
+  // actuals, the explicit default `C#()` or a typedef. The unadorned name
+  // of a parameterized class names its members in the specialization the
+  // code runs in instead (IEEE 1800-2023 8.25.1).
+  [[nodiscard]] static bool selects_specialization(
+      std::string_view spelling, const ClassSelection& selection);
   // The selection with the selected class's own actuals only.
   [[nodiscard]] std::optional<ClassSelection> resolve_own_class_selection(
       std::string_view spelling, const Scope& scope,

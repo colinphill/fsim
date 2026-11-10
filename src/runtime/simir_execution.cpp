@@ -58,22 +58,27 @@ Interpreter::Impl::Impl(
             static_cast<Impl*>(context)->discard_scheduler_work();
         });
     scheduler.set_slot_start_hook([this](Scheduler&) {
-        if (!requires_sampled_values) {
-            return;
-        }
-        if (sampled_value_dependency_mask.size() != signals.size()) {
-            sampled_value_dependencies_unknown = true;
-        }
-        for (std::size_t signal = 0U;
-             signal < signals.size();
-             ++signal) {
-            if (!sampled_value_dependencies_unknown
-                && sampled_value_dependency_mask[signal] == 0U) {
-                continue;
+        if (requires_sampled_values) {
+            if (sampled_value_dependency_mask.size() != signals.size()) {
+                sampled_value_dependencies_unknown = true;
             }
-            sampled_values[signal]
-                = logical_signal_value(static_cast<SignalId>(signal));
-            store_sampled_value_words(static_cast<SignalId>(signal));
+            for (std::size_t signal = 0U;
+                 signal < signals.size();
+                 ++signal) {
+                if (!sampled_value_dependencies_unknown
+                    && sampled_value_dependency_mask[signal] == 0U) {
+                    continue;
+                }
+                sampled_values[signal]
+                    = logical_signal_value(static_cast<SignalId>(signal));
+                store_sampled_value_words(static_cast<SignalId>(signal));
+            }
+        }
+        // The concurrent assertion monitors that evaluate at this time step
+        // without a clock tick (IEEE 1800-2023 16.12, 16.12.14), after the
+        // sampled values of the time step are taken.
+        if (sva_wakes_due) {
+            wake_sva_monitors();
         }
     });
 }

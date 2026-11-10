@@ -1,0 +1,6 @@
+MIX d=01 q=00 r=00 p=00 s=00 at 5000000 fs
+MIX d=02 q=01 r=00 p=01 s=00 at 15000000 fs
+MIX d=03 q=02 r=01 p=02 s=01 at 25000000 fs
+MIX d=04 q=03 r=02 p=03 s=02 at 35000000 fs
+MIX d=04 q=04 r=03 p=04 s=03 at 45000000 fs
+MIX d=04 q=04 r=04 p=04 s=04 at 55000000 fs

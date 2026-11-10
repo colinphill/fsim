@@ -526,6 +526,11 @@ template <typename Operations>
             return !value.postponed;
         } else if constexpr (std::is_same_v<T, SystemVerilogMath>) {
             return value.function >= SystemVerilogMathFunction::Time;
+        } else if constexpr (std::is_same_v<T, SvaOperation>) {
+            // An immediate assertion's control read (IEEE 1800-2023 20.11):
+            // an inline load of the host's control word, as the time
+            // queries load the time (KOp::sva_sampled_load).
+            return value.kind == SvaKind::control;
         } else {
             return false;
         }
@@ -897,8 +902,12 @@ template <typename OperationAt, typename Types, typename NineValued = std::nullp
         return read->kind != SignalReadKind::current || read->ticks != 1U
             || read->clock || read->gate;
     }
-    return operation_holds<SvaOperation>(operation)
-        || operation_holds<WaitRegion>(operation);
+    // An assertion control read (SvaKind::control, 20.11) reads no sampled
+    // state and runs in any region.
+    if (const auto* sva = operation_get_if<SvaOperation>(&operation)) {
+        return sva->kind != SvaKind::control;
+    }
+    return operation_holds<WaitRegion>(operation);
 }
 
 /// Operations a behavioral member may use: the static set plus waits,
@@ -1448,7 +1457,8 @@ template <typename OperationAt, typename Types, typename NineValued = std::nullp
 /// (16.2.4), whose event and transaction history the host keeps; and the
 /// target of a force or release (IEEE 1800-2023 10.6.2, 1076-2019
 /// 10.5.2.1), whose forced value hides its drivers' in the host's
-/// resolution.
+/// resolution; the disable net of a concurrent assertion's monitor, whose
+/// rise the host's commit path delivers (16.12).
 [[nodiscard]] inline std::optional<SignalId> static_kernel_host_signal(
     const Operation& operation)
 {
@@ -1474,6 +1484,13 @@ template <typename OperationAt, typename Types, typename NineValued = std::nullp
             // The triggered state of an event (IEEE 1800-2023 15.5.3) is
             // the host's history of its synchronization object.
             return value.event;
+        } else if constexpr (std::is_same_v<T, SvaOperation>) {
+            // A concurrent assertion's disable net: the host watches it
+            // through its commit path and disables the monitor's running
+            // attempts each time it becomes 1 (IEEE 1800-2023 16.12).
+            return value.disable_signal
+                ? std::optional<SignalId> { *value.disable_signal }
+                : std::nullopt;
         } else if constexpr (std::is_same_v<T, ClassStaticMethodCall>) {
             // A driver disconnection (IEEE 1076-2019 10.5.2.2) edits the
             // projected output waveform of the member's host driver.

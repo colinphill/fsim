@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+wide pause=p0p1p2p3p4p5p6p7p8p9p0p1p2p3p4p5p6p7p8p9p0p1p2p3p4p5p6p7p8p9p0p1p2p3p4p5p6p7p8p9 at 40000 fs
+wide tags=0:01:12:23:34:45:56:67:78:89:90:01:12:2
+wide squares=9090501
+wide flips=5
+wide ramp=496
+wide chain=0,1,2,3,4,5,6,7,8,9,
+wide fill=84,84,81,75,66,54,39,21,
+wide marks=ABCDEFGHIJ

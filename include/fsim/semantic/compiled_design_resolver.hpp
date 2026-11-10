@@ -2,6 +2,7 @@
 #pragma once
 
 #include "fsim/semantic/compiled_design_specialization.hpp"
+#include "fsim/support/vhdl_standard_enumeration.hpp"
 
 #include <cstdint>
 #include <functional>
@@ -312,6 +313,19 @@ public:
         std::string_view spelling,
         std::optional<ScopeId> owner_scope = std::nullopt) const;
 
+    /// The predefined enumeration type a VHDL type mark denotes when the
+    /// compiler provides that type's declaration and the design retains none:
+    /// BOOLEAN, BIT or CHARACTER of STD.STANDARD (IEEE 1076-2019 16.3), or
+    /// STD_ULOGIC, or its subtype STD_LOGIC, of IEEE.STD_LOGIC_1164 (16.7).
+    /// The mark is resolved by the visibility rules at `use_scope` (12.3,
+    /// 12.4): a simple name through the implicit context clause (13.2), a use
+    /// clause or the package's own region, an expanded name through its
+    /// prefix. No value for a mark denoting a retained declaration, whose
+    /// type the caller follows, nor for any other type.
+    [[nodiscard]] std::optional<support::VhdlIntrinsicEnumeration>
+    resolve_vhdl_intrinsic_enumeration(
+        std::string_view spelling, ScopeId use_scope) const;
+
     /// Resolve an unresolved named type through lexical visibility, package
     /// imports, and package re-exports, then apply the active type-parameter
     /// actual or default. The returned reference remains HIR-owned data by
@@ -464,6 +478,13 @@ public:
     [[nodiscard]] bool vhdl_standard_package_member_visible(
         const vhdl::Name&, ScopeId use_scope) const;
 
+    /// Whether a simple name denotes package STD.STANDARD at a use site: a
+    /// use clause `use std.standard;` of the unit makes the package name
+    /// directly visible and no declaration of that name hides it (IEEE
+    /// 1076-2019 12.3, 12.4).
+    [[nodiscard]] bool vhdl_standard_package_name_visible(
+        std::string_view name, ScopeId use_scope) const;
+
     /// Return whether an exact compiler-owned package member is imported
     /// into a VHDL use scope. Unlike the generic governed-package query,
     /// this does not accept a same-spelled member from another package.
@@ -594,6 +615,14 @@ private:
     [[nodiscard]] bool vhdl_subtype_iteration_independent(
         const vhdl::SubtypeIndication&, ScopeId use_scope,
         detail::ResolutionMemo& family) const;
+
+    // The explicit operators `name` denotes for the actual types of the
+    // generic types visible at `use_scope` under the binding frames: those
+    // declared with each actual's type in its declarative region (IEEE
+    // 1076-2019 5.8, 6.5.3.1, 12.3).
+    [[nodiscard]] std::vector<DeclarationId>
+    vhdl_generic_type_actual_operations(
+        const vhdl::Name& name, ScopeId use_scope) const;
 
     // Whether results read only the design, the specialization and the
     // binding frames, so the specialization's memo can keep them.

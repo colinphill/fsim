@@ -8,6 +8,7 @@
 #include "fsim/frontend/coverage_point_identity.hpp"
 #include "fsim/frontend/source.hpp"
 #include "fsim/semantic/compiled_design_normalization.hpp"
+#include "fsim/semantic/sva_plan.hpp"
 
 #include <array>
 #include <charconv>
@@ -2757,9 +2758,39 @@ void Lowerer::emit_deferred_assertion_action_handoff()
         process_.operations.size());
     process_.operations.emplace_back(
         WaitRegion { *deferred_assertion_action_phase_ });
+    // The report matures unless a Kill of the assertion flushed it while it
+    // was queued (IEEE 1800-2023 20.11): the Kill count in the control word
+    // read now differs from the one read when the report was queued. An Off
+    // leaves queued reports to mature.
+    std::optional<InstructionIndex> maturity_gate;
+    if (deferred_assertion_control_) {
+        const auto& control = *deferred_assertion_control_;
+        const auto current = lower_assertion_control_read(
+            control.type, control.directive, control.name);
+        constexpr auto generation_width
+            = 32U - semantic::sva::control_generation_shift;
+        const auto queued_generation = allocate_register(
+            generation_width, frontend::ValueDomain::Bit2);
+        const auto current_generation = allocate_register(
+            generation_width, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Extract { queued_generation,
+            control.queued, semantic::sva::control_generation_shift,
+            generation_width });
+        process_.operations.emplace_back(Extract { current_generation,
+            current, semantic::sva::control_generation_shift,
+            generation_width });
+        const auto same = allocate_register(1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary { BinaryOperator::equal,
+            same, queued_generation, current_generation });
+        maturity_gate = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations.emplace_back(Branch { same,
+            static_cast<InstructionIndex>(*maturity_gate + 1U), 0U,
+            UnknownBranchPolicy::when_false });
+    }
     deferred_assertion_action_handoff_
         = DeferredAssertionActionHandoff {
-              fork, continuation_jump, branch
+              fork, continuation_jump, branch, maturity_gate
           };
     deferred_assertion_action_phase_.reset();
     for (auto& effect : deferred_assertion_action_effects_) {
@@ -2858,6 +2889,14 @@ bool Lowerer::hir_contains_deferred_assertion(
                 && (source.immediate_deferred || source.immediate_final))) {
             return true;
         }
+        // A unique, unique0 or priority if or case queues its violation
+        // reports like a deferred assertion; the same flush points clear
+        // them (IEEE 1800-2023 12.4.2.1, 12.5.3.1).
+        if ((source.kind == semantic::sv::StatementKind::conditional
+                || source.kind == semantic::sv::StatementKind::selection)
+            && source.case_qualifier != semantic::sv::CaseQualifier::none) {
+            return true;
+        }
         if (source.kind == semantic::sv::StatementKind::task_call) {
             auto selected = source.task.selected;
             if (!selected && source.task.overloads.size() == 1U) {
@@ -2908,8 +2947,14 @@ Lowerer::finish_deferred_assertion_action_handoff()
     }
     deferred_assertion_action_phase_.reset();
     deferred_assertion_action_effects_.clear();
+    deferred_assertion_control_.reset();
     if (!deferred_assertion_action_handoff_) {
         return std::nullopt;
+    }
+    if (deferred_assertion_action_handoff_->maturity_gate) {
+        patch_assertion_control_gate(
+            *deferred_assertion_action_handoff_->maturity_gate,
+            static_cast<InstructionIndex>(process_.operations.size()));
     }
     process_.operations.emplace_back(ForkEnd { });
     const auto continuation = static_cast<InstructionIndex>(
@@ -4010,6 +4055,28 @@ bool Lowerer::lower_hir_sensitivity_wait(
     return true;
 }
 
+bool Lowerer::hir_automatic_local(
+    const semantic::DeclarationId declaration) const
+{
+    const auto found = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_declaration(declaration)
+        : std::nullopt;
+    if (!found || found->systemverilog == nullptr) {
+        return false;
+    }
+    switch (found->systemverilog->lifetime) {
+    case semantic::sv::Lifetime::automatic:
+        return true;
+    case semantic::sv::Lifetime::static_lifetime:
+        return false;
+    case semantic::sv::Lifetime::implicit:
+        break;
+    }
+    return active_hir_callable_
+        && *active_hir_callable_ < hir_callable_frames_.size()
+        && hir_callable_frames_[*active_hir_callable_].type.automatic;
+}
+
 bool Lowerer::lower_hir_statement_unsuspended(
     const semantic::StatementId statement_id)
 {
@@ -4037,6 +4104,19 @@ bool Lowerer::lower_hir_statement_unsuspended(
             process_.operations.emplace_back(
                 WaitRegion { runtime::SchedulerPhase::reactive });
             sample_concurrent_assertion_reads_ = false;
+            return true;
+        }
+        // The subroutine calls attached to a sequence run in the Reactive
+        // region with sampled by-value arguments (IEEE 1800-2023 16.11).
+        constexpr std::string_view concurrent_assertion_call_marker {
+            "\x1f"
+            "fsim.concurrent-assertion-call-region|"
+        };
+        if (input.kind == semantic::sv::StatementKind::display
+            && input.output_text.starts_with(
+                concurrent_assertion_call_marker)) {
+            process_.operations.emplace_back(
+                WaitRegion { runtime::SchedulerPhase::reactive });
             return true;
         }
         constexpr std::string_view concurrent_assertion_marker {
@@ -9976,9 +10056,13 @@ bool Lowerer::lower_hir_statement_unsuspended(
             if (!lowered) {
                 return assignment_rejected(__LINE__);
             }
+            // The value extends by its own signedness, not the property's
+            // (IEEE 1800-2023 10.7, 11.8.2): `int p; p = 1'b1;` stores 1.
             if (register_width(*lowered) != property->width) {
-                lowered = resize_register(
-                    *lowered, property->width, property->signed_value);
+                lowered = resize_register(*lowered, property->width,
+                    synchronization_value || pattern
+                        ? property->signed_value
+                        : hir_expression_signed(*value));
             }
             std::optional<RegisterId> receiver;
             if (!property->static_storage) {
@@ -11377,6 +11461,20 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 && hir_string_format_expression_status(
                        *value, hir_process_scope_)
                     == HirStringFormatStatus::invalid) {
+                // A hierarchical reference to a later instance retries the
+                // process (IEEE 1800-2023 23.6); any other refusal is a
+                // diagnostic, never a skipped assignment.
+                if (hierarchical_reference_missed_) {
+                    return assignment_rejected(__LINE__);
+                }
+                if (const auto refused
+                    = specialized_hir_unit_->find_expression(*value);
+                    refused && refused->systemverilog != nullptr) {
+                    report_once("FSIM-ELAB-SVSTRING-019",
+                        "$sformatf arguments must be strings or integral "
+                        "values of a known type",
+                        hir_source_span(refused->systemverilog->source));
+                }
                 return true;
             }
             // An element of a STRING variable held as a runtime string.
@@ -14221,6 +14319,15 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 *procedural_delay });
         }
         if (binding->kind == HirRuntimeBindingKind::local) {
+            if (nonblocking && hir_automatic_local(binding->declaration)) {
+                // IEEE 1800-2023 6.21, 10.4.2 (the parser reports the
+                // locals of automatic tasks and methods it sees by name).
+                report("FSIM-SV-SEM-397",
+                    "automatic variable '" + binding->name
+                        + "' cannot be written by a nonblocking assignment",
+                    span);
+                return true;
+            }
             if (nonblocking) {
                 if (elaboration_detail::trace_lowering_failures()) {
                     std::cerr
@@ -14911,6 +15018,130 @@ bool Lowerer::lower_hir_statement_unsuspended(
         process_.operations[finish] = Jump { end };
         return true;
     };
+    // A unique, unique0 or priority if (IEEE 1800-2023 12.4.2): this
+    // statement heads the series of if-else-if conditions, or continues it
+    // as the else-if of an earlier one (hir_qualified_if_link_; a begin-end
+    // around a nested if ends the series). It selects the branch a plain if
+    // does. unique and unique0 report a violation when a later condition is
+    // also true -- each condition is evaluated once on every path: the
+    // later ones only after this one held -- and unique and priority one
+    // when no condition is true and the series has no final else (12.4.2.1:
+    // reported from the violation report queue).
+    const auto lower_qualified_if = [&](
+        const semantic::sv::CaseQualifier qualifier,
+        const frontend::SourceSpan& head) {
+        using semantic::sv::CaseQualifier;
+        const auto link = [&](const std::span<const semantic::StatementId>
+                                  branch) -> const semantic::sv::Statement* {
+            if (branch.size() != 1U) {
+                return nullptr;
+            }
+            const auto next = specialized_hir_unit_->find_statement(
+                branch.front());
+            if (!next || next->systemverilog == nullptr) {
+                return nullptr;
+            }
+            const auto& source = *next->systemverilog;
+            return source.kind == semantic::sv::StatementKind::conditional
+                    && source.condition
+                    && source.immediate_directive
+                        != semantic::sv::Statement::ImmediateDirective::cover
+                    && source.case_qualifier == CaseQualifier::none
+                ? &source
+                : nullptr;
+        };
+        const auto qualifier_name = qualifier == CaseQualifier::unique
+            ? std::string { "unique" }
+            : qualifier == CaseQualifier::unique0 ? std::string { "unique0" }
+                                                  : std::string { "priority" };
+        const auto violation_type = qualifier == CaseQualifier::unique
+            ? 32U
+            : qualifier == CaseQualifier::unique0 ? 64U : 128U;
+        if (!emit_coverage_decision(*condition)) {
+            return false;
+        }
+        const auto lowered = lower_condition(*condition);
+        if (!lowered) {
+            return false;
+        }
+        const auto branch = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations.emplace_back(Branch {
+            *lowered, 0U, 0U, UnknownBranchPolicy::when_false });
+        const auto when_true = static_cast<InstructionIndex>(
+            process_.operations.size());
+        if (qualifier != CaseQualifier::priority) {
+            std::vector<std::pair<InstructionIndex, RegisterId>> overlaps;
+            for (const auto* later = link(else_statements); later != nullptr;
+                 later = link(later->else_statements)) {
+                const auto other = lower_condition(*later->condition);
+                if (!other) {
+                    return false;
+                }
+                overlaps.emplace_back(static_cast<InstructionIndex>(
+                                          process_.operations.size()),
+                    *other);
+                process_.operations.emplace_back(Branch {
+                    *other, 0U, 0U, UnknownBranchPolicy::when_false });
+            }
+            if (!overlaps.empty()) {
+                const auto skip = static_cast<InstructionIndex>(
+                    process_.operations.size());
+                process_.operations.emplace_back(Jump { 0U });
+                const auto violation = static_cast<InstructionIndex>(
+                    process_.operations.size());
+                emit_violation_report(violation_type,
+                    qualifier_name + " if has multiple matching conditions",
+                    head);
+                for (const auto& [test, other] : overlaps) {
+                    process_.operations[test] = Branch { other, violation,
+                        static_cast<InstructionIndex>(test + 1U),
+                        UnknownBranchPolicy::when_false };
+                }
+                process_.operations[skip] = Jump { static_cast<InstructionIndex>(
+                    process_.operations.size()) };
+            }
+        }
+        if (!emit_coverage_arm(statements, true)) {
+            return false;
+        }
+        if (!lower_hir_statements(statements)) {
+            return false;
+        }
+        const auto finish = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations.emplace_back(Jump { 0U });
+        const auto when_false = static_cast<InstructionIndex>(
+            process_.operations.size());
+        if (!emit_coverage_arm(else_statements, false)) {
+            return false;
+        }
+        if (link(else_statements) != nullptr) {
+            hir_qualified_if_link_ = std::pair { qualifier, head };
+            const bool lowered_else = lower_hir_statements(else_statements);
+            hir_qualified_if_link_.reset();
+            if (!lowered_else) {
+                return false;
+            }
+        } else if (else_statements.empty()) {
+            if (qualifier != CaseQualifier::unique0) {
+                emit_violation_report(violation_type,
+                    qualifier_name + " if has no matching condition", head);
+            }
+        } else if (!lower_hir_statements(else_statements)) {
+            return false;
+        }
+        const auto end = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations[branch] = Branch {
+            *lowered,
+            when_true,
+            when_false,
+            UnknownBranchPolicy::when_false,
+        };
+        process_.operations[finish] = Jump { end };
+        return true;
+    };
     const auto lower_case = [&](const auto& alternatives) {
         if (!condition) {
             if (elaboration_detail::trace_lowering_failures()) {
@@ -15359,8 +15590,20 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 && hir_vhdl_predefined_character_subtype(
                     *selector_character_element_subtype,
                     selector_character_array_scope));
-        const auto selector_loop_enumeration
-            = hir_vhdl_loop_parameter_enumeration(*condition);
+        // A loop parameter is a value of the base type of its discrete
+        // range (IEEE 1076-2019 10.10). One of BOOLEAN, BIT, CHARACTER or
+        // STD_ULOGIC reads as any other selector of that type does; one of an
+        // enumeration type the design declares keeps that type here, so its
+        // choices are checked against it (10.9) and encoded as its positions.
+        const auto selector_loop_subtype
+            = hir_vhdl_loop_parameter_subtype(*condition);
+        const bool selector_predefined_loop = selector_loop_subtype
+            && (hir_vhdl_scalar_loop_parameter(*condition)
+                || hir_vhdl_predefined_character_subtype(
+                    *selector_loop_subtype, selector_scope));
+        const auto selector_loop_enumeration = selector_predefined_loop
+            ? std::optional<semantic::TypeId> { }
+            : hir_vhdl_loop_parameter_enumeration(*condition);
         auto selector_enumeration = selector_loop_enumeration;
         if (!selector_enumeration && selector_subtype) {
             selector_enumeration = hir_vhdl_enumeration_root(*selector_subtype);
@@ -18634,7 +18877,14 @@ bool Lowerer::lower_hir_statement_unsuspended(
             });
             any_match = next_any;
         }
-        const auto warning_source = runtime_source_location(span);
+        // The violation reports of a unique, unique0 or priority case
+        // (Table 20-6 types 32, 64 and 128): checked as the statement
+        // executes, reported from the process's violation report queue
+        // (IEEE 1800-2023 12.5.3.1, 20.11).
+        const auto violation_type = qualifier
+                == semantic::sv::CaseQualifier::unique
+            ? 32U
+            : qualifier == semantic::sv::CaseQualifier::unique0 ? 64U : 128U;
         const auto warn_if = [&](const RegisterId checked,
                                  std::string message) {
             const auto branch = static_cast<InstructionIndex>(
@@ -18647,11 +18897,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
             });
             const auto warning = static_cast<InstructionIndex>(
                 process_.operations.size());
-            process_.operations.emplace_back(Report {
-                std::move(message),
-                runtime::simir::AssertionSeverity::warning,
-                warning_source,
-            });
+            emit_violation_report(violation_type, std::move(message), span);
             const auto next = static_cast<InstructionIndex>(
                 process_.operations.size());
             process_.operations[branch] = Branch {
@@ -18904,6 +19150,13 @@ bool Lowerer::lower_hir_statement_unsuspended(
             -> std::optional<std::int64_t> {
             if (specialized_hir_unit_ == nullptr) {
                 return hir_constant_integer(expression);
+            }
+            // A character literal bound is its position in the type the
+            // context gave it ('X' to 'Z' of STD_ULOGIC is 1 to 4).
+            if (statement->vhdl != nullptr) {
+                if (const auto position = hir_vhdl_bound_position(expression)) {
+                    return position;
+                }
             }
             const auto resolver = hir_resolver();
             if (const auto enumeration
@@ -21545,6 +21798,39 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     span);
                 return true;
             }
+            // A SystemVerilog-2023 nonblocking assignment shall not write an
+            // element of a dynamically sized array variable (IEEE 1800-2023
+            // 10.4.2, 6.21): an element selected, at any level of the
+            // target, from a dynamic array, a queue or an associative array
+            // (the variable-size arrays of 7.4 Table 7-1; "dynamically sized
+            // arrays (dynamic, associative, or queues)", 6.24.3).
+            // The whole variable is a legal target.
+            if (input.assignment_kind
+                    == semantic::sv::AssignmentKind::nonblocking
+                && input.target
+                && systemverilog_standard_
+                    == frontend::StandardRevision::SystemVerilog2023) {
+                if (const auto path = hir_sv_value_path(*input.target)) {
+                    const auto dynamic = std::ranges::find_if(path->steps,
+                        [](const HirSvValuePath::Step& step) {
+                            return !step.indices.empty()
+                                && !step.container.fixed;
+                        });
+                    if (dynamic != path->steps.end()) {
+                        const auto* kind = dynamic->container.associative
+                            ? "an associative array"
+                            : dynamic->container.queue ? "a queue"
+                                                       : "a dynamic array";
+                        report("FSIM-ELAB-SVASSIGN-001",
+                            std::string { "SystemVerilog-2023 prohibits a "
+                                          "nonblocking assignment to an "
+                                          "element of " }
+                                + kind,
+                            span);
+                        return true;
+                    }
+                }
+            }
             // `a[i++] += 2` evaluates its index once (IEEE 1800-2017 11.4.1).
             struct CapturedIndicesReset {
                 Lowerer& lowerer;
@@ -21663,15 +21949,44 @@ bool Lowerer::lower_hir_statement_unsuspended(
         case semantic::sv::StatementKind::conditional: {
             if (input.immediate_directive
                     != semantic::sv::Statement::ImmediateDirective::cover
-                || !(input.immediate_deferred || input.immediate_final)
                 || !input.condition) {
+                // The else-if of a unique, unique0 or priority if continues
+                // its series of conditions (IEEE 1800-2023 12.4.2).
+                const auto link = std::exchange(
+                    hir_qualified_if_link_, std::nullopt);
+                if (input.immediate_directive
+                        != semantic::sv::Statement::ImmediateDirective::cover
+                    && input.condition) {
+                    if (input.case_qualifier
+                        != semantic::sv::CaseQualifier::none) {
+                        return lower_qualified_if(input.case_qualifier, span);
+                    }
+                    if (link) {
+                        return lower_qualified_if(link->first, link->second);
+                    }
+                }
                 return lower_if();
             }
-            // A deferred cover (`cover #0` / `cover final`, IEEE 1800-2023
-            // 16.4): its pass statement is queued like an assertion's
-            // action, with its arguments evaluated now, and runs in the
-            // Reactive or Postponed region unless a flush point cancels it
-            // first (16.4.1, 16.4.2).
+            // An immediate cover (IEEE 1800-2023 16.3). A deferred one
+            // (`cover #0` / `cover final`, 16.4) queues its pass statement
+            // like an assertion's action, with its arguments evaluated now,
+            // and runs it in the Reactive or Postponed region unless a flush
+            // point or a Kill cancels it first (16.4.1, 16.4.2, 20.11). The
+            // assertion controls (20.11) decide whether the cover is checked
+            // and whether its pass statement runs.
+            const bool deferred
+                = input.immediate_deferred || input.immediate_final;
+            const auto control_type = !deferred
+                ? semantic::sva::control_simple_immediate
+                : input.immediate_final
+                ? semantic::sva::control_final_deferred
+                : semantic::sva::control_observed_deferred;
+            const auto control_name
+                = hir_assertion_control_name(input.immediate_label);
+            const auto control_word = lower_assertion_control_read(
+                control_type, semantic::sva::control_cover, control_name);
+            const auto on_gate = emit_assertion_control_gate(
+                control_word, semantic::sva::control_on);
             const auto first_action = input.statements.empty()
                 ? std::nullopt
                 : specialized_hir_unit_->find_statement(
@@ -21690,9 +22005,17 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 *checked, 0U, 0U, UnknownBranchPolicy::when_false });
             const auto pass = static_cast<InstructionIndex>(
                 process_.operations.size());
-            deferred_assertion_action_phase_ = input.immediate_final
-                ? runtime::SchedulerPhase::postponed
-                : runtime::SchedulerPhase::reactive;
+            const auto pass_gate = emit_assertion_control_gate(
+                control_word, semantic::sva::control_pass);
+            if (deferred) {
+                deferred_assertion_control_ = DeferredAssertionControl {
+                    control_type, semantic::sva::control_cover, control_name,
+                    control_word
+                };
+                deferred_assertion_action_phase_ = input.immediate_final
+                    ? runtime::SchedulerPhase::postponed
+                    : runtime::SchedulerPhase::reactive;
+            }
             if (!lower_hir_statements(input.statements)) {
                 return false;
             }
@@ -21701,7 +22024,9 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 process_.operations.size());
             process_.operations[branch] = Branch {
                 *checked, pass, end, UnknownBranchPolicy::when_false };
-            if (action_requires_handoff && !handoff) {
+            patch_assertion_control_gate(on_gate, end);
+            patch_assertion_control_gate(pass_gate, end);
+            if (deferred && action_requires_handoff && !handoff) {
                 report(
                     "FSIM-ELAB-SVASSERT-002",
                     "a deferred assertion action could not be lowered to a "
@@ -23069,28 +23394,107 @@ bool Lowerer::lower_hir_statement_unsuspended(
             if (std::ranges::find(
                     assertion_control_tasks, input.task.spelling)
                 != assertion_control_tasks.end()) {
-                auto marker = std::string { "\x1f"
-                                            "fsim.assertion-control|" }
-                    + input.task.spelling.substr(1U);
-                if (input.task.spelling == "$assertcontrol"
-                    && !input.task_arguments.empty()
-                    && input.task_arguments.front().actual) {
-                    const auto argument
-                        = *input.task_arguments.front().actual;
-                    const auto control_value = specialized_hir_unit_
-                                                   ->evaluate_integral_expression(
-                                                       argument);
-                    if (control_value) {
-                        marker += "|" + std::to_string(*control_value);
-                    } else if (const auto expression
-                        = specialized_hir_unit_->find_expression(argument);
-                        expression
-                        && expression->systemverilog != nullptr) {
-                        marker += "|" + expression->systemverilog->text;
+                // $assertcontrol ( control_type [ , [ assertion_type ] [ , [
+                // directive_type ] [ , [ levels ] [ , list ] ] ] ] ) and the
+                // convenience tasks, `task [ ( levels [ , list ] ) ]` (IEEE
+                // 1800-2023 20.11). Each integer argument is evaluated here
+                // and sent to the host ahead of the request, as
+                // `arg|<position>|<value>` with positions control_type 0,
+                // assertion_type 1, directive_type 2 and levels 3; the
+                // request names the task, the calling scope (where the list
+                // items are resolved, as for $dumpvars, 21.7.1.2) and the
+                // list items.
+                constexpr std::string_view marker {
+                    "\x1f"
+                    "fsim.assertion-control|"
+                };
+                const bool control = input.task.spelling == "$assertcontrol";
+                const std::size_t integers = control ? 4U : 1U;
+                const bool named = std::ranges::any_of(input.task_arguments,
+                    [](const semantic::sv::TaskAssociation& argument) {
+                        return argument.formal.has_value();
+                    });
+                if (language_ == frontend::Language::Vhdl2008 || named
+                    || (control
+                        && (input.task_arguments.empty()
+                            || !input.task_arguments.front().actual))) {
+                    report("FSIM-ELAB-SVASSERT-005",
+                        input.task.spelling
+                            + (control
+                                    ? " requires a control_type and "
+                                      "positional arguments"
+                                    : " takes positional levels and scope or "
+                                      "assertion arguments")
+                            + " (IEEE 1800-2023 20.11)",
+                        span);
+                    return true;
+                }
+                std::string request = std::string { marker }
+                    + input.task.spelling.substr(1U) + "|"
+                    + hir_instance_path();
+                for (std::size_t index = 0U;
+                     index < input.task_arguments.size(); ++index) {
+                    const auto& argument = input.task_arguments[index];
+                    if (index < integers) {
+                        if (!argument.actual) {
+                            continue;
+                        }
+                        auto lowered
+                            = lower_hir_expression(*argument.actual, 32U);
+                        if (!lowered) {
+                            return false;
+                        }
+                        if (register_width(*lowered) != 32U) {
+                            lowered = resize_register(*lowered, 32U,
+                                hir_expression_signed(*argument.actual));
+                        }
+                        FormatDisplay argument_display;
+                        argument_display.source = *lowered;
+                        argument_display.format = OutputFormat::decimal;
+                        argument_display.prefix = std::string { marker } + "arg|"
+                            + std::to_string(control ? index : 3U) + "|";
+                        argument_display.newline = false;
+                        argument_display.signed_decimal = true;
+                        argument_display.suppress_leading_zero = true;
+                        process_.operations.emplace_back(std::move(argument_display));
+                        continue;
                     }
+                    const auto expression = argument.actual
+                        ? specialized_hir_unit_->find_expression(
+                              *argument.actual)
+                        : std::nullopt;
+                    if (!expression || expression->systemverilog == nullptr
+                        || (expression->systemverilog->kind
+                                != semantic::sv::ExpressionKind::name
+                            && expression->systemverilog->kind
+                                != semantic::sv::ExpressionKind::index)
+                        || expression->systemverilog->text.empty()
+                        || expression->systemverilog->text.find('|')
+                            != std::string::npos) {
+                        report("FSIM-ELAB-SVASSERT-005",
+                            input.task.spelling
+                                + " list items must name scopes or "
+                                  "assertions (IEEE 1800-2023 20.11)",
+                            hir_source_span(argument.source));
+                        return true;
+                    }
+                    request += '|';
+                    request += expression->systemverilog->text;
+                }
+                {
+                    // The call's place, `src|<line>|<column>|<path>`, where
+                    // the host reports a control_type outside Table 20-5 or
+                    // a negative levels argument.
+                    const auto call_source = runtime_source_location(span);
+                    process_.operations.emplace_back(Display {
+                        std::string { marker } + "src|"
+                            + std::to_string(call_source.line) + "|"
+                            + std::to_string(call_source.column) + "|"
+                            + call_source.path.str(),
+                        false, false });
                 }
                 process_.operations.emplace_back(Display {
-                    std::move(marker), false, false });
+                    std::move(request), false, false });
                 return true;
             }
             if (input.task.spelling.starts_with(container_push_prefix)) {
@@ -23732,6 +24136,52 @@ bool Lowerer::lower_hir_statement_unsuspended(
             const bool failure_requires_handoff = deferred
                 && (!input.assertion_has_failure_action
                     || action_requires_handoff(input.else_statements));
+            const bool immediate_assertion
+                = !input.assertion_message.starts_with("concurrent assertion '");
+            // The assertion controls (IEEE 1800-2023 20.11) of an immediate
+            // or deferred assertion: an assertion that is off (or killed)
+            // is not checked at all, and the pass and fail actions run --
+            // the default $error included -- only while enabled when the
+            // assertion executes. A deferred report queued before a Kill
+            // does not mature (deferred_assertion_control_). A concurrent
+            // assertion's fallback evaluator reads its own controls.
+            std::optional<RegisterId> control_word;
+            std::optional<InstructionIndex> on_gate;
+            std::uint32_t control_type { };
+            std::uint32_t control_directive { };
+            std::string control_name;
+            if (immediate_assertion) {
+                control_type = !deferred
+                    ? semantic::sva::control_simple_immediate
+                    : input.output_postponed
+                    ? semantic::sva::control_final_deferred
+                    : semantic::sva::control_observed_deferred;
+                control_directive = input.immediate_directive
+                        == semantic::sv::Statement::ImmediateDirective::assumption
+                    ? semantic::sva::control_assume
+                    : input.immediate_directive
+                        == semantic::sv::Statement::ImmediateDirective::cover
+                    ? semantic::sva::control_cover
+                    : semantic::sva::control_assert;
+                control_name = hir_assertion_control_name(input.immediate_label);
+                control_word = lower_assertion_control_read(
+                    control_type, control_directive, control_name);
+                on_gate = emit_assertion_control_gate(
+                    *control_word, semantic::sva::control_on);
+            }
+            const auto gate_action = [&](const std::uint32_t bit)
+                -> std::optional<InstructionIndex> {
+                if (!control_word) {
+                    return std::nullopt;
+                }
+                if (deferred) {
+                    deferred_assertion_control_ = DeferredAssertionControl {
+                        control_type, control_directive, control_name,
+                        *control_word
+                    };
+                }
+                return emit_assertion_control_gate(*control_word, bit);
+            };
             const auto checked = lower_condition(*input.condition);
             if (!checked) {
                 return false;
@@ -23752,11 +24202,10 @@ bool Lowerer::lower_hir_statement_unsuspended(
             // reach the foreign assertion callbacks (IEEE 1800-2023 39.4.1);
             // the points are probe-only: a run without --foreign-probes
             // drops them from its code.
-            const bool immediate_assertion
-                = !input.assertion_message.starts_with("concurrent assertion '");
             if (immediate_assertion) {
                 emit_debug_point(DebugPointKind::assertion_pass, span);
             }
+            const auto pass_gate = gate_action(semantic::sva::control_pass);
             if (deferred) {
                 deferred_assertion_action_phase_
                     = input.output_postponed
@@ -23772,11 +24221,16 @@ bool Lowerer::lower_hir_statement_unsuspended(
             const auto skip_failure = static_cast<InstructionIndex>(
                 process_.operations.size());
             process_.operations.emplace_back(Jump { 0U });
+            if (pass_gate) {
+                patch_assertion_control_gate(*pass_gate, skip_failure);
+            }
             const auto failure = static_cast<InstructionIndex>(
                 process_.operations.size());
             if (immediate_assertion) {
                 emit_debug_point(DebugPointKind::assertion_fail, span);
             }
+            const auto failure_gate
+                = gate_action(semantic::sva::control_fail);
             std::optional<InstructionIndex> failure_handoff;
             if (input.assertion_has_failure_action) {
                 if (deferred) {
@@ -23817,6 +24271,11 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 UnknownBranchPolicy::when_false,
             };
             process_.operations[skip_failure] = Jump { end };
+            for (const auto gate : { on_gate, failure_gate }) {
+                if (gate) {
+                    patch_assertion_control_gate(*gate, end);
+                }
+            }
             if ((pass_requires_handoff && !pass_handoff)
                 || (failure_requires_handoff && !failure_handoff)) {
                 report(

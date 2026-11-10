@@ -1663,6 +1663,11 @@ struct Scheduler::Impl {
     }
 
     void enqueue_systemverilog_at(SimulationTick, SchedulerPhase, Entry);
+    /// IEEE 1800-2023 4.6 b): an event of an NBA region takes the region's
+    /// order class, so that its insertion sequence orders it
+    /// (nonblocking_region_first and nonblocking_region_last excepted).
+    static void order_nonblocking_region_entry(
+        SchedulerPhase phase, Entry& entry) noexcept;
     [[nodiscard]] bool begin_systemverilog_batch(bool include_postponed);
 
     [[nodiscard]] WorkQueue* pending_systemverilog_queue(

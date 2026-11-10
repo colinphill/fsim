@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: Apache-2.0
+intlit length 4 4 4 4 4 5
+intlit constant_length 4 4 4 5
+intlit constant_pos 3 4 8 97 1 1 4
+intlit pos 0 3 4 8 97 1
+intlit val 'Z' '-' 'b'
+intlit x01 'X''1''X''1'
+intlit x01z 'X''Z''X''Z'
+intlit ux01 'U''1''U''1'
+intlit ux01z 'U''Z''U''Z'
+intlit image 'Z' '-' 'a' 'Z'
+intlit value 'H' 5 'q'
+intlit x01z_loop 'X' 1
+intlit x01z_loop '0' 2
+intlit x01z_loop '1' 3
+intlit x01z_loop 'Z' 4
+intlit x01z_count 4
+intlit std_ulogic_loop 'U' 0
+intlit std_ulogic_loop 'X' 1
+intlit std_ulogic_loop '0' 2
+intlit std_ulogic_loop '1' 3
+intlit std_ulogic_loop 'Z' 4
+intlit std_ulogic_loop 'W' 5
+intlit std_ulogic_loop 'L' 6
+intlit std_ulogic_loop 'H' 7
+intlit std_ulogic_loop '-' 8
+intlit x01z_uses 'X' false false 'X' 'X''1' x
+intlit x01z_uses '0' false true '0' '0''1' o
+intlit x01z_uses '1' false true '1' '1''1' o
+intlit x01z_uses 'Z' true true 'Z' 'Z''1' z
+intlit x01z_hits 0 1 1 1 1 0 0 0 0
+intlit logic_index 11 20 20
+intlit x01z_index 1 2 3 4
+intlit literal_index 4 1 2 3 30 10 20 40
+intlit literal_slice 2 50 60 0 0 7 8
+intlit range_uses 'X' false 1
+intlit range_uses '0' false 2
+intlit range_uses '1' false 3
+intlit range_uses 'Z' true 4
+intlit bit_uses '0' false '0' '0''1' l '0'
+intlit bit_uses '1' true '1' '1''1' h '1'
+intlit bit_hits 1 1
+intlit boolean_uses false false true false false
+intlit boolean_uses true true false true true
+intlit character_uses 'a' false 'a' 97
+intlit character_uses 'b' true 'b' 98
+intlit character_uses 'c' false 'c' 99
+intlit character_hits 1 1 1 0 0
+intlit standard_expanded 5 99 'q' 113 294 true '1' 'z' 5
+intlit standard_all 'z' 3 114 7 0

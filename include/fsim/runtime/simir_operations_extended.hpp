@@ -762,13 +762,64 @@ enum class SvaKind : std::uint8_t {
     tick,
     // result := the next outcome (runtime::sva::Outcome).
     outcome,
+    // result := the assertion control word (semantic::sva::control_on and
+    // the others, IEEE 1800-2023 20.11) of the process's control site
+    // `site`; `plan` describes the site (`type|directive|name`). It reads
+    // no signal and creates no monitor.
+    control,
+    // The local-variable requests of the monitor of `site` (IEEE 1800-2023
+    // 16.10; sva::Monitor::pending_requests): after a tick that returned
+    // -n, request r (0 <= r < n, the 32-bit register `start`) asks for the
+    // value of one expression for one thread's valuation of the locals.
+    // request: result (32 bits) := the expression's number.
+    request,
+    // local: result := the value of local `guard_count` in the valuation
+    // of request `start` (the local's width, four-state).
+    local,
+    // answer: the value of request `start` := register `guards`
+    // (`guard_count` bits); result (32 bits) := 0.
+    answer,
+    // The next subroutine call attached to a sequence that the last
+    // completed tick queued (IEEE 1800-2023 16.11; sva::Monitor::take_call):
+    // result (32 bits) := its number plus one, 0 when none is left. Its
+    // local variables are then read with `local` at request 0xffffffff.
+    call,
 };
 
 /// The concurrent-property monitor of one assertion directive (IEEE
 /// 1800-2017 16.14). The process owning the operation owns the monitor; the
 /// first tick creates it from `plan` (an encoded semantic::sva::Plan) and the
 /// per-instance `bounds`. `guards` packs the sampled guard values, guard i in
-/// bit i; `start` and `disabled` are 1-bit flags. `result` is 32 bits.
+/// bit i; `start` and `disabled` are 1-bit flags. `result` is 32 bits. A
+/// control read (SvaKind::control) uses only `site`, `plan` and `result`;
+/// its sites are numbered apart from the monitors' sites.
+/// `disable_signal`, on a directive's tick, is the 1-bit signal its
+/// `disabled` operand reads: the disable condition's truth with current
+/// values (IEEE 1800-2023 16.12). The host watches it through its commit
+/// path, and each time it becomes 1 the running attempts of the monitor end
+/// in the disabled state at once, between the ticks too (Monitor::
+/// disable_running); the tick still disables the attempt that starts while
+/// it is 1.
+/// `wake_signal`, on the tick of a monitor that also evaluates at time steps
+/// without a tick of its clock (its plan reads its one clock's tick as a
+/// guard, as a multiclocked plan does), is the 1-bit signal the process waits
+/// for besides its clock: the host toggles it at the start of such a time
+/// step while an attempt of the monitor is in progress, after
+/// `abort_signal` (the truth of its asynchronous abort conditions, IEEE
+/// 1800-2023 16.12.14) changed in an earlier time step, or at every time
+/// step with semantic::sva::monitor_every_step in `monitor_flags` (a disable
+/// or abort condition no net follows, 16.12). The tick of such an
+/// evaluation applies only the asynchronous aborts, with sampled values,
+/// and the disable condition. semantic::sva::monitor_expect marks an expect
+/// statement's monitor (16.17): an attempt its disable net ends between the
+/// ticks reports the disabled outcome, which ends the statement.
+/// A tick of a plan with local variables (16.10) gives -n when it needs n
+/// values of local-variable expressions it was not given: the attempt state
+/// is unchanged, and the process answers each request (SvaKind::request,
+/// local, answer) and runs the tick again. The local read takes the request
+/// in `start` and the local's number in `guard_count`; its result has the
+/// local's width. The answer takes the request in `start` and the value in
+/// `guards`, `guard_count` bits wide.
 struct SvaOperation {
     SvaKind kind { SvaKind::tick };
     std::uint32_t site { };
@@ -779,6 +830,10 @@ struct SvaOperation {
     RegisterId disabled { };
     std::vector<RegisterId> bounds;
     RegisterId result { };
+    RareOptionalId<SignalId> disable_signal;
+    RareOptionalId<SignalId> wake_signal;
+    RareOptionalId<SignalId> abort_signal;
+    std::uint8_t monitor_flags { };
 };
 
 enum class PlaLogicKind : std::uint8_t {

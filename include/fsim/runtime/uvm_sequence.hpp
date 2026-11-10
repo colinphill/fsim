@@ -985,6 +985,10 @@ public:
                           SystemVerilogUvmPhaseProcessHandle process);
   void release_role(SystemVerilogUvmSequenceRoleHandle role);
   void teardown_roles(SystemVerilogUvmRootHandle root);
+  // Tears down the roles of every root that still has a live one. The
+  // owner calls it while the services the release reports to still run;
+  // destruction does it again for roles left live.
+  void teardown_all_roles() noexcept;
   [[nodiscard]] std::span<const SystemVerilogUvmSequenceRoleEvent>
   role_events() const noexcept {
     return role_events_;

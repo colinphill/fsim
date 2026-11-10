@@ -248,6 +248,11 @@ bool Simulation::signal_is_assigned(const SignalId signal) const
     return impl_->interpreter->signal_is_assigned(signal);
 }
 
+bool Simulation::signal_kernel_owned(const SignalId signal) const
+{
+    return impl_->interpreter->signal_kernel_owned(signal);
+}
+
 void Simulation::start()
 {
     if (impl_->lifecycle != Impl::Lifecycle::ready) {
@@ -536,14 +541,17 @@ std::int32_t Simulation::reset_value() const noexcept
     return impl_->reset_value;
 }
 
+// A closed static kernel's own time step, while it runs one, is the time:
+// a hook its process calls sees what the scheduler would have shown
+// (docs/engine-v4-semantics.md S10).
 SimulationTick Simulation::now() const noexcept
 {
-    return impl_->interpreter->scheduler().now();
+    return impl_->interpreter->current_time();
 }
 
 std::uint64_t Simulation::delta() const noexcept
 {
-    return impl_->interpreter->scheduler().delta();
+    return impl_->interpreter->current_delta();
 }
 
 std::uint64_t Simulation::cycles() const noexcept

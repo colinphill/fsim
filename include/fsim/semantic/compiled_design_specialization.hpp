@@ -536,6 +536,19 @@ public:
         ExpressionId expression,
         const SpecializedHirIntegralBinding& binding) const;
 
+    /// Evaluate a bound of a VHDL range as a position in its type (IEEE
+    /// 1076-2019 5.2.1) where the integral evaluation gives something else:
+    /// a character literal at its position in the type its context gave it
+    /// (9.3.2), and a STD_ULOGIC-valued attribute such as `X01Z'LEFT` at its
+    /// position (the integral evaluation encodes '0' and '1' as BIT values
+    /// and no other STD_ULOGIC value). No value for any other expression,
+    /// whose integral evaluation is its position. `binding` is as for
+    /// evaluate_integral_expression, or null.
+    [[nodiscard]] std::optional<std::int64_t>
+    evaluate_vhdl_position(
+        ExpressionId expression,
+        const SpecializedHirIntegralBinding* binding = nullptr) const;
+
     /// Evaluate the bounded pure VHDL constant subset while preserving
     /// packed-vector width and index bounds. Unsupported or runtime-dependent
     /// expressions return no value.

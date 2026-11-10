@@ -1476,6 +1476,31 @@ bool Lowerer::lower_hir_string_format_task(
         return false;
     }
     if (status == HirStringFormatStatus::invalid) {
+        // A hierarchical reference to a later instance retries the process
+        // (IEEE 1800-2023 23.6); any other refusal is a diagnostic, never a
+        // skipped statement.
+        if (hierarchical_reference_missed_) {
+            return false;
+        }
+        const auto refused = specialized_hir_unit_->find_statement(
+            statement_id);
+        if (refused && refused->systemverilog != nullptr) {
+            const auto span = hir_source_span(refused->systemverilog->source);
+            const auto target_refused = std::ranges::any_of(diagnostics_,
+                [&](const Diagnostic& diagnostic) {
+                    return diagnostic.code == "FSIM-ELAB-SVSTRING-020"
+                        && diagnostic.span.begin.offset == span.begin.offset
+                        && diagnostic.span.end.offset == span.end.offset
+                        && diagnostic.span.source_name.str()
+                            == span.source_name.str();
+                });
+            if (!target_refused) {
+                report_once("FSIM-ELAB-SVSTRING-019",
+                    refused->systemverilog->task.spelling
+                        + " has an invalid or target-mismatched format",
+                    span);
+            }
+        }
         return true;
     }
     const auto statement = specialized_hir_unit_->find_statement(
@@ -2063,10 +2088,39 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
             }
             if (call.kind == semantic::sv::ExpressionKind::call
                 && call.text == "$sformatf") {
+                bool refused { };
                 const auto fail = [&](std::string message) {
+                    refused = true;
                     report_expression(expression_id,
                         "FSIM-ELAB-SVSTRING-019",
                         std::move(message));
+                };
+                // A hierarchical reference to an instance elaborated after
+                // this process has no type yet, nor has a method call on
+                // one (`i.q.size()`); its lowering retries once the instance
+                // exists (IEEE 1800-2023 23.6). A method call on a local
+                // receiver (`a.exists(k)`) is no such reference.
+                const auto forward_reference = [&](
+                    semantic::ExpressionId value) {
+                    auto expression
+                        = specialized_hir_unit_->find_expression(value);
+                    while (expression && expression->systemverilog != nullptr
+                        && expression->systemverilog->kind
+                            == semantic::sv::ExpressionKind::call
+                        && expression->systemverilog->text.starts_with('.')
+                        && !expression->systemverilog->operands.empty()) {
+                        value = expression->systemverilog->operands.front();
+                        expression
+                            = specialized_hir_unit_->find_expression(value);
+                    }
+                    return expression && expression->systemverilog != nullptr
+                        && expression->systemverilog->kind
+                            != semantic::sv::ExpressionKind::call
+                        && expression->systemverilog->kind
+                            != semantic::sv::ExpressionKind::class_method_call
+                        && expression->systemverilog->text.find('.')
+                            != std::string::npos
+                        && !hir_referenced_declaration(value);
                 };
                 const auto format = call.operands.empty()
                     ? std::optional<semantic::CompiledExpressionView> { }
@@ -2122,14 +2176,7 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
                     } else {
                         const auto unresolved_hierarchical = [&]
                             (const semantic::ExpressionId value) {
-                                const auto expression
-                                    = specialized_hir_unit_->find_expression(
-                                        value);
-                                return expression
-                                    && expression->systemverilog != nullptr
-                                    && expression->systemverilog->text.find('.')
-                                        != std::string::npos
-                                    && !hir_referenced_declaration(value);
+                                return forward_reference(value);
                             };
                         const auto compatible = [&]
                             (const semantic::ExpressionId value,
@@ -2210,6 +2257,21 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
                             }
                         }
                     }
+                }
+                // Lowering skips a call this check refuses, so a refusal
+                // that slipped past the checks above is still reported.
+                const auto forward_hierarchical = std::ranges::any_of(
+                    call.operands,
+                    [&](const semantic::ExpressionId value) {
+                        return forward_reference(value)
+                            && !hir_expression_width(value, call.scope);
+                    });
+                if (!refused && !forward_hierarchical
+                    && hir_string_format_expression_status(
+                           expression_id, call.scope)
+                        == HirStringFormatStatus::invalid) {
+                    fail("$sformatf arguments must be strings or integral "
+                        "values of a known type");
                 }
             }
             if (call.kind == semantic::sv::ExpressionKind::call

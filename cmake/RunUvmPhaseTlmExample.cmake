@@ -20,9 +20,13 @@ set(
 string(APPEND expected
   " closure_audit=compatibility/diagnostics/source/complexity/memory/trace/artifact/cache gaps=0")
 
-function(run_stage)
+# run_stage_with_error(<stderr variable> <driver arguments>...): one stage of
+# the driver, with FSIM_STAGE_ENVIRONMENT set; its standard error is returned
+# in the named variable.
+function(run_stage_with_error error_variable)
   execute_process(
     COMMAND
+      "${CMAKE_COMMAND}" -E env ${FSIM_STAGE_ENVIRONMENT}
       "${FSIM_EXECUTABLE}" ${ARGN}
     RESULT_VARIABLE result
     OUTPUT_VARIABLE output
@@ -39,19 +43,63 @@ function(run_stage)
       "UVM phase/TLM stage lost exact transcript (${ARGN})\n${output}")
   endif()
   message(STATUS "${output}")
+  set(${error_variable} "${error}" PARENT_SCOPE)
+endfunction()
+
+function(run_stage)
+  set(FSIM_STAGE_ENVIRONMENT "")
+  run_stage_with_error(ignored ${ARGN})
 endfunction()
 
 set(common "${FSIM_UVM_ROOT}" "${FSIM_WORK_DIR}" "${FSIM_RELEASE}")
 run_stage(direct ${common})
 run_stage(compile ${common})
 foreach(optimization IN ITEMS o0 o2)
+  set(kernel_cache "${FSIM_WORK_DIR}/${optimization}/cache/static-kernel.sqlite3")
+  # Only an ahead-of-time elaboration stores v4 kernel code in the
+  # optimization's cache (make_config: <work>/<optimization>/cache;
+  # `elaborate --aot`, docs/engine-v4-semantics.md). An ordinary
+  # elaboration and a simulation compile the kernel in memory and publish
+  # nothing, so the cold run starts, and ends, without a cache file.
+  file(REMOVE "${FSIM_WORK_DIR}/${optimization}/cache/static-kernel.sqlite3")
   run_stage(elaborate ${common} ${optimization})
-  file(REMOVE "${FSIM_WORK_DIR}/cache/static-kernel.sqlite3")
-  run_stage(simulate ${common} ${optimization} compiled cold.fst)
-  if(NOT EXISTS "${FSIM_WORK_DIR}/cache/static-kernel.sqlite3")
+  if(EXISTS "${kernel_cache}")
     message(FATAL_ERROR
-      "UVM phase/TLM cold run did not publish its native cache (${optimization})")
+      "UVM phase/TLM elaboration without --aot published ${kernel_cache}")
   endif()
-  run_stage(simulate ${common} ${optimization} compiled warm.fst)
+  run_stage(simulate ${common} ${optimization} compiled cold.fst)
+  if(EXISTS "${kernel_cache}")
+    message(FATAL_ERROR
+      "UVM phase/TLM compiled simulation published ${kernel_cache}")
+  endif()
+  # The ahead-of-time elaboration stores the kernel code; the warm run
+  # starts from it. Its profile (FSIM_PROFILE_PHASES) reports every kernel
+  # template restored from the cache (`static-kernel-codegen restored=N
+  # of=N`), and no template the run compiles later has instructions of its
+  # own to compile (`instructions=0`); the cold run above compiled them.
+  run_stage(elaborate ${common} ${optimization} --aot)
+  if(NOT EXISTS "${kernel_cache}")
+    message(FATAL_ERROR
+      "UVM phase/TLM elaborate --aot did not store ${kernel_cache}")
+  endif()
+  set(FSIM_STAGE_ENVIRONMENT FSIM_PROFILE_PHASES=1)
+  run_stage_with_error(profile
+    simulate ${common} ${optimization} compiled warm.fst)
+  set(FSIM_STAGE_ENVIRONMENT "")
+  string(REGEX MATCH
+    "fsim-profile: static-kernel-codegen restored=([0-9]+) of=([0-9]+)"
+    restored "${profile}")
+  if(NOT restored OR CMAKE_MATCH_1 EQUAL 0
+      OR NOT CMAKE_MATCH_1 EQUAL CMAKE_MATCH_2)
+    message(FATAL_ERROR
+      "UVM phase/TLM compiled simulation did not start from ${kernel_cache}\n${profile}")
+  endif()
+  string(REGEX MATCH
+    "fsim-profile: static-kernel-codegen templates=[0-9]+ hot=[0-9]+ warm=[0-9]+ instructions=[1-9]"
+    compiled_in_run "${profile}")
+  if(compiled_in_run)
+    message(FATAL_ERROR
+      "UVM phase/TLM compiled simulation compiled kernel code despite ${kernel_cache}\n${profile}")
+  endif()
   run_stage(simulate ${common} ${optimization} debug debug.vcd)
 endforeach()

@@ -59,6 +59,8 @@ AttemptStorage::Caps AttemptStorage::caps() const noexcept
     result.requests = static_cast<std::size_t>(get(h_requests_cap));
     result.heap = static_cast<std::size_t>(get(h_heap_cap));
     result.scratch = static_cast<std::size_t>(get(h_scratch_cap));
+    result.memo = static_cast<std::size_t>(get(h_memo_cap));
+    result.calls = static_cast<std::size_t>(get(h_calls_cap));
     result.bounds = get(h_bounds_off) == 0
         ? 0U
         : static_cast<std::size_t>(words_[static_cast<std::size_t>(get(h_bounds_off))]) + 1U;
@@ -70,7 +72,7 @@ std::size_t AttemptStorage::total_words(const Caps& caps) noexcept
     return header_words + 3U * caps.clocks + caps.attempts * attempt_stride
         + caps.outcomes * outcome_stride + caps.started * started_stride
         + caps.events * event_stride + caps.requests * request_stride
-        + 2U * caps.heap + caps.scratch + caps.bounds;
+        + 2U * caps.heap + caps.scratch + caps.memo + caps.calls + caps.bounds;
 }
 
 void AttemptStorage::relayout(const Caps& next)
@@ -96,6 +98,8 @@ void AttemptStorage::relayout(const Caps& next)
     const auto heap_off = place(next.heap);
     const auto heap_alt_off = place(next.heap);
     const auto scratch_off = place(next.scratch);
+    const auto memo_off = place(next.memo);
+    const auto calls_off = place(next.calls);
     const auto bounds_off = next.bounds == 0U ? std::size_t { 0 } : place(next.bounds);
 
     // Tables keep their rows; the clocks keep their words.
@@ -147,6 +151,12 @@ void AttemptStorage::relayout(const Caps& next)
     std::copy_n(old.begin() + static_cast<std::ptrdiff_t>(field(h_scratch_off)),
         std::min(field(h_scratch_used), next.scratch),
         block.begin() + static_cast<std::ptrdiff_t>(scratch_off));
+    std::copy_n(old.begin() + static_cast<std::ptrdiff_t>(field(h_memo_off)),
+        std::min(field(h_memo_used), next.memo),
+        block.begin() + static_cast<std::ptrdiff_t>(memo_off));
+    std::copy_n(old.begin() + static_cast<std::ptrdiff_t>(field(h_calls_off)),
+        std::min(field(h_calls_used), next.calls),
+        block.begin() + static_cast<std::ptrdiff_t>(calls_off));
 
     const auto put = [&](const Header header, const std::size_t value) {
         block[header] = static_cast<std::int64_t>(value);
@@ -171,6 +181,10 @@ void AttemptStorage::relayout(const Caps& next)
     put(h_heap_cap, next.heap);
     put(h_scratch_off, scratch_off);
     put(h_scratch_cap, next.scratch);
+    put(h_memo_off, memo_off);
+    put(h_memo_cap, next.memo);
+    put(h_calls_off, calls_off);
+    put(h_calls_cap, next.calls);
     put(h_bounds_off, bounds_off);
     put(h_total_words, block.size());
     words_ = std::move(block);
@@ -288,6 +302,28 @@ std::optional<AttemptStorage> AttemptStorage::adopt(
     if (!scratch_off || !scratch_cap || !scratch_used
         || *scratch_off < header_words || *scratch_off + *scratch_cap > total
         || *scratch_used > *scratch_cap) {
+        return std::nullopt;
+    }
+    const auto memo_off = field(h_memo_off);
+    const auto memo_cap = field(h_memo_cap);
+    const auto memo_used = field(h_memo_used);
+    const auto memo_stride = field(h_memo_stride);
+    const auto memo_pending = field(h_memo_pending);
+    if (!memo_off || !memo_cap || !memo_used || !memo_stride || !memo_pending
+        || *memo_off < header_words || *memo_off + *memo_cap > total
+        || *memo_used > *memo_cap
+        || (*memo_stride == 0U ? *memo_used != 0U
+                               : *memo_used % *memo_stride != 0U
+                    || *memo_pending > *memo_used / *memo_stride)) {
+        return std::nullopt;
+    }
+    const auto calls_off = field(h_calls_off);
+    const auto calls_cap = field(h_calls_cap);
+    const auto calls_used = field(h_calls_used);
+    const auto calls_taken = field(h_calls_taken);
+    if (!calls_off || !calls_cap || !calls_used || !calls_taken
+        || *calls_off < header_words || *calls_off + *calls_cap > total
+        || *calls_used > *calls_cap || *calls_taken > *calls_used) {
         return std::nullopt;
     }
     // Each row's record lies inside the used heap.
@@ -600,6 +636,12 @@ void AttemptStorage::reserve_region(
     case grow_scratch:
         field = &next.scratch;
         break;
+    case grow_memo:
+        field = &next.memo;
+        break;
+    case grow_calls:
+        field = &next.calls;
+        break;
     default:
         return;
     }
@@ -608,6 +650,34 @@ void AttemptStorage::reserve_region(
     }
     *field = grown(*field, needed);
     relayout(next);
+}
+
+void AttemptStorage::push_memo(const std::span<const std::int64_t> entry)
+{
+    const auto used = static_cast<std::size_t>(get(h_memo_used));
+    reserve_region(grow_memo, used + entry.size());
+    std::ranges::copy(entry,
+        words_.begin()
+            + static_cast<std::ptrdiff_t>(
+                static_cast<std::size_t>(get(h_memo_off)) + used));
+    set(h_memo_used, static_cast<std::int64_t>(used + entry.size()));
+}
+
+void AttemptStorage::push_call(const std::span<const std::int64_t> entry)
+{
+    const auto used = static_cast<std::size_t>(get(h_calls_used));
+    reserve_region(grow_calls, used + entry.size());
+    std::ranges::copy(entry,
+        words_.begin()
+            + static_cast<std::ptrdiff_t>(
+                static_cast<std::size_t>(get(h_calls_off)) + used));
+    set(h_calls_used, static_cast<std::int64_t>(used + entry.size()));
+}
+
+void AttemptStorage::restore(std::vector<std::int64_t> words) noexcept
+{
+    words_ = std::move(words);
+    publish(words_.data());
 }
 
 void AttemptStorage::refresh_steps_active() noexcept

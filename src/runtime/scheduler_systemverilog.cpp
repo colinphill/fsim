@@ -21,14 +21,34 @@ void Scheduler::Impl::enqueue_systemverilog_at(
             else if (phase == SchedulerPhase::update)
                 phase = SchedulerPhase::re_update;
         }
+        order_nonblocking_region_entry(phase, entry);
         push_entry(current->systemverilog.queues[phase_index(phase)],
             std::move(entry));
         if (executing && phase == *executing)
             ++current_phase_revision;
         return;
     }
+    order_nonblocking_region_entry(phase, entry);
     push_entry(future_slot_at(time).systemverilog.queues[phase_index(phase)],
         std::move(entry));
+}
+
+void Scheduler::Impl::order_nonblocking_region_entry(
+    const SchedulerPhase phase, Entry& entry) noexcept
+{
+    // IEEE 1800-2023 4.6 b): the NBA regions perform their updates in the
+    // order the statements executed, so their events share one order class
+    // and the insertion sequence (the execution order every process and the
+    // static kernel draw from) decides. A Pre-NBA event keeps the front and
+    // an event placed after every update the back (nonblocking_region_first,
+    // nonblocking_region_last). A batch ticket keeps its members' keys.
+    if ((phase != SchedulerPhase::update && phase != SchedulerPhase::re_update)
+        || entry.is_batch_ticket()
+        || entry.order == nonblocking_region_last) {
+        return;
+    }
+    entry.order = entry.order == nonblocking_region_first ? StableOrder { 0U }
+                                                          : StableOrder { 1U };
 }
 
 bool Scheduler::Impl::begin_systemverilog_batch(bool include_postponed)
@@ -1044,6 +1064,20 @@ bool Scheduler::systemverilog_active_work_pending() const noexcept
                 .empty();
 }
 
+bool Scheduler::systemverilog_nonblocking_work_pending() const noexcept
+{
+    if (!impl_->current)
+        return false;
+    const auto& slot = *impl_->current;
+    const auto running = slot.systemverilog_phase;
+    const auto region = running && *running >= SchedulerPhase::reactive
+        ? SchedulerPhase::re_update
+        : SchedulerPhase::update;
+    if (running && *running == region && !slot.systemverilog_running.empty())
+        return true;
+    return !slot.systemverilog.queues[phase_index(region)].empty();
+}
+
 bool Scheduler::systemverilog_active_region_pending() const noexcept
 {
     if (!impl_->current)
@@ -1082,10 +1116,31 @@ void Scheduler::schedule_internal_systemverilog_running_active(
         impl_->make_internal_entry(order, std::move(task)));
 }
 
-bool Scheduler::generic_active_phase_open() const noexcept
+std::optional<SchedulerPhase>
+Scheduler::generic_phase_after_systemverilog() const noexcept
 {
-    return impl_->current
-        && impl_->current->phase <= phase_index(SchedulerPhase::active);
+    if (!impl_->current)
+        return std::nullopt;
+    const auto& slot = *impl_->current;
+    auto phase = slot.phase;
+    // A callback of the generic queue at slot.phase (not of a SystemVerilog
+    // batch or of the end of the slot) is running: that queue is drained in
+    // one batch, so only the next phase starts after the SystemVerilog work.
+    if (impl_->in_callback && !slot.systemverilog_phase.has_value()
+        && !slot.executing_end_of_slot && phase < phase_count)
+        ++phase;
+    if (phase > phase_index(SchedulerPhase::inactive))
+        return std::nullopt;
+    return static_cast<SchedulerPhase>(phase);
+}
+
+bool Scheduler::generic_queue_executing() const noexcept
+{
+    if (!impl_->current)
+        return false;
+    const auto& slot = *impl_->current;
+    return impl_->in_callback && !slot.systemverilog_phase.has_value()
+        && !slot.executing_end_of_slot && slot.phase < phase_count;
 }
 
 bool Scheduler::systemverilog_work_pending() const noexcept

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_systemverilog_hir_internal.hpp"
 #include "../elaboration/hir_output_conversion.hpp"
+#include "fsim/semantic/systemverilog_type_state.hpp"
 
 #include <algorithm>
 #include <concepts>
@@ -1441,9 +1442,12 @@ namespace {
             output.executable_width = resolved_named_type
                 ? std::optional<std::uint64_t> { }
                 : input.width();
-            output.four_state = !resolved_named_type
-                && (input.domain == frontend::ValueDomain::Logic4
-                    || input.domain == frontend::ValueDomain::Integer);
+            // A named type is 4-state when the type it names is (IEEE
+            // 1800-2023 6.18, 6.19).
+            output.four_state = resolved_named_type
+                ? sv::named_type_four_state(output, hir_)
+                : input.domain == frontend::ValueDomain::Logic4
+                    || input.domain == frontend::ValueDomain::Integer;
             if (!resolved_named_type) {
                 if (input.packed_range) {
                     output.packed_range = sv::PackedRange {

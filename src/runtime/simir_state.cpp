@@ -2264,6 +2264,16 @@ void Interpreter::Impl::record_signal_event(
 {
     stamp_signal_event(signal, generic_delta, origin);
     capture_sampled_history_clock(signal, generic_delta, origin);
+    // A concurrent assertion's disable net (16.12).
+    if (signal < sva_disable_watched.size()
+        && sva_disable_watched[signal] != 0U) {
+        disable_sva_attempts(signal);
+    }
+    // A concurrent assertion's abort net (16.12.14).
+    if (signal < sva_abort_watched.size()
+        && sva_abort_watched[signal] != 0U) {
+        sva_abort_changed(signal);
+    }
 }
 
 void Interpreter::Impl::register_signal_selection(

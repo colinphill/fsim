@@ -575,7 +575,7 @@ namespace codec_detail {
         } else if constexpr (
             std::same_as<T, runtime::simir::SvaKind>) {
             return value >= runtime::simir::SvaKind::tick
-                && value <= runtime::simir::SvaKind::outcome;
+                && value <= runtime::simir::SvaKind::call;
         } else if constexpr (
             std::same_as<T, runtime::simir::DynamicEventOperation>) {
             return value >= runtime::simir::DynamicEventOperation::create
@@ -860,7 +860,9 @@ namespace codec_detail {
             value.nested_elements,
             value.keys,
             value.string_keys,
-            value.shape);
+            value.shape,
+            value.associative_default,
+            value.associative_default_text);
     }
 
     template <typename T>

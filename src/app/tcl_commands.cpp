@@ -390,6 +390,19 @@ namespace fsim::app::tcl_detail {
         }
         // The engine of the session is the one --engine names, as for
         // `fsim simulate`; the debugger commands ask for the debug engine.
+        // The command line wins over every other choice of engine: a
+        // debugger command under an --engine that names another engine is
+        // refused, as it is once a plain command has started the session in
+        // that engine.
+        if (requested_engine && context.invocation.engine
+            && session_engine(context) != *requested_engine) {
+            (void)command_error(
+                interpreter,
+                "the session runs in a different execution mode (--engine "
+                    + *context.invocation.engine
+                    + "); the Tcl debug control needs --engine debug");
+            return false;
+        }
         const auto engine = requested_engine.value_or(
             session_engine(context));
         if (!ensure_built(context, interpreter)) {

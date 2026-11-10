@@ -225,7 +225,7 @@ std::string make_cache_key(
     key.add("llvm", production_llvm_version);
     key.add("standard-library", standard_library_cache_version);
     if (!checked.objects.empty()) {
-        key.add("workspace-object-order", "managed-catalog-content-v1");
+        key.add("workspace-object-order", "managed-catalog-identity-v2");
     }
     add_vhdl_analysis_order(key, checked);
     add_systemverilog_standard_package_identities(key, checked);
@@ -810,7 +810,7 @@ make_specialization_cache_keys(
             "fsim-specialization-provenance-v10-compiled-source-identity");
         key.add("fsim-version", version);
         key.add("standard-library", standard_library_cache_version);
-        key.add("workspace-object-order", "managed-catalog-content-v1");
+        key.add("workspace-object-order", "managed-catalog-identity-v2");
         add_vhdl_analysis_order(key, checked);
         add_systemverilog_standard_package_identities(key, checked);
         key.add(

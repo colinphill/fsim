@@ -1,0 +1,13 @@
+frame local=40
+frame nested=43
+frame again=50
+cmos on=0
+cmos off=z
+cmos pmos=1
+sscanf count=3 packed=0000002a real=10.0 int=-17
+fscanf count=1 value=42
+plusargs found=1 count=7
+plusargs found=1 name=fsim
+nba before=12 sibling=34
+nba after=de sibling=97
+cells a1 xZ 37 a4 states 06 5a

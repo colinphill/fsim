@@ -973,11 +973,14 @@ public:
                     put_signed(step.hi_slot);
                 });
                 put(sequence.counters);
+                put(sequence.locals_base);
                 put(sequence.state_base);
             });
             list(plan.properties, [&](const SvaNativeProperty& property) {
                 put(static_cast<std::uint64_t>(property.kind));
                 put(property.overlapped ? 1U : 0U);
+                put(property.synchronous ? 1U : 0U);
+                put(property.clock);
                 put(property.sequence);
                 put_signed(property.child);
                 list(property.children,
@@ -989,6 +992,8 @@ public:
                 put_signed(property.hi_slot);
                 put(property.line);
                 put(property.column);
+                put(property.guard_expression ? 1U : 0U);
+                grouped(property.initializers);
             });
             put(plan.root);
             put(plan.every_match ? 1U : 0U);
@@ -998,6 +1003,14 @@ public:
                     put(position.first);
                     put(position.second);
                 });
+            grouped(plan.local_offset);
+            grouped(plan.local_size);
+            grouped(plan.local_width);
+            put(plan.locals_words);
+            grouped(plan.expression_target);
+            list(plan.local_sets,
+                [&](const std::vector<std::uint32_t>& set) { grouped(set); });
+            put(plan.memo_stride);
         });
     }
     /// Width plus the raw bit planes (two four-state, four logic9).
@@ -1311,10 +1324,13 @@ public:
                                              && get_narrow(step.hi_slot);
                                      })
                                   && get(sequence.counters)
+                                  && get(sequence.locals_base)
                                   && get(sequence.state_base);
                           })
                        && list(plan.properties, [&](SvaNativeProperty& property) {
                               return get(property.kind) && get(property.overlapped)
+                                  && get(property.synchronous)
+                                  && get(property.clock)
                                   && get(property.sequence)
                                   && get_narrow(property.child)
                                   && list(property.children,
@@ -1326,14 +1342,22 @@ public:
                                   && get_narrow(property.lo_slot)
                                   && get_signed(property.hi)
                                   && get_narrow(property.hi_slot)
-                                  && get(property.line) && get(property.column);
+                                  && get(property.line) && get(property.column)
+                                  && get(property.guard_expression)
+                                  && grouped(property.initializers);
                           })
                        && get(plan.root) && get(plan.every_match)
                        && grouped(plan.clock_guards)
                        && list(plan.guard_positions,
                            [&](std::pair<std::uint32_t, std::uint32_t>& position) {
                                return get(position.first) && get(position.second);
-                           });
+                           })
+                       && grouped(plan.local_offset) && grouped(plan.local_size)
+                       && grouped(plan.local_width) && get(plan.locals_words)
+                       && grouped(plan.expression_target)
+                       && list(plan.local_sets,
+                           [&](std::vector<std::uint32_t>& set) { return grouped(set); })
+                       && get(plan.memo_stride);
                });
     }
     bool packed(PackedLogic4& value)

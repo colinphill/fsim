@@ -11,6 +11,7 @@
 #include <iostream>
 #include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace fsim::test::assertion_application {
@@ -904,6 +905,18 @@ endmodule
                     return event.time == 3;
                 }));
         }
+        // Each sample is traced at the time of its sampling process: a
+        // clocking event's at the instant of the event (IEEE 1800-2023
+        // 19.3), also when a closed kernel runs its own time steps.
+        const auto trace_times = [](const CoverageExecutionCapture& capture) {
+            std::vector<std::pair<std::uint64_t, std::uint64_t>> times;
+            for (const auto& event : capture.trace) {
+                times.emplace_back(event.time, event.delta);
+            }
+            return times;
+        };
+        assert(trace_times(interpreted) == trace_times(compiled_cold));
+        assert(trace_times(compiled_cold) == trace_times(compiled_warm));
         assert(interpreted.hits == compiled_cold.hits);
         assert(interpreted.report == compiled_cold.report);
         assert(compiled_cold.report == compiled_warm.report);

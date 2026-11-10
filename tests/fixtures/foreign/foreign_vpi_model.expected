@@ -73,7 +73,7 @@
 #c ts arr.1 type=vpiArrayTypespec name=unparrtype ranges=[6:4] alias=-:-
 #c ts arr.2 type=vpiPackedArrayTypespec name=parrtype2 ranges=[2:1][1:3] alias=-:-
 #c ts arr.3 type=vpiPackedArrayTypespec name=parrtype ranges=[1:3] alias=-:-
-#c ts arr.4 type=vpiStructTypespec name=- ranges=- alias=-:-
+#c ts arr.4 type=vpiStructTypespec name=elem_t ranges=- alias=-:-
 #c ts pk.0 type=vpiLogicTypespec name=- ranges=[3:0][7:0] alias=-:-
 #c ts pk.1 type=vpiLogicTypespec name=- ranges=[7:0] alias=-:-
 #c ts pk.2 type=vpiLogicTypespec name=- ranges=- alias=-:-
@@ -88,8 +88,8 @@
 #c ts wa.2 type=vpiLogicTypespec name=- ranges=- alias=-:-
 #c ts rc.0 type=vpiStructTypespec name=rec_t ranges=- alias=-:-
 #c ts p2v.0 type=vpiPackedArrayTypespec name=parrtype2 ranges=[2:1][1:3] alias=-:-
-#c ts p2v.1 type=vpiPackedArrayTypespec name=- ranges=[1:3] alias=-:-
-#c ts p2v.2 type=vpiStructTypespec name=- ranges=- alias=-:-
+#c ts p2v.1 type=vpiPackedArrayTypespec name=parrtype ranges=[1:3] alias=-:-
+#c ts p2v.2 type=vpiStructTypespec name=elem_t ranges=- alias=-:-
 #c c base=vpiBitTypespec signed=0
 #c c const red type=vpiEnumConst size=3 value=0
 #c c const yellow type=vpiEnumConst size=3 value=1

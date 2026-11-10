@@ -17069,7 +17069,19 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit_in_stack(
         unit.concurrent_statements.end()
     };
     if (unit.kind == semantic::sv::UnitKind::program) {
-        active_concurrent_statements.clear();
+        // A program's elaboration severity tasks run at elaboration (IEEE
+        // 1800-2023 20.11); its continuous assignments are scheduled in the
+        // Reactive region (24.3.1), the hidden nets of its concurrent
+        // assertions in the Active region
+        // (schedule_program_assertion_nets).
+        std::erase_if(active_concurrent_statements,
+            [&](const semantic::StatementId statement_id) {
+                const auto statement
+                    = specialized->find_statement(statement_id);
+                return statement && statement->systemverilog != nullptr
+                    && statement->systemverilog->kind
+                    == semantic::sv::StatementKind::report;
+            });
     }
     const auto selected_generates = specialized->selected_generates();
 
@@ -29833,41 +29845,31 @@ bool HierarchyBuilder::validate_compiled_vhdl_subtype_declarations(
                 continue;
             }
             if (profile.type_class == SubtypeClass::enumeration) {
-                // A character literal of a predefined enumeration type
-                // without a retained definition: its position.
-                const auto predefined_literal
+                // A character literal is its position in the type its context
+                // gave it (IEEE 1076-2019 9.3.2, 12.5) when that is BOOLEAN,
+                // BIT, CHARACTER or STD_ULOGIC, whose literal lists the
+                // compiler provides (16.3, 16.7): 'X' to 'Z' of STD_ULOGIC is
+                // 1 to 4, never CHARACTER's 88 to 90. The integral fold reads
+                // '1' as the BIT value 1 and may resolve the spelling to a
+                // same-spelled literal of another enumeration, so it decides
+                // only the other bounds.
+                const auto intrinsic_literal
                     = [&](const std::optional<semantic::ExpressionId> id)
                     -> std::optional<std::int64_t> {
                     const auto bound = id ? specialized->find_expression(*id)
                                           : std::nullopt;
-                    if (profile.enumeration_type || !profile.scalar_range
-                        || !bound || bound->vhdl == nullptr
+                    if (!bound || bound->vhdl == nullptr
                         || bound->vhdl->kind
-                            != semantic::vhdl::ExpressionKind::logic_literal
-                        || bound->vhdl->text.size() != 3U
-                        || bound->vhdl->text.front() != '\'') {
+                            != semantic::vhdl::ExpressionKind::logic_literal) {
                         return std::nullopt;
                     }
-                    const auto character = bound->vhdl->text[1];
-                    const auto last = profile.scalar_range->right;
-                    if (last == 255) {
-                        return static_cast<std::int64_t>(
-                            static_cast<unsigned char>(character));
-                    }
-                    const auto literals = last == 8
-                        ? std::string_view { "UX01ZWLH-" }
-                        : std::string_view { "01" };
-                    const auto position = literals.find(character);
-                    return position == std::string_view::npos
-                        ? std::nullopt
-                        : std::optional { static_cast<std::int64_t>(position) };
+                    const auto type = support::find_vhdl_intrinsic_enumeration(
+                        bound->vhdl->resolved_builtin_type);
+                    return type ? support::vhdl_intrinsic_enumeration_position(
+                                      *type, bound->vhdl->text)
+                                : std::nullopt;
                 };
-                // An intrinsic enumeration's character literal is its
-                // position in that type (IEEE 1076-2019 16.3, 16.7); the
-                // integral fold reads a digit as an integer and may resolve
-                // the spelling to a same-spelled literal of another
-                // enumeration, so it decides only the other bounds.
-                auto left = predefined_literal(constraint.left_expression);
+                auto left = intrinsic_literal(constraint.left_expression);
                 if (!left) {
                     left = constraint.left
                         ? constraint.left
@@ -29876,7 +29878,7 @@ bool HierarchyBuilder::validate_compiled_vhdl_subtype_declarations(
                               *constraint.left_expression)
                         : std::nullopt;
                 }
-                auto right = predefined_literal(constraint.right_expression);
+                auto right = intrinsic_literal(constraint.right_expression);
                 if (!right) {
                     right = constraint.right
                         ? constraint.right

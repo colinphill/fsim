@@ -306,11 +306,24 @@ struct Simulation::Impl {
     [[nodiscard]] static std::pair<std::string_view, std::string_view>
     static_property_parts(const std::string_view identity);
     // The static storage a method of `handle`'s object uses for a static
-    // property declared by `owner`: that object's specialization of the
-    // owner (IEEE 1800-2017 8.25), or `owner` itself.
+    // property declared by `owner`: `specialization` when the class
+    // executor selected one (a static method's, IEEE 1800-2023 8.25.1),
+    // else that object's specialization of the owner (8.25), or `owner`
+    // itself.
     [[nodiscard]] std::string static_property_specialization(
         std::string_view owner,
-        runtime::SystemVerilogClassHandle handle) const;
+        runtime::SystemVerilogClassHandle handle,
+        std::string_view specialization = { }) const;
+    // The specialization identity a class type names, its parameter
+    // actuals evaluated in specialization `context` (none: constant
+    // actuals only); made on first use when the design has no such
+    // specialization yet (IEEE 1800-2023 8.25).
+    [[nodiscard]] std::optional<std::string> class_type_specialization(
+        const semantic::sv::TypeReference& type,
+        std::string_view context) const;
+    [[nodiscard]] std::optional<std::string> make_class_type_specialization(
+        const semantic::sv::TypeReference& type,
+        std::string_view context) const;
 
     [[nodiscard]] runtime::PackedLogic4 invoke_source_function(
         const runtime::SystemVerilogClassHandle handle,
@@ -325,8 +338,11 @@ struct Simulation::Impl {
         std::optional<runtime::simir::ProcessId> report_process
             = std::nullopt);
 
+    // `static_specialization` is the specialization the static method runs
+    // in (IEEE 1800-2023 8.25.1); empty when the call names none.
     [[nodiscard]] runtime::PackedLogic4 invoke_source_static_function(
         const std::string_view canonical_identity,
+        const std::string_view static_specialization,
         std::vector<runtime::PackedLogic4>& actuals,
         std::vector<std::string>& string_actuals,
         const std::span<const std::string> actual_names,
@@ -556,6 +572,11 @@ struct Simulation::Impl {
     void materialize_vpi_children(fsim_vpi_handle_v1 parent);
     [[nodiscard]] std::optional<runtime::SystemVerilogVpiStoredValue>
     vpi_live_value(fsim_vpi_handle_v1 handle, bool stored) const;
+    // A memory's value as a foreign interface reads it: from the v4 kernel
+    // when it owns the memory (Interpreter::kernel_container_object_value,
+    // no observation barrier, as a signal's read), else the host snapshot.
+    [[nodiscard]] runtime::simir::ContainerValue vpi_container_value(
+        runtime::simir::ContainerObjectId object) const;
     // $scope, $showscopes and $showvars (IEEE 1800-2023 D.11-D.13): the
     // task `name` with its payload, run by the process that called it.
     void run_scope_task(runtime::simir::ProcessId process,
@@ -617,6 +638,11 @@ struct Simulation::Impl {
 
     void publish_assertion_attempt_start(
         runtime::simir::ProcessId design_process, std::int64_t start);
+    // The attempt of the design process's assertion (directive kind and
+    // name as its markers spell them) that started at `start` ended in the
+    // disabled state now (IEEE 1800-2023 16.12, 39.4.2).
+    void publish_assertion_disabled(runtime::simir::ProcessId design_process,
+        std::string_view kind, std::string_view name, std::int64_t start);
     void publish_assertion_step(runtime::simir::ProcessId design_process,
         const runtime::sva::StepRecord& step);
 
@@ -668,8 +694,25 @@ struct Simulation::Impl {
         generated_class_specializations;
     mutable std::unique_ptr<semantic::sv::ClassSpecializationIndex>
         generated_class_index;
+    // How many of the index's specializations generated_class_specializations
+    // has taken in; the ones after it were made at run time.
+    mutable std::size_t generated_class_index_published { };
+    // class_type_specialization answers by class type and running
+    // specialization; the HIR they come from lives as long as the run.
+    mutable std::map<std::pair<const semantic::sv::TypeReference*, std::string>,
+        std::optional<std::string>>
+        class_type_specializations;
+    // The class types and running specializations the run made new
+    // specializations from, in order: a restored run makes them again before
+    // it reads its objects and static properties back (IEEE 1800-2023 D.9).
+    mutable std::deque<std::pair<semantic::sv::TypeReference, std::string>>
+        class_specialization_recipes;
     [[nodiscard]] const semantic::sv::ClassSpecialization*
     generated_class_specialization(std::string_view identity) const;
+    // The specialization index the run makes classes with: built from the
+    // design on first use, then shared by every run-time specialization.
+    [[nodiscard]] semantic::sv::ClassSpecializationIndex&
+    runtime_class_index() const;
     // The parameters of the module, interface or program instance whose
     // class `specialization` is, by constraint binding identity
     // (`unit::name`) as decimal values; empty for any other class.
@@ -803,6 +846,11 @@ struct Simulation::Impl {
     /// uses_simulation_control, read before the interpreter takes the
     /// processes).
     bool simulation_control_tasks {};
+    /// The container object that holds each class's static array, queue or
+    /// associative array of values, by its storage identity (read before the
+    /// interpreter takes the design; IEEE 1800-2023 8.9, 8.25.1).
+    std::map<std::string, runtime::simir::ContainerObjectId, std::less<>>
+        class_static_containers;
     std::unique_ptr<runtime::simir::Interpreter> interpreter;
 
     std::unique_ptr<runtime::SystemVerilogVpiObjectRegistry> vpi_registry;
@@ -1250,14 +1298,10 @@ struct Simulation::Impl {
     std::map<std::uint32_t, std::size_t>
         concurrent_assertion_indices;
 
-    std::set<runtime::simir::ProcessId>
+    // The design process of each concurrent assertion directive's monitor,
+    // with the directive kind and name its register marker gives.
+    std::map<runtime::simir::ProcessId, std::pair<std::string, std::string>>
         concurrent_assertion_design_processes;
-
-    std::set<runtime::simir::ProcessId>
-        disabled_vpi_assertion_processes;
-
-    std::set<runtime::simir::ProcessId>
-        enabled_vpi_assertion_processes;
 
     std::map<std::uint32_t, bool>
         concurrent_assertion_actions_suppressed;
@@ -1271,18 +1315,67 @@ struct Simulation::Impl {
     std::map<runtime::simir::ProcessId, PendingConcurrentAssertion>
         sva_vacuous_obligations;
 
-    bool concurrent_assertions_enabled { true };
-
-    bool concurrent_assertion_pass_actions_enabled { true };
-
-    bool concurrent_assertion_vacuous_actions_enabled { true };
-
-    bool concurrent_assertion_failure_actions_enabled { true };
-
-    // Per assertion, the vpi_control action settings that override the
-    // global ones above: pass, vacuous pass, fail (IEEE 1800-2023 39.5.2).
-    std::map<runtime::simir::ProcessId, std::array<std::optional<bool>, 3U>>
-        concurrent_assertion_action_overrides;
+    // The assertion control state (IEEE 1800-2023 20.11, 39.5.2) of one
+    // assertion or expect statement: a concurrent assertion's process, or
+    // the control sites (Interpreter::assertion_control_sites) of one
+    // immediate or deferred assertion or expect statement of a process.
+    struct AssertionControl {
+        // Its assertion type (Table 20-6) and directive type (Table 20-7).
+        std::uint32_t type { };
+        std::uint32_t directive { };
+        // Its hierarchical name (empty for an unlabelled immediate
+        // assertion or expect statement), the scope that holds it and the
+        // design instance around that scope.
+        std::string name;
+        std::string scope;
+        std::string instance;
+        bool on { true };
+        bool pass { true };
+        bool vacuous { true };
+        bool fail { true };
+        bool locked { };
+        // The Kills that selected it (sva::control_generation_shift).
+        std::uint32_t kills { };
+        std::vector<std::size_t> sites;
+    };
+    // Built once from the artifact (build_assertion_controls); a save holds
+    // each one's state (app.assertions), in this order.
+    std::vector<AssertionControl> assertion_controls;
+    std::map<runtime::simir::ProcessId, std::size_t>
+        concurrent_assertion_controls;
+    // The immediate assertions the class executor runs (a class method
+    // called outside generated code), by HIR statement. They have no
+    // control sites; the executor reads their word (assertion_word).
+    std::unordered_map<std::uint32_t, std::size_t>
+        executor_assertion_controls;
+    // The control word (sva::control_*) of an assertion's state.
+    [[nodiscard]] static std::int64_t assertion_word(
+        const AssertionControl& control) noexcept;
+    // The scopes a list item of an assertion control task can name: the
+    // design instances and the scopes holding assertions, with their
+    // enclosing scopes.
+    std::set<std::string, std::less<>> assertion_control_scopes;
+    std::set<std::string, std::less<>> assertion_control_instances;
+    // The evaluated integer arguments of a control task call, sent ahead of
+    // its request: control_type, assertion_type, directive_type, levels.
+    std::map<runtime::simir::ProcessId,
+        std::array<std::optional<std::int64_t>, 4U>>
+        assertion_control_arguments;
+    // The place of a control task call, sent ahead of its request, where
+    // a warning about the call is reported.
+    std::map<runtime::simir::ProcessId, runtime::simir::SourceLocation>
+        assertion_control_sources;
+    void build_assertion_controls();
+    // Sets the control words of its sites from its state.
+    void publish_assertion_control(std::size_t index);
+    // One $assertcontrol or convenience task request (20.11).
+    void run_assertion_control(runtime::simir::ProcessId process,
+        std::string_view payload, SimulationTick time, std::uint64_t delta);
+    // On, Off and Kill of one assertion (20.11, 39.5.2): Kill also aborts
+    // its attempts and flushes its queued deferred reports.
+    void set_assertion_checking(std::size_t index, int control);
+    [[nodiscard]] const AssertionControl* concurrent_assertion_control(
+        runtime::simir::ProcessId design_process) const;
 
     // Whether the action of an outcome ("pass", "vacuous", else fail) of a
     // design process's assertion runs.

@@ -44,6 +44,12 @@ ordered_workspace_objects(const std::span<const WorkspaceObjectSelection> object
             continue;
         }
 
+        // Objects of one library are ordered by what they define: the
+        // language, standard and profile they were compiled with and the
+        // identities of their units. Never by their payload or checksums,
+        // which carry the paths of the sources and the workspace, so that a
+        // design orders, links and selects its compiler package provider
+        // the same wherever its workspace lives.
         std::vector<OrderedSelection> group;
         group.reserve(end - begin);
         for (std::size_t index = begin; index < end; ++index) {
@@ -51,60 +57,37 @@ ordered_workspace_objects(const std::span<const WorkspaceObjectSelection> object
             if (selection.active_units.empty()) {
                 continue;
             }
-            auto metadata = artifact::load_object_metadata(
+            const auto metadata = artifact::load_object_metadata(
                 selection.path, diagnostics);
             if (!metadata) {
                 return std::nullopt;
             }
-            auto bytes = artifact::serialize_object_metadata(*metadata);
-            compiler::CacheKeyBuilder key;
-            key.add("managed-selection-order", "catalog-content-v1");
-            key.add("library", metadata->library);
-            key.add("language", metadata->language);
-            key.add("standard", metadata->standard);
-            key.add("profile", metadata->compatibility_profile);
-            key.add("compilation", metadata->compilation_digest);
-            key.add("compiled-hir", metadata->compiled_hir_checksum);
-            key.add_bytes("metadata", std::as_bytes(std::span { bytes }));
-            key.add("active-count", std::to_string(selection.active_units.size()));
+            std::string key;
+            const auto add = [&](const std::string_view field) {
+                key.append(field);
+                key.push_back('\0');
+            };
+            add(metadata->library);
+            add(metadata->language);
+            add(metadata->standard);
+            add(metadata->compatibility_profile);
             for (const auto& unit : selection.active_units) {
-                key.add("unit-language", unit.language);
-                key.add("unit-kind", unit.kind);
-                key.add("unit-name", unit.name);
-                key.add("unit-primary", unit.primary_name);
-                key.add("unit-architecture", unit.architecture);
-                key.add("unit-artifact", support::path_to_utf8(unit.artifact));
-                key.add("unit-checksum", unit.checksum);
-                key.add("unit-standard", unit.standard);
-                key.add("unit-profile", unit.compatibility_profile);
-                key.add("unit-name-form",
-                    std::to_string(static_cast<std::uint8_t>(unit.name_form)));
-                key.add("unit-primary-name-form",
-                    std::to_string(static_cast<std::uint8_t>(unit.primary_name_form)));
+                add(unit.language);
+                add(unit.kind);
+                add(unit.name);
+                add(unit.primary_name);
+                add(unit.architecture);
+                add(unit.standard);
+                add(unit.compatibility_profile);
+                add(std::to_string(static_cast<std::uint8_t>(unit.name_form)));
+                add(std::to_string(
+                    static_cast<std::uint8_t>(unit.primary_name_form)));
             }
-            group.push_back({ &selection, key.finish() });
+            group.push_back({ &selection, std::move(key) });
         }
-        std::ranges::sort(group, { }, &OrderedSelection::key);
-        for (std::size_t index = 1; index < group.size(); ++index) {
-            if (group[index - 1].key != group[index].key) {
-                continue;
-            }
-            const auto left = artifact::load_object_metadata(
-                group[index - 1].selection->path, diagnostics);
-            const auto right = artifact::load_object_metadata(
-                group[index].selection->path, diagnostics);
-            if (!left || !right) {
-                return std::nullopt;
-            }
-            if (artifact::serialize_object_metadata(*left)
-                    != artifact::serialize_object_metadata(*right)
-                || group[index - 1].selection->active_units
-                    != group[index].selection->active_units) {
-                diagnostics.error(std::string { workspace_object_diagnostic },
-                    "managed objects have a colliding content order identity");
-                return std::nullopt;
-            }
-        }
+        // Equal identities select one unit twice, which resolve_selection
+        // refuses; until then they keep their catalog order.
+        std::ranges::stable_sort(group, { }, &OrderedSelection::key);
         for (const auto& item : group) {
             ordered.push_back(item.selection);
         }

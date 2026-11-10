@@ -2,6 +2,7 @@
 
 #include "verilog_parser_internal.hpp"
 #include "verilog_parser_assertion_support.hpp"
+#include "fsim/semantic/sva_plan.hpp"
 
 #include <algorithm>
 #include <map>
@@ -36,7 +37,8 @@ void VerilogParser::resolve_generate_assertion_references(DesignUnit& unit)
                             return block.name == name;
                         });
             });
-        resolve_expect_statements(unit, body.processes, body.tasks);
+        resolve_expect_statements(unit, body.processes, body.tasks,
+            body.signals, body.concurrent_statements);
         if (body.systemverilog_concurrent_assertions.empty()) {
             return;
         }
@@ -107,6 +109,37 @@ void VerilogParser::resolve_generate_assertion_references(DesignUnit& unit)
                 position += 2U;
             }
         }
+        // The scopes the clocking events resolve their names in: the
+        // module's, then each enclosing block's and this block's (23.9).
+        // The scratch unit holds their sequence and property declarations
+        // in the same order.
+        sva_scopes_ = sva_name_scopes(unit);
+        const auto add_scope = [&](const GenerateBody& source) {
+            SvaNameScope scope;
+            const auto add = [&](const auto& items) {
+                for (const auto& item : items) {
+                    scope.names.insert(item.name);
+                }
+            };
+            add(source.constants);
+            add(source.signals);
+            add(source.variables);
+            add(source.instances);
+            add(source.systemverilog_clocking_blocks);
+            for (const auto& block : source.systemverilog_clocking_blocks) {
+                scope.clocking_events.emplace(block.name, block.event_tokens);
+            }
+            scope.declarations_end = sva_scopes_.back().declarations_end
+                + source.systemverilog_assertion_declarations.size();
+            sva_scopes_.push_back(std::move(scope));
+        };
+        for (const auto* enclosing : outer) {
+            add_scope(*enclosing);
+        }
+        add_scope(body);
+        // The loop generate variables are declared in the blocks of their
+        // loops; as constants they are part of the innermost.
+        sva_scopes_.back().names.insert(genvars.begin(), genvars.end());
         publish_assertion_trees(scratch, body.systemverilog_assertion_declarations,
             body.systemverilog_concurrent_assertions);
         body.published_concurrent_assertions
@@ -116,10 +149,18 @@ void VerilogParser::resolve_generate_assertion_references(DesignUnit& unit)
         body.systemverilog_concurrent_assertions.clear();
         const auto signal_count = scratch.signals.size();
         const auto variable_count = scratch.variables.size();
+        const auto statement_count = scratch.concurrent_statements.size();
         resolve_assertion_references(scratch);
+        sva_scopes_.clear();
         for (auto& process : scratch.processes) {
             body.processes.push_back(std::move(process));
         }
+        // The continuous assignments of the directives' disable conditions
+        // (resolve_sva_directive).
+        body.concurrent_statements.insert(body.concurrent_statements.end(),
+            std::make_move_iterator(scratch.concurrent_statements.begin()
+                + static_cast<std::ptrdiff_t>(statement_count)),
+            std::make_move_iterator(scratch.concurrent_statements.end()));
         body.signals.insert(body.signals.end(),
             std::make_move_iterator(scratch.signals.begin()
                 + static_cast<std::ptrdiff_t>(signal_count)),
@@ -173,7 +214,8 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                         return block.name == name;
                     });
         });
-    resolve_expect_statements(unit, unit.processes, unit.tasks);
+    resolve_expect_statements(unit, unit.processes, unit.tasks, unit.signals,
+        unit.concurrent_statements);
     const auto design_names = assertion_design_unit_names(unit);
     resolve_assertion_declaration_references(unit);
     publish_assertion_trees(unit, unit.systemverilog_assertion_declarations,
@@ -187,6 +229,43 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             continue;
         }
         const auto& directive = unit.systemverilog_concurrent_assertions[index];
+        // A property with local variables is evaluated only by the
+        // concurrent-property monitor (IEEE 1800-2023 16.10): a form it does
+        // not cover is an error, not the earlier evaluator's sampled reading.
+        // One that no clock reaches is illegal (16.16: no clock can be
+        // inferred without a default clocking).
+        if (sva_uses_locals_ && sva_reject_reason_ == "no clocking event"
+            && directive.procedural_enable.empty()) {
+            Token location;
+            location.kind = TokenKind::Identifier;
+            location.text = "assert";
+            location.span = directive.span;
+            error(directive.property_tokens.empty()
+                    ? location
+                    : directive.property_tokens.front(),
+                "FSIM-SV-SEM-472",
+                "the concurrent assertion has no clocking event: its "
+                "property infers no clock and there is no default clocking");
+            continue;
+        }
+        // A procedural one keeps the two 16.14.6 errors below.
+        if (sva_uses_locals_
+            && (directive.procedural_enable.empty()
+                || (sva_reject_reason_ != "no clocking event"
+                    && !sva_reject_reason_.starts_with(
+                        "automatic variable ")))) {
+            Token location;
+            location.kind = TokenKind::Identifier;
+            location.text = "assert";
+            location.span = directive.span;
+            error(directive.property_tokens.empty()
+                    ? location
+                    : directive.property_tokens.front(),
+                "FSIM-SV-SEM-200",
+                "the concurrent property with local variables cannot be "
+                "evaluated: " + sva_reject_reason_);
+            continue;
+        }
         if (!directive.procedural_enable.empty()) {
             Token location;
             location.kind = TokenKind::Identifier;
@@ -1374,6 +1453,19 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             = named_sequence_tokens.empty()
             ? predicate_tokens
             : std::span<const Token> { named_sequence_tokens };
+        if (!executable_locals.empty()) {
+            Token location;
+            location.kind = TokenKind::Identifier;
+            location.text = "assert";
+            location.span = directive.span;
+            error(directive.property_tokens.empty()
+                    ? location
+                    : directive.property_tokens.front(),
+                "FSIM-SV-SEM-200",
+                "the concurrent property with local variables cannot be "
+                "evaluated: " + sva_reject_reason_);
+            continue;
+        }
         std::vector<GeneralPropertyActions::LocalState>
             general_property_locals;
         bool invalid_general_property_initializer { };
@@ -1690,14 +1782,62 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             marker.span = directive.span;
             return marker;
         };
+        // The pass and fail statements run only while the assertion
+        // controls enable them (IEEE 1800-2023 20.11): `bit` of the
+        // assertion's control word (semantic::sva::control_pass and the
+        // others), read when the action would run.
+        const auto control_directive
+            = directive.kind == SystemVerilogConcurrentAssertionKind::Assert
+            ? semantic::sva::control_assert
+            : directive.kind == SystemVerilogConcurrentAssertionKind::Cover
+            ? semantic::sva::control_cover
+            : directive.kind == SystemVerilogConcurrentAssertionKind::Assume
+            ? semantic::sva::control_assume
+            : 0U;
+        const auto gated_actions = [&](const std::span<const Statement> actions,
+                                       const std::uint32_t bit) {
+            auto gate = parse_generated_statement(
+                synthetic_tokens("if (($__fsim_assertion_control("
+                        + std::to_string(semantic::sva::control_concurrent) + ", "
+                        + std::to_string(control_directive) + ", \"\") & "
+                        + std::to_string(bit) + ") != 0) begin end",
+                    directive.span),
+                directive.span);
+            if (!gate) {
+                Statement block;
+                block.kind = StatementKind::Block;
+                block.span = directive.span;
+                block.statements.assign(actions.begin(), actions.end());
+                return block;
+            }
+            auto& target = gate->statements.size() == 1U
+                    && gate->statements.front().kind == StatementKind::Block
+                ? gate->statements.front().statements
+                : gate->statements;
+            target.insert(target.end(), actions.begin(), actions.end());
+            return std::move(*gate);
+        };
+        // The process is a concurrent assertion of its directive type to
+        // the assertion controls, which also stop its new attempts (the
+        // attempt filter) whether or not it has actions.
+        if (auto registration = parse_generated_statement(
+                synthetic_tokens("begin int __fsim_ac; __fsim_ac = "
+                                 "$__fsim_assertion_control("
+                        + std::to_string(semantic::sva::control_concurrent)
+                        + ", " + std::to_string(control_directive)
+                        + ", \"\"); end",
+                    directive.span),
+                directive.span)) {
+            process.statements.push_back(std::move(*registration));
+        }
         const auto append_actions = [&](std::vector<Statement>& destination,
-                                        const std::span<const Statement> actions) {
+                                        const std::span<const Statement> actions,
+                                        const std::uint32_t bit) {
             if (actions.empty()) {
                 return;
             }
             destination.push_back(action_region_marker());
-            destination.insert(
-                destination.end(), actions.begin(), actions.end());
+            destination.push_back(gated_actions(actions, bit));
         };
         const auto serialized_actions = [](const std::vector<Statement>& statements) {
             auto begin = std::size_t { 0 };
@@ -1736,14 +1876,29 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                 + std::string { outcome } + "|" + process.name;
             // Only display and report actions can be replayed when a
             // pending attempt resolves at the end of simulation; those in
-            // unnamed blocks are replayed in order.
+            // unnamed blocks and assertion control gates (gated_actions;
+            // the host applies the controls to the replay) are replayed in
+            // order.
             std::vector<const Statement*> replayed;
+            const auto control_gate = [](const auto& self,
+                                          const Expression& expression)
+                -> bool {
+                return (expression.kind == ExpressionKind::Call
+                           && expression.text == "$__fsim_assertion_control")
+                    || std::ranges::any_of(expression.operands,
+                        [&](const Expression& operand) {
+                            return self(self, operand);
+                        });
+            };
             const auto collect = [&](const auto& self,
                                      const std::span<const Statement> items)
                 -> void {
                 for (const auto& item : items) {
-                    if (item.kind == StatementKind::Block
-                        && item.label.empty()) {
+                    if ((item.kind == StatementKind::Block
+                            && item.label.empty())
+                        || (item.kind == StatementKind::If
+                            && item.else_statements.empty()
+                            && control_gate(control_gate, item.condition))) {
                         self(self, std::span<const Statement> {
                                        item.statements.begin(),
                                        item.statements.end() });
@@ -1781,15 +1936,19 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             assertion.statements.insert(
                 assertion.statements.end(),
                 sequence_match_actions.begin(), sequence_match_actions.end());
-            assertion.statements.insert(
-                assertion.statements.end(), pass_actions.begin(), pass_actions.end());
+            if (!pass_actions.empty()) {
+                assertion.statements.push_back(
+                    gated_actions(
+                        pass_actions, semantic::sva::control_pass));
+            }
         }
         assertion.assertion_has_failure_action = true;
         assertion.else_statements.push_back(coverage_marker("failure"));
         const auto failure_actions = directive.failure_action_statements.empty()
             ? action_statements(directive.failure_action_tokens)
             : directive.failure_action_statements;
-        append_actions(assertion.else_statements, failure_actions);
+        append_actions(assertion.else_statements, failure_actions,
+            semantic::sva::control_fail);
         if (failure_actions.empty() && !directive.has_failure_action && (directive.kind == SystemVerilogConcurrentAssertionKind::Assert || directive.kind == SystemVerilogConcurrentAssertionKind::Assume)) {
             Statement report;
             report.kind = StatementKind::Report;
@@ -1797,7 +1956,9 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             report.assertion_severity = AssertionSeverity::Error;
             report.span = directive.span;
             assertion.else_statements.push_back(action_region_marker());
-            assertion.else_statements.push_back(std::move(report));
+            assertion.else_statements.push_back(gated_actions(
+                std::span<const Statement> { &report, 1U },
+                semantic::sva::control_fail));
         }
         const auto append_evaluation =
             [&](Statement evaluation) {
@@ -1842,7 +2003,8 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             actions.success.push_back(std::move(success));
             actions.failure.push_back(std::move(failure));
             actions.vacuous.push_back(coverage_marker("vacuous"));
-            append_actions(actions.vacuous, pass_actions);
+            append_actions(actions.vacuous, pass_actions,
+                semantic::sva::control_vacuous);
             actions.clock = process.sensitivities;
             actions.span = directive.span;
             actions.name_prefix = "__fsim_a" + std::to_string(index);
@@ -1881,7 +2043,8 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             if (property_abort->outcome
                 == SystemVerilogPropertyAbortOutcome::VacuousSuccess) {
                 aborted.statements.push_back(coverage_marker("vacuous"));
-                append_actions(aborted.statements, pass_actions);
+                append_actions(aborted.statements, pass_actions,
+                    semantic::sva::control_vacuous);
             } else {
                 auto failure = assertion;
                 failure.condition = Expression {
@@ -2392,7 +2555,8 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                 implication.statements.push_back(std::move(assertion));
             }
             implication.else_statements.push_back(coverage_marker("vacuous"));
-            append_actions(implication.else_statements, pass_actions);
+            append_actions(implication.else_statements, pass_actions,
+                semantic::sva::control_vacuous);
             append_evaluation(std::move(implication));
         } else {
             append_evaluation(std::move(assertion));

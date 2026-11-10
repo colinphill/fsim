@@ -150,12 +150,24 @@ namespace systemverilog_hir_detail {
         const auto simple_name = separator == std::string_view::npos
             ? spelling
             : spelling.substr(separator + 2U);
+        // A package of the owner's library, or `library::package` as
+        // linked HIR spells a package of any library.
         const auto find_package = [&](const std::string_view name) {
             return std::ranges::find_if(
                 hir.units(), [&](const sv::Unit& candidate) {
-                    return candidate.kind == sv::UnitKind::package
-                        && candidate.library == semantic_owner.library
-                        && candidate.name == name;
+                    if (candidate.kind != sv::UnitKind::package) {
+                        return false;
+                    }
+                    if (candidate.library == semantic_owner.library
+                        && candidate.name == name) {
+                        return true;
+                    }
+                    return name.size()
+                            == candidate.library.size() + 2U
+                                + candidate.name.size()
+                        && name.starts_with(candidate.library)
+                        && name.substr(candidate.library.size(), 2U) == "::"
+                        && name.ends_with(candidate.name);
                 });
         };
         const auto direct_type = [&](const sv::Unit& package) {

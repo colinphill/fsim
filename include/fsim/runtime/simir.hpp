@@ -2497,12 +2497,17 @@ public:
         const SourceLocation&,
         SimulationTick,
         std::uint64_t)>;
+    /// A covergroup sample (IEEE 1800-2023 19.8) at the time and delta of
+    /// the sampling process: a closed static kernel running its own time
+    /// steps passes its own time, ahead of the scheduler's.
     using CoverageSampleHook = std::function<void(
         std::string_view,
         std::span<const PackedLogic4>,
         std::span<const std::uint8_t>,
         std::span<const frontend::SystemVerilogScalarKind>,
-        CoverageSampleTrigger)>;
+        CoverageSampleTrigger,
+        SimulationTick,
+        std::uint64_t)>;
     using CoverageQueryHook = std::function<PackedLogic4(
         CoverageQueryKind, const std::string&)>;
     using VhdlPslApiHook = std::function<bool(
@@ -2526,10 +2531,31 @@ public:
     /// simulation tick (IEEE 1800-2023 39.4.2 cbAssertionStart); the process
     /// is the static design process that owns the assertion.
     using SvaAttemptHook = std::function<void(ProcessId, std::int64_t)>;
+    /// A concurrent assertion's disable condition became true and ended the
+    /// attempt that started at the given simulation tick in the disabled
+    /// state (IEEE 1800-2023 16.12, 39.4.2 cbAssertionDisabledEvaluation);
+    /// the process is the static design process that owns the assertion.
+    /// Called at once, from the commit of the directive's disable net, once
+    /// per attempt in the order the attempts started.
+    using SvaDisabledHook = std::function<void(ProcessId, std::int64_t)>;
     /// A step of an attempt of the process's assertion (IEEE 1800-2023 39.4.2
     /// cbAssertionStepSuccess / cbAssertionStepFailure); produced only for
     /// attempts stepping was enabled for (39.5.2).
     using SvaStepHook = std::function<void(ProcessId, const sva::StepRecord&)>;
+    /// The action controls of a design process's concurrent assertions and
+    /// expect statements (IEEE 1800-2023 20.11, 39.5.2): bit n set means the
+    /// action block of outcome n (1 success, 2 failure, 3 vacuous success)
+    /// does not run. It reads no signal.
+    using SvaActionFilter = std::function<std::uint32_t(ProcessId)>;
+    /// One control site (IEEE 1800-2023 20.11): an assertion, expect
+    /// statement or concurrent directive whose SvaKind::control reads of
+    /// `process` carry `site` and the description `type|directive|name`
+    /// (semantic::sva::control_on and the others).
+    struct AssertionControlSite {
+        ProcessId process { };
+        std::uint32_t site { };
+        std::string description;
+    };
     // Class callbacks receive the currently executing process. The next
     // identity is the owning static design process; runtime fork children
     // retain it even though their ProcessProgram id is dynamic.
@@ -2560,13 +2586,16 @@ public:
     using ClassStaticPropertyReadHook = std::function<PackedLogic4(std::string_view)>;
     using ClassStaticPropertyWriteHook = std::function<void(
         std::string_view, const PackedLogic4&)>;
+    // The last argument is the call's class specialization
+    // (ClassStaticMethodCall::class_specialization).
     using ClassStaticMethodCallContextHook = std::function<PackedLogic4(
         ProcessId,
         std::string_view,
         std::vector<PackedLogic4>&,
         std::vector<std::string>&,
         std::span<const std::string>,
-        std::span<const std::uint8_t>)>;
+        std::span<const std::uint8_t>,
+        std::string_view)>;
     /// Execute one imported SystemVerilog DPI function. The identity is the
     /// declaration's C linkage name; mutable actual vectors carry output,
     /// inout, and ref copy-out values using the same representation as class
@@ -3029,6 +3058,13 @@ public:
     /// from now on (docs/engine-v4-semantics.md S19); other signals already
     /// are. A watch lasts for the rest of the run.
     void watch_signal_changes(std::span<const SignalId> signals);
+    /// watch_signal_changes for the signals that hold a container object's
+    /// elements (its packed bridge, element or aggregate signals, through
+    /// slice views): every later change of an element written in the v4
+    /// kernel, by a member or a foreign deposit, reaches the host object
+    /// and the container change hook, as in the reference engine (a VPI
+    /// value change callback on a memory word, IEEE 1800-2023 38.36.1).
+    void watch_container_object_changes(ContainerObjectId object);
     /// watch_signal_changes, and the v4 kernel also reports every assignment
     /// to these signals that leaves the value as it is, a transaction
     /// without an event (IEEE 1076-2019 14.7.3.1), to the signal transaction
@@ -3076,6 +3112,15 @@ public:
     /// an observation barrier; nullopt under the same conditions.
     [[nodiscard]] std::optional<PackedLogic4> kernel_signal_value(
         SignalId signal) const;
+    /// The value of a design container object the v4 kernel owns (through
+    /// its packed bridge signal, its element signals or its own element
+    /// storage), read from the kernel without an observation barrier: no
+    /// host copy is refreshed and no change is published, so a foreign
+    /// interface may call it while it holds its own locks. nullopt when the
+    /// kernel does not hold the whole value (as kernel_signal_value), and
+    /// the caller takes container_object_value_snapshot().
+    [[nodiscard]] std::optional<ContainerValue> kernel_container_object_value(
+        ContainerObjectId object) const;
     /// After a foreign release of a net the kernel owns: the members that
     /// drive it run again, so it returns to the drivers' value (IEEE
     /// 1800-2023 10.6.2). No effect on any other signal.
@@ -3176,6 +3221,20 @@ public:
     /// Stop the running attempts of the selected processes' monitors
     /// ($assertkill, IEEE 1800-2017 20.12).
     void kill_sva_monitors(std::span<const ProcessId> design_processes);
+    /// Install the action controls (SvaActionFilter); every monitor takes
+    /// them now and at its creation.
+    void set_sva_action_filter(SvaActionFilter filter);
+    /// The action controls changed: every monitor takes them again, so the
+    /// next outcome each pops runs or skips its action block accordingly.
+    void refresh_sva_actions();
+    /// The control sites of the design's processes, numbered: element i
+    /// is the site whose control word set_assertion_control(i, ...) sets.
+    /// The first call numbers them.
+    [[nodiscard]] const std::vector<AssertionControlSite>&
+        assertion_control_sites();
+    /// Set the control word of control site `index` (20.11): the reads
+    /// that follow, in generated code too, see it.
+    void set_assertion_control(std::size_t index, std::int64_t word);
     /// Stop only the running attempts that started at `start_time` in the
     /// selected processes' monitors (vpiAssertionKill with an attempt start
     /// time, IEEE 1800-2023 39.5.2); true when one was running.
@@ -3191,6 +3250,7 @@ public:
     [[nodiscard]] std::optional<std::pair<std::uint32_t, std::uint32_t>>
     sva_outcome_fail(ProcessId design_process) const;
     void set_sva_attempt_hook(SvaAttemptHook hook);
+    void set_sva_disabled_hook(SvaDisabledHook hook);
     /// Turn the inert attempt-start reports of the concurrent assertion
     /// evaluators (Display::inert) into reports; effective for every attempt
     /// that starts after the call, at any point of the run.
@@ -3257,9 +3317,24 @@ public:
     /// timers together, in increasing order without repeats (IEEE 1800-2023
     /// 37.81). A debug query.
     [[nodiscard]] std::vector<SimulationTick> pending_times() const;
+    /// The time and delta of the running time step, as the design and the
+    /// host services its processes call observe them: the scheduler's, or,
+    /// while a closed static kernel runs a time step of its own ahead of the
+    /// scheduler, that step's time at its first delta, which the scheduler
+    /// would have reported (docs/engine-v4-semantics.md S10).
+    [[nodiscard]] SimulationTick current_time() const noexcept;
+    [[nodiscard]] std::uint64_t current_delta() const noexcept;
     [[nodiscard]] Scheduler& scheduler() noexcept;
     [[nodiscard]] const Scheduler& scheduler() const noexcept;
     void set_signal_change_hook(SignalChangeHook hook);
+    /// While a SignalChangeHook runs: the process whose write made the change
+    /// (its blocking or nonblocking assignment, continuous assignment or
+    /// force statement; on a resolved net, the driver whose contribution
+    /// changed), empty when no process wrote it (a foreign write, a
+    /// resolution of no driver's). The changes of one process in one region
+    /// come in the order its statements executed (IEEE 1800-2023 4.6 a),
+    /// b)); those of different processes in either engine's order (4.7).
+    [[nodiscard]] std::optional<ProcessId> signal_change_writer() const noexcept;
     /// Publish the static kernel's changed outputs at once (none without a
     /// kernel): what its running process wrote reaches the host's signals
     /// and their observers before a foreign routine the process called

@@ -68,7 +68,10 @@ legacy JIT was removed, so the loop compares the reference evaluator with v4.
     deleted (engine-v4 migration, Stage D).
   - `--compiled-processes` and `--aot-scope` are accepted for command-line
     compatibility and ignored.
-  - `elaborate --aot` populates the v4 kernel cache.
+  - `elaborate --aot` populates the v4 kernel cache. A later compiled run
+    takes its kernel templates from it; with `FSIM_PROFILE_PHASES=1` it
+    reports `static-kernel-codegen restored=N of=M` (templates found in the
+    cache of those the run needs).
 
   | `--engine` | Runs | Native code |
   |---|---|---|
@@ -321,7 +324,47 @@ state, S3):
   - Blocking writes are visible at once (S7).
   - Commit order is the queue order; for two writes to the same bits, the
     later one wins.
-- **Basis.** 1800 §4.4.2.4 (NBA events region), §4.9.4 (nonblocking
+  - One execution-order key orders the NBA updates of host processes and
+    kernel bodies in one time step (§4.6 b)). The host scheduler orders its
+    NBA region by insertion sequence, not by process order: an update a
+    host process schedules goes into the region's execution-order class
+    (`order_nonblocking_region_entry`), ahead of it only the Pre-NBA
+    synchronization callbacks (`nonblocking_region_first`), behind it only
+    the kernel's settle after its commits (`nonblocking_region_last`). A
+    kernel activation that leaves nonblocking writes while host updates are
+    pending in that region defers them (`defer_nonblocking`): its commit task
+    enters the execution-order class at the end of the activation, so it
+    lands after the host updates scheduled before it and before those
+    scheduled after it. The writes of one activation stay one key (they
+    commit together); a hosted process that interleaves with that activation
+    writes host signals, disjoint from the kernel's slots, so only the order
+    observers see between the two objects can differ (§4.7).
+  - A kernel body's nonblocking write of a host signal (one a host process
+    or `$monitor` reads), and its `<= #0` write (§10.4.2), joins the
+    kernel's own queue as a host entry (`PendingKind::host`,
+    `queue_host_update`, `schedule_host_after`), not the host's NBA region
+    at the time its statement executes. The commit applies it in its queue
+    place (`commit_host_update`): the outputs the earlier updates changed
+    reach the host first, then the host signal's driver commits and the
+    kernel's readers of it wake. A batch with a host entry always defers to
+    the host's NBA region, where outputs commit at once; a commit inside an
+    activation (a closed, warping or mixed kernel) stages the entry behind
+    the outputs it stages, in the same order. So `x <= 1; p <= 1; y <= 6;`
+    updates x, p, y in that order whichever of them is a host signal.
+  - The other NBA-region events a kernel body makes on the host, a
+    nonblocking trigger of an event object (`->>`, §15.5.1) and the
+    nonblocking update (§10.4.2) of a string variable or of an array the
+    host keeps (a dynamic array, queue or associative array, or an element
+    of a host-kept fixed array; `write_object`/`write_object_element` hand
+    it to the kernel's `NonblockingSink`), join the same queue as host
+    tasks (`PendingKind::host_task`, `queue_host_task`): the commit performs
+    each in its place (`commit_host_update`; an array's update rescans the
+    kernel's inputs, as its blocking write does), so `x <= 1; s <= "a";
+    y <= 2;` updates x, then s, then y, and a value-change callback of x
+    still reads the old string. A Reactive or region-moved member's (outside the
+    kernel's NBA batch) are scheduled in the host's region as before.
+- **Basis.** 1800 §4.4.2.4 (NBA events region), §4.6 b) (nonblocking
+  updates in execution order), §4.9.4 (nonblocking
   assignment), §10.4.2 (nonblocking procedural assignments), §9.4.2 (event
   control, edge definitions), §4.5 (simulation algorithm).
 - **Status:** *implemented*. Outputs changed by or after a commit are
@@ -331,7 +374,8 @@ state, S3):
   follow S17.
 - **Witness.** T-sv (edge registers with asynchronous reset, derived clock,
   dynamic bit and part-select NBA writes, memory with registered read),
-  T-beh. Corpus (ivtest, sv-tests, verilator).
+  T-beh, `nba_execution_order` (systemverilog-scheduling-witnesses),
+  `fsim.application.kernel_ownership`. Corpus (ivtest, sv-tests, verilator).
 
 ## S7. Region order within a time step
 
@@ -427,10 +471,13 @@ state, S3):
     closed kernel: every process is a member, there are no host outputs, no
     host-written inputs, and nothing outside the kernel records between time
     steps. A warped step reports the time and delta the scheduler would have
-    reported.
+    reported, also to the host services its members call (output, reports,
+    `$readmem` reports, covergroup samples and their trace, 1800 §19.3, the
+    coverage database's run time) and to `Simulation::now()`/`delta()` in a
+    hook they reach (`Interpreter::current_time()`/`current_delta()`).
   - Warp is refused under: a run limit, active PSL directives, any signal,
-    scalar, driver or container change hook, safe-point observers, VPI
-    handles or runtime updates, SystemC.
+    scalar, driver or container change hook, an execution-point hook,
+    safe-point observers, VPI handles or runtime updates, SystemC.
 - **Basis.** 1800 §4.3, §4.5 (time advances only when no events remain);
   1076 §14.7.5.3 (simulation cycle).
 - **Status:** *implemented* for warp (`FSIM_STATIC_KERNEL_TIME_WARP=0`
@@ -554,7 +601,10 @@ state, S3):
   full store asks the runtime to grow it; a recursive callable's frames,
   the packed registers it saves at each call, go on a second growable store
   of the body, `frame_push`/`frame_pop`, and ride in the thread's saved
-  stack), `report`,
+  stack; the strings, containers and private arrays such a frame lists are
+  runtime-library values, which the push and pop save and restore through
+  the runtime, `frame_storage`, one frame per activation: 1076 §14.6 b),
+  §4.3), `report`,
   `std.env.stop/finish`, `now`, and the zero-delay inertial assignments of
   the delta mode. A thread runs in the VHDL round with the members, its
   assignments go through the round queue and apply in the update phase; a
@@ -686,6 +736,45 @@ state, S3):
     address its native counter had already advanced). Work woken by the
     drain's own SystemVerilog writes runs in the drain (step 3), and the
     activation commits its writes in a round before it yields.
+  - The delta's VHDL update (a round's commit, or the commit of the VHDL
+    work SystemVerilog writes woke) follows all of the delta's
+    SystemVerilog work, the host's included, as in the reference scheduler,
+    which starts a generic phase only while every SystemVerilog region
+    before Postponed is empty. A VHDL signal fed by a SystemVerilog port
+    therefore takes the value that work leaves, never an in-between one
+    (cross-language-semantics.md, "Time and phase lattice"). The kernel
+    keeps this where its own SystemVerilog work outruns the host's
+    (gate BA):
+    1. a round's commit, or a commit of SystemVerilog-woken VHDL writes,
+       that finds host SystemVerilog work pending (staged or published
+       updates, host or hosted processes, their nonblocking updates) waits
+       for it in a host task (`vhdl_update_waits_for_host`,
+       `defer_vhdl_round`). The task is queued in the delta's generic
+       Active queue, or in its generic Inactive queue when the activation
+       itself runs in the Active queue (the first activation, or one a
+       generic-domain wake starts): a task queued into the executing queue
+       runs in the same batch, before the SystemVerilog work
+       (`Scheduler::generic_phase_after_systemverilog`). Until the task
+       runs, no other activation runs or commits a round. The round itself
+       runs at once when the activation is a task of a generic queue
+       (`Scheduler::generic_queue_executing`), as the reference runs the
+       delta's VHDL processes in its generic Active batch ahead of the
+       SystemVerilog work that batch queues: a VHDL flop on a SystemVerilog
+       flop's output, both clocked by one VHDL clock edge, reads the output
+       from before the SystemVerilog flop's nonblocking update (IEEE
+       1076-2019 14.7.5.3). Outside such a task (a SystemVerilog batch's,
+       say) the whole round waits (`vhdl_round_waits_for_host`);
+    2. the `#0` resumptions of kernel threads and hosted processes that
+       wait for host Active work resume in a host task of the same delta's
+       Inactive region (`defer_hosted_inactive`), not in the next delta,
+       and a round whose drain left them waiting keeps its writes queued
+       for the commit in step 1 instead of committing before them.
+    Cost per time slot: nothing when no SystemVerilog work is pending at a
+    round's commit; otherwise the same single host task as before, queued
+    one queue later, and one host Inactive task per `#0` that waits for host
+    Active work in place of a next-delta activation. Witness:
+    `mixed_region_port` and `mixed_clocked_port` in the SystemVerilog
+    scheduling witnesses (interpreter and v4).
   - Slots of Logic9 signals read by SystemVerilog code are coerced to Logic4
     (`U` becomes X); publication uses the writer's domain.
   - A SystemVerilog member of a mixed kernel does not require the host
@@ -848,21 +937,59 @@ state, S3):
     for its time, phase and step stops, and publishes the kernel's pending
     outputs when a run stops, so a stop inside an activation shows the
     values its earlier statements wrote. A simulation built without a run's
-    access plan (the library API, an embedding client) takes the process
-    side of this plan but keeps every signal a host signal
-    (`StaticKernelAccessPlan::host_signals`): its change hooks hear every
-    write of every signal in the reference evaluator's order, which the
-    kernel's member order and per-activation publication cannot give. Under
-    `--engine debug` a signal change observer (`Simulation::set_signal_change_hook`,
+    access plan (the library API, an embedding client) takes this plan
+    whole, its signals kernel-owned as under `--engine debug`; its change
+    hooks hear each signal's changes in order, and the changes of different
+    signals within one region in the kernel's order (IEEE 1800-2023 4.7
+    leaves that order open). `Simulation::signal_kernel_owned` says whether
+    the kernel owns a signal. A design container object the kernel holds in
+    its own element storage (the variable of a protected type's shared
+    variable, an array no signal aliases) is current only there: a host
+    read (`Interpreter::container_object_value`, the snapshot form, Tcl
+    `object read`, the debugger's `show`) copies the kernel's elements into
+    the host object first, and a host deposit writes them back into the
+    kernel (`StaticKernel::read_owned_container_object`,
+    `write_owned_container_object`). Nothing in the kernel waits on such
+    storage (an event control or implicit sensitivity on an array element
+    names its bridge or element signals), so such a deposit wakes no
+    member; a process reads it when it next runs (IEEE 1076-2019 6.4.2.4:
+    a variable update has no event). A host deposit of a container whose
+    elements the kernel holds in signals (a packed bridge, the element
+    signals of a net array) is a foreign write of those signals, as
+    `deposit_signal`'s (`note_external_signal_write`, `host_deposit`): the
+    kernel takes it into their slots and wakes their readers (IEEE
+    1800-2023 38.34). A VPI value watch on a memory word watches the
+    memory's signals (`Interpreter::watch_container_object_changes`), so
+    the kernel's and the host's writes of a word are announced as the
+    reference engine announces them (38.36.1), and VPI reads a memory word
+    straight from the kernel (`Interpreter::kernel_container_object_value`,
+    as `kernel_signal_value` for a signal), without an observation barrier
+    that could publish changes while the VPI object registry is locked.
+    Under this plan, and under
+    `--engine debug`, a signal change observer (`Simulation::set_signal_change_hook`,
     `add_signal_change_hook`, the scalar forms) watches every signal, and a
     VPI value watch watches its object's signals; under this plan the
-    kernel reports every change of a watched (output) slot at the write
-    (`slot_changed_general` publishes it at once), so several blocking
-    writes of one activation are several changes, as the reference
-    evaluator reports them. Other plans publish the value an activation
-    leaves. A write under a force reaches the host's stored layer first
-    (`restore_override`), so a release finds what the writers wrote
-    meanwhile. Registry reads and puts ask the simulation for a live value
+    kernel reports every change of a watched (output) slot once the write
+    is complete (`slot_changed_general` notes it, `flush_debug_writes`
+    publishes the noted slots in first-write order at the thread's next
+    debug point, at its suspension, at each NBA update of the commit and at
+    the end of the activation), so several blocking writes of one
+    activation are several changes, as the reference evaluator reports
+    them, and the field stores of one wide write are one change. Other plans publish the value an activation
+    leaves. While a change hook runs, `Simulation::signal_change_writer`
+    names the process whose write made the change (both engines: the process
+    a statement of which executed, or the driver a commit is for), so a
+    client can check that one process's changes in one delta cycle come in
+    the order its statements executed (§4.6 a), b)); the kernel's
+    publications commit as its slot's writer (`last_writer_`). A write under
+    a force reaches the host's stored layer first (`restore_override`), so a
+    release finds what the writers wrote meanwhile; a wide write notifies
+    its 64-bit fields one at a time, so each field reaches the stored layer
+    as a slice of its writer's and only that field's forced bits are put
+    back (`restore_override_field`). A run's watches (an observer's, or a
+    value reference a client took) are not saved with the run
+    (`kernel.values` holds the design's outputs): the restored run's own
+    watched outputs take the restored values (`resync_watched_outputs`). Registry reads and puts ask the simulation for a live value
     with the registry lock released, because the kernel publishes
     (`notify_live_value`) while it answers. A first-time live SDF net-delay
     split is grafted like the compiled kernel's, the members' debug points

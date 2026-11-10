@@ -322,6 +322,12 @@ void Simulation::set_signal_change_hook(SignalChangeHook hook)
     impl_->refresh_observation_hooks();
 }
 
+std::optional<runtime::simir::ProcessId>
+Simulation::signal_change_writer() const noexcept
+{
+    return impl_->interpreter->signal_change_writer();
+}
+
 void Simulation::watch_signal_changes(
     const std::span<const runtime::simir::SignalId> signals)
 {

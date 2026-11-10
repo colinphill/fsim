@@ -129,6 +129,7 @@ int fsim_application_case_sv_mutable_strings();
 int fsim_application_case_sv_containers();
 int fsim_application_case_synchronization();
 int fsim_application_case_ordering_interactions();
+int fsim_application_case_kernel_ownership();
 int fsim_application_case_sv_container_capacity();
 int fsim_application_case_sv_files();
 int fsim_application_case_sv_preprocessor_generate();
@@ -148,6 +149,7 @@ constexpr NamedApplicationCase application_cases[] = {
     { "sv_containers", fsim_application_case_sv_containers },
     { "synchronization", fsim_application_case_synchronization },
     { "ordering_interactions", fsim_application_case_ordering_interactions },
+    { "kernel_ownership", fsim_application_case_kernel_ownership },
     { "sv_container_capacity", fsim_application_case_sv_container_capacity },
     { "sv_files", fsim_application_case_sv_files },
     { "sv_preprocessor_generate", fsim_application_case_sv_preprocessor_generate },

@@ -1,0 +1,17 @@
+immediate_assertions.sv:22:5: error[FSIM-HDL-REPORT]: assertion failed
+immediate_assertions.sv:27:5: error[FSIM-HDL-REPORT]: assertion failed
+assume passed
+covered once
+check 1 passed
+check 2 failed
+first: result=1 pre=1 post=1
+off: result=1 pre=2 post=2
+assume passed
+check 1 passed
+fail off: result=1 pre=3 post=3
+immediate_assertions.sv:22:5: error[FSIM-HDL-REPORT]: assertion failed
+flag is set
+assume passed
+check 1 passed
+check 2 failed
+on: result=1 pre=4 post=4

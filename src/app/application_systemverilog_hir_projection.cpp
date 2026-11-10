@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_systemverilog_hir_internal.hpp"
 
+#include "fsim/semantic/systemverilog_type_state.hpp"
+
 namespace fsim::app::application_detail::systemverilog_hir_detail {
 
 namespace {
@@ -241,6 +243,12 @@ void SystemVerilogHirBuilder::apply_named_type_dimensions(
                     packed_range(dimension, scope, parent));
             }
         }
+    }
+    // A named type is 4-state when the type it names is (IEEE 1800-2023
+    // 6.18, 6.19); the frontend leaves a name's value domain unknown. A
+    // typedef's own base keeps only the name its definition follows.
+    if (!resolved_typedef_base && !output.four_state) {
+        output.four_state = sv::named_type_four_state(output, hir_);
     }
     if (!input.systemverilog_named_type_dimensions.empty()) {
         apply_named_type_dimensions(output, input, fallback, scope, parent);

@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+warning[FSIM-HDL-REPORT]: unique case has multiple matching items
+warning[FSIM-HDL-REPORT]: unique case has no matching item
+warning[FSIM-HDL-REPORT]: unique0 case has multiple matching items
+warning[FSIM-HDL-REPORT]: priority case has no matching item
+warning[FSIM-HDL-REPORT]: unique case has multiple matching items
+warning[FSIM-HDL-REPORT]: unique case has multiple matching items
+warning[FSIM-HDL-REPORT]: priority case has no matching item

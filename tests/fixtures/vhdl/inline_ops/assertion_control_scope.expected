@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+inl final t=85
+inl final t=95
+inl scope u1.ma=20 u2.ma=18
+inl scope u1.l pa=18 pc=20 ia1=20 ic1=20 da1=18
+inl scope u2.l pa=18 pc=18 ia1=18 ic1=18 da1=16
+inl scope u3 pa=24 pc=24 ia1=20 ic1=22 da1=22
+inl scope q.d1=15 b.fa=20 b.fc=18 expect=26

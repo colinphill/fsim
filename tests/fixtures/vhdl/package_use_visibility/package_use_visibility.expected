@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+pkguse green_pos 1
+pkguse high_pos 3
+pkguse z_pos 3
+pkguse sym_length 3
+pkguse folded_length 3
+pkguse is_green true
+pkguse folded_green true
+pkguse strength 01Z10X
+pkguse hstring XZ
+pkguse resolved '1'

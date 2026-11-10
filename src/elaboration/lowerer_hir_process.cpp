@@ -409,6 +409,23 @@ void Lowerer::report(
         std::move(code), std::move(message), std::move(span) });
 }
 
+void Lowerer::report_once(
+    std::string code,
+    std::string message,
+    frontend::SourceSpan span)
+{
+    const auto reported = std::ranges::any_of(diagnostics_,
+        [&](const Diagnostic& diagnostic) {
+            return diagnostic.code == code
+                && diagnostic.span.begin.offset == span.begin.offset
+                && diagnostic.span.end.offset == span.end.offset
+                && diagnostic.span.source_name.str() == span.source_name.str();
+        });
+    if (!reported) {
+        report(std::move(code), std::move(message), std::move(span));
+    }
+}
+
 bool Lowerer::signal_binding_can_emit_write(
     const HirRuntimeBinding& binding) const noexcept
 {
@@ -2728,10 +2745,18 @@ std::optional<Process> Lowerer::lower_hir_process(
             }
             return signal;
         };
+        // `always @(cb)` waits for the clocking event of the clocking block
+        // (IEEE 1800-2023 14.13), as a statement's `@(cb)` does, not for a
+        // change of a signal of that name.
+        const auto named_clocking_event
+            = hir_named_clocking_event(input.sensitivities, input.scope);
+        const std::vector<semantic::sv::Sensitivity>& sensitivities
+            = named_clocking_event ? *named_clocking_event
+                                   : input.sensitivities;
         // An event with its own `iff` guard (IEEE 1800-2023 9.4.2.3) is
         // waited for by the process body's leading event control, which
         // tests the guard of the event that fired.
-        const bool guarded_events = std::ranges::any_of(input.sensitivities,
+        const bool guarded_events = std::ranges::any_of(sensitivities,
             [](const semantic::sv::Sensitivity& sensitivity) {
                 return sensitivity.guard.has_value();
             });
@@ -2761,7 +2786,7 @@ std::optional<Process> Lowerer::lower_hir_process(
             }
         };
         bool dynamic_terms { };
-        for (const auto& sensitivity : input.sensitivities) {
+        for (const auto& sensitivity : sensitivities) {
             if (sensitivity.signal == "*") {
                 description.wildcard_sensitivity = true;
                 continue;
@@ -2801,7 +2826,7 @@ std::optional<Process> Lowerer::lower_hir_process(
                     }
                     // A class event is waited on through its event object
                     // (IEEE 1800-2017 15.5.2), by the leading event control.
-                    if (input.sensitivities.size() == 1U
+                    if (sensitivities.size() == 1U
                         && hir_class_event_expression(
                             *sensitivity.expression)) {
                         dynamic_terms = true;
@@ -2930,7 +2955,7 @@ std::optional<Process> Lowerer::lower_hir_process(
                 }
                 if (!signal && sensitivity.edge == semantic::sv::EdgeKind::any
                     && (description.event_expression
-                        || input.sensitivities.size() != 1U)) {
+                        || sensitivities.size() != 1U)) {
                     // A constant never changes; another expression is
                     // watched through every signal it reads (9.4.2).
                     for (const auto dependency : hir_signal_dependencies(
@@ -2947,7 +2972,7 @@ std::optional<Process> Lowerer::lower_hir_process(
                 }
                 if (!signal) {
                     if (description.event_expression
-                        || input.sensitivities.size() != 1U) {
+                        || sensitivities.size() != 1U) {
                         dynamic_terms = true;
                         break;
                     }
@@ -3007,7 +3032,7 @@ std::optional<Process> Lowerer::lower_hir_process(
             // A constant (a parameter or enumeration literal) never
             // changes, so it adds no event.
             if (!signal && sensitivity.edge == semantic::sv::EdgeKind::any
-                && input.sensitivities.size() > 1U
+                && sensitivities.size() > 1U
                 && hir_resolver()
                        .resolve_systemverilog_constant(
                            sensitivity.signal, input.scope, false,
@@ -3028,9 +3053,9 @@ std::optional<Process> Lowerer::lower_hir_process(
         if (guarded_events && !dynamic_terms) {
             const bool plain
                 = description.sensitivities.size()
-                    == input.sensitivities.size()
+                    == sensitivities.size()
                 && !description.wildcard_sensitivity
-                && std::ranges::none_of(input.sensitivities,
+                && std::ranges::none_of(sensitivities,
                     [](const semantic::sv::Sensitivity& sensitivity) {
                         return sensitivity.expression.has_value();
                     })
@@ -3041,7 +3066,7 @@ std::optional<Process> Lowerer::lower_hir_process(
                     });
             if (plain) {
                 description.wake_guards.assign(
-                    input.sensitivities.begin(), input.sensitivities.end());
+                    sensitivities.begin(), sensitivities.end());
             } else {
                 dynamic_terms = true;
             }
@@ -4882,6 +4907,10 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
     deferred_assertion_action_phase_.reset();
     deferred_assertion_action_handoff_.reset();
     deferred_assertion_action_effects_.clear();
+    deferred_assertion_control_.reset();
+    hir_qualified_if_link_.reset();
+    assertion_control_sites_.clear();
+    sva_local_widths_.clear();
     language_ = language;
     // A process that holds a deferred assertion (directly or in a callable
     // it calls) clears its report queue at each flush point (16.4.2); no

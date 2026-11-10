@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+gtop user = called
+gtop color equal false
+gtop color differ false
+gtop user = called
+gtop warm equal false
+gtop shape equal true
+gtop shape differ true
+gtop user = called
+gtop nested color equal false
+gtop nested shape equal true
+gtop token folded false
+gtop own = called
+gtop own equal true
+gtop user = called
+gtop block equal false
+gtop user = called
+gtop entity equal false

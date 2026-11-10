@@ -477,6 +477,10 @@ struct Statement {
     OriginId origin;
     AssignmentKind assignment_kind { AssignmentKind::blocking };
     std::optional<ExpressionId> target;
+    // For a task_call of a class's static method through a specialization
+    // (`C#(4)::t();`, `typedef C#(4) T; T::t();`), the selection: a call
+    // expression whose class_owner names the specialization the method runs
+    // in (IEEE 1800-2023 8.25.1).
     std::optional<ExpressionId> value;
     std::optional<ExpressionId> condition;
     Name task;

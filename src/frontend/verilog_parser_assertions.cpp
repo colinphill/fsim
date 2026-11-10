@@ -1506,6 +1506,7 @@ VerilogParser::parse_assertion_declaration(
             declaration.body_tokens.back());
     }
     if (kind != SystemVerilogAssertionDeclarationKind::Checker) {
+        check_explicitly_clocked_samples(declaration.body_tokens, false);
         const auto expression_position = structure_assertion_locals(declaration);
         structure_assertion_clock_and_disable(declaration, expression_position);
         structure_assertion_endpoints(declaration);
@@ -1702,6 +1703,73 @@ void VerilogParser::declare_inline_property(
     declarations.push_back(std::move(declaration));
 }
 
+void VerilogParser::check_explicitly_clocked_samples(
+    const std::span<const Token> tokens, const bool whole)
+{
+    std::unordered_set<std::size_t> reported;
+    const auto scan = [&](const std::size_t begin, const std::size_t end) {
+        for (std::size_t position = begin;
+             position < end && position + 1U < tokens.size(); ++position) {
+            const auto& name = tokens[position];
+            const bool past = name.text == "$past";
+            if (name.kind != TokenKind::Identifier
+                || tokens[position + 1U].kind != TokenKind::LeftParen
+                || !(past || name.text == "$rose" || name.text == "$fell"
+                    || name.text == "$stable" || name.text == "$changed")) {
+                continue;
+            }
+            const auto close = matching_right_parenthesis(tokens, position + 1U);
+            if (!close) {
+                return;
+            }
+            std::size_t depth = 0U;
+            std::size_t arguments = 1U;
+            for (auto at = position + 1U; at < *close; ++at) {
+                const auto kind = tokens[at].kind;
+                if (kind == TokenKind::LeftParen || kind == TokenKind::LeftBracket
+                    || kind == TokenKind::LeftBrace) {
+                    ++depth;
+                } else if (kind == TokenKind::RightParen
+                    || kind == TokenKind::RightBracket
+                    || kind == TokenKind::RightBrace) {
+                    --depth;
+                } else if (kind == TokenKind::Comma && depth == 1U) {
+                    ++arguments;
+                }
+            }
+            // The clocking argument is the second of a value change
+            // function and the fourth of $past (16.9.3).
+            if (arguments < (past ? 4U : 2U) && reported.insert(position).second) {
+                error(name, "FSIM-SV-SEM-473",
+                    "'" + name.text + "' in a disable condition or a clock "
+                    "expression shall be explicitly clocked: give it a "
+                    "clocking event argument (IEEE 1800-2023 16.9.3)");
+            }
+        }
+    };
+    if (whole) {
+        scan(0U, tokens.size());
+        return;
+    }
+    for (std::size_t position = 0; position < tokens.size(); ++position) {
+        const auto& token = tokens[position];
+        if (token.kind == TokenKind::At && position + 1U < tokens.size()
+            && tokens[position + 1U].kind == TokenKind::LeftParen) {
+            if (const auto close
+                = matching_right_parenthesis(tokens, position + 1U)) {
+                scan(position + 2U, *close);
+            }
+        } else if (token.text == "disable" && position + 2U < tokens.size()
+            && tokens[position + 1U].text == "iff"
+            && tokens[position + 2U].kind == TokenKind::LeftParen) {
+            if (const auto close
+                = matching_right_parenthesis(tokens, position + 2U)) {
+                scan(position + 3U, *close);
+            }
+        }
+    }
+}
+
 SystemVerilogConcurrentAssertion
 VerilogParser::parse_concurrent_assertion(
     const Token& start,
@@ -1769,6 +1837,7 @@ VerilogParser::parse_concurrent_assertion(
                 ? "a concurrent assertion property is unbalanced"
                 : "a concurrent assertion has an empty property");
     }
+    check_explicitly_clocked_samples(assertion.property_tokens, false);
     if (assertion.form == SystemVerilogConcurrentAssertionForm::Sequence
         && !assertion.property_tokens.empty()) {
         SystemVerilogAssertionDeclaration sequence;

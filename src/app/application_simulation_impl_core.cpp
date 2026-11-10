@@ -309,12 +309,7 @@ Simulation::Impl::generated_class_specialization(
     if (identity.find("#gen{") == std::string_view::npos) {
         return nullptr;
     }
-    if (!generated_class_index) {
-        generated_class_index
-            = std::make_unique<semantic::sv::ClassSpecializationIndex>(
-                built.semantics, built.systemverilog_hir);
-    }
-    if (!generated_class_index->specialize_generated_identity(identity)) {
+    if (!runtime_class_index().specialize_generated_identity(identity)) {
         return nullptr;
     }
     for (const auto& specialization :
@@ -328,6 +323,95 @@ Simulation::Impl::generated_class_specialization(
         }
     }
     return find();
+}
+
+semantic::sv::ClassSpecializationIndex&
+Simulation::Impl::runtime_class_index() const
+{
+    if (!generated_class_index) {
+        generated_class_index
+            = std::make_unique<semantic::sv::ClassSpecializationIndex>(
+                built.semantics, built.systemverilog_hir);
+        // The index starts from the specializations the design was
+        // elaborated with; only those it makes later are new.
+        generated_class_index_published = generated_class_index->size();
+    }
+    return *generated_class_index;
+}
+
+std::optional<std::string> Simulation::Impl::class_type_specialization(
+    const semantic::sv::TypeReference& type,
+    const std::string_view context) const
+{
+    if (!type.class_specialization.empty()) {
+        return type.class_specialization;
+    }
+    if (type.class_identity.empty()) {
+        return std::nullopt;
+    }
+    auto key = std::pair { &type, std::string { context } };
+    if (const auto cached = class_type_specializations.find(key);
+        cached != class_type_specializations.end()) {
+        return cached->second;
+    }
+    auto answer = make_class_type_specialization(type, context);
+    class_type_specializations.emplace(std::move(key), answer);
+    return answer;
+}
+
+std::optional<std::string> Simulation::Impl::make_class_type_specialization(
+    const semantic::sv::TypeReference& type,
+    const std::string_view context) const
+{
+    // A class name without actuals denotes the default specialization
+    // (IEEE 1800-2023 8.25), which the design always has.
+    if (type.interface_parameter_actuals.empty()) {
+        const auto& compiled
+            = built.compiled_systemverilog_class_specializations;
+        const auto found = std::ranges::find_if(compiled,
+            [&](const semantic::sv::ClassSpecialization& candidate) {
+                return candidate.declaration_identity == type.class_identity
+                    && candidate.default_specialization;
+            });
+        if (found != compiled.end()) {
+            return found->specialization_identity;
+        }
+    }
+    // Actuals that read the running class's parameters (`C#(T)` in a
+    // method of `D#(T)`) take that specialization's values.
+    auto& index = runtime_class_index();
+    std::optional<semantic::sv::ClassSpecializationId> running;
+    if (!context.empty()) {
+        running = index.find(context);
+        if (!running && context.find("#gen{") != std::string_view::npos) {
+            running = index.specialize_generated_identity(context);
+        }
+        if (!running) {
+            return std::nullopt;
+        }
+    }
+    const auto made = index.specialize(type, running, type.target.source);
+    if (!made) {
+        return std::nullopt;
+    }
+    // A specialization the elaborated design does not have joins the
+    // classes made at run time, with static storage of its own.
+    const auto count = index.size();
+    for (auto position = generated_class_index_published; position < count;
+         ++position) {
+        const auto& specialization = index.result().specializations[position];
+        if (std::ranges::find(generated_class_specializations,
+                specialization.specialization_identity,
+                &semantic::sv::ClassSpecialization::specialization_identity)
+            == generated_class_specializations.end()) {
+            generated_class_specializations.push_back(specialization);
+        }
+    }
+    if (count > generated_class_index_published) {
+        class_specialization_recipes.emplace_back(type, std::string { context });
+    }
+    generated_class_index_published = count;
+    return index.at(*made).specialization_identity;
 }
 
 [[nodiscard]] const semantic::sv::ClassSpecialization&
@@ -744,20 +828,36 @@ void Simulation::Impl::add_constraint_state_variables(
         const auto* method = class_hir_execution.method_named(target, name);
         if (method == nullptr)
             return;
+        // The class that declares the callback, a compilation-unit scope
+        // named without its digest.
+        auto owner = method->owner_identity;
+        if (const auto unit = owner.find("$unit@");
+            unit != std::string::npos) {
+            const auto end = owner.find("::", unit);
+            owner.erase(unit + 5U,
+                end == std::string::npos ? end : end - unit - 5U);
+        }
         const auto returns_void = !method->return_type
             || method->return_type->target.spelling == "void";
         if (method->kind != semantic::sv::ClassMethodKind::function
             || method->static_method || !method->formals.empty()
             || !returns_void) {
-            throw std::invalid_argument {
-                "randomize callback requires a nonstatic zero-argument void "
-                "function"
-            };
+            throw std::invalid_argument { std::string { name }
+                + " of class '" + owner
+                + "' must be a nonstatic zero-argument void function" };
         }
         std::vector<runtime::PackedLogic4> actuals;
         std::vector<std::string> string_actuals;
-        (void)class_hir_execution.invoke_function(
-            *method, target, actuals, string_actuals, { }, { });
+        // A callback that cannot complete is an error of the run, not a
+        // randomization failure, which only an unsatisfiable solve is
+        // (IEEE 1800-2023 18.6.1, 18.6.3).
+        try {
+            (void)class_hir_execution.invoke_function(
+                *method, target, actuals, string_actuals, { }, { });
+        } catch (const std::exception& error) {
+            throw std::runtime_error { std::string { name } + " of class '"
+                + owner + "' failed in randomize(): " + error.what() };
+        }
     };
     const auto callback = [&](const std::string_view name) {
         callback_on(handle, name);
@@ -766,7 +866,7 @@ void Simulation::Impl::add_constraint_state_variables(
         callback("pre_randomize");
     } catch (...) {
         object.properties = prior_properties;
-        return runtime::PackedLogic4::from_aval_bval(32, 0, 0);
+        throw;
     }
     // Objects reached through class-handle properties join the solve; rand
     // handles extend randomization to theirs, whose pre_randomize runs after
@@ -789,7 +889,7 @@ void Simulation::Impl::add_constraint_state_variables(
         for (auto& [member_handle, properties] : prior_members) {
             class_heap.object(member_handle).properties = std::move(properties);
         }
-        return runtime::PackedLogic4::from_aval_bval(32, 0, 0);
+        throw;
     }
     runtime::SystemVerilogClassRandomizeRequest request;
     // Bound the enumerated domains, as scope randomize does, so a wide
@@ -1813,7 +1913,7 @@ void Simulation::Impl::add_constraint_state_variables(
                 class_heap.object(member_handle).properties
                     = std::move(properties);
             }
-            return runtime::PackedLogic4::from_aval_bval(32, 0, 0);
+            throw;
         }
     }
     return runtime::PackedLogic4::from_aval_bval(
@@ -2030,6 +2130,26 @@ void Simulation::Impl::assign_property_value(
         return;
     }
     destination.packed = resize_packed(value, destination.packed.width());
+    // A 2-state property stores 0 for each X or Z bit written to it (IEEE
+    // 1800-2023 6.3.2.1, 10.7).
+    auto& stored = destination.packed;
+    if (destination.kind != runtime::SystemVerilogClassPropertyKind::Bit2
+        || stored.is_logic9() || stored.width() == 0U) {
+        return;
+    }
+    if (stored.width() <= 64U) {
+        const auto word = stored.unchecked_low_word();
+        if (word.bval != 0U) {
+            stored.assign_word({ word.width, word.aval & ~word.bval, 0U });
+        }
+        return;
+    }
+    for (std::size_t bit = 0U; bit < stored.width(); ++bit) {
+        const auto state = stored.get(bit);
+        if (state == runtime::Logic4::x || state == runtime::Logic4::z) {
+            stored.set(bit, runtime::Logic4::zero);
+        }
+    }
 }
 
 [[nodiscard]] runtime::PackedLogic4 Simulation::Impl::invoke_class_container(
@@ -2057,8 +2177,14 @@ Simulation::Impl::static_property_parts(const std::string_view identity)
 
 std::string Simulation::Impl::static_property_specialization(
     const std::string_view owner,
-    const runtime::SystemVerilogClassHandle handle) const
+    const runtime::SystemVerilogClassHandle handle,
+    const std::string_view specialization) const
 {
+    // The class executor selected the specialization: the one a static
+    // method runs in, or the one a selection names (IEEE 1800-2023 8.25.1).
+    if (!specialization.empty()) {
+        return std::string { specialization };
+    }
     const auto registered = [&] {
         try {
             static_cast<void>(class_static_store.initialized(owner));
@@ -2112,8 +2238,10 @@ std::string Simulation::Impl::static_property_specialization(
             current->declaration_identity);
         // The class of one generated scope is a type of its own, which a
         // lowered override dispatch tests the receiver against (IEEE
-        // 1800-2017 27.4, 8.20).
-        if (!current->generate_environment.empty()) {
+        // 1800-2017 27.4, 8.20), and so is each specialization of a
+        // parameterized class, which a lowered `$cast` tests (IEEE
+        // 1800-2023 8.16, 8.25).
+        if (semantic::sv::has_own_static_storage(*current)) {
             descriptor.assignable_declared_types.push_back(
                 current->specialization_identity);
         }
@@ -2789,6 +2917,10 @@ Simulation::Impl::~Impl()
         (void)vpi_registry->remove_value_state_observer(
             *vpi_value_state_observer);
     }
+    // UVM roles the run leaves live are released while the interpreter
+    // whose scheduler times their activity reports still exists: members
+    // are destroyed in reverse order, the interpreter before the services.
+    uvm_sequences.teardown_all_roles();
 }
 
 [[nodiscard]] runtime::SystemVerilogVpiStoredValue Simulation::Impl::vpi_value(
@@ -2835,8 +2967,7 @@ void Simulation::Impl::require_vpi_value(
             if (update.forced_value) {
                 return runtime::SystemVerilogVpiValueError::ReadOnly;
             }
-            auto value = interpreter->container_object_value_snapshot(
-                word->second.first);
+            auto value = vpi_container_value(word->second.first);
             // A word of a string container takes a string (IEEE 1800-2023
             // 38.35).
             if (vpi_container_categories.at(word->second.first)
@@ -3395,8 +3526,7 @@ Simulation::Impl::vpi_live_value(
     if (const auto word = vpi_word_handles.find(handle);
         word != vpi_word_handles.end()) {
         const auto [container, ordinal] = word->second;
-        const auto value
-            = interpreter->container_object_value_snapshot(container);
+        const auto value = vpi_container_value(container);
         if (ordinal >= runtime::simir::container_value_size(value)) {
             return std::nullopt;
         }
@@ -3423,6 +3553,15 @@ Simulation::Impl::vpi_live_value(
         }
     }
     return std::nullopt;
+}
+
+runtime::simir::ContainerValue Simulation::Impl::vpi_container_value(
+    const runtime::simir::ContainerObjectId object) const
+{
+    if (auto owned = interpreter->kernel_container_object_value(object)) {
+        return std::move(*owned);
+    }
+    return interpreter->container_object_value_snapshot(object);
 }
 
 bool Simulation::Impl::vpi_handle_watched(
@@ -3490,8 +3629,11 @@ void Simulation::Impl::watch_vpi_object(
                 // string variable (IEEE 1800-2023 38.36.1).
                 watch_vpi_string(*object);
             } else if (!vpi_watched_containers.contains(container)) {
+                // The v4 kernel publishes the memory's element changes to
+                // the host object, whose change hook announces the words.
+                interpreter->watch_container_object_changes(container);
                 vpi_watched_containers.emplace(container,
-                    interpreter->container_object_value_snapshot(container));
+                    vpi_container_value(container));
             }
         } else if (vpi_string_handles.contains(*object)) {
             // A string object has no change hook of its own: its text is
@@ -3507,8 +3649,9 @@ void Simulation::Impl::watch_vpi_object(
         for (const auto& [container, words] : vpi_container_words) {
             (void)words;
             if (!vpi_watched_containers.contains(container)) {
+                interpreter->watch_container_object_changes(container);
                 vpi_watched_containers.emplace(container,
-                    interpreter->container_object_value_snapshot(container));
+                    vpi_container_value(container));
             }
         }
     }
@@ -3660,6 +3803,38 @@ void Simulation::Impl::publish_assertion_attempt_start(
     interpreter->prepare_output_callback_observation();
     assertion_attempt_hook(
         object->second, static_cast<runtime::SimulationTick>(start));
+}
+
+void Simulation::Impl::publish_assertion_disabled(
+    const runtime::simir::ProcessId design_process, const std::string_view kind,
+    const std::string_view name, const std::int64_t start)
+{
+    if (!vpi_assertions || !vpi_callbacks
+        || !vpi_callbacks->has_registrations()) {
+        return;
+    }
+    const auto occurrence = std::ranges::find_if(built.design_ir.processes(),
+        [&](const auto& item) { return item.runtime_index == design_process; });
+    if (occurrence == built.design_ir.processes().end()) {
+        return;
+    }
+    ConcurrentAssertionEvent event;
+    event.name = std::string { name };
+    event.process = occurrence->name;
+    event.kind = kind == "assumption"
+        ? ConcurrentAssertionCoverageKind::assumption
+        : kind == "cover"
+        ? ConcurrentAssertionCoverageKind::cover
+        : kind == "restriction"
+        ? ConcurrentAssertionCoverageKind::restriction
+        : ConcurrentAssertionCoverageKind::assertion;
+    event.outcome = ConcurrentAssertionOutcome::disabled;
+    event.time = interpreter->scheduler().now();
+    event.delta = interpreter->scheduler().delta();
+    event.attempt_start = static_cast<runtime::SimulationTick>(start);
+    // The callback may read values of the design.
+    interpreter->prepare_output_callback_observation();
+    publish_vpi_assertion(event);
 }
 
 void Simulation::Impl::publish_assertion_step(

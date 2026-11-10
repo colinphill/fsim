@@ -539,6 +539,10 @@ struct SystemVerilogClockingSignal {
 struct SystemVerilogClockingBlock {
     std::string name;
     std::vector<Sensitivity> event;
+    // The clocking event as written after `@`: what a concurrent assertion
+    // clocked by the block (`@(cb)`) resolves as its clock (IEEE 1800-2023
+    // 14.13, 16.16).
+    std::vector<Token> event_tokens;
     std::optional<SystemVerilogClockingSkew> default_input_skew;
     std::optional<SystemVerilogClockingSkew> default_output_skew;
     std::vector<SystemVerilogClockingSignal> signals;

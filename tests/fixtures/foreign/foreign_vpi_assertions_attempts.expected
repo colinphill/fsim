@@ -6,9 +6,9 @@
 #c 25 success p_dis start=5
 #c 27 start p_eos start=27
 #c 27 success p_eos start=7
+#c 30 disabled-evaluation p_dis start=15
+#c 30 disabled-evaluation p_dis start=25
 #c 35 start p_dis start=35
-#c 35 disabled-evaluation p_dis start=15
-#c 35 disabled-evaluation p_dis start=25
 #c 35 disabled-evaluation p_dis start=35
 #c 37 start p_eos start=37
 #c 37 success p_eos start=17

@@ -1862,11 +1862,93 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::int64_t sva_pop_serial { };
     // The observer of attempt starts.
     SvaAttemptHook sva_attempt_hook;
+    // The disable nets of the monitors (SvaOperation::disable_signal; IEEE
+    // 1800-2023 16.12): by net, each monitor it disables, as (process,
+    // site) and the design process owning it. A monitor registers when it
+    // is created (sva_monitor_bind): one that does not exist yet has no
+    // attempt to disable. `sva_disable_watched` flags the nets by signal
+    // for the commit path (record_signal_event).
+    // `outcomes`: the monitor is an expect statement's
+    // (semantic::sva::monitor_expect), whose disabled attempt reports the
+    // disabled outcome that ends the statement (16.17).
+    struct SvaDisableWatch {
+        ProcessId process { };
+        std::uint32_t site { };
+        ProcessId design_process { };
+        bool outcomes { };
+    };
+    std::map<SignalId, std::vector<SvaDisableWatch>> sva_disable_watches;
+    std::vector<std::uint8_t> sva_disable_watched;
+    // The observer of the attempts a disable net ends between the ticks.
+    SvaDisabledHook sva_disabled_hook;
+    // The disable net `net` changed: when it became 1, every running
+    // attempt of each monitor it disables ends in the disabled state at
+    // once (sva::Monitor::disable_running), reported to sva_disabled_hook.
+    void disable_sva_attempts(SignalId net);
+    // The monitors that also evaluate at time steps without a clock tick
+    // (SvaOperation::wake_signal; IEEE 1800-2023 16.12, 16.12.14), in the
+    // order they were created: the monitor as (process, site), its wake
+    // bit, whether it is woken at every time step of an attempt
+    // (semantic::sva::monitor_every_step), and whether its abort net
+    // changed since it was last woken (`pending`). At the start of each
+    // time step (wake_sva_monitors) each monitor with an attempt in
+    // progress that is pending or woken at every step has its wake bit
+    // toggled, which resumes its process.
+    struct SvaWake {
+        ProcessId process { };
+        std::uint32_t site { };
+        SignalId signal { };
+        bool every_step { };
+        bool pending { };
+    };
+    std::vector<SvaWake> sva_wakes;
+    // The abort nets (SvaOperation::abort_signal): by net, the indexes of
+    // the sva_wakes entries of the monitors it belongs to;
+    // `sva_abort_watched` flags them by signal for the commit path
+    // (record_signal_event).
+    std::map<SignalId, std::vector<std::uint32_t>> sva_abort_watches;
+    std::vector<std::uint8_t> sva_abort_watched;
+    // Whether some monitor is pending or woken at every step; the start of
+    // a time step does nothing otherwise.
+    bool sva_wakes_due { };
+    // The abort net `net` changed: its monitors are woken at the start of
+    // the next time step.
+    void sva_abort_changed(SignalId net);
+    // The start of a time step: toggle the wake bits due (see SvaWake).
+    void wake_sva_monitors();
     // The step events of attempts stepping is enabled for, and the start
     // times a library asked stepping for before the process's monitor
     // existed (39.5.2).
     SvaStepHook sva_step_hook;
     std::map<ProcessId, std::vector<std::int64_t>> sva_step_requests;
+    // The action controls of each assertion (set_sva_action_filter).
+    SvaActionFilter sva_action_filter;
+    // The assertion control words (IEEE 1800-2023 20.11): one per control
+    // site, the sites of a process (its SvaKind::control reads, numbered
+    // from 0 by `site`) one after the other from the process's base. The
+    // host sets them (Interpreter::set_assertion_control); the reference
+    // and generated code read them (StaticKernelSvaTable::controls). Sized
+    // once by plan_assertion_controls, so the kernel's pointer stays valid.
+    std::vector<std::int64_t> assertion_controls;
+    // Per process, the index of its first control site, or
+    // no_assertion_control.
+    std::vector<std::uint32_t> assertion_control_base;
+    static constexpr std::uint32_t no_assertion_control
+        = std::numeric_limits<std::uint32_t>::max();
+    // Per control site: its process, its number there and its description
+    // (SvaOperation::plan of the reads).
+    std::vector<AssertionControlSite> assertion_control_sites;
+    bool assertion_controls_planned { };
+    // Numbers the control sites of every process once (the first call).
+    // The static kernel's host member runs a stub on the scheduler: its
+    // sites are those of `host_program` (the program it ran before), when
+    // given.
+    void plan_assertion_controls(std::optional<ProcessId> host = std::nullopt,
+        const Process* host_program = nullptr);
+    // The control word of site `site` of `design_process`; the default word
+    // for a process planned without it.
+    [[nodiscard]] std::int64_t assertion_control_word(
+        ProcessId design_process, std::uint32_t site) const noexcept;
     std::vector<ModulePath> module_paths;
     std::vector<ModuleTimingCheck> module_timing_checks;
     std::vector<ModuleTimingCheckState> module_timing_check_states;
@@ -2034,6 +2116,37 @@ struct Interpreter::Impl : SchedulerBatchTask {
         projected_drivers;
     std::uint64_t next_projected_transaction_id { 1 };
     SignalChangeHook signal_change_hook;
+    /// While signal_change_hook is installed: the process whose write the
+    /// change being published is (Interpreter::signal_change_writer), set by
+    /// a SignalChangeWriterScope around a process's execution and a driver's
+    /// commit; empty for a write of no process.
+    std::optional<ProcessId> signal_change_writer;
+    /// The writer of the signal changes published while it lives: `process`,
+    /// then the writer before it. It does nothing unless a signal change hook
+    /// is installed.
+    class SignalChangeWriterScope {
+    public:
+        SignalChangeWriterScope(Impl& impl, const ProcessId process)
+        {
+            if (impl.signal_change_hook) {
+                writer_ = &impl.signal_change_writer;
+                saved_ = std::exchange(*writer_, process);
+            }
+        }
+        ~SignalChangeWriterScope()
+        {
+            if (writer_ != nullptr) {
+                *writer_ = saved_;
+            }
+        }
+        SignalChangeWriterScope(const SignalChangeWriterScope&) = delete;
+        SignalChangeWriterScope& operator=(const SignalChangeWriterScope&)
+            = delete;
+
+    private:
+        std::optional<ProcessId>* writer_ { };
+        std::optional<ProcessId> saved_;
+    };
     NativeSignalObservationRequiredHook
         native_signal_observation_required_hook;
     NativeSignalObservationAnyHook native_signal_observation_any_hook;
@@ -2303,6 +2416,11 @@ struct Interpreter::Impl : SchedulerBatchTask {
     }
     /// The static kernel runs as `id` (its host process).
     [[nodiscard]] bool static_kernel_host(ProcessId id) const noexcept;
+    /// Interpreter::current_time and current_delta: the scheduler's, or a
+    /// closed static kernel's own time step while it runs one ahead of the
+    /// scheduler (its first delta). The time host services stamp.
+    [[nodiscard]] SimulationTick current_time() const noexcept;
+    [[nodiscard]] std::uint64_t current_delta() const noexcept;
     void static_kernel_enqueue_hosted(ProcessId id,
         StaticKernelHostedWake wake, SimulationTick time = 0U,
         StableOrder order = 0U);
@@ -2405,6 +2523,16 @@ struct Interpreter::Impl : SchedulerBatchTask {
     void expose_signal_value_reference(SignalId signal);
     void expose_container_value_reference(ContainerObjectId object);
     void prepare_container_value_observation(ContainerObjectId object);
+    // The signals that hold a container object's elements: its packed
+    // bridge, element and aggregate signals, through its slice views.
+    [[nodiscard]] std::vector<SignalId> container_alias_signals(
+        ContainerObjectId object) const;
+    // A design container the v4 kernel holds in its own element storage:
+    // copy its current elements into the host object before a host read,
+    // and the host object's elements into the kernel after a host deposit
+    // (StaticKernel::read_owned_container_object, S19).
+    void observe_static_kernel_container(ContainerObjectId object);
+    void deposit_static_kernel_container(ContainerObjectId object);
     [[nodiscard]] ContainerReferenceRefresh
     make_container_reference_refresh(ContainerObjectId object) const;
     [[nodiscard]] PreparedContainerReferenceRefresh
@@ -2628,15 +2756,22 @@ struct Interpreter::Impl : SchedulerBatchTask {
     // A process's write of a design object or of one of its elements (IEEE
     // 1800-2023 10.4.1, 10.4.2): a blocking one now, a nonblocking one from
     // the NBA region (the update phase outside SystemVerilog). The
-    // interpreter and the static kernel's members both make it.
+    // interpreter and the static kernel's members both make it. A
+    // SystemVerilog nonblocking write hands its update to `nonblocking_sink`
+    // when one is given (a kernel member's NBA queue, which performs it in
+    // execution order with the member's other updates, 4.6 b)); otherwise
+    // the NBA region takes it now.
+    using NonblockingSink = std::function<void(Scheduler::Task)>;
     void write_object(const WriteContainerObject& operation,
         ProcessSchedulingDomain process_domain, ProcessId driver,
-        InstructionIndex instruction, const ContainerValue& source);
+        InstructionIndex instruction, const ContainerValue& source,
+        const NonblockingSink& nonblocking_sink = { });
     void write_object_element(const WriteContainerObjectElement& operation,
         ProcessSchedulingDomain process_domain, ProcessId driver,
         InstructionIndex instruction, const PackedLogic4& index,
         const PackedLogic4& value, const std::optional<PackedLogic4>& base,
-        std::vector<PackedLogic4> level_indices);
+        std::vector<PackedLogic4> level_indices,
+        const NonblockingSink& nonblocking_sink = { });
     void write_container_object_member_value(
         ContainerObjectId id,
         const PackedLogic4& index,

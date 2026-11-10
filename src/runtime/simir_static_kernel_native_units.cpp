@@ -609,8 +609,10 @@ Interpreter::Impl::StaticKernel::OperationTier*
 Interpreter::Impl::StaticKernel::operation_tier(const std::uint32_t member_index,
     const bool thread)
 {
-    // Helpers are bound once build_native has run.
-    if (codegen_ == nullptr || verify_ || native_helpers_.step_ops[0] == nullptr
+    // Helpers are bound once build_native has run. A verify replay
+    // (FSIM_KERNEL_VERIFY) is the reference evaluator's own run: the compiled
+    // code is checked against it, not against more generated code.
+    if (codegen_ == nullptr || replaying_ || native_helpers_.step_ops[0] == nullptr
         || members_[member_index].operations().empty()) {
         return nullptr;
     }
@@ -718,8 +720,10 @@ Interpreter::Impl::StaticKernel::OperationTier*
 Interpreter::Impl::StaticKernel::hosted_tier(ProcessState& process,
     const OperationList& operations)
 {
-    // Helpers are bound once build_native has run.
-    if (codegen_ == nullptr || verify_ || native_helpers_.hosted_step_ops[0] == nullptr
+    // Helpers are bound once build_native has run. A verified run hosts
+    // its processes as any compiled run does (the verify replay covers the
+    // kernel's members, not hosted processes).
+    if (codegen_ == nullptr || native_helpers_.hosted_step_ops[0] == nullptr
         || operations.size() == 0U) {
         return nullptr;
     }
@@ -751,7 +755,7 @@ void Interpreter::Impl::StaticKernel::build_hosted_tiers()
 {
     // An ahead-of-time build compiles the hosted processes' tiers with the
     // rest of the image; the simulation finds them there.
-    if (codegen_ == nullptr || !codegen_->ahead_of_time() || verify_
+    if (codegen_ == nullptr || !codegen_->ahead_of_time()
         || native_helpers_.hosted_step_ops[0] == nullptr) {
         return;
     }

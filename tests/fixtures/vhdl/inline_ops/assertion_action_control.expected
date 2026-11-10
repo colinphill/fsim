@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+inl actions assert p=24 v=16 f=26
+inl actions cover p=24 v=16
+inl actions expect p=24 v=16 f=26
+inl actions never=0

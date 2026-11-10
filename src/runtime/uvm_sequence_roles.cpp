@@ -37,6 +37,13 @@ is_run_role(const SystemVerilogUvmSequenceRoleKind kind) noexcept {
 } // namespace
 
 SystemVerilogUvmSequenceService::~SystemVerilogUvmSequenceService() noexcept {
+  teardown_all_roles();
+  roles_.clear();
+  roles_by_component_.clear();
+  live_roles_ = 0;
+}
+
+void SystemVerilogUvmSequenceService::teardown_all_roles() noexcept {
   std::set<SystemVerilogUvmRootHandle> roots;
   for (const auto &[slot, selected] : roles_) {
     (void)slot;
@@ -50,9 +57,6 @@ SystemVerilogUvmSequenceService::~SystemVerilogUvmSequenceService() noexcept {
       // Destruction must remain safe if a peer service is already unwinding.
     }
   }
-  roles_.clear();
-  roles_by_component_.clear();
-  live_roles_ = 0;
 }
 
 void SystemVerilogUvmSequenceService::set_role_services(

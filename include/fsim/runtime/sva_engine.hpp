@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -59,10 +60,43 @@ public:
     /// clocks ticked from its clock guards.
     void tick(const std::vector<bool>& guards, bool start, bool disabled,
         std::int64_t time);
+    /// The requests of the last tick (IEEE 1800-2023 16.10): a plan with
+    /// local variables evaluates the expressions that read them through the
+    /// assertion process. A tick that needs a value it has not been given
+    /// leaves the attempt state as it was and holds one request per value;
+    /// the process answers each and runs the tick again in the same time
+    /// step. 0 after a tick that completed.
+    [[nodiscard]] std::size_t pending_requests() const noexcept;
+    /// The expression request `request` (0-based) asks for.
+    [[nodiscard]] std::uint32_t request_expression(std::size_t request) const;
+    /// The words of local `local` in the valuation of request `request`:
+    /// the value words, then the unknown words.
+    [[nodiscard]] std::vector<std::int64_t> request_local(
+        std::size_t request, std::uint32_t local) const;
+    /// The width in bits of local `local` (0 when there is none).
+    [[nodiscard]] std::uint32_t local_width(std::uint32_t local) const;
+    /// The value of request `request`: the truth of a check (word 0 is 1
+    /// when known one), or the assigned local's words.
+    void answer(std::size_t request, std::span<const std::int64_t> value);
+    /// The next subroutine call the last completed tick queued (IEEE
+    /// 1800-2023 16.11), in the order the threads reached them: its number
+    /// plus one, or 0 when none is left (the queue is then empty). The
+    /// call's local variables are request_local(call_request, local).
+    [[nodiscard]] std::uint32_t take_call();
+    /// The request number that names the call take_call gave last.
+    static constexpr std::size_t call_request = 0xffff'ffffU;
     [[nodiscard]] std::size_t pending_outcomes() const;
     /// Takes the next outcome; `serial` stamps the block (h_pop_serial) so
     /// the host can tell which of a process's monitors popped last.
     [[nodiscard]] Outcome next_outcome(std::int64_t serial);
+    /// The code the outcome pop reports for `outcome` (KOp::sva_outcome):
+    /// the outcome, plus layout::outcome_action_off when its action block
+    /// is switched off (set_actions_off).
+    [[nodiscard]] std::int64_t reported_code(Outcome outcome) const noexcept;
+    /// The action controls in force (20.11, 39.5.2): bit n of `outcomes`
+    /// set switches off the action block of outcome n (1 success, 2
+    /// failure, 3 vacuous success) from the next outcome taken on.
+    void set_actions_off(std::uint32_t outcomes) noexcept;
     /// The tick (simulation time) the attempt of the outcome last taken by
     /// next_outcome started at (IEEE 1800-2023 39.4.2 attemptStartTime).
     [[nodiscard]] std::int64_t last_outcome_start() const noexcept;
@@ -93,6 +127,15 @@ public:
     [[nodiscard]] Finished finish();
     /// $assertkill: stop the running attempts (20.12).
     void kill();
+    /// The disable condition became true (IEEE 1800-2023 16.12): every
+    /// running attempt ends in the disabled state at once, at that point of
+    /// the time step, not at the next tick. Returns the start of each, in
+    /// the order the attempts started (39.4.2 attemptStartTime); the
+    /// attempts produce no outcome to pop, since a disabled evaluation runs
+    /// no action block, unless `outcomes` (an expect statement's monitor,
+    /// whose disabled attempt ends the statement, 16.17): then each queues
+    /// the disabled outcome.
+    [[nodiscard]] std::vector<std::int64_t> disable_running(bool outcomes = false);
     /// vpiAssertionKill with an attempt start time: discard the running
     /// attempts that started at `start_time` and leave the rest (39.5.2).
     /// Returns how many were discarded.
@@ -155,12 +198,16 @@ public:
 
 private:
     void build(const std::vector<std::int64_t>& bounds);
+    void advance(const std::vector<bool>& guards, bool start, bool disabled,
+        std::int64_t time);
+    [[nodiscard]] std::size_t request_entry(std::size_t request) const;
     [[nodiscard]] static std::size_t clock_count(
         const semantic::sva::Plan& plan);
 
     std::string plan_text_;
     std::vector<std::int64_t> bounds_;
     std::unique_ptr<CompiledPlan> plan_;
+    std::vector<std::uint32_t> local_widths_;
     AttemptStorage storage_;
     // Scratch of one pass over the attempts; never part of the state.
     std::vector<std::int64_t> scratch_;

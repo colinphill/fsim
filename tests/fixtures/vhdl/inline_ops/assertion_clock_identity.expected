@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+inl clk i1 f=2 s=19
+inl clk i2 f=27 s=3
+inl clk i3 f=28 s=1
+inl clk i4 f=7 s=23
+inl clk i5 f=6 s=24
+inl clk i6 f=2 s=19
+inl clk i7 f=27 s=3
+inl clk i8 f=7 s=23

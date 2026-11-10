@@ -1035,6 +1035,9 @@ void Interpreter::Impl::StaticKernel::run_hosted(const HostedReady& ready)
         state.waiting_on_static = false;
         impl_.remove_dynamic_wait(state);
     }
+    // A host process reads the host's copies: the kernel's completed writes
+    // land first under a debugger plan.
+    flush_debug_writes();
     // Not re-entrant: execute runs the process to its next suspension, and
     // every wake it causes is queued above, never run from here.
     impl_.execute(ready.process);

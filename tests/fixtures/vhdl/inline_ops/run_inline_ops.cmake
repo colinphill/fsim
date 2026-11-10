@@ -32,7 +32,9 @@
 # FSIM_PROFILE_KERNEL's `deopts=` count). FSIM_KERNEL_ENV is a
 # list of NAME=VALUE environment settings for the kernel runs (plan options of
 # the kernel, such as FSIM_KERNEL_NO_MIRRORS, which leaves every host signal
-# unmirrored).
+# unmirrored). FSIM_REPORTS=warnings compares the simulation's warning
+# reports (`warning[FSIM-HDL-REPORT]: ...`, without source locations)
+# instead of the `inl` lines of a SystemVerilog case.
 
 if(NOT DEFINED FSIM_EXECUTABLE OR NOT EXISTS "${FSIM_EXECUTABLE}")
   message(FATAL_ERROR "FSIM_EXECUTABLE must name the built fsim command")
@@ -48,6 +50,16 @@ endforeach()
 foreach(variable IN ITEMS FSIM_STATIC_KERNEL FSIM_KERNEL_VERIFY
     FSIM_PROFILE_PHASES FSIM_PROFILE_KERNEL FSIM_VERIFY_ARTIFACT)
   unset(ENV{${variable}})
+endforeach()
+# A list argument reaches the script with its separators escaped (add_test
+# writes `A\;B` into the test's command line, and -D keeps the backslashes),
+# which a foreach over the variable takes for one element: unescape them so
+# that every entry of FSIM_KERNEL_ENV and the FSIM_FORBID_* lists applies.
+foreach(variable IN ITEMS FSIM_KERNEL_ENV FSIM_FORBID_GENERIC
+    FSIM_FORBID_REASON FSIM_FORBID_NOT_COMPILED FSIM_FORBID_EFFECT)
+  if(DEFINED ${variable})
+    string(REPLACE "\\;" ";" ${variable} "${${variable}}")
+  endif()
 endforeach()
 if(NOT DEFINED FSIM_SOURCE)
   set(FSIM_SOURCE "${FSIM_CASE}")
@@ -84,7 +96,11 @@ else()
   set(source "${FSIM_SOURCE}.sv")
   set(compile_arguments compile -q "${source}")
   set(elaborate_arguments elaborate -q --top top ${generic_arguments} --no-aot)
-  set(report_regex "inl [^\n]*")
+  if("${FSIM_REPORTS}" STREQUAL "warnings")
+    set(report_regex "warning\\[FSIM-HDL-REPORT\\]: [^\n]*")
+  else()
+    set(report_regex "inl [^\n]*")
+  endif()
 endif()
 
 string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef workspace_id)

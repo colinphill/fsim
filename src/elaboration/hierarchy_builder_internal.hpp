@@ -1537,6 +1537,9 @@ private:
         const semantic::sv::Unit& unit);
     void set_resolution(SignalId signal, ResolutionKind resolution);
     void validate_process_drivers();
+    // The hidden nets of a program's concurrent assertions run in the
+    // Active region, as in design code (IEEE 1800-2023 24.3.1).
+    void schedule_program_assertion_nets();
     void canonicalize_process_operations(Process& process);
     // Under code coverage, a toggle monitor process per covered object.
     void append_toggle_coverage_monitors();

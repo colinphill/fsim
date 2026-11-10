@@ -266,6 +266,7 @@ void VerilogParser::parse_default_disable(
         "default disable iff requires a condition");
     return;
   }
+  check_explicitly_clocked_samples(tokens, true);
   if (!condition.empty()) {
     error(
         start,
@@ -297,7 +298,11 @@ void VerilogParser::parse_clocking_block(
       TokenKind::At,
       "'@' before a clocking event",
       "FSIM-SV-PARSE-283");
+  const auto event_begin = index_;
   block.event = parse_sensitivity();
+  block.event_tokens.assign(
+      tokens_.begin() + static_cast<std::ptrdiff_t>(event_begin),
+      tokens_.begin() + static_cast<std::ptrdiff_t>(index_));
   // `@(e iff g)`: the clocking event occurs at the occurrences of e at which
   // g holds (IEEE 1800-2023 14.3, 9.4.2.3). A hidden variable toggles at
   // each such occurrence, `always @(e) if ((|g) === 1'b1) tick = !tick;`,

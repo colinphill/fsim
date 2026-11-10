@@ -33,6 +33,19 @@
 //   scratch     scratch_off, scratch_used, scratch_cap  work words of one
 //                                            sequence step in generated code;
 //                                            empty between ticks
+//   memo        memo_off, memo_used, memo_cap  the values of the local-
+//                                            variable expressions of the tick
+//                                            in progress (16.10), stride
+//                                            memo_stride: expression,
+//                                            answered, the thread's local
+//                                            words, the result words; empty
+//                                            between ticks
+//   calls       calls_off, calls_used, calls_cap  the subroutine calls the
+//                                            last tick queued (16.11): call,
+//                                            then the thread's local words;
+//                                            the process runs and empties
+//                                            them after the tick; calls_taken
+//                                            words of them it took
 //
 // An attempt's automaton (property tree and sequence threads) is a record in
 // the current heap, at `blob` words from heap_off and `length` words long;
@@ -57,8 +70,14 @@ namespace layout {
 /// pop serial of the outcome taken last. Layout 3: the scratch region the
 /// generated attempt automaton works in (header words 36 to 38). Layout 4: a
 /// thread's throughout entries in a record carry the condition's source
-/// position (guard, from, line, column).
-inline constexpr std::int64_t magic = 0x5356'4131'0005LL;
+/// position (guard, from, line, column). Layout 6: an instance record of a
+/// multiclocked plan carries its start point (flag bits 9 and 10), and its
+/// start is a time step until the instance aligns to its clock (16.13.3);
+/// h_flags carries the host's action controls (flag_actions_off). Layout 7:
+/// the memo region of the local-variable expressions (header words 40 to
+/// 44; IEEE 1800-2023 16.10) and the queue of subroutine calls attached to
+/// sequences (header words 45 to 48; 16.11).
+inline constexpr std::int64_t magic = 0x5356'4131'0007LL;
 
 enum Header : std::size_t {
     h_magic = 0,
@@ -113,13 +132,50 @@ enum Header : std::size_t {
     // the offset of a region whose first word is the count, then the values;
     // 0 when the plan has none. Generated code reads a slot bound here.
     h_bounds_off,
+    // The memo of the local-variable expressions (layout 7): one entry per
+    // expression and thread valuation the tick in progress needed, in the
+    // words [off, off + used); `stride` words each (memo_e_* fields), and the
+    // last `pending` entries are the requests the assertion process has not
+    // answered yet. The tick that finds every value it needs clears it.
+    h_memo_off,
+    h_memo_used,
+    h_memo_cap,
+    h_memo_stride,
+    h_memo_pending,
+    // The subroutine calls attached to sequences that the last tick queued
+    // (16.11), in the words [off, off + used): the call's number, then the
+    // local words of the thread that reached it, for each; `taken` words of
+    // them the process took already (the last call taken ends there).
+    h_calls_off,
+    h_calls_used,
+    h_calls_cap,
+    h_calls_taken,
 };
-inline constexpr std::size_t header_words = 40;
+inline constexpr std::size_t header_words = 49;
 static_assert(h_total_words < header_words);
 
 // h_flags bits.
 inline constexpr std::int64_t flag_every_match = 1; // cover sequence (16.14.3)
 inline constexpr std::int64_t flag_multiclocked = 2; // 16.13
+// The plan's bits; a restored block must carry the same.
+inline constexpr std::int64_t flag_plan = flag_every_match | flag_multiclocked;
+// The action controls of the run (IEEE 1800-2023 20.11 PassOff, FailOff,
+// VacuousOff and their VPI forms, 39.5.2), set by the host whenever they
+// change: bit action_off_shift + n set means the action block of outcome n
+// (1 success, 2 failure, 3 vacuous success) does not run, and the outcome
+// pop returns n + outcome_action_off for it. The pass or fail statement is
+// the only thing skipped; the outcome itself still counts (20.11).
+inline constexpr std::int64_t action_off_shift = 1;
+inline constexpr std::int64_t flag_actions_off = 0b111 << 2;
+inline constexpr std::int64_t outcome_action_off = 8;
+// The code the outcome pop returns for outcome `outcome` (1 to 4) of a block
+// whose h_flags is `flags`; generated code computes the same.
+[[nodiscard]] constexpr std::int64_t outcome_code(
+    const std::int64_t outcome, const std::int64_t flags) noexcept
+{
+    return outcome
+        + (((flags >> (outcome + action_off_shift)) & 1) * outcome_action_off);
+}
 
 inline constexpr std::size_t attempt_stride = 5;
 inline constexpr std::size_t outcome_stride = 4;
@@ -149,6 +205,12 @@ inline constexpr std::size_t e_tick = 7;
 // the step's matched expression (39.4.2 matched_exprs).
 inline constexpr std::size_t e_guard_line = 8;
 inline constexpr std::size_t e_guard_column = 9;
+
+// Memo entry fields: the expression, whether its value is known, then the
+// thread's local words and the result words.
+inline constexpr std::size_t memo_e_expression = 0;
+inline constexpr std::size_t memo_e_answered = 1;
+inline constexpr std::size_t memo_e_locals = 2;
 
 } // namespace layout
 
@@ -325,6 +387,63 @@ public:
     /// Stores the plan's bounds in the block (layout 5).
     void set_bounds(const std::vector<std::int64_t>& bounds);
 
+    // --- the memo of local-variable expressions (layout 7) ---
+    void set_memo_stride(std::size_t stride) noexcept
+    {
+        set(layout::h_memo_stride, static_cast<std::int64_t>(stride));
+    }
+    [[nodiscard]] std::size_t memo_stride() const noexcept
+    {
+        return static_cast<std::size_t>(get(layout::h_memo_stride));
+    }
+    [[nodiscard]] std::size_t memo_count() const noexcept
+    {
+        const auto stride = memo_stride();
+        return stride == 0U
+            ? 0U
+            : static_cast<std::size_t>(get(layout::h_memo_used)) / stride;
+    }
+    [[nodiscard]] std::span<std::int64_t> memo_entry(std::size_t index) noexcept
+    {
+        return { words_.data() + static_cast<std::size_t>(get(layout::h_memo_off))
+                + index * memo_stride(),
+            memo_stride() };
+    }
+    [[nodiscard]] std::span<const std::int64_t> memo_entry(
+        std::size_t index) const noexcept
+    {
+        return { words_.data() + static_cast<std::size_t>(get(layout::h_memo_off))
+                + index * memo_stride(),
+            memo_stride() };
+    }
+    /// Appends an entry of memo_stride() words; growth when full.
+    void push_memo(std::span<const std::int64_t> entry);
+    void clear_memo() noexcept
+    {
+        set(layout::h_memo_used, 0);
+        set(layout::h_memo_pending, 0);
+    }
+    // --- the queued subroutine calls (layout 7, 16.11) ---
+    [[nodiscard]] std::size_t calls_used() const noexcept
+    {
+        return static_cast<std::size_t>(get(layout::h_calls_used));
+    }
+    [[nodiscard]] std::span<const std::int64_t> calls() const noexcept
+    {
+        return { words_.data() + static_cast<std::size_t>(get(layout::h_calls_off)),
+            calls_used() };
+    }
+    /// Appends a call's words; growth when full.
+    void push_call(std::span<const std::int64_t> entry);
+    void clear_calls() noexcept
+    {
+        set(layout::h_calls_used, 0);
+        set(layout::h_calls_taken, 0);
+    }
+    /// Replaces the block by `words` (an earlier copy of it), keeping the
+    /// binding of its table entry.
+    void restore(std::vector<std::int64_t> words) noexcept;
+
     /// The regions reserve_region grows.
     enum : std::size_t {
         grow_attempts,
@@ -334,6 +453,8 @@ public:
         grow_requests,
         grow_heap,
         grow_scratch,
+        grow_memo,
+        grow_calls,
     };
 
 private:
@@ -346,6 +467,8 @@ private:
         std::size_t requests { };
         std::size_t heap { };
         std::size_t scratch { };
+        std::size_t memo { };
+        std::size_t calls { };
         // Words of the bounds region (count, values); 0 for none.
         std::size_t bounds { };
     };

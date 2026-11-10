@@ -201,18 +201,18 @@ void test_assertion_actions(
     assert(
         reference.pattern_marker.bval == 0
         && reference.pattern_marker.aval == 8);
-    assert(reference.reports.size() == 14);
+    // The violations of the unique, unique0 and priority case statements
+    // are found as they execute, but their reports wait on the process's
+    // violation report queue until the Observed region of the time step
+    // (IEEE 1800-2023 12.5.3.1, 12.4.2.1). The $fatal at the end of the
+    // same Active region finishes the simulation first (20.10: an implicit
+    // $finish; 20.2), so none of them matures. The case variants' reports
+    // are checked by fsim.application.inline-ops-assertion-violation-case.
+    assert(reference.reports.size() == 7);
     constexpr std::array expected_messages {
         std::string_view { "$info" },
         std::string_view { "standalone warning" },
         std::string_view { "standalone error" },
-        std::string_view { "unique case has multiple matching items" },
-        std::string_view { "unique case has no matching item" },
-        std::string_view { "unique0 case has multiple matching items" },
-        std::string_view { "priority case has no matching item" },
-        std::string_view { "unique case has multiple matching items" },
-        std::string_view { "unique case has multiple matching items" },
-        std::string_view { "priority case has no matching item" },
         std::string_view { "pass block" },
         std::string_view { "failure block" },
         std::string_view { "assertion failed" },
@@ -222,13 +222,6 @@ void test_assertion_actions(
         fsim::runtime::simir::AssertionSeverity::note,
         fsim::runtime::simir::AssertionSeverity::warning,
         fsim::runtime::simir::AssertionSeverity::error,
-        fsim::runtime::simir::AssertionSeverity::warning,
-        fsim::runtime::simir::AssertionSeverity::warning,
-        fsim::runtime::simir::AssertionSeverity::warning,
-        fsim::runtime::simir::AssertionSeverity::warning,
-        fsim::runtime::simir::AssertionSeverity::warning,
-        fsim::runtime::simir::AssertionSeverity::warning,
-        fsim::runtime::simir::AssertionSeverity::warning,
         fsim::runtime::simir::AssertionSeverity::note,
         fsim::runtime::simir::AssertionSeverity::warning,
         fsim::runtime::simir::AssertionSeverity::error,
@@ -293,7 +286,10 @@ void test_cli_failure_reporting(
         position = report_text.find(marker, position + marker.size())) {
         ++report_count;
     }
-    assert(report_count == 14);
+    // The case statements' violation reports would mature in the Observed
+    // region, which the $fatal of the same Active region never reaches
+    // (IEEE 1800-2023 12.5.3.1, 20.10, 20.2).
+    assert(report_count == 7);
     assert(
         report_text.find("note[FSIM-HDL-REPORT]: $info")
         != std::string::npos);
@@ -303,7 +299,7 @@ void test_cli_failure_reporting(
     assert(
         report_text.find(
             "warning[FSIM-HDL-REPORT]: unique case has multiple matching items")
-        != std::string::npos);
+        == std::string::npos);
     assert(
         report_text.find("failure[FSIM-HDL-REPORT]: terminal")
         != std::string::npos);

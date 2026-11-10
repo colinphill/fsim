@@ -1596,9 +1596,15 @@ Expression VerilogParser::parse_primary_impl()
                 expression.call_result_domain = ValueDomain::Integer;
                 expression.call_result_signed = true;
             } else if (canonical == "$__fsim_sva_tick"
-                || canonical == "$__fsim_sva_outcome") {
+                || canonical == "$__fsim_sva_outcome"
+                || canonical == "$__fsim_sva_request"
+                || canonical == "$__fsim_sva_answer"
+                || canonical == "$__fsim_sva_call"
+                || canonical == "$__fsim_assertion_control") {
                 // The concurrent-property monitor of a generated assertion
-                // process.
+                // process, and the assertion control word of a generated
+                // concurrent assertion or expect statement (IEEE 1800-2023
+                // 20.11).
                 expression.call_result_width = 32;
                 expression.call_result_domain = ValueDomain::Integer;
                 expression.call_result_signed = true;

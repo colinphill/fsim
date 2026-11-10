@@ -101,14 +101,15 @@ Simulation::Impl::fallback_standard_coverage_database()
         support::Sha256::digest(
             "fsim-v3-code-coverage-model:" + built.cache_key));
     const auto run_identity = standard_run_identity();
-    const auto& scheduler = interpreter->scheduler();
+    // The run's time when the database is taken ($coverage_save from a
+    // closed static kernel's own time step too, Interpreter::current_time).
     contents.runs.push_back({
         run_identity,
         "standard-coverage-api",
         "fsim-v3",
         built.seed,
-        scheduler.now(),
-        scheduler.delta(),
+        interpreter->current_time(),
+        interpreter->current_delta(),
         lifecycle == Lifecycle::finished
             ? artifact::CoverageDatabaseRunStatus::Complete
             : artifact::CoverageDatabaseRunStatus::Stopped,
@@ -211,14 +212,15 @@ Simulation::Impl::current_standard_coverage_database()
     contents.fingerprint.digest = coverage_digest(fingerprint.finish());
 
     const auto run_identity = standard_run_identity();
-    const auto& scheduler = interpreter->scheduler();
+    // The run's time when the database is taken ($coverage_save from a
+    // closed static kernel's own time step too, Interpreter::current_time).
     contents.runs.push_back({
         run_identity,
         "standard-coverage-api",
         "fsim-v3",
         built.seed,
-        scheduler.now(),
-        scheduler.delta(),
+        interpreter->current_time(),
+        interpreter->current_delta(),
         lifecycle == Lifecycle::finished
             ? artifact::CoverageDatabaseRunStatus::Complete
             : artifact::CoverageDatabaseRunStatus::Stopped,

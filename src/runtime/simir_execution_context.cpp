@@ -124,7 +124,9 @@ void Interpreter::Impl::ExecutionContext::sample_coverage(
         actuals,
         sample.signed_actuals,
         sample.scalar_kinds,
-        sample.trigger);
+        sample.trigger,
+        owner.scheduler.now(),
+        owner.scheduler.delta());
 }
 
 [[nodiscard]] PackedLogic4

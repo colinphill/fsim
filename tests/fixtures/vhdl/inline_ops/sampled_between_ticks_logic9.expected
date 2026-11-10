@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+inl l9 t=23 rose=1 fell=0 stable=0 svchg=1 svstable=0
+inl l9 t=26 rose=0 fell=0 stable=1 svchg=0 svstable=1
+inl l9 t=33 rose=0 fell=1 stable=0 svchg=1 svstable=0
+inl l9 t=36 rose=0 fell=0 stable=1 svchg=0 svstable=1
+inl l9 clk2 rose=23 fell=33 changed=56
+inl l9 t=59 rose=0 fell=0 stable=1 svchg=0 svstable=1
+inl l9 t=65 rose=0 fell=0 stable=1 svchg=0 svstable=1
+inl l9 t=66 rose=0 fell=0 stable=1 svchg=0 svstable=1
+inl l9 t=69 rose=0 fell=1 stable=0 svchg=1 svstable=0
+inl l9 t=79 rose=0 fell=0 stable=1 svchg=0 svstable=1
+inl l9 t=85 rose=0 fell=0 stable=1 svchg=0 svstable=1
+inl l9 ticks rose=55 fell=75 stable=150 changed=130

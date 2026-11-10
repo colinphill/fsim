@@ -9,6 +9,7 @@
 #include <cstring>
 #include <exception>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -24,6 +25,21 @@ namespace fsim::runtime {
 using SimulationTick = std::uint64_t;
 using StableOrder = std::uint64_t;
 using RuntimeSignalId = std::uint32_t;
+
+/// Nonblocking assignments are performed in the order the statements
+/// executed (IEEE 1800-2023 4.6 b), 10.4.2), whichever process, hosted
+/// process or kernel body executed them. The SystemVerilog NBA regions
+/// (SchedulerPhase::update and re_update) therefore order their events by one
+/// execution-order key, the scheduler's insertion sequence, and not by the
+/// stable order of the process that scheduled them: the scheduler gives every
+/// event of those regions one order class. Two stable orders keep a place of
+/// their own: an event scheduled at `nonblocking_region_first` runs ahead of
+/// every update (a Pre-NBA callback, 4.4.3.3), and one at
+/// `nonblocking_region_last` after every update.
+inline constexpr StableOrder nonblocking_region_last
+    = std::numeric_limits<StableOrder>::max();
+inline constexpr StableOrder nonblocking_region_first
+    = std::numeric_limits<StableOrder>::max() - 1U;
 
 struct SchedulerOrderKey {
   StableOrder order { };
@@ -726,6 +742,11 @@ public:
   /// the running callback: the rest of the running Active batch, or work
   /// queued for the next one.
   [[nodiscard]] bool systemverilog_active_region_pending() const noexcept;
+  /// True while same-time work of the running SystemVerilog NBA region
+  /// (Update, or Re-NBA in the reactive set) remains besides the running
+  /// callback, or work queued for that region: updates whose statements
+  /// executed after those of the running task (IEEE 1800-2023 4.6 b)).
+  [[nodiscard]] bool systemverilog_nonblocking_work_pending() const noexcept;
   /// True while the running SystemVerilog Active batch has a task left
   /// (the running callback excluded) at a stable order up to `order`,
   /// tasks at the `excluded` order aside.
@@ -737,9 +758,22 @@ public:
   /// queues an Active task.
   void schedule_internal_systemverilog_running_active(StableOrder stable_order,
       detail::SchedulerTaskDescriptor task);
-  /// True while the current delta's generic (VHDL) Active queue has yet to
-  /// finish: work scheduled there now still runs in this delta.
-  [[nodiscard]] bool generic_active_phase_open() const noexcept;
+  /// The first generic (VHDL) phase of the current delta, up to Inactive,
+  /// whose queue starts only after the SystemVerilog work queued now: the
+  /// dispatcher runs a delta's SystemVerilog batches before each of its
+  /// generic phases, but a task queued into the generic queue that is
+  /// executing runs in that same batch, ahead of such work. So it is the
+  /// phase the delta is at, or the next one while the generic queue of that
+  /// phase is the one executing; nullopt once the generic Inactive phase
+  /// has started (or with no current time slot).
+  [[nodiscard]] std::optional<SchedulerPhase>
+  generic_phase_after_systemverilog() const noexcept;
+  /// True while a task of the current delta's generic (VHDL) queue runs,
+  /// not a SystemVerilog batch or the end of the slot: what the task does
+  /// precedes the SystemVerilog work the delta has left, which was queued
+  /// in this batch (the dispatcher drains the SystemVerilog regions before
+  /// each generic phase).
+  [[nodiscard]] bool generic_queue_executing() const noexcept;
   [[nodiscard]] std::optional<SimulationTick>
   next_pending_time() const noexcept;
   /// The times of the future time steps that hold work, in increasing order

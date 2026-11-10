@@ -1050,7 +1050,7 @@ const char* Interpreter::Impl::run_class_operation(
         ? call_dpi_import(operation, identity, actuals, string_actuals, bound)
         : class_static_method_call_context_hook(process, identity, actuals,
               string_actuals, operation.actual_names,
-              operation.actual_directions);
+              operation.actual_directions, operation.class_specialization);
     access.write(operation.destination, std::move(result));
     for (std::size_t index = 0; index < actuals.size(); ++index) {
         const auto string_actual = !operation.actual_kinds.empty()
@@ -1772,7 +1772,7 @@ void Interpreter::Impl::handle_boundary(
         coverage_sample_hook(
             sample->instance_identity, actuals, sample->signed_actuals,
             sample->scalar_kinds,
-            sample->trigger);
+            sample->trigger, scheduler.now(), scheduler.delta());
         return;
     }
     if (fsim::runtime::simir::operation_holds<CodeCoverageHit>(operation)
@@ -3029,7 +3029,8 @@ void Interpreter::Impl::handle_boundary(
                           actuals,
                           string_actuals,
                           method->actual_names,
-                          method->actual_directions),
+                          method->actual_directions,
+                          method->class_specialization),
                 method->result_width));
         for (std::size_t index = 0; index < actuals.size(); ++index) {
             const auto string_actual = !method->actual_kinds.empty()

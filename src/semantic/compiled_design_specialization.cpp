@@ -2420,6 +2420,20 @@ public:
         return canonical_systemverilog_bits(expression);
     }
 
+    // A bound of a VHDL range as a position in its type (IEEE 1076-2019
+    // 5.2.1) where evaluate() gives something else: a typed character
+    // literal's position, and a STD_ULOGIC-valued attribute's position
+    // rather than this fold's encoding of its value (`X01Z'LEFT` is
+    // position 1). None for any other expression.
+    [[nodiscard]] std::optional<std::int64_t>
+    evaluate_vhdl_position(const ExpressionId expression)
+    {
+        if (const auto literal = vhdl_intrinsic_literal(expression)) {
+            return literal->second;
+        }
+        return evaluate_vhdl_attribute_position(expression);
+    }
+
     [[nodiscard]] std::optional<SpecializedHirVhdlConstantValue>
     evaluate_vhdl_constant(const ExpressionId expression)
     {
@@ -12371,8 +12385,13 @@ private:
             scope);
     }
 
+    // `position_result`: a value of an enumeration type is its position, as
+    // the argument of T'POS takes it, not this fold's encoding of it.
+    // `std_ulogic_value`, when given, says whether the result is a value of
+    // STD_ULOGIC, the one type where the two differ.
     [[nodiscard]] std::optional<std::int64_t> evaluate_vhdl_attribute(
-        const vhdl::Expression& expression)
+        const vhdl::Expression& expression, const bool position_result = false,
+        bool* const std_ulogic_value = nullptr)
     {
         if (expression.kind != vhdl::ExpressionKind::call
             || expression.operands.empty()) {
@@ -12631,6 +12650,28 @@ private:
             type_id = definition->base.type_mark.target;
         }
 
+        // The prefix's type when it is BOOLEAN, BIT, CHARACTER or STD_ULOGIC,
+        // whose literals the compiler provides (IEEE 1076-2019 16.3, 16.7):
+        // a retained declaration of one, or a range whose bounds the context
+        // typed as one. Bounds and 'POS operands are then positions in it,
+        // and a STD_ULOGIC result goes back to this fold's encoding of the
+        // type's values, where '0' and '1' are 0 and 1 and no other value has
+        // one.
+        std::optional<support::VhdlIntrinsicEnumeration> intrinsic;
+        if (definition != nullptr
+            && definition->form == vhdl::TypeForm::enumeration) {
+            intrinsic = vhdl_intrinsic_enumeration_type(*definition);
+        }
+        const auto note_intrinsic = [&](const std::optional<ExpressionId> id) {
+            if (!intrinsic && id) {
+                if (const auto literal = vhdl_intrinsic_literal(*id)) {
+                    intrinsic = literal->first;
+                }
+            }
+        };
+        const auto std_ulogic = [&] {
+            return intrinsic == support::VhdlIntrinsicEnumeration::std_ulogic;
+        };
         // A CHARACTER literal bound is its position, its character code
         // (IEEE 1076-2008 16.3).
         const bool character_typed
@@ -12642,8 +12683,15 @@ private:
                     subtype->type_mark.spelling, "character"));
         const auto bound = [&](const ExpressionId id)
             -> std::optional<std::int64_t> {
+            if (const auto literal = vhdl_intrinsic_literal(id)) {
+                return literal->second;
+            }
+            // `array (X01Z)` is bounded by X01Z'LEFT and X01Z'RIGHT.
+            if (const auto position = evaluate_vhdl_attribute_position(id)) {
+                return position;
+            }
             if (const auto value = evaluate(id)) {
-                return value;
+                return std_ulogic() ? vhdl_std_ulogic_position(*value) : value;
             }
             const auto literal = unit_.find_expression(id);
             if (character_typed && literal && literal->vhdl != nullptr
@@ -12658,6 +12706,19 @@ private:
         const auto concrete_range = [&](const vhdl::RangeConstraint& range)
             -> std::optional<vhdl::RangeConstraint> {
             auto result = range;
+            note_intrinsic(result.left_expression);
+            note_intrinsic(result.right_expression);
+            // A typed literal bound is its position, whatever an earlier fold
+            // of its spelling took.
+            for (const auto& [endpoint, written] :
+                { std::pair { &result.left, result.left_expression },
+                    std::pair { &result.right, result.right_expression } }) {
+                if (written) {
+                    if (const auto literal = vhdl_intrinsic_literal(*written)) {
+                        *endpoint = literal->second;
+                    }
+                }
+            }
             if (!result.left && result.left_expression) {
                 result.left = bound(*result.left_expression);
             }
@@ -12987,6 +13048,34 @@ private:
                     predefined_name, "std_logic")) {
                 last_ordinal = 8;
             }
+            // BOOLEAN, BIT, CHARACTER or STD_ULOGIC whose declaration the
+            // compiler provides: what the prefix's type mark, or the base
+            // type mark its subtype chain ends at, denotes where it is
+            // written (16.3, 16.7).
+            if (!intrinsic) {
+                const CompiledDesignResolver resolver { unit_ };
+                if (definition != nullptr) {
+                    if ((definition->form == vhdl::TypeForm::subtype
+                            || definition->form == vhdl::TypeForm::alias)
+                        && !definition->base.type_mark.target.valid()) {
+                        const auto owner
+                            = unit_.find_declaration(definition->declaration);
+                        intrinsic = resolver.resolve_vhdl_intrinsic_enumeration(
+                            definition->base.type_mark.spelling,
+                            owner && owner->vhdl != nullptr
+                                ? owner->vhdl->scope
+                                : expression.scope);
+                    }
+                } else if (subtype != nullptr) {
+                    if (!subtype->type_mark.target.valid()) {
+                        intrinsic = resolver.resolve_vhdl_intrinsic_enumeration(
+                            subtype->type_mark.spelling, expression.scope);
+                    }
+                } else if (!declaration || declaration->vhdl == nullptr) {
+                    intrinsic = resolver.resolve_vhdl_intrinsic_enumeration(
+                        prefix->vhdl->text, prefix->vhdl->scope);
+                }
+            }
             if (!range && last_ordinal) {
                 range = vhdl::RangeConstraint {
                     vhdl::RangeKind::enumeration,
@@ -13005,28 +13094,55 @@ private:
         }
         const auto left = *range->left;
         const auto right = *range->right;
+        // A value of the type, from its position.
+        const auto value_at = [&](const std::int64_t position)
+            -> std::optional<std::int64_t> {
+            if (std_ulogic_value != nullptr) {
+                *std_ulogic_value = std_ulogic();
+            }
+            return std_ulogic() && !position_result
+                ? vhdl_std_ulogic_value(position)
+                : std::optional { position };
+        };
         if (expression.text == "'pos" || expression.text == "'val") {
             if (expression.operands.size() != 2U) {
                 return std::nullopt;
             }
-            const auto value = evaluate(expression.operands[1]);
-            if (!value || *value < std::min(left, right)
-                || *value > std::max(left, right)) {
+            // T'POS's argument has the type T (16.2.2).
+            std::optional<std::int64_t> position;
+            if (expression.text == "'pos") {
+                if (const auto literal
+                    = vhdl_intrinsic_literal(expression.operands[1])) {
+                    position = literal->second;
+                } else {
+                    // `T'POS(S'RIGHT)`: the attribute's value as a position.
+                    position = evaluate_vhdl_attribute_position(
+                        expression.operands[1]);
+                }
+            }
+            if (!position) {
+                position = evaluate(expression.operands[1]);
+                if (position && expression.text == "'pos" && std_ulogic()) {
+                    position = vhdl_std_ulogic_position(*position);
+                }
+            }
+            if (!position || *position < std::min(left, right)
+                || *position > std::max(left, right)) {
                 return std::nullopt;
             }
-            return value;
+            return expression.text == "'val" ? value_at(*position) : position;
         }
         if (expression.text == "'left") {
-            return left;
+            return value_at(left);
         }
         if (expression.text == "'right") {
-            return right;
+            return value_at(right);
         }
         if (expression.text == "'low") {
-            return std::min(left, right);
+            return value_at(std::min(left, right));
         }
         if (expression.text == "'high") {
-            return std::max(left, right);
+            return value_at(std::max(left, right));
         }
         if (expression.text == "'ascending") {
             if (range->direction_from_bounds) {
@@ -14533,6 +14649,106 @@ private:
             actual_declarations_.emplace(
                 actual->declaration, *actual->actual_declaration);
         }
+    }
+
+    // The value of a STD_ULOGIC-valued attribute (`X01Z'LEFT`, `T'VAL(4)`)
+    // as its position in STD_ULOGIC rather than this fold's encoding of it.
+    // None for any other expression, whose evaluate() is its position.
+    [[nodiscard]] std::optional<std::int64_t>
+    evaluate_vhdl_attribute_position(const ExpressionId id)
+    {
+        const auto attribute = unit_.find_expression(id);
+        if (!attribute || attribute->vhdl == nullptr
+            || attribute->vhdl->kind != vhdl::ExpressionKind::call
+            || !attribute->vhdl->text.starts_with('\'')) {
+            return std::nullopt;
+        }
+        // Re-entry is a cycle of bounds, as in evaluate().
+        const auto active_key = std::pair { call_frames_.size(), id };
+        if (!active_expressions_.insert(active_key).second) {
+            return std::nullopt;
+        }
+        bool std_ulogic_value { };
+        const auto position = evaluate_vhdl_attribute(
+            *attribute->vhdl, true, &std_ulogic_value);
+        active_expressions_.erase(active_key);
+        return std_ulogic_value ? position : std::nullopt;
+    }
+
+    // A character literal the context typed (9.3.2) as BOOLEAN, BIT,
+    // CHARACTER or STD_ULOGIC: that type and the literal's position in it.
+    [[nodiscard]] std::optional<
+        std::pair<support::VhdlIntrinsicEnumeration, std::int64_t>>
+    vhdl_intrinsic_literal(const ExpressionId id) const
+    {
+        const auto literal = unit_.find_expression(id);
+        if (!literal || literal->vhdl == nullptr
+            || literal->vhdl->kind != vhdl::ExpressionKind::logic_literal) {
+            return std::nullopt;
+        }
+        const auto type = support::find_vhdl_intrinsic_enumeration(
+            literal->vhdl->resolved_builtin_type);
+        if (!type) {
+            return std::nullopt;
+        }
+        const auto position = support::vhdl_intrinsic_enumeration_position(
+            *type, literal->vhdl->text);
+        return position ? std::optional { std::pair { *type, *position } }
+                        : std::nullopt;
+    }
+
+    // The intrinsic enumeration a retained declaration of STD.STANDARD's
+    // BOOLEAN, BIT or CHARACTER, or of IEEE.STD_LOGIC_1164's STD_ULOGIC,
+    // declares (16.3, 16.7): the enumeration type declaration with that
+    // expanded name.
+    [[nodiscard]] std::optional<support::VhdlIntrinsicEnumeration>
+    vhdl_intrinsic_enumeration_type(
+        const vhdl::TypeDefinition& definition) const
+    {
+        using Intrinsic = support::VhdlIntrinsicEnumeration;
+        const auto declaration = unit_.find_declaration(definition.declaration);
+        if (definition.form != vhdl::TypeForm::enumeration || !declaration
+            || declaration->vhdl == nullptr) {
+            return std::nullopt;
+        }
+        const auto declared = [&](const std::string_view library,
+                                  const std::string_view package,
+                                  const std::string_view name) {
+            return support::equal_ignoring_ascii_case(definition.name, name)
+                && unit_.design().vhdl_scope_in_package(
+                    declaration->vhdl->scope, library, package);
+        };
+        if (declared("std", "standard", "boolean")) {
+            return Intrinsic::boolean;
+        }
+        if (declared("std", "standard", "bit")) {
+            return Intrinsic::bit;
+        }
+        if (declared("std", "standard", "character")) {
+            return Intrinsic::character;
+        }
+        if (declared("ieee", "std_logic_1164", "std_ulogic")) {
+            return Intrinsic::std_ulogic;
+        }
+        return std::nullopt;
+    }
+
+    // This fold encodes a STD_ULOGIC value '0' or '1' as 0 or 1 (a BIT
+    // value); its position in STD_ULOGIC is 2 or 3 (16.7).
+    [[nodiscard]] static std::optional<std::int64_t> vhdl_std_ulogic_position(
+        const std::int64_t value) noexcept
+    {
+        return value == 0 || value == 1 ? std::optional { value + 2 }
+                                        : std::nullopt;
+    }
+
+    // The fold's encoding of the STD_ULOGIC value at a position: none for a
+    // value other than '0' and '1'.
+    [[nodiscard]] static std::optional<std::int64_t> vhdl_std_ulogic_value(
+        const std::int64_t position) noexcept
+    {
+        return position == 2 || position == 3 ? std::optional { position - 2 }
+                                              : std::nullopt;
     }
 
     [[nodiscard]] std::optional<std::int64_t> vhdl_user_character_ordinal(
@@ -18705,6 +18921,20 @@ SpecializedHirUnit::evaluate_integral_expression(
         &binding, initializer_memo_context_
     };
     return evaluator.evaluate(expression);
+}
+
+std::optional<std::int64_t> SpecializedHirUnit::evaluate_vhdl_position(
+    const ExpressionId expression,
+    const SpecializedHirIntegralBinding* const binding) const
+{
+    if (language() != Language::vhdl) {
+        return std::nullopt;
+    }
+    HirIntegralEvaluator evaluator {
+        *this, nullptr, "FSIM-ELAB-SVCONST-002", "constant evaluation",
+        binding, initializer_memo_context_
+    };
+    return evaluator.evaluate_vhdl_position(expression);
 }
 
 std::optional<SpecializedHirVhdlConstantValue>

@@ -1179,6 +1179,42 @@ puts "debug-mode-mismatch [string match {*different execution mode*} $message]"
     if (run("interpreter").find("debug-mode-mismatch 1") == std::string::npos)
         throw std::runtime_error(
             "--engine interpreter did not override simulate.engine");
+    // The command line wins over the debugger's own choice too: a debugger
+    // command that would start the session is refused under an --engine
+    // naming another engine, as after a plain command, and the session
+    // starts on that engine.
+    constexpr auto first_script = R"FSIM_TCL(
+set loaded [fsim::load_snapshot engine]
+set caught [catch {fsim::debug status} message]
+puts "debug-first-mismatch $caught [string match {*different execution mode*} $message]"
+fsim::run 1ns
+puts "plain-after-refusal"
+)FSIM_TCL";
+    for (const std::string engine : { "interpreter", "v4" }) {
+        std::istringstream input;
+        std::ostringstream output;
+        std::ostringstream error;
+        if (run_cli(tcl_arguments(engine, first_script), input, output, error) != 0)
+            throw std::runtime_error(
+                "Tcl engine session failed: " + error.str());
+        if (output.str().find("debug-first-mismatch 1 1") == std::string::npos
+            || output.str().find("plain-after-refusal") == std::string::npos)
+            throw std::runtime_error("fsim::debug overrode --engine " + engine
+                + ": " + output.str());
+    }
+    // --engine debug: the debugger command starts the session.
+    {
+        std::istringstream input;
+        std::ostringstream output;
+        std::ostringstream error;
+        if (run_cli(tcl_arguments("debug", first_script), input, output, error)
+                != 0
+            || output.str().find("debug-first-mismatch 0 0")
+                == std::string::npos)
+            throw std::runtime_error(
+                "fsim::debug was refused under --engine debug: " + output.str()
+                + error.str());
+    }
 }
 
 void write_file(const std::filesystem::path& path, const std::string_view contents)

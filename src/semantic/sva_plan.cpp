@@ -7,10 +7,16 @@
 namespace fsim::semantic::sva {
 namespace {
 
-// "sva3" adds the source span of each guard after the (possibly empty) clock
-// guard list; "sva2" added the source position of each check and property;
-// "sva1" text (artifacts written before) still decodes, without positions.
-constexpr std::string_view version { "sva3" };
+// "sva5" adds the local variables (IEEE 1800-2023 16.10) after the property
+// clocks: the locals' widths, the expressions' targets, the local sets and
+// each property's initialization assignments, and the number of subroutine
+// calls attached to sequences (16.11); "sva4" adds the clock of each property after the guards' spans; "sva3"
+// added the source span of each guard after the (possibly empty) clock guard
+// list; "sva2" added the source position of each check and property; "sva1"
+// text (artifacts written before) still decodes, without positions.
+constexpr std::string_view version { "sva5" };
+constexpr std::string_view version_clocks { "sva4" };
+constexpr std::string_view version_spans { "sva3" };
 constexpr std::string_view version_positions { "sva2" };
 constexpr std::string_view version_without_positions { "sva1" };
 
@@ -117,7 +123,8 @@ std::string encode(const Plan& plan)
     for (const auto& property : plan.properties) {
         out.put(static_cast<std::int64_t>(property.kind));
         out.put((property.strong ? 1 : 0) | (property.overlapped ? 2 : 0)
-            | (property.synchronous ? 4 : 0));
+            | (property.synchronous ? 4 : 0)
+            | (property.guard_expression ? 8 : 0));
         out.put(property.sequence);
         out.put(property.guard);
         out.put(property.lo);
@@ -141,12 +148,39 @@ std::string encode(const Plan& plan)
         out.put(span.line);
         out.put(span.column);
     }
+    for (const auto& property : plan.properties) {
+        out.put(property.clock);
+    }
+    out.put(static_cast<std::int64_t>(plan.locals.size()));
+    for (const auto& local : plan.locals) {
+        out.put(local.width);
+    }
+    out.put(static_cast<std::int64_t>(plan.expressions.size()));
+    for (const auto& expression : plan.expressions) {
+        out.put(expression.target);
+    }
+    out.put(static_cast<std::int64_t>(plan.local_sets.size()));
+    for (const auto& set : plan.local_sets) {
+        out.put(static_cast<std::int64_t>(set.size()));
+        for (const auto local : set) {
+            out.put(local);
+        }
+    }
+    for (const auto& property : plan.properties) {
+        out.put(static_cast<std::int64_t>(property.initializers.size()));
+        for (const auto initializer : property.initializers) {
+            out.put(initializer);
+        }
+    }
+    out.put(static_cast<std::int64_t>(plan.calls));
     return std::move(out).finish();
 }
 
 std::optional<Plan> decode(const std::string_view text)
 {
-    const bool spans = text.starts_with(version);
+    const bool locals = text.starts_with(version);
+    const bool property_clocks = locals || text.starts_with(version_clocks);
+    const bool spans = property_clocks || text.starts_with(version_spans);
     const bool positions = spans || text.starts_with(version_positions);
     if (!positions && !text.starts_with(version_without_positions)) {
         return std::nullopt;
@@ -172,7 +206,7 @@ std::optional<Plan> decode(const std::string_view text)
         sequence.code.resize(size);
         for (auto& instruction : sequence.code) {
             if (!in.get_unsigned(instruction.op,
-                    static_cast<std::int64_t>(Op::clock))
+                    static_cast<std::int64_t>(Op::call))
                 || !in.get_unsigned(instruction.a, maximum_count)
                 || !in.get_unsigned(instruction.b, maximum_count)
                 || !in.get_unsigned(instruction.c, maximum_count)
@@ -207,6 +241,7 @@ std::optional<Plan> decode(const std::string_view text)
         property.strong = (flags & 1) != 0;
         property.overlapped = (flags & 2) != 0;
         property.synchronous = (flags & 4) != 0;
+        property.guard_expression = (flags & 8) != 0;
         property.children.resize(children);
         for (auto& child : property.children) {
             if (!in.get_unsigned(child, maximum_count)) {
@@ -216,10 +251,12 @@ std::optional<Plan> decode(const std::string_view text)
     }
     if (!in.done()) {
         // "sva3" always writes the clock count (0 for a singly clocked
-        // plan); the older texts only for a multiclocked plan.
+        // plan without clock tick guards, 1 for one whose monitor also
+        // evaluates between its clock's ticks); the older texts only for a
+        // multiclocked plan.
         std::size_t clocks { };
         if (!in.get_unsigned(clocks, maximum_count)
-            || (!spans && clocks < 2U) || clocks == 1U) {
+            || (!spans && clocks < 2U)) {
             return std::nullopt;
         }
         plan.clock_guards.resize(clocks);
@@ -239,12 +276,81 @@ std::optional<Plan> decode(const std::string_view text)
             }
         }
     }
+    if (property_clocks) {
+        // Each property's clock is one of the plan's clocks (clock 0 for a
+        // singly clocked plan).
+        const auto limit = static_cast<std::int64_t>(
+            plan.clock_guards.empty() ? 0U : plan.clock_guards.size() - 1U);
+        for (auto& property : plan.properties) {
+            if (!in.get_unsigned(property.clock, limit)) {
+                return std::nullopt;
+            }
+        }
+    }
+    if (locals) {
+        std::size_t count { };
+        if (!in.get_unsigned(count, maximum_count)) {
+            return std::nullopt;
+        }
+        plan.locals.resize(count);
+        for (auto& local : plan.locals) {
+            if (!in.get_unsigned(local.width, maximum_count)) {
+                return std::nullopt;
+            }
+        }
+        if (!in.get_unsigned(count, maximum_count)) {
+            return std::nullopt;
+        }
+        plan.expressions.resize(count);
+        for (auto& expression : plan.expressions) {
+            if (!in.get_unsigned(expression.target,
+                    static_cast<std::int64_t>(plan.locals.size()))) {
+                return std::nullopt;
+            }
+        }
+        if (!in.get_unsigned(count, maximum_count)) {
+            return std::nullopt;
+        }
+        plan.local_sets.resize(count);
+        for (auto& set : plan.local_sets) {
+            std::size_t size { };
+            if (!in.get_unsigned(size, maximum_count)) {
+                return std::nullopt;
+            }
+            set.resize(size);
+            for (auto& local : set) {
+                if (!in.get_unsigned(local, maximum_count)
+                    || local >= plan.locals.size()) {
+                    return std::nullopt;
+                }
+            }
+        }
+        for (auto& property : plan.properties) {
+            if (!in.get_unsigned(count, maximum_count)) {
+                return std::nullopt;
+            }
+            property.initializers.resize(count);
+            for (auto& initializer : property.initializers) {
+                if (!in.get_unsigned(initializer, maximum_count)
+                    || initializer >= plan.expressions.size()
+                    || plan.expressions[initializer].target == 0U) {
+                    return std::nullopt;
+                }
+            }
+        }
+        if (!in.get_unsigned(plan.calls, maximum_count)) {
+            return std::nullopt;
+        }
+    }
     if (!in.done() || plan.root >= plan.properties.size()) {
         return std::nullopt;
     }
     // Every reference stays inside the plan.
     for (const auto& property : plan.properties) {
-        if (property.guard >= plan.guards && property.guard != 0U) {
+        if (property.guard_expression
+                ? property.guard >= plan.expressions.size()
+                    || plan.expressions[property.guard].target != 0U
+                : property.guard >= plan.guards && property.guard != 0U) {
             return std::nullopt;
         }
         if ((property.kind == PropertyKind::sequence
@@ -262,8 +368,27 @@ std::optional<Plan> decode(const std::string_view text)
     for (const auto& sequence : plan.sequences) {
         for (const auto& instruction : sequence.code) {
             const auto size = sequence.code.size();
-            const bool guarded = instruction.op == Op::check
-                || instruction.op == Op::throughout_begin;
+            const bool expression = instruction.op == Op::check_expression
+                || (instruction.op == Op::throughout_begin && instruction.c == 1U);
+            const bool guarded = !expression
+                && (instruction.op == Op::check
+                    || instruction.op == Op::throughout_begin);
+            const auto check_target = [&](const std::uint32_t index,
+                                          const std::uint32_t target) {
+                return index < plan.expressions.size()
+                    && plan.expressions[index].target == target;
+            };
+            if ((expression && !check_target(instruction.a, 0U))
+                || (instruction.op == Op::assign
+                    && (instruction.a >= plan.locals.size()
+                        || !check_target(instruction.b, instruction.a + 1U)
+                        || instruction.c > 1U))
+                || (instruction.op == Op::call && instruction.a >= plan.calls)
+                || (instruction.op == Op::join_end
+                    && (instruction.b > plan.local_sets.size()
+                        || instruction.c > plan.local_sets.size()))) {
+                return std::nullopt;
+            }
             const bool counted = instruction.op == Op::counter_set
                 || instruction.op == Op::counter_branch
                 || instruction.op == Op::counter_increment;

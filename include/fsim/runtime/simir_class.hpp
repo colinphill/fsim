@@ -71,6 +71,11 @@ struct ClassStaticMethodCall {
   std::vector<std::uint8_t> actual_directions;
   std::uint32_t result_width{};
   std::vector<std::uint8_t> actual_kinds{};
+  /// The class specialization a static class method runs in: each
+  /// specialization of a parameterized class has static properties and
+  /// static methods of its own (IEEE 1800-2023 8.25.1). Empty for a call
+  /// that is not one of a class's static methods.
+  std::string class_specialization{};
 };
 
 /// A dynamic array or queue of strings as the one string actual of an

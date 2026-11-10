@@ -10,6 +10,7 @@
 #include "fsim/elaboration/coverage_hir_points.hpp"
 #include "fsim/frontend/parser.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
+#include "fsim/support/vhdl_standard_enumeration.hpp"
 
 #include <array>
 #include <chrono>
@@ -1121,10 +1122,24 @@ private:
         semantic::ExpressionId expression) const;
     // A bound folded before specialization yields to its expression when
     // that names a frame-bound parameter.
+    // A VHDL range bound as a position where its integral fold gives
+    // something else: a character literal at its position in the BOOLEAN,
+    // BIT, CHARACTER or STD_ULOGIC type its context gave it (IEEE 1076-2019
+    // 9.3.2, 12.5), a STD_ULOGIC-valued attribute (`X01Z'LEFT`) at its
+    // position. None for any other expression.
+    [[nodiscard]] std::optional<std::int64_t> hir_vhdl_bound_position(
+        semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<std::int64_t> hir_range_bound(
         const std::optional<std::int64_t>& folded,
         const std::optional<semantic::ExpressionId>& expression) const
     {
+        // A typed character literal bound is its position, whatever a fold
+        // of its spelling alone took ('1' is STD_ULOGIC's position 3).
+        if (expression) {
+            if (const auto position = hir_vhdl_bound_position(*expression)) {
+                return position;
+            }
+        }
         if (expression && !hir_generic_binding_frames_.empty()
             && hir_frame_bound_expression(*expression)) {
             if (const auto value = hir_constant_integer(*expression)) {
@@ -1744,6 +1759,13 @@ private:
     [[nodiscard]] bool hir_vhdl_enumeration_index(
         semantic::ExpressionId index,
         semantic::ScopeId process_scope) const;
+    // A VHDL index expression that selects by its position in the index
+    // type (5.3.2.1): one of an enumeration type as above, or a STD_ULOGIC
+    // value (IEEE 1076-2019 16.7), whose nine-value element
+    // widen_enumeration_ordinal turns into its position.
+    [[nodiscard]] bool hir_vhdl_position_index(
+        semantic::ExpressionId index,
+        semantic::ScopeId process_scope) const;
     // The array type an array subtype belongs to, for overload resolution:
     // STD_LOGIC_VECTOR and STD_ULOGIC_VECTOR, UNSIGNED, SIGNED and
     // BIT_VECTOR are distinct (IEEE 1076-2008 4.5.2). Nullopt when unknown.
@@ -1761,6 +1783,30 @@ private:
     // The enumeration type a VHDL for-loop parameter iterates over, when the
     // value names one; the parameter's runtime value is the ordinal.
     [[nodiscard]] bool hir_vhdl_boolean_loop_parameter(
+        semantic::ExpressionId expression) const;
+    [[nodiscard]] const semantic::vhdl::Statement* hir_vhdl_parameter_loop(
+        semantic::ExpressionId expression) const;
+    // The BOOLEAN, BIT, CHARACTER or STD_ULOGIC type of a VHDL for-loop
+    // parameter; its loop counter holds the position in that type.
+    [[nodiscard]] std::optional<support::VhdlIntrinsicEnumeration>
+    hir_vhdl_intrinsic_loop_parameter(
+        semantic::ExpressionId expression) const;
+    // A for-loop parameter of BOOLEAN, BIT or STD_ULOGIC, whose loop
+    // counter holds a position while its value is the literal at that
+    // position (IEEE 1076-2019 10.10): its type, and the subtype every use
+    // of its name sees.
+    [[nodiscard]] std::optional<support::VhdlIntrinsicEnumeration>
+    hir_vhdl_scalar_loop_parameter(
+        semantic::ExpressionId expression) const;
+    [[nodiscard]] std::optional<semantic::vhdl::SubtypeIndication>
+    hir_vhdl_scalar_loop_parameter_subtype(
+        semantic::ExpressionId expression) const;
+    // The subtype of the name of a for-loop parameter over an enumeration
+    // type (IEEE 1076-2019 10.10): BOOLEAN, BIT, STD_ULOGIC, CHARACTER or a
+    // declared enumeration type. None for an integer loop parameter or any
+    // other name.
+    [[nodiscard]] std::optional<semantic::vhdl::SubtypeIndication>
+    hir_vhdl_loop_parameter_subtype(
         semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<semantic::TypeId>
     hir_vhdl_loop_parameter_enumeration(
@@ -1842,6 +1888,12 @@ private:
         std::uint32_t member_offset = 0U);
     [[nodiscard]] std::optional<semantic::DeclarationId>
     hir_target_declaration(semantic::ExpressionId expression) const;
+    // A local the process or callable being lowered holds with automatic
+    // lifetime: declared `automatic`, or a local or formal of an automatic
+    // task, function or method not declared `static` (IEEE 1800-2023 6.21,
+    // 13.3.1, 13.4.2, 8.6).
+    [[nodiscard]] bool hir_automatic_local(
+        semantic::DeclarationId declaration) const;
     // A member selected through a virtual interface handle (`vif.data`):
     // the handle's declaration and, for every elaborated instance of the
     // interface type, its handle and member signal.
@@ -3018,6 +3070,16 @@ private:
     lower_hir_vhdl_attribute(
         semantic::ExpressionId expression,
         std::size_t expected_width);
+    // The STD_ULOGIC value at a position held in an integer register (U, X,
+    // 0, 1, Z, W, L, H, -; IEEE 1076-2019 16.7), chosen among the nine
+    // literals.
+    [[nodiscard]] RegisterId lower_hir_vhdl_logic9_at_position(
+        RegisterId position);
+    // The value of the name of a loop parameter of an enumeration type: the
+    // literal at the position its loop counter holds; none for any other
+    // name.
+    [[nodiscard]] std::optional<RegisterId>
+    lower_hir_vhdl_loop_parameter(semantic::ExpressionId expression);
     [[nodiscard]] std::optional<RegisterId>
     lower_hir_vhdl_aggregate(
         semantic::ExpressionId expression,
@@ -4529,6 +4591,19 @@ private:
     [[nodiscard]] bool hir_uvm_library_identity(
         std::string_view identity) const;
     mutable std::optional<bool> hir_uvm_library_declared_;
+    // The specialization identity a runtime call of the class static method
+    // `identity` carries (ClassStaticMethodCall::class_specialization): the
+    // specialization the call runs in, whose static properties and static
+    // methods it uses (IEEE 1800-2023 8.25.1); empty for a runtime service.
+    [[nodiscard]] std::string hir_static_call_specialization(
+        std::string_view identity,
+        std::optional<std::uint32_t> specialization) const;
+    // The class type `$cast` checks its destination `target` against: the
+    // specialization the destination's type names when that specialization
+    // is a type of its own (a parameterized class, or the class of one
+    // generated scope; IEEE 1800-2023 8.16, 8.25), else `declared`.
+    [[nodiscard]] std::string hir_cast_target_identity(
+        semantic::ExpressionId target, std::string declared) const;
     // Run the constructor of `declaration` on `receiver` with the call
     // actuals: the explicit constructor body, or the implicit base
     // construction and property initializers.
@@ -4866,6 +4941,39 @@ private:
     // process (runtime::simir::SvaOperation).
     [[nodiscard]] std::optional<RegisterId> lower_hir_sva_call(
         const semantic::sv::Expression& call, std::size_t expected_width);
+    // `$__fsim_assertion_control(type, directive, "name")`: the assertion
+    // control word of the concurrent assertion or expect statement the
+    // frontend generated the call for.
+    [[nodiscard]] std::optional<RegisterId> lower_hir_assertion_control_call(
+        const semantic::sv::Expression& call);
+    // The assertion control word (IEEE 1800-2023 20.11, sva::control_on and
+    // the bits after it) of the assertion this process names by assertion
+    // type, directive type and label path (see
+    // hir_assertion_control_name), read into a 32-bit register. Each
+    // distinct assertion of a process is one control site of it.
+    [[nodiscard]] RegisterId lower_assertion_control_read(
+        std::uint32_t type, std::uint32_t directive, std::string_view name);
+    // The path of an assertion labelled `label` below the scope of this
+    // process, `blocks.label`: the enclosing task or function and named
+    // blocks (empty when none), a '.', then the label (empty for an
+    // unlabelled assertion). It names no instance, so instances of one
+    // module share the lowered process.
+    [[nodiscard]] std::string hir_assertion_control_name(
+        std::string_view label) const;
+    // Skip what follows unless bit `bit` of the control word `word` is set:
+    // the branch whose false target patch_assertion_control_gate sets.
+    [[nodiscard]] InstructionIndex emit_assertion_control_gate(
+        RegisterId word, std::uint32_t bit);
+    void patch_assertion_control_gate(
+        InstructionIndex gate, InstructionIndex target);
+    // A violation report of a unique, unique0 or priority if or case
+    // (assertion type `type`: 32, 64 or 128, Table 20-6): unless the
+    // assertion controls switched its reports off, a pending violation
+    // report on the process's report queue, which matures and reports
+    // `message` as a warning in the Observed region unless a flush point or
+    // a Kill clears it first (IEEE 1800-2023 12.4.2.1, 12.5.3.1, 20.11).
+    void emit_violation_report(std::uint32_t type, std::string message,
+        const frontend::SourceSpan& span);
     [[nodiscard]] std::optional<RegisterId> lower_hir_function_call(
         semantic::ExpressionId expression,
         std::size_t expected_width);
@@ -5115,6 +5223,12 @@ private:
     // these registers instead of evaluating them again (IEEE 1800-2017
     // 11.4.1).
     std::unordered_map<std::uint32_t, RegisterId> hir_captured_update_indices_;
+    // With-clause iterators given a width while a reduction's result width
+    // is computed (IEEE 1800-2023 7.12.3): the element's, or int for
+    // `item.index`.
+    mutable std::unordered_map<std::uint32_t, std::size_t>
+        hir_probed_iterator_widths_;
+    mutable std::unordered_set<std::uint32_t> hir_probed_iterator_signed_;
     // Bound `with`-clause iterators over signed elements: such an iterator
     // has its element's signedness (IEEE 1800-2017 7.12).
     std::unordered_set<std::uint32_t> hir_captured_signed_;
@@ -5444,6 +5558,13 @@ private:
         std::size_t width, bool continuous_assignment);
     [[nodiscard]] RegisterId widen_enumeration_ordinal(RegisterId source);
     void report(
+        std::string code,
+        std::string message,
+        frontend::SourceSpan span);
+    // report() unless a diagnostic with this code already names this span:
+    // a lowering step that skips a construct its checker refused reports
+    // the refusal itself, never a silently skipped statement.
+    void report_once(
         std::string code,
         std::string message,
         frontend::SourceSpan span);
@@ -5969,7 +6090,30 @@ private:
         InstructionIndex fork { };
         InstructionIndex continuation_jump { };
         InstructionIndex branch { };
+        // The maturity check of the queued report: the branch that skips
+        // the action when a Kill flushed the report (20.11) meanwhile.
+        std::optional<InstructionIndex> maturity_gate;
     };
+    // The control site of the deferred assertion whose action is being
+    // lowered, and the control word it read when it queued the report.
+    struct DeferredAssertionControl {
+        std::uint32_t type { };
+        std::uint32_t directive { };
+        std::string name;
+        RegisterId queued { };
+    };
+    std::optional<DeferredAssertionControl> deferred_assertion_control_;
+    // The qualifier and the head of the unique, unique0 or priority if whose
+    // series of conditions (IEEE 1800-2023 12.4.2) the else-if lowered next
+    // continues; reset as that else-if starts.
+    std::optional<std::pair<semantic::sv::CaseQualifier, frontend::SourceSpan>>
+        hir_qualified_if_link_;
+    // The descriptions of this process's assertion control sites, by site.
+    std::vector<std::string> assertion_control_sites_;
+    // The widths of the local variables (IEEE 1800-2023 16.10) of each
+    // monitor site of this process, from its tick's witness operands: a
+    // local read of the site has the local's width.
+    std::map<std::uint32_t, std::vector<std::uint32_t>> sva_local_widths_;
     std::optional<runtime::SchedulerPhase>
         deferred_assertion_action_phase_;
     std::optional<DeferredAssertionActionHandoff>

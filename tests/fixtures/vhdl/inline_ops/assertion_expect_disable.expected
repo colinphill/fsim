@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+inl after1 t=27
+inl after2 t=70
+inl pass3 t=85
+inl after3 t=85

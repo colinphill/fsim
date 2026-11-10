@@ -4055,6 +4055,7 @@ fsim_configure_test(fsim_systemc_compiler_tests)
 target_compile_definitions(
   fsim_systemc_compiler_tests
   PRIVATE FSIM_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}"
+          FSIM_TEST_SOURCE_ROOT="${PROJECT_SOURCE_DIR}"
 )
 target_link_libraries(fsim_systemc_compiler_tests PRIVATE fsim_systemc)
 add_test(NAME fsim.systemc.compiler COMMAND fsim_systemc_compiler_tests)
@@ -4202,8 +4203,10 @@ if(TARGET fsim_application)
     app/code_coverage_control_test.cpp
   )
   fsim_configure_test(fsim_code_coverage_control_tests)
+  # ${FSIM_CLI_LIBRARY}: make_cli_services, for the CLI runs.
   target_link_libraries(
-    fsim_code_coverage_control_tests PRIVATE fsim_application fsim_cli)
+    fsim_code_coverage_control_tests
+    PRIVATE fsim_application fsim_cli ${FSIM_CLI_LIBRARY})
   fsim_register_simple_test(
     fsim.application.code-coverage-control
     fsim_code_coverage_control_tests
@@ -4816,6 +4819,10 @@ if(TARGET fsim_application)
       1 ordering_interactions app/ordering_interaction_application_test.cpp
       fsim.application.ordering_interactions
       fast named-events containers ordering shuffle systemverilog cache)
+    fsim_add_application_case(
+      1 kernel_ownership app/kernel_ownership_application_test.cpp
+      fsim.application.kernel_ownership
+      fast ordering systemverilog debugger)
     add_test(
       NAME fsim.application.sv_container_capacity
       COMMAND fsim_application_tests_1 sv_container_capacity)
@@ -5506,6 +5513,21 @@ fsim_register_simple_test(
     fsim.application.ordering_interactions
     fsim_ordering_interaction_application_tests
     "fast;named-events;containers;ordering;shuffle;systemverilog;cache"
+  )
+
+  add_executable(
+    fsim_kernel_ownership_application_tests
+    app/kernel_ownership_application_test.cpp
+  )
+  fsim_configure_test(fsim_kernel_ownership_application_tests)
+  target_link_libraries(
+    fsim_kernel_ownership_application_tests
+    PRIVATE fsim_application
+  )
+  fsim_register_simple_test(
+    fsim.application.kernel_ownership
+    fsim_kernel_ownership_application_tests
+    "fast;ordering;systemverilog;debugger"
   )
 
   add_executable(
@@ -6886,6 +6908,109 @@ set_tests_properties(fsim.application.vhdl-vital-literal-visibility PROPERTIES
   LABELS "application;vhdl;positive"
   TIMEOUT 600)
 
+# A use clause of the design unit being elaborated does not reach the
+# declarations of a package it uses (IEEE 1076-2019 12.3, 12.4): a package's
+# literals and constants fold with the package's own visibility when the top
+# unit also uses packages (another user package, IEEE.VITAL_MEMORY) that
+# declare the same literals. Interpreter, kernel and verified kernel.
+add_test(
+  NAME fsim.application.vhdl-package-use-visibility
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/package_use_visibility"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/package_use_visibility/run_package_use_visibility.cmake"
+)
+set_tests_properties(fsim.application.vhdl-package-use-visibility PROPERTIES
+  LABELS "application;vhdl;positive"
+  TIMEOUT 600)
+
+# The "=" of a generic type is the operation of its actual's type (IEEE
+# 1076-2019 5.8.2, 6.5.3.1): an explicit "=" declared with the actual's type
+# hides its predefined equality (12.3) in a generic package's instances,
+# whatever the instantiating unit's use clauses make visible; an actual type
+# without one keeps the predefined "=". VHDL-2008 and VHDL-2019; interpreter,
+# kernel and verified kernel.
+add_test(
+  NAME fsim.application.vhdl-generic-type-operators
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/generic_type_operators"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/generic_type_operators/run_generic_type_operators.cmake"
+)
+set_tests_properties(fsim.application.vhdl-generic-type-operators PROPERTIES
+  LABELS "application;vhdl;positive"
+  TIMEOUT 600)
+
+# A character literal of BOOLEAN, BIT, CHARACTER or STD_ULOGIC folds by the
+# type its context gives it (IEEE 1076-2019 9.3.2, 12.5): 'POS, 'VAL,
+# 'IMAGE and 'VALUE, the bounds of STD_LOGIC_1164's subtypes, array types
+# indexed by them (literal indices and slice bounds by position), and loops
+# over them, in several workspace directories; STD.STANDARD's types named
+# `standard.character` after `use std.standard;` or `use std.all;`.
+# Interpreter, kernel and verified kernel.
+add_test(
+  NAME fsim.application.vhdl-intrinsic-literal-context
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/intrinsic_literal_context"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/intrinsic_literal_context/run_intrinsic_literal_context.cmake"
+)
+set_tests_properties(fsim.application.vhdl-intrinsic-literal-context PROPERTIES
+  LABELS "application;vhdl;positive"
+  TIMEOUT 600)
+
+# A for-loop parameter over CHARACTER or a declared enumeration type is a
+# value of that type (IEEE 1076-2019 10.10): a case selector, an operand of a
+# concatenation and a comparison, an actual choosing among overloads, the
+# source of an assignment and the argument of 'POS, 'VAL and 'IMAGE, in
+# ascending and descending loops. Interpreter, kernel and verified kernel.
+add_test(
+  NAME fsim.application.vhdl-enumeration-loop-parameter
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/enumeration_loop_parameter"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/enumeration_loop_parameter/run_enumeration_loop_parameter.cmake"
+)
+set_tests_properties(fsim.application.vhdl-enumeration-loop-parameter PROPERTIES
+  LABELS "application;vhdl;positive"
+  TIMEOUT 600)
+
+# A for-loop parameter over BOOLEAN is a BOOLEAN wherever its name is used,
+# for a range given by the type mark, literals, attributes of BOOLEAN or of a
+# subtype of it, or a subtype's type mark (IEEE 1076-2019 10.10, 5.2.1,
+# 16.2.2). Interpreter, kernel and verified kernel.
+add_test(
+  NAME fsim.application.vhdl-boolean-loop-parameter
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/boolean_loop_parameter"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/boolean_loop_parameter/run_boolean_loop_parameter.cmake"
+)
+set_tests_properties(fsim.application.vhdl-boolean-loop-parameter PROPERTIES
+  LABELS "application;vhdl;positive"
+  TIMEOUT 600)
+
+# A design's compiled objects are ordered, linked and given their IEEE
+# packages by the units they define, not by checksums that carry the
+# workspace path: compile, elaborate and simulate report the same in several
+# workspace directories. Interpreter, kernel and verified kernel.
+add_test(
+  NAME fsim.application.vhdl-workspace-object-order
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/workspace_object_order"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/workspace_object_order/run_workspace_object_order.cmake"
+)
+set_tests_properties(fsim.application.vhdl-workspace-object-order PROPERTIES
+  LABELS "application;vhdl;positive"
+  TIMEOUT 600)
+
 # Wide and nine-value operations the v4 kernel compiles inline, with no
 # runtime helper: weak 128-element vectors (dynamic selects, part inserts,
 # signal assignment), shifts and rotates with a signed amount, VHDL integer
@@ -7036,7 +7161,477 @@ add_test(
     -DFSIM_LANGUAGE=sv
     "-DFSIM_KERNEL_ENV=FSIM_KERNEL_SVA_CHECK=1"
     -DFSIM_FORBID_EFFECT=sva_tick
+    "-DFSIM_FORBID_REASON=tier:not_compiled:(assertion|operation)"
     -DFSIM_FORBID_NOT_COMPILED=assertion
+    "-DFSIM_FORBID_GENERIC=SvaOperation\;ReadSignal"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# Multiclocked properties whose root is not a sequence (16.13.2, 16.13.3,
+# 16.16): implications, followed-by, the property operators, if-else,
+# nexttime, always, eventually, until, the abort operators and disable iff
+# across two and three clocks. Their instances start at points of the trace
+# and align to the ticks of their clocks in generated code too; the records
+# are checked against the host monitor (FSIM_KERNEL_SVA_CHECK).
+add_test(
+  NAME fsim.application.inline-ops-assertion-multiclock-property
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=assertion_multiclock_property
+    -DFSIM_LANGUAGE=sv
+    "-DFSIM_KERNEL_ENV=FSIM_KERNEL_SVA_CHECK=1"
+    -DFSIM_FORBID_EFFECT=sva_tick
+    "-DFSIM_FORBID_REASON=tier:not_compiled:(assertion|operation)"
+    -DFSIM_FORBID_NOT_COMPILED=assertion
+    "-DFSIM_FORBID_GENERIC=SvaOperation\;ReadSignal"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# The assertion action controls (20.11: PassOn/PassOff, NonvacuousOn,
+# VacuousOff, FailOn/FailOff, as tasks and as $assertcontrol) skip the pass
+# or fail statement itself, not only its output, for assert and cover
+# directives and expect statements: the outcome pop of the directive's block
+# reports the switched-off outcome apart, in generated code too.
+add_test(
+  NAME fsim.application.inline-ops-assertion-action-control
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=assertion_action_control
+    -DFSIM_LANGUAGE=sv
+    "-DFSIM_KERNEL_ENV=FSIM_KERNEL_SVA_CHECK=1"
+    -DFSIM_FORBID_EFFECT=sva_tick
+    -DFSIM_FORBID_NOT_COMPILED=assertion
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# The assertion control tasks select by assertion type, directive type,
+# levels and a list of scopes or assertions, with Lock and Unlock (20.11):
+# concurrent assertions on the monitor and the earlier evaluator, immediate,
+# observed and final deferred assertions and covers (a Kill flushes a queued
+# deferred report, an Off does not), and expect statements, which On, Off
+# and Kill leave alone. Generated code reads each assertion's control word.
+add_test(
+  NAME fsim.application.inline-ops-assertion-control-scope
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=assertion_control_scope
+    -DFSIM_LANGUAGE=sv
+    "-DFSIM_KERNEL_ENV=FSIM_KERNEL_SVA_CHECK=1"
+    -DFSIM_FORBID_EFFECT=sva_tick
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# Properties with local variables (IEEE 1800-2023 16.10) on the concurrent-
+# property monitor: match items, flow through or/and, repetition, a wide
+# local, conditional and negation, initialization assignments, local formal
+# arguments, a local as an instance's actual, sampled values, disable iff
+# ending an attempt in flight between two ticks (16.12), and accept_on,
+# reject_on and a sampled disable condition around a property with locals
+# (16.12.14). Generated code runs the monitor and answers its expression
+# requests (no sva_tick helper); FSIM_KERNEL_SVA_CHECK compares every tick,
+# its locals, memo and calls with the host monitor. The expected values are
+# derived in the fixture.
+add_test(
+  NAME fsim.application.inline-ops-assertion-locals
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=assertion_locals
+    -DFSIM_LANGUAGE=sv
+    "-DFSIM_KERNEL_ENV=FSIM_KERNEL_SVA_CHECK=1"
+    -DFSIM_FORBID_EFFECT=sva_tick
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# The assertion controls of immediate and deferred assertions (20.11): the
+# pass and fail statements as the report is queued, Off leaving a queued
+# deferred report to mature and Kill flushing it, final deferred ones; and
+# Kill against Off of a concurrent attempt in progress.
+add_test(
+  NAME fsim.application.inline-ops-assertion-control-actions
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=assertion_control_actions
+    -DFSIM_LANGUAGE=sv
+    "-DFSIM_KERNEL_ENV=FSIM_KERNEL_SVA_CHECK=1"
+    -DFSIM_FORBID_EFFECT=sva_tick
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# The violation reports of unique, unique0 and priority case statements are
+# assertion types 32, 64 and 128 of the assertion controls (20.11): On, Off,
+# Kill and Lock apply to them, the convenience tasks do not.
+add_test(
+  NAME fsim.application.inline-ops-assertion-control-violation
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=assertion_control_violation
+    -DFSIM_LANGUAGE=sv
+    -DFSIM_REPORTS=warnings
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# unique, unique0 and priority if report their violations (12.4.2), and
+# case and if violations wait in the pending violation report queue: they
+# mature in the Observed region and a flush point drops them (12.4.2.1).
+add_test(
+  NAME fsim.application.inline-ops-assertion-violation-queue
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=assertion_violation_queue
+    -DFSIM_LANGUAGE=sv
+    -DFSIM_REPORTS=warnings
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# The violation reports of the unique, unique0 and priority forms of case,
+# casex, casez, case inside and case matches (12.5.3, 12.6.1), each maturing
+# in the Observed region of its own time step (12.5.3.1).
+add_test(
+  NAME fsim.application.inline-ops-assertion-violation-case
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=assertion_violation_case
+    -DFSIM_LANGUAGE=sv
+    -DFSIM_REPORTS=warnings
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# A deferred assertion's action may call a void function or a function
+# whose value is discarded (16.4).
+add_test(
+  NAME fsim.application.inline-ops-assertion-deferred-call
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=assertion_deferred_call
+    -DFSIM_LANGUAGE=sv
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# `always @(cb)` waits for the clocking event of the clocking block
+# (14.13), with and without iff.
+add_test(
+  NAME fsim.application.inline-ops-clocking-event-process
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=clocking_event_process
+    -DFSIM_LANGUAGE=sv
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# disable iff reads current values and disables the attempts in progress
+# whenever it is true, between ticks and within a time step too (16.12,
+# 16.15), with $assertcontrol Kill (20.11). The disable net is a host signal
+# whose commit disables the monitor's attempts; the monitor stays compiled.
+add_test(
+  NAME fsim.application.inline-ops-assertion-async-disable
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=assertion_async_disable
+    -DFSIM_LANGUAGE=sv
+    "-DFSIM_KERNEL_ENV=FSIM_KERNEL_SVA_CHECK=1"
+    -DFSIM_FORBID_EFFECT=sva_tick
+    "-DFSIM_FORBID_REASON=tier:not_compiled:(assertion|operation)"
+    -DFSIM_FORBID_NOT_COMPILED=assertion
+    "-DFSIM_FORBID_GENERIC=SvaOperation\;ReadSignal"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# accept_on and reject_on check their abort condition with sampled values at
+# every time step of an attempt, sync_accept_on and sync_reject_on only at
+# the clock's ticks (16.12.14): the abort net's change wakes the monitor at
+# the start of the next time step; the monitor stays compiled.
+add_test(
+  NAME fsim.application.inline-ops-assertion-async-abort
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=assertion_async_abort
+    -DFSIM_LANGUAGE=sv
+    "-DFSIM_KERNEL_ENV=FSIM_KERNEL_SVA_CHECK=1"
+    -DFSIM_FORBID_EFFECT=sva_tick
+    "-DFSIM_FORBID_REASON=tier:not_compiled:(assertion|operation)"
+    -DFSIM_FORBID_NOT_COMPILED=assertion
+    "-DFSIM_FORBID_GENERIC=SvaOperation\;ReadSignal"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# A disable condition with a value change function becomes true at the start
+# of a time step between the ticks (16.9.3, 16.12): the monitor evaluates at
+# every time step of an attempt and stays compiled.
+add_test(
+  NAME fsim.application.inline-ops-assertion-disable-sampled
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=assertion_disable_sampled
+    -DFSIM_LANGUAGE=sv
+    "-DFSIM_KERNEL_ENV=FSIM_KERNEL_SVA_CHECK=1"
+    -DFSIM_FORBID_EFFECT=sva_tick
+    "-DFSIM_FORBID_REASON=tier:not_compiled:(assertion|operation)"
+    -DFSIM_FORBID_NOT_COMPILED=assertion
+    "-DFSIM_FORBID_GENERIC=SvaOperation\;ReadSignal"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# An expect statement's disable iff disables its attempt at once and the
+# statement completes in that time step (16.12, 16.17).
+add_test(
+  NAME fsim.application.inline-ops-assertion-expect-disable
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=assertion_expect_disable
+    -DFSIM_LANGUAGE=sv
+    "-DFSIM_KERNEL_ENV=FSIM_KERNEL_SVA_CHECK=1"
+    -DFSIM_FORBID_EFFECT=sva_tick
+    "-DFSIM_FORBID_REASON=tier:not_compiled:(assertion|operation)"
+    -DFSIM_FORBID_NOT_COMPILED=assertion
+    "-DFSIM_FORBID_GENERIC=SvaOperation\;ReadSignal"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# Clocking events are the same clock only when identical (16.13.1,
+# 16.16.1): resolved names, edges and iff conditions, not spellings. A
+# module-scope property's clk inside a generate block that declares its own
+# clk is another clock; `top.clk` and `posedge (clk)` are clk's.
+add_test(
+  NAME fsim.application.inline-ops-assertion-clock-identity
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=assertion_clock_identity
+    -DFSIM_LANGUAGE=sv
+    "-DFSIM_KERNEL_ENV=FSIM_KERNEL_SVA_CHECK=1"
+    -DFSIM_FORBID_EFFECT=sva_tick
+    -DFSIM_FORBID_NOT_COMPILED=assertion
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# The clocks of a multiclocked property report their ticks through tick bits
+# their clock processes set, as a single clock does (16.13): asynchronous
+# aborts (16.12.14) and a disable condition with a value change function
+# (16.12, 16.9.3) act between the ticks, and the monitor stays compiled (no
+# event's triggered state in its tick).
+add_test(
+  NAME fsim.application.inline-ops-assertion-multiclock-abort
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=assertion_multiclock_abort
+    -DFSIM_LANGUAGE=sv
+    "-DFSIM_KERNEL_ENV=FSIM_KERNEL_SVA_CHECK=1"
+    -DFSIM_FORBID_EFFECT=sva_tick
+    "-DFSIM_FORBID_REASON=tier:not_compiled:(assertion|operation)"
+    -DFSIM_FORBID_NOT_COMPILED=assertion
+    "-DFSIM_FORBID_GENERIC=SvaOperation\;ReadSignal"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+add_test(
+  NAME fsim.application.inline-ops-assertion-multiclock-abort-strict
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=assertion_multiclock_abort
+    -DFSIM_LANGUAGE=sv
+    "-DFSIM_KERNEL_ENV=FSIM_KERNEL_SVA_CHECK=1\;FSIM_V4_STRICT=1"
+    -DFSIM_FORBID_EFFECT=sva_tick
+    "-DFSIM_FORBID_REASON=tier:not_compiled:(assertion|operation)"
+    -DFSIM_FORBID_NOT_COMPILED=assertion
+    "-DFSIM_FORBID_GENERIC=SvaOperation\;ReadSignal"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# An expect statement's asynchronous aborts and a disable condition that
+# reads a variable of its procedure end its attempt between the clock's
+# ticks, and the statement completes there (16.17, 16.12.14, 16.12).
+add_test(
+  NAME fsim.application.inline-ops-assertion-expect-abort
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=assertion_expect_abort
+    -DFSIM_LANGUAGE=sv
+    "-DFSIM_KERNEL_ENV=FSIM_KERNEL_SVA_CHECK=1"
+    -DFSIM_FORBID_EFFECT=sva_tick
+    "-DFSIM_FORBID_REASON=tier:not_compiled:(assertion|operation)"
+    -DFSIM_FORBID_NOT_COMPILED=assertion
+    "-DFSIM_FORBID_GENERIC=SvaOperation\;ReadSignal"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+add_test(
+  NAME fsim.application.inline-ops-assertion-expect-abort-strict
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=assertion_expect_abort
+    -DFSIM_LANGUAGE=sv
+    "-DFSIM_KERNEL_ENV=FSIM_KERNEL_SVA_CHECK=1\;FSIM_V4_STRICT=1"
+    -DFSIM_FORBID_EFFECT=sva_tick
+    "-DFSIM_FORBID_REASON=tier:not_compiled:(assertion|operation)"
+    -DFSIM_FORBID_NOT_COMPILED=assertion
+    "-DFSIM_FORBID_GENERIC=SvaOperation\;ReadSignal"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# Procedural concurrent assertions with asynchronous aborts, multiclocked
+# and singly clocked (16.14.6, 16.12.14): the procedure's enable is consumed
+# at the leading clock's tick its attempt starts at.
+add_test(
+  NAME fsim.application.inline-ops-assertion-procedural-abort
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=assertion_procedural_abort
+    -DFSIM_LANGUAGE=sv
+    "-DFSIM_KERNEL_ENV=FSIM_KERNEL_SVA_CHECK=1"
+    -DFSIM_FORBID_EFFECT=sva_tick
+    "-DFSIM_FORBID_REASON=tier:not_compiled:(assertion|operation)"
+    -DFSIM_FORBID_NOT_COMPILED=assertion
+    "-DFSIM_FORBID_GENERIC=SvaOperation\;ReadSignal"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+add_test(
+  NAME fsim.application.inline-ops-assertion-procedural-abort-strict
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=assertion_procedural_abort
+    -DFSIM_LANGUAGE=sv
+    "-DFSIM_KERNEL_ENV=FSIM_KERNEL_SVA_CHECK=1\;FSIM_V4_STRICT=1"
+    -DFSIM_FORBID_EFFECT=sva_tick
+    "-DFSIM_FORBID_REASON=tier:not_compiled:(assertion|operation)"
+    -DFSIM_FORBID_NOT_COMPILED=assertion
+    "-DFSIM_FORBID_GENERIC=SvaOperation\;ReadSignal"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# Sampled value functions that take the assertion's clock (16.9.3) are
+# kernel reads of their histories in the monitors of covers and asserts, an
+# asynchronous abort's monitor too: no ReadSignal through the helper.
+add_test(
+  NAME fsim.application.inline-ops-assertion-inferred-clock
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=assertion_inferred_clock
+    -DFSIM_LANGUAGE=sv
+    "-DFSIM_KERNEL_ENV=FSIM_KERNEL_SVA_CHECK=1"
+    -DFSIM_FORBID_EFFECT=sva_tick
+    "-DFSIM_FORBID_REASON=tier:not_compiled:(assertion|operation)"
+    -DFSIM_FORBID_NOT_COMPILED=assertion
+    "-DFSIM_FORBID_GENERIC=SvaOperation\;ReadSignal"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+add_test(
+  NAME fsim.application.inline-ops-assertion-inferred-clock-strict
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=assertion_inferred_clock
+    -DFSIM_LANGUAGE=sv
+    "-DFSIM_KERNEL_ENV=FSIM_KERNEL_SVA_CHECK=1\;FSIM_V4_STRICT=1"
+    -DFSIM_FORBID_EFFECT=sva_tick
+    "-DFSIM_FORBID_REASON=tier:not_compiled:(assertion|operation)"
+    -DFSIM_FORBID_NOT_COMPILED=assertion
+    "-DFSIM_FORBID_GENERIC=SvaOperation\;ReadSignal"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# A program's continuous assignments run in the Reactive region (24.3.1,
+# 24.3.2), and its concurrent assertions keep the scheduling of design code:
+# default and explicit disable iff with current values, a disable operand
+# that design code changes in the tick's Active region (the hidden disable
+# net runs in the Active region), and an asynchronous reject_on (16.12,
+# 16.12.14, 16.15) give the same ticks in a program as in a module.
+add_test(
+  NAME fsim.application.inline-ops-assertion-program-disable
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=assertion_program_disable
+    -DFSIM_LANGUAGE=sv
+    "-DFSIM_KERNEL_ENV=FSIM_KERNEL_SVA_CHECK=1"
+    -DFSIM_FORBID_EFFECT=sva_tick
+    "-DFSIM_FORBID_REASON=tier:not_compiled:(assertion|operation)"
+    -DFSIM_FORBID_NOT_COMPILED=assertion
+    "-DFSIM_FORBID_GENERIC=SvaOperation\;ReadSignal"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+add_test(
+  NAME fsim.application.inline-ops-assertion-program-disable-strict
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=assertion_program_disable
+    -DFSIM_LANGUAGE=sv
+    "-DFSIM_KERNEL_ENV=FSIM_KERNEL_SVA_CHECK=1\;FSIM_V4_STRICT=1"
+    -DFSIM_FORBID_EFFECT=sva_tick
+    "-DFSIM_FORBID_REASON=tier:not_compiled:(assertion|operation)"
+    -DFSIM_FORBID_NOT_COMPILED=assertion
+    "-DFSIM_FORBID_GENERIC=SvaOperation\;ReadSignal"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# A top-level program with a continuous assignment and disable iff
+# elaborates (only its severity tasks run at elaboration, 20.11) and runs
+# them (24.3.1, 16.12, 16.15).
+add_test(
+  NAME fsim.application.inline-ops-assertion-program-root
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=assertion_program_root
+    -DFSIM_LANGUAGE=sv
+    "-DFSIM_KERNEL_ENV=FSIM_KERNEL_SVA_CHECK=1"
+    -DFSIM_FORBID_EFFECT=sva_tick
+    "-DFSIM_FORBID_REASON=tier:not_compiled:(assertion|operation)"
+    -DFSIM_FORBID_NOT_COMPILED=assertion
+    "-DFSIM_FORBID_GENERIC=SvaOperation\;ReadSignal"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+add_test(
+  NAME fsim.application.inline-ops-assertion-program-root-strict
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=assertion_program_root
+    -DFSIM_LANGUAGE=sv
+    "-DFSIM_KERNEL_ENV=FSIM_KERNEL_SVA_CHECK=1\;FSIM_V4_STRICT=1"
+    -DFSIM_FORBID_EFFECT=sva_tick
+    "-DFSIM_FORBID_REASON=tier:not_compiled:(assertion|operation)"
+    -DFSIM_FORBID_NOT_COMPILED=assertion
+    "-DFSIM_FORBID_GENERIC=SvaOperation\;ReadSignal"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# A $assertcontrol control_type outside Table 20-5, and a negative levels
+# argument of a control task, is a warning and the call has no effect; the
+# run continues (20.11, 21.7.1.2).
+add_test(
+  NAME fsim.application.inline-ops-assertion-control-type-warning
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=assertion_control_type_warning
+    -DFSIM_LANGUAGE=sv
+    -DFSIM_REPORTS=warnings
     -P
     "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
 )
@@ -7077,6 +7672,93 @@ add_test(
     -P
     "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
 )
+# The same with FSIM_V4_STRICT=1: no process of the compiled runs, the one
+# under FSIM_KERNEL_VERIFY included, runs on the reference interpreter (the
+# VHDL kernel hosts the SystemVerilog assertion processes on native code).
+add_test(
+  NAME fsim.application.inline-ops-sampled-logic9-strict
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=sampled_logic9
+    -DFSIM_LANGUAGE=mixed
+    -DFSIM_TOP=vtop
+    "-DFSIM_KERNEL_ENV=FSIM_KERNEL_SVA_CHECK=1\;FSIM_V4_STRICT=1"
+    -DFSIM_FORBID_EFFECT=sva_tick
+    "-DFSIM_FORBID_GENERIC=SvaOperation\;ReadSignal"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# Value change functions with an explicit clocking event read in time steps
+# that are not ticks of that clock, in procedural code and in assertions of
+# another clock: the time step's sampled value against the sample of the
+# most recent strictly prior tick (16.9.3), inline in the compiled kernel
+# (the Preponed words and the history ring); then the same with Logic9 nets
+# of a VHDL top level (nine-value rings of one and of two chunks). The
+# -strict runs set FSIM_V4_STRICT=1 (no process on the reference
+# interpreter in a compiled run).
+add_test(
+  NAME fsim.application.inline-ops-sampled-between-ticks
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=sampled_between_ticks
+    -DFSIM_LANGUAGE=sv
+    "-DFSIM_KERNEL_ENV=FSIM_KERNEL_SVA_CHECK=1"
+    -DFSIM_FORBID_EFFECT=sva_tick
+    "-DFSIM_FORBID_REASON=tier:not_compiled:(assertion|operation)"
+    -DFSIM_FORBID_NOT_COMPILED=assertion
+    "-DFSIM_FORBID_GENERIC=SvaOperation\;ReadSignal"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+add_test(
+  NAME fsim.application.inline-ops-sampled-between-ticks-strict
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=sampled_between_ticks
+    -DFSIM_LANGUAGE=sv
+    "-DFSIM_KERNEL_ENV=FSIM_KERNEL_SVA_CHECK=1\;FSIM_V4_STRICT=1"
+    -DFSIM_FORBID_EFFECT=sva_tick
+    "-DFSIM_FORBID_REASON=tier:not_compiled:(assertion|operation)"
+    -DFSIM_FORBID_NOT_COMPILED=assertion
+    "-DFSIM_FORBID_GENERIC=SvaOperation\;ReadSignal"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+add_test(
+  NAME fsim.application.inline-ops-sampled-between-ticks-logic9
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=sampled_between_ticks_logic9
+    -DFSIM_LANGUAGE=mixed
+    -DFSIM_TOP=vtop
+    "-DFSIM_KERNEL_ENV=FSIM_KERNEL_SVA_CHECK=1"
+    -DFSIM_FORBID_EFFECT=sva_tick
+    "-DFSIM_FORBID_REASON=tier:not_compiled:(assertion|operation)"
+    -DFSIM_FORBID_NOT_COMPILED=assertion
+    "-DFSIM_FORBID_GENERIC=SvaOperation\;ReadSignal"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+add_test(
+  NAME fsim.application.inline-ops-sampled-between-ticks-logic9-strict
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=sampled_between_ticks_logic9
+    -DFSIM_LANGUAGE=mixed
+    -DFSIM_TOP=vtop
+    "-DFSIM_KERNEL_ENV=FSIM_KERNEL_SVA_CHECK=1\;FSIM_V4_STRICT=1"
+    -DFSIM_FORBID_EFFECT=sva_tick
+    "-DFSIM_FORBID_REASON=tier:not_compiled:(assertion|operation)"
+    -DFSIM_FORBID_NOT_COMPILED=assertion
+    "-DFSIM_FORBID_GENERIC=SvaOperation\;ReadSignal"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
 # The global clocking future functions (16.9.4): $future_gclk is a plain read
 # of the signal in the kernel; the comparing forms read the host.
 add_test(
@@ -7088,6 +7770,43 @@ add_test(
     -DFSIM_LANGUAGE=sv
     "-DFSIM_KERNEL_ENV=FSIM_KERNEL_SVA_CHECK=1"
     -DFSIM_FORBID_EFFECT=sva_tick
+    "-DFSIM_FORBID_GENERIC=SvaOperation"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+# The comparing global clocking functions (16.9.4) on std_logic nets of a
+# VHDL top level: a SystemVerilog reader compares the mapped values (21.2.1.3
+# / UG900), so '0' -> 'L', 'H' -> '1' and 'Z' -> 'Z' are steady; the
+# comparing forms read the host, as in sampled-gclk. The -strict run sets
+# FSIM_V4_STRICT=1.
+add_test(
+  NAME fsim.application.inline-ops-sampled-gclk-logic9
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=sampled_gclk_logic9
+    -DFSIM_LANGUAGE=mixed
+    -DFSIM_TOP=vtop
+    "-DFSIM_KERNEL_ENV=FSIM_KERNEL_SVA_CHECK=1"
+    -DFSIM_FORBID_EFFECT=sva_tick
+    "-DFSIM_FORBID_REASON=tier:not_compiled:(assertion|operation)"
+    -DFSIM_FORBID_NOT_COMPILED=assertion
+    "-DFSIM_FORBID_GENERIC=SvaOperation"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+add_test(
+  NAME fsim.application.inline-ops-sampled-gclk-logic9-strict
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=sampled_gclk_logic9
+    -DFSIM_LANGUAGE=mixed
+    -DFSIM_TOP=vtop
+    "-DFSIM_KERNEL_ENV=FSIM_KERNEL_SVA_CHECK=1\;FSIM_V4_STRICT=1"
+    -DFSIM_FORBID_EFFECT=sva_tick
+    "-DFSIM_FORBID_REASON=tier:not_compiled:(assertion|operation)"
+    -DFSIM_FORBID_NOT_COMPILED=assertion
     "-DFSIM_FORBID_GENERIC=SvaOperation"
     -P
     "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
@@ -7179,6 +7898,19 @@ add_test(
     "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
     "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
     -DFSIM_CASE=deep_frames
+    -DFSIM_LANGUAGE=vhdl
+    -DFSIM_STANDARD=2008
+    -DFSIM_FORBID_DEOPT=1
+    -DFSIM_FORBID_NOT_COMPILED=recursive_call\;recursive_frame_storage\;frame_not_isolated
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops/run_inline_ops.cmake"
+)
+add_test(
+  NAME fsim.application.inline-ops-recursive-storage
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl/inline_ops"
+    -DFSIM_CASE=recursive_storage
     -DFSIM_LANGUAGE=vhdl
     -DFSIM_STANDARD=2008
     -DFSIM_FORBID_DEOPT=1
@@ -7519,7 +8251,22 @@ set_tests_properties(
   fsim.application.inline-ops-assertion-multiclock
   fsim.application.inline-ops-sampled-wide
   fsim.application.inline-ops-sampled-logic9
+  fsim.application.inline-ops-sampled-logic9-strict
+  fsim.application.inline-ops-sampled-between-ticks
+  fsim.application.inline-ops-sampled-between-ticks-strict
+  fsim.application.inline-ops-assertion-multiclock-abort
+  fsim.application.inline-ops-assertion-multiclock-abort-strict
+  fsim.application.inline-ops-assertion-expect-abort
+  fsim.application.inline-ops-assertion-expect-abort-strict
+  fsim.application.inline-ops-assertion-procedural-abort
+  fsim.application.inline-ops-assertion-procedural-abort-strict
+  fsim.application.inline-ops-assertion-inferred-clock
+  fsim.application.inline-ops-assertion-inferred-clock-strict
+  fsim.application.inline-ops-sampled-between-ticks-logic9
+  fsim.application.inline-ops-sampled-between-ticks-logic9-strict
   fsim.application.inline-ops-sampled-gclk
+  fsim.application.inline-ops-sampled-gclk-logic9
+  fsim.application.inline-ops-sampled-gclk-logic9-strict
   fsim.application.inline-ops-sampled-glitch
   fsim.application.inline-ops-concat-logic9-narrow
   fsim.application.inline-ops-sv-shift-logic9
@@ -7641,10 +8388,16 @@ set_tests_properties(fsim.application.vhdl-wide-match PROPERTIES
 # interpreter, the kernel and the kernel under FSIM_KERNEL_VERIFY equal the
 # hand-derived LRM results; every process of waits.vhd is a compiled kernel
 # member. FSIM_KERNEL_VERIFY replays compiled thread activations (waits.vhd,
-# the SystemVerilog threads.sv, and classes.sv with a blocking write, $display,
-# a task call, fork-join_none, strings and files) on the reference evaluator
-# with its effects shadowed, and an injected mismatch
-# (FSIM_KERNEL_VERIFY_INJECT=thread) must be reported.
+# the SystemVerilog threads.sv, classes.sv with a blocking write, $display,
+# a task call, fork-join_none, strings and files, and replay_effects.sv with
+# private frame arrays, a mirrored switch output, scans into module variables
+# and nonblocking writes of every element form of slot-held memories) on the
+# reference evaluator with its effects
+# shadowed, and an injected mismatch (FSIM_KERNEL_VERIFY_INJECT=thread) must
+# be reported. mirror_reads.sv has kernel processes read wide host nets
+# (several drivers resolved by the host, part-select and bit writes, a sole
+# driver mirrored as it writes) through the kernel's mirrors, which the
+# verified run checks against the host's values.
 add_test(
   NAME fsim.application.vhdl-behavioral-process
   COMMAND "${CMAKE_COMMAND}"

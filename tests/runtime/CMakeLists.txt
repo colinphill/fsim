@@ -1296,6 +1296,22 @@ target_include_directories(
 fsim_add_foreign_conformance_test(
   vpi-assoc-words vpi foreign_vpi_assoc_words.sv
   foreign_vpi_assoc_words.expected "" fsim_foreign_vpi_assoc_words_plugin)
+# Words of a variable array and of a net array put, read back and watched
+# while the compiled kernel holds the arrays (IEEE 1800-2023 37.17, 38.34,
+# 38.36.1), also under the debugger.
+add_library(fsim_foreign_vpi_memory_words_plugin SHARED
+  foreign_vpi_memory_words_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_memory_words_plugin)
+target_link_libraries(fsim_foreign_vpi_memory_words_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_memory_words_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-memory-words vpi foreign_vpi_memory_words.sv
+  foreign_vpi_memory_words.expected "" fsim_foreign_vpi_memory_words_plugin)
+fsim_add_foreign_conformance_test(
+  vpi-memory-words-debug vpi foreign_vpi_memory_words.sv
+  foreign_vpi_memory_words.expected "" fsim_foreign_vpi_memory_words_plugin
+  0 OFF "" DEBUG_COMMANDS foreign_vpi_memory_words_debug.tcl)
 # Library binding of a configured design (IEEE 1800-2023 33.7).
 add_library(fsim_foreign_vpi_config_plugin SHARED
   foreign_vpi_config_plugin.c)
@@ -2630,6 +2646,14 @@ foreach(FSIM_ENGINE IN ITEMS v4 interpreter)
     SAVE_ARGS --save-at 50ns --save-file cli.state
     RESTARTS
       "cli.state=${FSIM_SAVE_RESTART_FIXTURES}/save_restart_cli.restart.expected")
+  # Associative arrays with a default (IEEE 1800-2023 7.9.11): the default
+  # from a declaration and one assigned before the save, read after a
+  # restart.
+  fsim_add_save_restart_test(assoc-default ${FSIM_ENGINE}
+    save_restart_assoc_default.sv save_restart_assoc_default.expected
+    SAVE_ARGS --save-at 50ns --save-file assoc_default.state
+    RESTARTS
+      "assoc_default.state=${FSIM_SAVE_RESTART_FIXTURES}/save_restart_assoc_default.restart.expected")
   fsim_add_save_restart_test(task ${FSIM_ENGINE}
     save_restart_task.sv save_restart_task.expected
     RESTARTS
@@ -2744,6 +2768,21 @@ foreach(FSIM_ENGINE IN ITEMS v4 interpreter)
     SAVE_ARGS --save-at 30ns --save-file sva.state
     RESTARTS
       "sva.state=${FSIM_SAVE_RESTART_FIXTURES}/save_restart_sva.restart.expected")
+  # The monitor a disable net disables is saved: after the restart the
+  # disable iff still ends the attempt in flight between the edges (16.12).
+  fsim_add_save_restart_test(sva-disable ${FSIM_ENGINE}
+    save_restart_sva_disable.sv save_restart_sva_disable.expected
+    SAVE_ARGS --save-at 30ns --save-file sva_disable.state
+    RESTARTS
+      "sva_disable.state=${FSIM_SAVE_RESTART_FIXTURES}/save_restart_sva_disable.restart.expected")
+  # A save while attempts of a property with local variables are in flight
+  # (IEEE 1800-2023 16.10): the threads' locals are saved with the monitor,
+  # and the restart's attempts pass and fail on the same values.
+  fsim_add_save_restart_test(sva-locals ${FSIM_ENGINE}
+    save_restart_sva_locals.sv save_restart_sva_locals.expected
+    SAVE_ARGS --save-at 30ns --save-file sva_locals.state
+    RESTARTS
+      "sva_locals.state=${FSIM_SAVE_RESTART_FIXTURES}/save_restart_sva_locals.restart.expected")
 endforeach()
 
 # A UVM testbench across $save, $restart and $reset (IEEE 1800-2023 D.8, D.9;
@@ -2888,3 +2927,57 @@ fsim_add_scope_task_test(list elaboration scope_tasks_list.sv
   ELABORATE_MESSAGE "FSIM-ELAB-SVSCOPE-002")
 fsim_add_scope_task_test(literal elaboration scope_tasks_literal.sv
   ELABORATE_MESSAGE "FSIM-ELAB-SVSCOPE-001")
+
+# A pre_randomize or post_randomize that cannot complete is an error of the
+# run, not a randomization failure (IEEE 1800-2023 18.6.1, 18.6.3): the run
+# stops naming the class, the callback and the cause, on the reference
+# interpreter and the compiled kernel.
+set(FSIM_RANDOMIZE_CALLBACK_FIXTURES
+  "${PROJECT_SOURCE_DIR}/tests/fixtures/systemverilog/randomize_callback")
+foreach(FSIM_ENGINE IN ITEMS v4 interpreter)
+  foreach(FSIM_CALLBACK IN ITEMS pre post)
+    set(FSIM_NAME fsim.systemverilog.randomize-callback-error.${FSIM_CALLBACK}.${FSIM_ENGINE})
+    add_test(
+      NAME ${FSIM_NAME}
+      COMMAND
+        "${CMAKE_COMMAND}"
+        "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+        "-DFSIM_SOURCE=${FSIM_RANDOMIZE_CALLBACK_FIXTURES}/${FSIM_CALLBACK}_randomize_error.sv"
+        "-DFSIM_TOP=top"
+        "-DFSIM_ENGINE=${FSIM_ENGINE}"
+        "-DFSIM_SIMULATE_MESSAGE=error[FSIM-RUN-0002]: ${FSIM_CALLBACK}_randomize of class 'work::$unit::item' failed in randomize(): null or stale SystemVerilog class handle"
+        "-DFSIM_WORK_DIR=${PROJECT_BINARY_DIR}/tests/randomize-callback-error/${FSIM_CALLBACK}-${FSIM_ENGINE}"
+        -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunScopeTaskCase.cmake")
+    set_tests_properties(${FSIM_NAME}
+      PROPERTIES LABELS "fast;systemverilog;randomize;negative")
+  endforeach()
+endforeach()
+
+# Statements and expressions in pre_randomize and post_randomize, which run
+# outside generated code, behave as they do in a module: an immediate
+# assertion (and one in a method they call) runs its action blocks, reports
+# the default $error when it fails without an else block, follows
+# $assertoff/$asserton/$assertcontrol, and the callback goes on after the
+# failure, so randomize() still returns 1 (IEEE 1800-2023 16.3, 18.6.1,
+# 20.11); pure integral expressions (selects, concatenation, ?:, ==?,
+# inside, casez/casex, $bits, $clog2, the 20.9 bit vector functions) give
+# the values the same expressions give in a module.
+foreach(FSIM_ENGINE IN ITEMS v4 interpreter)
+  foreach(FSIM_CASE IN ITEMS immediate_assertions pure_expressions)
+    string(REPLACE "_" "-" FSIM_CASE_NAME "${FSIM_CASE}")
+    set(FSIM_NAME fsim.systemverilog.randomize-${FSIM_CASE_NAME}.${FSIM_ENGINE})
+    add_test(
+      NAME ${FSIM_NAME}
+      COMMAND
+        "${CMAKE_COMMAND}"
+        "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+        "-DFSIM_SOURCE=${FSIM_RANDOMIZE_CALLBACK_FIXTURES}/${FSIM_CASE}.sv"
+        "-DFSIM_TOP=top"
+        "-DFSIM_ENGINE=${FSIM_ENGINE}"
+        "-DFSIM_EXPECTED=${FSIM_RANDOMIZE_CALLBACK_FIXTURES}/${FSIM_CASE}.expected"
+        "-DFSIM_WORK_DIR=${PROJECT_BINARY_DIR}/tests/randomize-${FSIM_CASE_NAME}/${FSIM_ENGINE}"
+        -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunScopeTaskCase.cmake")
+    set_tests_properties(${FSIM_NAME}
+      PROPERTIES LABELS "fast;systemverilog;randomize")
+  endforeach()
+endforeach()

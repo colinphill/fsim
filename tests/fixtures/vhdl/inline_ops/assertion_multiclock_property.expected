@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+inl mcp k1 f=9 s=21
+inl mcp k2 f=13 s=17
+inl mcp k3 f=12 s=17
+inl mcp k4 f=3 s=27
+inl mcp k5 f=5 s=25
+inl mcp k6 f=23 s=7
+inl mcp k7 f=26 s=3
+inl mcp k8 f=11 s=19
+inl mcp k9 f=5 s=25
+inl mcp k10 f=4 s=26
+inl mcp k11 f=2 s=28
+inl mcp k12 f=6 s=24
+inl mcp k13 f=16 s=14
+inl mcp k14 f=16 s=13
+inl mcp k15 f=5 s=25
+inl mcp k16 f=6 s=23
+inl mcp k17 f=14 s=15
+inl mcp k18 f=3 s=25
+inl mcp k19 f=6 s=24
+inl mcp k20 f=7 s=23
+inl mcp k21 f=12 s=18
+inl mcp k22 f=12 s=12
+inl mcp k23 f=8 s=21

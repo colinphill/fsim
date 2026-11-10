@@ -727,7 +727,14 @@ void VerilogParser::parse_typedef(
                 type.named_type, &TypeAliasDeclaration::name);
             if (aliased != unit.type_aliases.end()
                 && !aliased->type.packed_members.empty()) {
+                // A packed array of an aggregate keeps the typedef whose
+                // shape it copies, for the VPI typespec chain (IEEE
+                // 1800-2023 37.25 details 1, 8).
+                auto over = std::move(type.named_type);
                 type = aliased->type;
+                if (!type.systemverilog_packed_dimensions.empty()) {
+                    type.systemverilog_packed_over = std::move(over);
+                }
             }
         }
     } else if (keyword("virtual")) {

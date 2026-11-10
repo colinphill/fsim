@@ -1,0 +1,13 @@
+bits 4 4 4 8 2 32
+clog2 0 0 4 4 3 8
+count 2 2 1 8 0 1 1 0 1
+sign -2 4294967290 -1
+select 1 0 3 3 1 1 8 1 0 x 0 x 1 1
+concat 65 1010 010111
+cond 2 1xx0 7
+wild 1 1 1 0
+inside 0 1 1 0 x
+casez second
+casez u second
+casex second
+result=1

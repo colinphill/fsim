@@ -1891,19 +1891,21 @@ namespace {
             && std::ranges::all_of(text.substr(first_digit), [](const char value) { return value >= '0' && value <= '9'; });
     }
 
+    // A decimal integer as a `width`-bit two's complement (`is_signed`) or
+    // unsigned value: a container element, or an associative array's key.
     std::optional<runtime::PackedLogic4> parse_container_integer_element(
         const std::string_view text,
-        const runtime::simir::ContainerType& type,
+        const std::size_t width,
+        const bool is_signed,
         std::string& error)
     {
-        const auto width = static_cast<std::size_t>(type.element_width);
         if (width == 0 || width > 64 || !is_decimal_integer(text)) {
             error = "decimal integer is unsupported for this container element width";
             return std::nullopt;
         }
 
         std::uint64_t bits { };
-        if (type.signed_elements) {
+        if (is_signed) {
             auto numeric_text = text;
             if (numeric_text.starts_with('+')) {
                 numeric_text.remove_prefix(1);
@@ -1951,16 +1953,91 @@ namespace {
         return runtime::PackedLogic4::from_aval_bval(width, bits, 0);
     }
 
+    // One element of a container value written through `object write`:
+    // binary digits or a decimal integer for a packed element, the scalar's
+    // text for a scalar element, the text itself for a string element.
+    bool parse_container_element(
+        const ContainerValue& original,
+        const std::string& text,
+        ContainerValue& result,
+        std::string& error)
+    {
+        if (original.type.element_kind == ContainerElementKind::String) {
+            result.string_elements.push_back(text);
+            return true;
+        }
+        if (original.type.element_kind == ContainerElementKind::Packed) {
+            std::string packed_error;
+            auto packed = fsim::app::parse_value(
+                text, original.type.element_width, packed_error);
+            if (!packed && is_decimal_integer(text)) {
+                packed = parse_container_integer_element(text,
+                    original.type.element_width,
+                    original.type.signed_elements, error);
+            } else if (!packed) {
+                error = std::move(packed_error);
+            }
+            if (!packed) {
+                return false;
+            }
+            result.elements.push_back(std::move(*packed));
+            return true;
+        }
+        const auto scalar = runtime::scan_systemverilog_scalar(
+            text, original.type.scalar_kind);
+        if (!scalar) {
+            error = "container scalar value is invalid for its declared type";
+            return false;
+        }
+        auto encoded = runtime::encode_systemverilog_scalar_payload(scalar.value);
+        if (!encoded) {
+            error = "container scalar value cannot be encoded";
+            return false;
+        }
+        result.elements.push_back(std::move(encoded.value));
+        return true;
+    }
+
+    // An associative array's key as `object read` writes it: the string of
+    // a string index, else binary digits of the index width or a decimal
+    // integer. A key with an unknown bit names no element (IEEE 1800-2023
+    // 7.8.6).
+    std::optional<runtime::PackedLogic4> parse_associative_key(
+        const runtime::simir::ContainerType& type,
+        const std::string& text,
+        std::string& error)
+    {
+        std::string packed_error;
+        auto key = fsim::app::parse_value(text, type.index_width, packed_error);
+        if (!key && is_decimal_integer(text)) {
+            key = parse_container_integer_element(
+                text, type.index_width, type.signed_indices, error);
+        } else if (!key) {
+            error = std::move(packed_error);
+        }
+        if (!key) {
+            return std::nullopt;
+        }
+        if (key->is_logic9()
+            || std::ranges::any_of(key->bval_words(),
+                [](const std::uint64_t word) { return word != 0U; })) {
+            error = "associative array key has an unknown bit";
+            return std::nullopt;
+        }
+        return key;
+    }
+
+    // The value `object write` assigns a container: a Tcl list of its
+    // elements, in index order, for a fixed-size array (as many as it has),
+    // a dynamic array or a queue (its new size, IEEE 1800-2023 7.5, 7.10);
+    // a list of {key element} pairs for an associative array, which then
+    // holds exactly those entries (7.8).
     std::optional<ContainerValue> parse_container_value(
         Tcl_Interp* interpreter,
         const ContainerValue& original,
         Tcl_Obj* input,
         std::string& error)
     {
-        if (original.type.associative) {
-            error = "associative container mutation is unsupported";
-            return std::nullopt;
-        }
         if (original.type.element_kind == ContainerElementKind::Container
             || original.type.element_kind == ContainerElementKind::Aggregate) {
             error = "nested and aggregate container mutation is unsupported";
@@ -1984,45 +2061,88 @@ namespace {
         result.nested_elements.clear();
         result.keys.clear();
         result.string_keys.clear();
-        for (Tcl_Size index = 0; index < count; ++index) {
-            const std::string text { tcl_string(values[index]) };
-            if (original.type.element_kind == ContainerElementKind::String) {
-                result.string_elements.push_back(text);
-                continue;
-            }
-            if (original.type.element_kind == ContainerElementKind::Packed) {
-                std::string packed_error;
-                auto packed = fsim::app::parse_value(
-                    text, original.type.element_width, packed_error);
-                if (!packed && is_decimal_integer(text)) {
-                    packed = parse_container_integer_element(
-                        text, original.type, error);
-                } else if (!packed) {
-                    error = std::move(packed_error);
-                }
-                if (!packed) {
+        // The default (7.9.11) belongs to the array; a pair list names none.
+        if (original.type.associative) {
+            // Each entry parsed alone, then the entries in key order (7.8.2).
+            struct Entry {
+                runtime::PackedLogic4 key;
+                std::string string_key;
+                ContainerValue element;
+            };
+            std::vector<Entry> entries;
+            entries.reserve(static_cast<std::size_t>(count));
+            for (Tcl_Size index = 0; index < count; ++index) {
+                Tcl_Obj** pair { };
+                Tcl_Size parts { };
+                if (Tcl_ListObjGetElements(interpreter, values[index], &parts, &pair)
+                        != TCL_OK
+                    || parts != 2) {
+                    error = "associative array entry must be a {key value} pair";
                     return std::nullopt;
                 }
-                result.elements.push_back(std::move(*packed));
-                continue;
+                Entry entry;
+                entry.element.type = original.type;
+                const std::string key_text { tcl_string(pair[0]) };
+                if (original.type.string_indices) {
+                    entry.string_key = key_text;
+                } else {
+                    auto key = parse_associative_key(
+                        original.type, key_text, error);
+                    if (!key) {
+                        return std::nullopt;
+                    }
+                    entry.key = std::move(*key);
+                }
+                if (!parse_container_element(original,
+                        std::string { tcl_string(pair[1]) }, entry.element,
+                        error)) {
+                    return std::nullopt;
+                }
+                entries.push_back(std::move(entry));
             }
-            const auto scalar = runtime::scan_systemverilog_scalar(
-                text, original.type.scalar_kind);
-            if (!scalar) {
-                error = "container scalar value is invalid for its declared type";
-                return std::nullopt;
+            const auto less = [&](const Entry& left, const Entry& right) {
+                return original.type.string_indices
+                    ? left.string_key < right.string_key
+                    : runtime::simir::associative_index_key_less(
+                          original.type, left.key, right.key);
+            };
+            std::ranges::stable_sort(entries, less);
+            for (std::size_t index = 1U; index < entries.size(); ++index) {
+                if (!less(entries[index - 1U], entries[index])) {
+                    error = "associative array value names a key twice";
+                    return std::nullopt;
+                }
             }
-            auto encoded = runtime::encode_systemverilog_scalar_payload(scalar.value);
-            if (!encoded) {
-                error = "container scalar value cannot be encoded";
-                return std::nullopt;
+            for (auto& entry : entries) {
+                if (original.type.string_indices) {
+                    result.string_keys.push_back(std::move(entry.string_key));
+                } else {
+                    result.keys.push_back(std::move(entry.key));
+                }
+                if (original.type.element_kind == ContainerElementKind::String) {
+                    result.string_elements.push_back(
+                        std::move(entry.element.string_elements.front()));
+                } else {
+                    result.elements.push_back(
+                        std::move(entry.element.elements.front()));
+                }
             }
-            result.elements.push_back(std::move(encoded.value));
+        } else {
+            for (Tcl_Size index = 0; index < count; ++index) {
+                if (!parse_container_element(original,
+                        std::string { tcl_string(values[index]) }, result,
+                        error)) {
+                    return std::nullopt;
+                }
+            }
         }
-        if (!original.type.fixed) {
+        if (!original.type.fixed && !original.type.associative) {
+            // The new size, keeping the parsed elements: a resize without
+            // them would give every element its default value.
             try {
-                runtime::simir::resize_container_value(result,
-                    static_cast<std::size_t>(count));
+                const auto parsed = result;
+                runtime::simir::resize_container_value(
+                    result, static_cast<std::size_t>(count), &parsed);
             } catch (const std::exception& exception) {
                 error = exception.what();
                 return std::nullopt;

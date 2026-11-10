@@ -3,9 +3,12 @@
 // Run-state save and restart of the static kernel (#128; IEEE 1800-2023 D.9,
 // IEEE 1076-2019 20.7-20.9; S5). Two sections:
 //
-//   kernel.values  the slot arena and the published outputs (the existing
-//                  value section, restored in place because compiled code
-//                  holds the arrays' addresses)
+//   kernel.values  the slot arena and the published values of the design's
+//                  outputs (the existing value section, restored in place
+//                  because compiled code holds the arrays' addresses); the
+//                  outputs a watch added during the run are the observers',
+//                  not run state, and take the restored values in
+//                  rearm_run_state
 //   kernel.state   per member: registers, call stack, frames, deopt state;
 //                  thread slots with their callable contexts and fork
 //                  bookkeeping; waiters; delay timers, VHDL timers and hosted
@@ -97,6 +100,14 @@ void Kernel::audit_run_state(std::vector<std::string>& messages) const
     busy(!pending_dissolves_.empty(), "pending dissolve list");
     FSIM_RS_IDLE("kernel.impl", yield_wakes_);
     busy(!yield_wakes_.empty(), "yield list");
+    // A debugger plan's noted writes are published at every debug point,
+    // suspension, NBA update and activation end (flush_debug_writes).
+    FSIM_RS_IDLE("kernel.impl", debug_writes_);
+    busy(!debug_writes_.empty(), "debugger write list");
+    FSIM_RS_IDLE("kernel.impl", debug_write_pending_);
+    busy(std::ranges::any_of(debug_write_pending_,
+             [](const std::uint8_t pending) { return pending != 0U; }),
+        "debugger write list");
     FSIM_RS_IDLE("kernel.impl", hosted_active_);
     busy(!hosted_active_.empty(), "hosted Active queue");
     FSIM_RS_IDLE("kernel.impl", hosted_inactive_);
@@ -207,12 +218,11 @@ void Kernel::audit_run_state(std::vector<std::string>& messages) const
     // The host-region handshake: each flag is the other side of a scheduler
     // event that must have run (the kernel.nonblocking and kernel.hosted_*
     // events are derived, so a save with one pending would lose it).
-    FSIM_RS_IDLE("kernel.impl", host_nba_wakes_);
     FSIM_RS_IDLE("kernel.impl", nonblocking_after_host_);
     FSIM_RS_IDLE("kernel.impl", nonblocking_deferred_);
     FSIM_RS_IDLE("kernel.impl", nonblocking_region_);
     FSIM_RS_IDLE("kernel.impl", in_host_nonblocking_region_);
-    busy(host_nba_wakes_ || nonblocking_after_host_ || nonblocking_deferred_
+    busy(nonblocking_after_host_ || nonblocking_deferred_
             || nonblocking_region_ || in_host_nonblocking_region_,
         "host nonblocking region");
     FSIM_RS_IDLE("kernel.impl", hosted_inactive_task_);
@@ -317,7 +327,6 @@ void Kernel::run_state_io(RunStateArchive& ar)
     FSIM_RS_TABLE("kernel.impl", slots_, ar, *this, [&](Slot& slot) {
         FSIM_RS_IO("kernel.slot", edge_seen, ar, slot);
         FSIM_RS_IO("kernel.slot", vhdl_written, ar, slot);
-        FSIM_RS_IO("kernel.slot", published, ar, slot);
         FSIM_RS_IO("kernel.slot", deferred_write, ar, slot);
         FSIM_RS_IO("kernel.slot", last_writer, ar, slot);
     });
@@ -631,6 +640,9 @@ bool Kernel::restore_run_state(
 
 void Kernel::rearm_run_state()
 {
+    // The outputs this run's own watches added take the restored values
+    // (the file holds the design's outputs only, record_value_section).
+    resync_watched_outputs();
     // The doorbells are not in the file. Forget the ones the freshly started
     // kernel armed (the scheduler discarded them), then arm them again for the
     // saved timers and flags.

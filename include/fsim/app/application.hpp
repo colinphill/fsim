@@ -1318,6 +1318,13 @@ public:
     /// forced report excludes bits only an assign holds.
     [[nodiscard]] bool signal_is_assigned(
         runtime::simir::SignalId signal) const;
+    /// The v4 static kernel owns the signal in this run: its value lives in
+    /// the kernel's slots, and reads, deposits, forces and change observers
+    /// reach it through the kernel's run-time access
+    /// (docs/engine-v4-semantics.md S19). False under the reference
+    /// interpreter and for a signal the host keeps.
+    [[nodiscard]] bool signal_kernel_owned(
+        runtime::simir::SignalId signal) const;
 
     void start();
     [[nodiscard]] runtime::RunResult run(
@@ -1487,6 +1494,13 @@ public:
     /// Stub kept for API compatibility: no-op (no background compilation).
     void await_all_native_compilation() const;
     void set_signal_change_hook(SignalChangeHook hook);
+    /// While a signal change hook or observer runs: the process whose write
+    /// made the change, when one did (Interpreter::signal_change_writer).
+    /// The changes of one process in one delta cycle come in the order its
+    /// statements executed in either engine (IEEE 1800-2023 4.6 a), b));
+    /// those of different processes in the engine's own order (4.7).
+    [[nodiscard]] std::optional<runtime::simir::ProcessId>
+    signal_change_writer() const noexcept;
     /// Signal change observers see every later change of these signals,
     /// also of those the v4 kernel owns (docs/engine-v4-semantics.md S19).
     /// A watch lasts for the rest of the run.

@@ -1555,12 +1555,15 @@ endmodule
                 }),
         "executable property value formals and actuals are accepted");
 
-    const auto supported_locals = parse_text(
-        "supported-executable-property-locals.sv",
-        R"(module supported_locals(
+    // Properties with local variables run on the concurrent-property
+    // monitor (IEEE 1800-2023 16.10): each directive becomes a monitor
+    // process whose tick evaluates the automaton, with the subroutine-call
+    // match items run from the process (16.11).
+    constexpr std::string_view locals_module_head = R"(module supported_locals(
     input logic clock, request,
     input logic [136:0] wide_value);
-  task automatic record_match(input int value); endtask
+)";
+    constexpr std::string_view locals_module_body = R"(  task automatic record_match(input int value); endtask
   property requested(logic value);
     int attempt = value;
     logic [136:0] captured = wide_value;
@@ -1585,179 +1588,154 @@ endmodule
   sequence_property: assert property (matched_request);
   delayed_sequence_property: assert property (delayed_matched_request);
 endmodule
-)",
-        Language::SystemVerilog2017);
-    const Process* local_process { nullptr };
-    const Process* sequence_process { nullptr };
-    const Process* delayed_sequence_process { nullptr };
-    if (!supported_locals.design.units.empty()) {
-        for (const auto& process : supported_locals.design.units.front().processes) {
-            if (process.name == "local_property") {
-                local_process = &process;
-            } else if (process.name == "sequence_property") {
-                sequence_process = &process;
-            } else if (process.name == "delayed_sequence_property") {
-                delayed_sequence_process = &process;
+)";
+    const auto statement_tree_any
+        = [](const auto& self, const Statement& statement,
+              const auto& predicate) -> bool {
+        if (predicate(statement)) {
+            return true;
+        }
+        const auto child = [&](const Statement& nested) {
+            return self(self, nested, predicate);
+        };
+        return std::ranges::any_of(statement.statements, child)
+            || std::ranges::any_of(statement.else_statements, child)
+            || std::ranges::any_of(statement.case_alternatives,
+                [&](const auto& alternative) {
+                    return std::ranges::any_of(alternative.statements, child);
+                });
+    };
+    const auto process_has = [&](const Process* process,
+                                 const auto& predicate) {
+        return process != nullptr
+            && std::ranges::any_of(process->statements,
+                [&](const Statement& statement) {
+                    return statement_tree_any(
+                        statement_tree_any, statement, predicate);
+                });
+    };
+    const auto is_monitor_tick = [](const Statement& statement) {
+        return statement.kind == StatementKind::Assignment
+            && statement.value.kind == ExpressionKind::Call
+            && statement.value.text == "$__fsim_sva_tick";
+    };
+    const auto find_process = [](const auto& result, std::string_view name) {
+        const Process* found { nullptr };
+        if (!result.design.units.empty()) {
+            for (const auto& process : result.design.units.front().processes) {
+                if (process.name == name) {
+                    found = &process;
+                }
             }
         }
+        return found;
+    };
+    // Each local is a variable of the monitor process's block under its
+    // unique name (`__fsim_lvN`), with its declared type.
+    const auto local_widths = [&](const Process* process) {
+        std::vector<std::uint64_t> widths;
+        (void)process_has(process, [&](const Statement& statement) {
+            for (const auto& variable : statement.declarations) {
+                if (variable.name.starts_with("__fsim_lv")) {
+                    widths.push_back(variable.type.width().value_or(0U));
+                }
+            }
+            return false;
+        });
+        std::ranges::sort(widths);
+        return widths;
+    };
+
+    // Without a default clocking, the two directives whose properties give
+    // no clock are illegal: no clock can be inferred for them (16.16, the
+    // example "illegal if it is not within the scope of a default clocking
+    // because no clock can be inferred"; neither is procedural, 16.14.6, and
+    // no let, sequence or property formal supplies a clocking event).
+    const auto unclocked_locals = parse_text(
+        "unclocked-executable-property-locals.sv",
+        std::string { locals_module_head } + std::string { locals_module_body },
+        Language::SystemVerilog2017);
+    std::string unclocked_failure;
+    std::vector<std::size_t> no_clock_lines;
+    for (const auto& diagnostic : unclocked_locals.diagnostics) {
+        unclocked_failure += " " + diagnostic.code + ":" + diagnostic.message;
+        if (diagnostic.code == "FSIM-SV-SEM-472") {
+            no_clock_lines.push_back(diagnostic.span.begin.line);
+        }
     }
+    std::ranges::sort(no_clock_lines);
+    require(
+        no_clock_lines == std::vector<std::size_t> { 25U, 26U }
+            && std::ranges::none_of(
+                unclocked_locals.diagnostics,
+                [](const Diagnostic& diagnostic) {
+                    return diagnostic.code == "FSIM-SV-SEM-199"
+                        || diagnostic.code == "FSIM-SV-SEM-200";
+                }),
+        "unclocked properties with local variables report that no clock can be inferred"
+            + unclocked_failure);
+    require(
+        process_has(find_process(unclocked_locals, "delayed_sequence_property"),
+            is_monitor_tick),
+        "a clocked property with local variables is a monitor process");
+
+    // Under a default clocking every directive has a clock.
+    const auto supported_locals = parse_text(
+        "supported-executable-property-locals.sv",
+        std::string { locals_module_head }
+            + "  default clocking @(posedge clock); endclocking\n"
+            + std::string { locals_module_body },
+        Language::SystemVerilog2017);
     std::string local_failure;
     for (const auto& diagnostic : supported_locals.diagnostics) {
         local_failure += " " + diagnostic.code + ":" + diagnostic.message;
     }
+    const auto* local_process = find_process(supported_locals, "local_property");
+    const auto* sequence_process
+        = find_process(supported_locals, "sequence_property");
+    const auto* delayed_sequence_process
+        = find_process(supported_locals, "delayed_sequence_property");
     require(
         supported_locals.ok()
-            && std::ranges::none_of(
-                supported_locals.diagnostics,
-                [](const Diagnostic& diagnostic) {
-                    return diagnostic.code == "FSIM-SV-SEM-199";
-                })
-            && local_process != nullptr
-            && local_process->variables.size() == 2U
-            && local_process->variables[0].name == "attempt"
-            && local_process->variables[0].type.width() == 32U
-            && local_process->variables[1].name == "captured"
-            && local_process->variables[1].type.width() == 137U
-            && std::ranges::any_of(
-                local_process->statements,
-                [](const Statement& statement) {
-                    if (statement.kind != StatementKind::Fork
-                        || !statement.fork_isolate_register_frame
-                        || statement.fork_join_kind != ForkJoinKind::None
-                        || statement.statements.size() != 1U) {
-                        return false;
-                    }
-                    const auto& branch = statement.statements.front();
-                    return branch.kind == StatementKind::Block
-                        && branch.statements.size() >= 3U
-                        && branch.statements[0].kind
-                        == StatementKind::Assignment
-                        && branch.statements[1].kind
-                        == StatementKind::Assignment
-                        && branch.statements.back().kind
-                        == StatementKind::Assert;
-                }),
-        "property locals retain arbitrary-width types and per-attempt initializer assignments"
+            && process_has(local_process, is_monitor_tick)
+            && process_has(sequence_process, is_monitor_tick)
+            && process_has(delayed_sequence_process, is_monitor_tick),
+        "properties with local variables are concurrent-property monitor processes"
             + local_failure);
-    const auto is_reactive_sequence_evaluation = [](const Statement& evaluation) {
-        return evaluation.kind == StatementKind::Assert
-            && evaluation.statements.size() >= 6U
-            && std::ranges::count(
-                   evaluation.statements,
-                   StatementKind::Assignment,
-                   &Statement::kind)
-            == 3
-            && evaluation.statements[0].kind == StatementKind::Display
-            && evaluation.statements[0].output_text.starts_with(
-                "\x1f"
-                "fsim.concurrent-assertion|")
-            && evaluation.statements[1].kind == StatementKind::Display
-            && evaluation.statements[1].output_text.starts_with(
-                "\x1f"
-                "fsim.concurrent-assertion-action-region|")
-            && evaluation.statements[2].target.text == "match_count"
-            && evaluation.statements[3].value.kind
-            == ExpressionKind::Binary
-            && evaluation.statements[4].value.kind
-            == ExpressionKind::Binary
-            && evaluation.statements[5].kind == StatementKind::TaskCall
-            && evaluation.statements[5].task_name == "record_match";
-    };
-    const auto statement_tree_has_reactive_sequence_evaluation
-        = [&](const auto& self, const Statement& statement) -> bool {
-        if (is_reactive_sequence_evaluation(statement)) {
-            return true;
-        }
-        return std::ranges::any_of(
-                   statement.statements,
-                   [&](const Statement& child) {
-                       return self(self, child);
-                   })
-            || std::ranges::any_of(
-                statement.else_statements,
-                [&](const Statement& child) {
-                    return self(self, child);
-                });
-    };
-    const auto statement_tree_has_local_sequence_attempt
-        = [&](const auto& self, const Statement& statement) -> bool {
-        if (statement.kind == StatementKind::Fork
-            && statement.fork_isolate_register_frame
-            && statement.fork_join_kind == ForkJoinKind::None
-            && statement.statements.size() == 1U
-            && statement.statements.front().kind == StatementKind::Block) {
-            const auto& branch = statement.statements.front();
-            const auto initializer = std::ranges::find_if(
-                branch.statements,
-                [](const Statement& child) {
-                    return child.kind == StatementKind::Assignment
-                        && child.target.text == "match_count";
-                });
-            const auto evaluation = std::ranges::find_if(
-                branch.statements,
-                [&](const Statement& child) {
-                    return statement_tree_has_reactive_sequence_evaluation(
-                        statement_tree_has_reactive_sequence_evaluation, child);
-                });
-            if (initializer != branch.statements.end()
-                && evaluation != branch.statements.end()
-                && initializer < evaluation) {
-                return true;
-            }
-        }
-        return std::ranges::any_of(
-                   statement.statements,
-                   [&](const Statement& child) {
-                       return self(self, child);
-                   })
-            || std::ranges::any_of(
-                statement.else_statements,
-                [&](const Statement& child) {
-                    return self(self, child);
-                });
-    };
     require(
-        sequence_process != nullptr
-            && sequence_process->variables.size() == 1U
-            && sequence_process->variables.front().name == "match_count"
-            && std::ranges::any_of(
-                sequence_process->statements,
-                [&](const Statement& statement) {
-                    return statement_tree_has_local_sequence_attempt(
-                        statement_tree_has_local_sequence_attempt, statement);
-                }),
-        "sequence first_match assignments, updates, and calls execute in the reactive action region after the observed outcome");
-    const auto statement_tree_has_target
-        = [&](const auto& self, const Statement& statement,
-              const std::string_view target) -> bool {
-        if (statement.kind == StatementKind::Assignment
-            && statement.target.text == target) {
-            return true;
-        }
-        return std::ranges::any_of(
-                   statement.statements,
-                   [&](const Statement& child) {
-                       return self(self, child, target);
-                   })
-            || std::ranges::any_of(
-                statement.else_statements,
-                [&](const Statement& child) {
-                    return self(self, child, target);
-                });
-    };
+        local_widths(local_process) == std::vector<std::uint64_t> { 32U, 137U }
+            && local_widths(sequence_process) == std::vector<std::uint64_t> { 32U }
+            && local_widths(delayed_sequence_process)
+                == std::vector<std::uint64_t> { 32U },
+        "property locals retain their declared types and arbitrary widths:"
+            + [&] {
+                  std::string listed;
+                  for (const auto* process :
+                      { local_process, sequence_process,
+                          delayed_sequence_process }) {
+                      listed += " |";
+                      for (const auto width : local_widths(process)) {
+                          listed += " " + std::to_string(width);
+                      }
+                  }
+                  return listed;
+              }());
+    // The subroutine-call match item runs from the monitor process in the
+    // Reactive region (16.11).
     require(
-        delayed_sequence_process != nullptr
-            && delayed_sequence_process->variables.size() == 1U
-            && delayed_sequence_process->variables.front().name
-                == "delayed_count"
-            && std::ranges::any_of(
-                delayed_sequence_process->statements,
-                [&](const Statement& statement) {
-                    return statement_tree_has_target(
-                        statement_tree_has_target,
-                        statement, "delayed_count");
+        process_has(sequence_process,
+            [](const Statement& statement) {
+                return statement.kind == StatementKind::TaskCall
+                    && statement.task_name == "record_match";
+            })
+            && process_has(sequence_process,
+                [](const Statement& statement) {
+                    return statement.kind == StatementKind::Display
+                        && statement.output_text.starts_with(
+                            "\x1f"
+                            "fsim.concurrent-assertion-call-region|");
                 }),
-        "ranged first_match sequences update attempt locals only after a completed match");
+        "a first_match subroutine-call match item is run from the monitor process");
 
     const auto unsupported_type = parse_text(
         "unsupported-executable-property-type.sv",
@@ -1943,6 +1921,65 @@ endmodule
         Language::SystemVerilog2017);
     require(count_code(automatic_clock, "FSIM-SV-SEM-471") == 1,
         "an automatic variable in a clocking event is illegal");
+
+    // A sampled value function other than $sampled in a disable condition or
+    // a clock expression shall be explicitly clocked (IEEE 1800-2023 16.9.3,
+    // 16.12): no clock is inferred there.
+    const auto unclocked_disable = parse_text(
+        "sampled-unclocked-disable.sv",
+        R"(module sampled_unclocked_disable(input logic clock, reset, a, b);
+  property p1; @(posedge clock) disable iff ($rose(reset)) a |=> b; endproperty
+  a1: assert property (p1);
+  a2: assert property (@(posedge clock) disable iff ($past(reset, 2)) a);
+  c1: cover sequence (@(posedge clock) disable iff ($changed(reset)) a ##1 b);
+endmodule
+)",
+        Language::SystemVerilog2017);
+    require(count_code(unclocked_disable, "FSIM-SV-SEM-473") == 3,
+        "$rose, $past and $changed without a clocking argument in disable iff are errors");
+    const auto unclocked_default_disable = parse_text(
+        "sampled-unclocked-default-disable.sv",
+        R"(module sampled_unclocked_default(input logic clock, reset, a);
+  default clocking cb @(posedge clock); endclocking
+  default disable iff $fell(reset);
+  a1: assert property (a);
+endmodule
+)",
+        Language::SystemVerilog2017);
+    require(count_code(unclocked_default_disable, "FSIM-SV-SEM-473") == 1,
+        "$fell without a clocking argument in default disable iff is an error");
+    const auto unclocked_clock = parse_text(
+        "sampled-unclocked-clock.sv",
+        R"(module sampled_unclocked_clock(input logic clock, enable, a, b);
+  sequence s1; @(posedge clock iff $stable(enable)) a ##1 b; endsequence
+  a1: assert property (@(posedge clock iff $past(enable)) a);
+  a2: assert property (s1);
+  always @(posedge clock) begin
+    a3: assert property (@(negedge clock iff $rose(enable)) b);
+  end
+endmodule
+)",
+        Language::SystemVerilog2017);
+    require(count_code(unclocked_clock, "FSIM-SV-SEM-473") == 3,
+        "$stable, $past and $rose without a clocking argument in a clock expression are errors");
+    const auto explicitly_clocked = parse_text(
+        "sampled-explicitly-clocked.sv",
+        R"(module sampled_explicit(input logic clock, reset, enable, a, b);
+  default clocking cb @(posedge clock); endclocking
+  default disable iff $fell(reset, @(posedge clock));
+  property p1;
+    @(posedge clock) disable iff ($rose(reset, @(posedge clock))) a |=> $rose(b);
+  endproperty
+  a1: assert property (p1);
+  a2: assert property (@(posedge clock iff $past(enable, 1, 1'b1, @(negedge clock)))
+      disable iff ($sampled(reset) || $changed(reset, @cb)) a ##1 $stable(b));
+  a3: assert property (@(posedge clock) disable iff ($past(reset, 2, , @(posedge clock))) a);
+endmodule
+)",
+        Language::SystemVerilog2017);
+    require(count_code(explicitly_clocked, "FSIM-SV-SEM-473") == 0
+            && explicitly_clocked.ok(),
+        "explicitly clocked sampled value functions, $sampled, and inferred clocks in the property body are legal");
 
     std::string resource_source {
         "module assertion_resource(input logic request);\n"

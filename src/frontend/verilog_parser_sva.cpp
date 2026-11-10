@@ -19,6 +19,7 @@
 #include <functional>
 #include <iostream>
 #include <map>
+#include <set>
 #include <string>
 #include <utility>
 
@@ -67,13 +68,23 @@ enum class NodeKind : std::uint8_t {
     // A named sequence or property instance kept as such (the published
     // tree, IEEE 1800-2023 37.50-37.54) instead of expanded.
     instance,
-    // The published tree only (`keep_instances`): `@(c) p` over a property,
-    // or one that restates the clock in effect (37.52 clocked property), a
-    // property `case` with its items (37.52 case property, case property
-    // item). The plan builders never see them.
+    // `@(c) p` over a property: p on clock `clock` (16.13.2, 16.13.3). The
+    // published tree (`keep_instances`) also uses it for one that restates
+    // the clock in effect (37.52 clocked property).
     clocked_property,
+    // The published tree only: a property `case` with its items (37.52 case
+    // property, case property item). The plan builders never see them.
     case_property,
     case_item,
+    // `(s, item, ...)`: sequence s with the match items in actual_tokens
+    // performed at the end of each match (IEEE 1800-2023 16.10, 16.11); a
+    // `leading` one holds the initialization assignments of a named
+    // sequence instance's local variables, performed when the instance's
+    // evaluation begins.
+    match_items,
+    // A property instance whose local variables have initialization
+    // assignments (actual_tokens), performed when its evaluation begins.
+    initialized,
 };
 
 struct Node {
@@ -116,6 +127,7 @@ struct Node {
     case NodeKind::throughout:
     case NodeKind::first_match:
     case NodeKind::clocked:
+    case NodeKind::match_items:
         return true;
     default:
         return false;
@@ -162,7 +174,267 @@ struct ParseContext {
     std::uint32_t current_clock { };
     // Keep a named instance as an instance node (the published tree).
     bool keep_instances { };
+    // Each clock's identity (ResolvedClock::identity), parallel to clocks.
+    std::vector<std::string> clock_identities { };
+    // The scopes the names of the clocking events resolve in, the module
+    // first (SvaNameScope), and the one the tokens being parsed are written
+    // in: the directive's (the last) or an instantiated declaration's.
+    std::vector<SvaNameScope> scopes { };
+    std::size_t origin { };
+    // The local variables of the property (IEEE 1800-2023 16.10): each
+    // declaration's locals are renamed to names unique in the property
+    // (`__fsim_lvN`, N the index), so every instance has its own copy.
+    struct Local {
+        std::string name;
+        std::vector<Token> type;
+    };
+    std::vector<Local> locals { };
+    std::set<std::string, std::less<>> local_names { };
+    // Whether the property uses local variables or match items.
+    bool uses_locals { };
 };
+
+// Whether `tokens` reference one of `names` (not as a member after `.`).
+[[nodiscard]] bool mentions_local(const std::span<const Token> tokens,
+    const std::set<std::string, std::less<>>& names)
+{
+    for (std::size_t position = 0; position < tokens.size(); ++position) {
+        if (tokens[position].kind == TokenKind::Identifier
+            && names.contains(tokens[position].text)
+            && (position == 0U
+                || tokens[position - 1U].kind != TokenKind::Dot)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// `tokens` with each name of `names` (not a member after `.`) replaced.
+[[nodiscard]] std::vector<Token> renamed(std::vector<Token> tokens,
+    const std::map<std::string, std::string, std::less<>>& names)
+{
+    for (std::size_t position = 0; position < tokens.size(); ++position) {
+        auto& token = tokens[position];
+        if (token.kind != TokenKind::Identifier
+            || (position > 0U && tokens[position - 1U].kind == TokenKind::Dot)) {
+            continue;
+        }
+        if (const auto found = names.find(token.text); found != names.end()) {
+            token.text = found->second;
+        }
+    }
+    return tokens;
+}
+
+// The keywords of an event expression (9.4.2); every other identifier that
+// starts a name is a name.
+[[nodiscard]] bool event_keyword(const Token& token)
+{
+    return token_is_keyword(token, "posedge") || token_is_keyword(token, "negedge")
+        || token_is_keyword(token, "edge") || token_is_keyword(token, "iff")
+        || token_is_keyword(token, "or");
+}
+
+// The scope (an index into `scopes`) a name written in scope `origin`
+// resolves to: the innermost from `origin` outwards that declares it (23.9);
+// none when it names nothing the assertion's scopes declare (a hierarchical
+// name's first part that is no local instance, a package or $root).
+[[nodiscard]] std::optional<std::size_t> name_scope(
+    const std::vector<SvaNameScope>& scopes, const std::string& name,
+    const std::size_t origin)
+{
+    if (scopes.empty()) {
+        return std::nullopt;
+    }
+    for (auto level = std::min(origin, scopes.size() - 1U) + 1U; level-- > 0U;) {
+        if (scopes[level].names.contains(name)) {
+            return level;
+        }
+    }
+    return std::nullopt;
+}
+
+// The scope a declaration of the unit's list belongs to (its index against
+// SvaNameScope::declarations_end); the innermost when the scopes do not
+// cover it.
+[[nodiscard]] std::size_t declaration_scope(const ParseContext& context,
+    const SystemVerilogAssertionDeclaration& declaration)
+{
+    const auto& declarations = context.unit.systemverilog_assertion_declarations;
+    const auto found = std::ranges::find_if(declarations,
+        [&](const SystemVerilogAssertionDeclaration& entry) {
+            return &entry == &declaration;
+        });
+    const auto index = static_cast<std::size_t>(found - declarations.begin());
+    for (std::size_t level = 0; level < context.scopes.size(); ++level) {
+        if (index < context.scopes[level].declarations_end) {
+            return level;
+        }
+    }
+    return context.scopes.empty() ? 0U : context.scopes.size() - 1U;
+}
+
+// Whether tokens [begin, end) are one name: identifiers joined by `.` or
+// `::`.
+[[nodiscard]] bool one_name(const std::span<const Token> tokens,
+    const std::size_t begin, const std::size_t end)
+{
+    if (begin >= end || tokens[begin].kind != TokenKind::Identifier) {
+        return false;
+    }
+    for (auto position = begin; position < end; ++position) {
+        const auto kind = tokens[position].kind;
+        const bool name = (position - begin) % 2U == 0U;
+        if (name ? kind != TokenKind::Identifier
+                 : kind != TokenKind::Dot && kind != TokenKind::Scope) {
+            return false;
+        }
+    }
+    return (end - begin) % 2U == 1U;
+}
+
+// A clocking event written in scope `origin`, resolved (16.13.1, 16.16.1):
+// `identity` is the event with each name replaced by the scope that declares
+// it and redundant parentheses left out, so two events are the same clock
+// only when they take the same edges of the same objects under the same iff
+// conditions, however they are spelled; `tokens` is the event as the
+// directive's scope (the last) reads it, a module-scope name that a
+// generate block redeclares qualified by the module's name (23.8).
+struct ResolvedClock {
+    std::string identity;
+    std::vector<Token> tokens;
+};
+
+[[nodiscard]] ResolvedClock resolve_clock(const DesignUnit& unit,
+    const std::vector<SvaNameScope>& scopes, const std::span<const Token> event,
+    const std::size_t origin)
+{
+    ResolvedClock result;
+    const auto innermost = scopes.empty() ? 0U : scopes.size() - 1U;
+    // Parentheses around the whole event or around one name.
+    std::vector<Token> tokens(event.begin(), event.end());
+    const auto clocking_event = [&]() -> std::optional<ResolvedClock> {
+        std::size_t begin { };
+        auto end = tokens.size();
+        while (end - begin >= 3U && tokens[begin].kind == TokenKind::LeftParen
+            && tokens[end - 1U].kind == TokenKind::RightParen) {
+            ++begin;
+            --end;
+        }
+        if (end - begin != 1U || tokens[begin].kind != TokenKind::Identifier
+            || event_keyword(tokens[begin])) {
+            return std::nullopt;
+        }
+        const auto level = name_scope(scopes, tokens[begin].text, origin);
+        if (!level) {
+            return std::nullopt;
+        }
+        const auto found
+            = scopes[*level].clocking_events.find(tokens[begin].text);
+        // A block whose event names itself, directly or through other
+        // blocks, keeps its name as its identity.
+        thread_local std::vector<const std::vector<Token>*> expanding;
+        if (found == scopes[*level].clocking_events.end()
+            || found->second.empty()
+            || std::ranges::find(expanding, &found->second)
+                != expanding.end()) {
+            return std::nullopt;
+        }
+        expanding.push_back(&found->second);
+        auto resolved = resolve_clock(unit, scopes, found->second, *level);
+        expanding.pop_back();
+        return resolved;
+    }();
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (std::size_t open = 0; open < tokens.size() && !changed; ++open) {
+            if (tokens[open].kind != TokenKind::LeftParen) {
+                continue;
+            }
+            std::size_t depth { };
+            std::size_t close = tokens.size();
+            for (auto position = open; position < tokens.size(); ++position) {
+                if (tokens[position].kind == TokenKind::LeftParen) {
+                    ++depth;
+                } else if (tokens[position].kind == TokenKind::RightParen
+                    && --depth == 0U) {
+                    close = position;
+                    break;
+                }
+            }
+            if (close == tokens.size()) {
+                break;
+            }
+            const bool whole = open == 0U && close + 1U == tokens.size();
+            const bool after_operator = open == 0U
+                || tokens[open - 1U].kind != TokenKind::Identifier
+                || event_keyword(tokens[open - 1U]);
+            if (whole || (after_operator && one_name(tokens, open + 1U, close))) {
+                tokens.erase(tokens.begin() + static_cast<std::ptrdiff_t>(close));
+                tokens.erase(tokens.begin() + static_cast<std::ptrdiff_t>(open));
+                changed = true;
+            }
+        }
+    }
+    for (std::size_t position = 0; position < tokens.size(); ++position) {
+        const auto& token = tokens[position];
+        if (!result.identity.empty()) {
+            result.identity += ' ';
+        }
+        const bool starts_name = token.kind == TokenKind::Identifier
+            && !event_keyword(token)
+            && (position == 0U
+                || (tokens[position - 1U].kind != TokenKind::Dot
+                    && tokens[position - 1U].kind != TokenKind::Scope))
+            && (position + 1U == tokens.size()
+                || tokens[position + 1U].kind != TokenKind::Scope);
+        if (!starts_name) {
+            result.identity += token.text;
+            continue;
+        }
+        // `m.x` inside module m names x of the module's scope (23.8).
+        if (token.text == unit.name && position + 2U < tokens.size()
+            && tokens[position + 1U].kind == TokenKind::Dot
+            && tokens[position + 2U].kind == TokenKind::Identifier
+            && !scopes.empty()
+            && !name_scope(scopes, token.text, origin)
+            && scopes.front().names.contains(tokens[position + 2U].text)) {
+            position += 2U;
+            result.identity += "@0:" + tokens[position].text;
+            continue;
+        }
+        const auto level = name_scope(scopes, token.text, origin);
+        result.identity += level ? "@" + std::to_string(*level) + ":" + token.text
+                                 : "@?:" + token.text;
+    }
+    // The tokens the directive's scope reads: a name of the module's scope
+    // that the directive's block redeclares is qualified by the module.
+    for (std::size_t position = 0; position < event.size(); ++position) {
+        const auto& token = event[position];
+        const bool starts_name = token.kind == TokenKind::Identifier
+            && !event_keyword(token)
+            && (position == 0U
+                || (event[position - 1U].kind != TokenKind::Dot
+                    && event[position - 1U].kind != TokenKind::Scope))
+            && (position + 1U == event.size()
+                || event[position + 1U].kind != TokenKind::Scope);
+        if (starts_name && origin != innermost
+            && name_scope(scopes, token.text, origin) == std::optional<std::size_t> { 0U }
+            && name_scope(scopes, token.text, innermost)
+                != std::optional<std::size_t> { 0U }) {
+            result.tokens.push_back(punctuation(token, TokenKind::Identifier, unit.name));
+            result.tokens.push_back(punctuation(token, TokenKind::Dot, "."));
+        }
+        result.tokens.push_back(token);
+    }
+    // A clocking block name, `@(cb)`, is the block's clocking event (IEEE
+    // 1800-2023 14.13, 16.16): the same clock as that event however it is
+    // written, its names resolved where the block declares them.
+    if (clocking_event) {
+        result.identity = std::move(clocking_event->identity);
+    }
+    return result;
+}
 
 // Builds the property tree of one token sequence; a named sequence or
 // property instance is expanded by a nested parser over its body.
@@ -180,7 +452,11 @@ public:
 
     [[nodiscard]] std::optional<std::size_t> parse()
     {
+        // The scope of a clocking event does not flow out of enclosing
+        // parentheses (16.13.3).
+        const auto enclosing = context_.current_clock;
         auto result = implication();
+        context_.current_clock = enclosing;
         if (result && position_ != tokens_.size()) {
             return fail("unexpected tokens after the property: "
                 + spelling(std::span<const Token> { tokens_ }.subspan(
@@ -261,6 +537,7 @@ private:
 
     std::optional<std::size_t> implication()
     {
+        const auto incoming = context_.current_clock;
         auto left = until();
         if (!left) {
             return left;
@@ -277,9 +554,20 @@ private:
         node.overlapped = implies ? at(TokenKind::Pipe)
                                   : at(TokenKind::Minus, 1);
         position_ += implies ? 2U : 3U;
+        // A clock that the antecedent changed to flows across the operator
+        // into the consequent (16.13.3).
+        const auto flowing = context_.current_clock;
         auto right = implication();
         if (!right) {
             return right;
+        }
+        if (!context_.keep_instances && flowing != incoming
+            && nodes_[*right].kind != NodeKind::clocked
+            && nodes_[*right].kind != NodeKind::clocked_property) {
+            right = clocked(flowing, right);
+            if (!right) {
+                return right;
+            }
         }
         node.operands = { *left, *right };
         return add(std::move(node));
@@ -287,6 +575,7 @@ private:
 
     std::optional<std::size_t> until()
     {
+        const auto incoming = context_.current_clock;
         auto left = iff();
         if (!left) {
             return left;
@@ -300,7 +589,11 @@ private:
             return left;
         }
         ++position_;
+        // The clock in effect distributes to the operands of a branching
+        // operator (16.13.3).
+        context_.current_clock = incoming;
         auto right = until();
+        context_.current_clock = incoming;
         if (!right) {
             return right;
         }
@@ -318,12 +611,15 @@ private:
 
     std::optional<std::size_t> iff()
     {
+        const auto incoming = context_.current_clock;
         auto left = disjunction();
         if (!left || !at_keyword("iff")) {
             return left;
         }
         ++position_;
+        context_.current_clock = incoming;
         auto right = iff();
+        context_.current_clock = incoming;
         if (!right) {
             return right;
         }
@@ -335,15 +631,19 @@ private:
 
     std::optional<std::size_t> disjunction()
     {
+        const auto incoming = context_.current_clock;
         auto left = conjunction();
         while (left && at_keyword("or")) {
             ++position_;
+            context_.current_clock = incoming;
             auto right = conjunction();
+            context_.current_clock = incoming;
             if (!right) {
                 return right;
             }
             Node node;
             node.kind = is_sequence(*left) && is_sequence(*right)
+                    && singly_clocked(*left, *right, incoming)
                 ? NodeKind::sequence_or
                 : NodeKind::disjunction;
             node.operands = { *left, *right };
@@ -354,15 +654,19 @@ private:
 
     std::optional<std::size_t> conjunction()
     {
+        const auto incoming = context_.current_clock;
         auto left = unary();
         while (left && at_keyword("and")) {
             ++position_;
+            context_.current_clock = incoming;
             auto right = unary();
+            context_.current_clock = incoming;
             if (!right) {
                 return right;
             }
             Node node;
             node.kind = is_sequence(*left) && is_sequence(*right)
+                    && singly_clocked(*left, *right, incoming)
                 ? NodeKind::sequence_and
                 : NodeKind::conjunction;
             node.operands = { *left, *right };
@@ -546,7 +850,9 @@ private:
                 return fail("a property if condition is not a boolean expression");
             }
             position_ = *close + 1U;
+            const auto incoming = context_.current_clock;
             auto then = implication();
+            context_.current_clock = incoming;
             if (!then) {
                 return then;
             }
@@ -554,6 +860,7 @@ private:
             if (at_keyword("else")) {
                 ++position_;
                 auto otherwise = implication();
+                context_.current_clock = incoming;
                 if (!otherwise) {
                     return otherwise;
                 }
@@ -835,7 +1142,7 @@ private:
             if (!bounds) {
                 return fail("a cycle delay is not a constant or range");
             }
-            auto right = repetition();
+            auto right = delay_operand();
             if (!right) {
                 return right;
             }
@@ -860,7 +1167,7 @@ private:
             if (!bounds) {
                 return fail("a cycle delay is not a constant or range");
             }
-            auto right = repetition();
+            auto right = delay_operand();
             if (!right) {
                 return right;
             }
@@ -875,6 +1182,16 @@ private:
             left = add(std::move(node));
         }
         return left;
+    }
+
+    // The right operand of a cycle delay, where a clocking event governs a
+    // sequence (`clocking_event sequence_expr`, 16.13.1).
+    std::optional<std::size_t> delay_operand()
+    {
+        const bool enclosing = std::exchange(delay_operand_, true);
+        auto result = repetition();
+        delay_operand_ = enclosing;
+        return result;
     }
 
     [[nodiscard]] bool at_repetition() const
@@ -1034,9 +1351,30 @@ private:
         const std::size_t close)
     {
         const auto inside = slice(open + 1U, close);
-        if (split_top_level(inside, TokenKind::Comma).size() > 1U) {
-            return fail("sequence match items are not yet evaluated by the "
-                        "concurrent-property monitor");
+        auto parts = split_top_level(inside, TokenKind::Comma);
+        if (parts.size() > 1U) {
+            if (context_.keep_instances) {
+                return fail("sequence match items are not yet evaluated by "
+                            "the concurrent-property monitor");
+            }
+            // `(s, item, ...)`: the items run at the end of each match of s
+            // (16.10, 16.11).
+            context_.uses_locals = true;
+            TreeParser inner { nodes_, parts.front(), context_, path_ };
+            auto operand = inner.parse();
+            position_ = close + 1U;
+            if (!operand) {
+                return operand;
+            }
+            if (!is_sequence(*operand)) {
+                return fail("match items follow a property, not a sequence");
+            }
+            Node node;
+            node.kind = NodeKind::match_items;
+            node.operands = { *operand };
+            node.actual_tokens.assign(std::make_move_iterator(parts.begin() + 1),
+                std::make_move_iterator(parts.end()));
+            return add(std::move(node));
         }
         TreeParser inner { nodes_, inside, context_, path_ };
         auto result = inner.parse();
@@ -1073,6 +1411,13 @@ private:
             if (!close) {
                 return fail("an operand list is unbalanced");
             }
+            // Only first_match takes match items (16.9.8).
+            if (node.kind != NodeKind::first_match
+                && split_top_level(slice(position_ + 1U, *close), TokenKind::Comma)
+                        .size()
+                    > 1U) {
+                return fail("strong and weak take one sequence");
+            }
             auto operand = nested(position_, *close);
             if (!operand) {
                 return operand;
@@ -1086,7 +1431,7 @@ private:
         if (at(TokenKind::At)) {
             // A clocking event applies to the rest of its operand. Another
             // clock than the one in effect makes a multiclocked sequence
-            // (16.13.1); multiclocked properties are not evaluated.
+            // (16.13.1) or property (16.13.2).
             ++position_;
             std::vector<Token> event;
             if (at(TokenKind::LeftParen)) {
@@ -1120,6 +1465,21 @@ private:
                 node.clock = clock;
                 node.operands = { *operand };
                 return add(std::move(node));
+            }
+            if (std::exchange(delay_operand_, false)) {
+                // After `##1` or `##0` the clocking event governs the
+                // longest sequence that follows, and its clock flows on
+                // to the right across the linear operators after it (an
+                // implication or followed-by, 16.13.3) up to the
+                // enclosing parentheses.
+                const auto enclosing
+                    = std::exchange(context_.current_clock, clock);
+                auto operand = disjunction();
+                delay_operand_ = true;
+                if (clock == enclosing || !operand) {
+                    return operand;
+                }
+                return clocked(clock, operand);
             }
             if (clock == context_.current_clock) {
                 return implication();
@@ -1169,10 +1529,6 @@ private:
             return fail("recursive sequence and property instances are not "
                         "yet evaluated by the concurrent-property monitor");
         }
-        if (!declaration.local_variables.empty()) {
-            return fail("assertion local variables are not yet evaluated by "
-                        "the concurrent-property monitor");
-        }
         if (declaration.disable) {
             return fail("disable iff of a nested property instance");
         }
@@ -1190,16 +1546,33 @@ private:
             }
             position_ = *close + 1U;
         }
-        auto body = substituted_body(declaration, actuals, name);
+        // Each instance has its own copy of the declaration's local
+        // variables (16.10).
+        std::vector<std::vector<Token>> initializers;
+        std::optional<std::vector<Token>> body;
+        if (has_locals(declaration)) {
+            body.emplace();
+            if (auto error = declare_locals(context_, declaration, actuals,
+                    declaration.expression_tokens, *body, initializers)) {
+                return fail(std::move(*error));
+            }
+        } else {
+            body = substituted_body(declaration, actuals, name);
+        }
         if (!body) {
             return fail("the actual arguments of '" + declaration.name
                 + "' do not match its formals");
         }
+        // The declaration's names resolve in its own scope (16.8); an
+        // actual's in the instance's, which this does not tell apart.
+        const auto origin = std::exchange(context_.origin,
+            declaration_scope(context_, declaration));
         auto clock = context_.current_clock;
         if (declaration.clock) {
             const auto event = substituted(declaration, actuals,
                 declaration.clock->event_tokens);
             if (!event) {
+                context_.origin = origin;
                 return fail("the instance clock does not substitute");
             }
             clock = clock_index(*event);
@@ -1211,42 +1584,179 @@ private:
             context_, expanded_path(declaration) };
         auto operand = inner.parse();
         context_.current_clock = enclosing;
+        context_.origin = origin;
+        if (operand && !initializers.empty()) {
+            Node wrapper;
+            wrapper.kind = is_sequence(*operand) ? NodeKind::match_items
+                                                 : NodeKind::initialized;
+            wrapper.leading = true;
+            wrapper.operands = { *operand };
+            wrapper.actual_tokens = std::move(initializers);
+            operand = add(std::move(wrapper));
+        }
         if (clock == enclosing) {
             return operand;
         }
         return clocked(clock, operand);
     }
 
-    // The index of a clocking event among the property's clocks.
+    // The index of a clocking event among the property's clocks: an event
+    // identical to one of them (16.16.1: the same edges of the same objects
+    // under the same iff conditions, ResolvedClock) is that clock.
     std::uint32_t clock_index(const std::vector<Token>& event)
     {
-        const auto text = spelling(event);
-        for (std::size_t index = 0; index < context_.clocks.size(); ++index) {
-            if (spelling(context_.clocks[index]) == text) {
+        auto resolved = resolve_clock(context_.unit, context_.scopes, event,
+            context_.origin);
+        for (std::size_t index = 0; index < context_.clock_identities.size();
+             ++index) {
+            if (context_.clock_identities[index] == resolved.identity) {
                 return static_cast<std::uint32_t>(index);
             }
         }
-        context_.clocks.push_back(event);
+        context_.clocks.push_back(std::move(resolved.tokens));
+        context_.clock_identities.push_back(std::move(resolved.identity));
         return static_cast<std::uint32_t>(context_.clocks.size() - 1U);
     }
 
+    // `@(c) s` or `@(c) p`: a sequence on clock c is part of a multiclocked
+    // sequence (16.13.1), a property on it a clocked property (16.13.2).
     std::optional<std::size_t> clocked(const std::uint32_t clock,
         const std::optional<std::size_t> operand)
     {
         if (!operand) {
             return operand;
         }
-        if (!is_sequence(*operand)) {
-            return fail("a multiclocked property");
-        }
         Node node;
-        node.kind = NodeKind::clocked;
+        node.kind = is_sequence(*operand) ? NodeKind::clocked
+                                          : NodeKind::clocked_property;
         node.clock = clock;
         node.operands = { *operand };
         return add(std::move(node));
     }
 
 public:
+    // Whether `declaration` has local variables (16.10): assertion variable
+    // declarations or local input formal arguments (16.8.2).
+    static bool has_locals(const SystemVerilogAssertionDeclaration& declaration)
+    {
+        return !declaration.local_variables.empty()
+            || std::ranges::any_of(declaration.formals, local_input);
+    }
+
+    // The data type of a local formal argument without its direction, and
+    // whether the formal is a local input: `local [input] type name`
+    // (16.8.2). A local inout or output formal binds the local variable
+    // given as its actual (16.8.2: the actual shall be a local variable),
+    // which substitution expresses directly.
+    static bool local_input(const SystemVerilogAssertionFormal& formal)
+    {
+        if (!formal.local) {
+            return false;
+        }
+        return formal.type_tokens.empty()
+            || (formal.type_tokens.front().text != "inout"
+                && formal.type_tokens.front().text != "output");
+    }
+
+    // Gives the local variables of `declaration` (16.10) their unique names
+    // in the property and records them: `body` is `raw` renamed, then with
+    // the formals substituted, and each initialization assignment becomes
+    // `name = (expression)` in `initializers`: the local input formals'
+    // first, then the declared variables' in declaration order (16.10). The
+    // error, if any.
+    static std::optional<std::string> declare_locals(ParseContext& context,
+        const SystemVerilogAssertionDeclaration& declaration,
+        const std::vector<std::vector<Token>>& actuals,
+        const std::span<const Token> raw, std::vector<Token>& body,
+        std::vector<std::vector<Token>>& initializers)
+    {
+        context.uses_locals = true;
+        std::map<std::string, std::string, std::less<>> names;
+        const auto declare = [&](const std::string& name,
+                                 std::vector<Token> type,
+                                 std::optional<std::vector<Token>> value,
+                                 const Token& model) {
+            const auto unique = "__fsim_lv" + std::to_string(context.locals.size());
+            if (value) {
+                std::vector<Token> item;
+                Token target = model;
+                target.kind = TokenKind::Identifier;
+                target.text = unique;
+                item.push_back(std::move(target));
+                item.push_back(punctuation(model, TokenKind::Assign, "="));
+                item.push_back(punctuation(model, TokenKind::LeftParen, "("));
+                item.insert(item.end(), value->begin(), value->end());
+                item.push_back(punctuation(model, TokenKind::RightParen, ")"));
+                initializers.push_back(std::move(item));
+            }
+            names[name] = unique;
+            context.locals.push_back({ unique, std::move(type) });
+            context.local_names.insert(unique);
+        };
+        // A local input formal is initialized with its actual's value when
+        // the instance begins (16.8.2).
+        for (const auto& formal : declaration.formals) {
+            if (!local_input(formal)) {
+                continue;
+            }
+            std::vector<Token> type = formal.type_tokens;
+            if (!type.empty() && type.front().text == "input") {
+                type.erase(type.begin());
+            }
+            if (type.empty()) {
+                return "the local formal argument '" + formal.name
+                    + "' has no data type";
+            }
+            Token reference;
+            reference.kind = TokenKind::Identifier;
+            reference.text = formal.name;
+            reference.span = formal.span;
+            auto value = substituted(declaration, actuals,
+                std::span<const Token> { &reference, 1U });
+            if (!value) {
+                return std::string { "a local formal argument has no actual" };
+            }
+            declare(formal.name, std::move(type), std::move(*value), reference);
+        }
+        for (const auto& local : declaration.local_variables) {
+            const auto& declarator = local.declarator_tokens;
+            const bool plain = !declarator.empty()
+                && declarator.front().kind == TokenKind::Identifier
+                && declarator.front().text == local.name
+                && (local.initializer_tokens.empty()
+                        ? declarator.size() == 1U
+                        : declarator.size() >= 3U
+                            && declarator[1U].kind == TokenKind::Assign);
+            if (!plain || local.type_tokens.empty()) {
+                return "the local variable '" + local.name
+                    + "' has unpacked dimensions or no data type";
+            }
+            auto type = substituted(declaration, actuals, local.type_tokens);
+            if (!type) {
+                return std::string { "a local variable type does not substitute" };
+            }
+            std::optional<std::vector<Token>> value;
+            if (!local.initializer_tokens.empty()) {
+                // The expression may read the locals declared before it
+                // (16.10).
+                value = substituted(declaration, actuals,
+                    renamed(local.initializer_tokens, names));
+                if (!value) {
+                    return std::string { "a local variable initializer does not substitute" };
+                }
+            }
+            declare(local.name, std::move(*type), std::move(value),
+                declarator.front());
+        }
+        auto substituted_raw = substituted(declaration, actuals,
+            renamed({ raw.begin(), raw.end() }, names));
+        if (!substituted_raw) {
+            return std::string { "the instance actuals do not match the formals" };
+        }
+        body = std::move(*substituted_raw);
+        return std::nullopt;
+    }
+
     // The tokens with each formal replaced by its parenthesized actual.
     static std::optional<std::vector<Token>> substituted(
         const SystemVerilogAssertionDeclaration& declaration,
@@ -1333,6 +1843,42 @@ private:
     // The declarations being expanded on the path to this parser.
     std::vector<const SystemVerilogAssertionDeclaration*> path_;
     std::size_t position_ { };
+    // Parsing the right operand of a cycle delay (delay_operand).
+    bool delay_operand_ { };
+
+    // The clocks the sequences and booleans under `node` are evaluated on,
+    // `incoming` the clock in effect at it (16.13.3).
+    void collect_clocks(const std::size_t node, const std::uint32_t incoming,
+        std::set<std::uint32_t>& clocks) const
+    {
+        const auto& item = nodes_[node];
+        const bool clocking = item.kind == NodeKind::clocked
+            || item.kind == NodeKind::clocked_property;
+        const auto inner = clocking ? item.clock : incoming;
+        if (!clocking && (!item.expression.empty() || item.operands.empty()
+                || (item.kind == NodeKind::delay && item.leading))) {
+            clocks.insert(incoming);
+        }
+        for (const auto operand : item.operands) {
+            collect_clocks(operand, inner, clocks);
+        }
+    }
+
+    // Whether two sequence operands share one clock: `and` and `or` of
+    // differently clocked or multiclocked sequences are property operators
+    // (16.13.1, 16.13.2). The published tree keeps the operators as
+    // written.
+    [[nodiscard]] bool singly_clocked(const std::size_t left,
+        const std::size_t right, const std::uint32_t incoming) const
+    {
+        if (context_.keep_instances) {
+            return true;
+        }
+        std::set<std::uint32_t> clocks;
+        collect_clocks(left, incoming, clocks);
+        collect_clocks(right, incoming, clocks);
+        return clocks.size() <= 1U;
+    }
 
     [[nodiscard]] std::vector<const SystemVerilogAssertionDeclaration*>
     expanded_path(const SystemVerilogAssertionDeclaration& declaration) const
@@ -1356,15 +1902,82 @@ public:
     plan::Plan plan;
     std::vector<std::vector<Token>> guards;
     std::vector<std::vector<Token>> bounds;
+    // The expressions that read local variables (Plan::expressions), as
+    // written: a boolean (target 0) or a match item statement whose target
+    // is local target - 1 (16.10).
+    std::vector<std::pair<std::vector<Token>, std::uint32_t>> expressions;
+    // The subroutine calls attached to sequences (Plan::calls), as written
+    // (16.11).
+    std::vector<std::vector<Token>> calls;
     // Why a multiclocked sequence could not be compiled.
     std::string failure { };
 
-    void compile(const std::size_t root, const bool every_match)
+    // The property's local variables, by their unique names, in order.
+    void use_locals(const std::vector<std::string>& names)
     {
-        plan.root = property(root);
+        for (const auto& name : names) {
+            local_index_.emplace(name,
+                static_cast<std::uint32_t>(local_index_.size()));
+            local_names_.insert(name);
+        }
+        plan.locals.resize(names.size());
+    }
+
+    // `clock` is the leading clock of the directive (the clock in effect at
+    // the root).
+    void compile(const std::size_t root, const bool every_match,
+        const std::uint32_t clock = 0U)
+    {
+        plan.root = property(root, clock);
         plan.every_match = every_match;
         plan.guards = static_cast<std::uint32_t>(guards.size());
         plan.bounds = static_cast<std::uint32_t>(bounds.size());
+    }
+
+    // The set of semantic leading clocks of property `index` with clock
+    // `incoming` in effect (16.16.1); an inherited leading clock is the
+    // incoming one.
+    void leading_clocks(const std::size_t index, const std::uint32_t incoming,
+        std::set<std::uint32_t>& clocks) const
+    {
+        const auto& node = nodes_[index];
+        if (sequence_kind(node.kind) || node.kind == NodeKind::strong
+            || node.kind == NodeKind::weak) {
+            clocks.insert(leading(index, incoming));
+            return;
+        }
+        switch (node.kind) {
+        case NodeKind::clocked_property:
+            leading_clocks(node.operands[0], node.clock, clocks);
+            break;
+        case NodeKind::negation:
+        case NodeKind::conjunction:
+        case NodeKind::disjunction:
+        case NodeKind::equivalence:
+        case NodeKind::implies:
+            for (const auto operand : node.operands) {
+                leading_clocks(operand, incoming, clocks);
+            }
+            break;
+        case NodeKind::implication:
+        case NodeKind::followed_by:
+            clocks.insert(leading(node.operands[0], incoming));
+            break;
+        case NodeKind::initialized:
+            leading_clocks(node.operands[0], incoming, clocks);
+            break;
+        case NodeKind::accept:
+        case NodeKind::reject:
+            if (node.synchronous) {
+                clocks.insert(incoming);
+            } else {
+                leading_clocks(node.operands[0], incoming, clocks);
+            }
+            break;
+        default:
+            clocks.insert(incoming);
+            break;
+        }
     }
 
     // The guard of each clock's tick in a multiclocked plan.
@@ -1409,6 +2022,216 @@ private:
         negated.insert(negated.end(), tokens.begin(), tokens.end());
         negated.push_back(punctuation(model, TokenKind::RightParen, ")"));
         return guard(negated);
+    }
+
+    [[nodiscard]] bool reads_locals(const std::span<const Token> tokens) const
+    {
+        return !local_names_.empty() && mentions_local(tokens, local_names_);
+    }
+
+    std::uint32_t expression(std::vector<Token> tokens, const std::uint32_t target)
+    {
+        auto key = std::to_string(target) + ":" + spelling(tokens);
+        if (const auto found = expression_index_.find(key);
+            found != expression_index_.end()) {
+            return found->second;
+        }
+        expressions.emplace_back(std::move(tokens), target);
+        plan.expressions.push_back({ target });
+        const auto index = static_cast<std::uint32_t>(plan.expressions.size() - 1U);
+        expression_index_.emplace(std::move(key), index);
+        return index;
+    }
+
+    static std::vector<Token> negation(const std::vector<Token>& tokens)
+    {
+        std::vector<Token> negated;
+        const auto& model = tokens.front();
+        negated.push_back(punctuation(model, TokenKind::Bang, "!"));
+        negated.push_back(punctuation(model, TokenKind::LeftParen, "("));
+        negated.insert(negated.end(), tokens.begin(), tokens.end());
+        negated.push_back(punctuation(model, TokenKind::RightParen, ")"));
+        return negated;
+    }
+
+    // The check of boolean `tokens`: a guard, or an expression when it
+    // reads local variables.
+    plan::Instruction check(const std::vector<Token>& tokens)
+    {
+        return positioned(reads_locals(tokens)
+                ? instruction(plan::Op::check_expression, expression(tokens, 0U))
+                : instruction(plan::Op::check, guard(tokens)),
+            tokens);
+    }
+
+    // A sequence match item (16.10): `local = e`, `local op= e` (selects of
+    // the local allowed), `local++`, `++local`, `local--` or `--local`; the
+    // target may be parenthesized, as when a local is an instance's actual
+    // (16.10). The statement with a plain target and the local's index, or
+    // nullopt for any other form (a subroutine call, 16.11).
+    std::optional<std::pair<std::vector<Token>, std::uint32_t>> match_item(
+        const std::vector<Token>& item) const
+    {
+        const auto is_step = [](const Token& token) {
+            return token.kind == TokenKind::PlusPlus
+                || token.kind == TokenKind::MinusMinus;
+        };
+        std::size_t position = 0U;
+        const bool prefix = !item.empty() && is_step(item.front());
+        position += prefix ? 1U : 0U;
+        std::size_t open = 0U;
+        while (position < item.size() && item[position].kind == TokenKind::LeftParen) {
+            ++open;
+            ++position;
+        }
+        if (position >= item.size() || item[position].kind != TokenKind::Identifier) {
+            return std::nullopt;
+        }
+        const auto found = local_index_.find(item[position].text);
+        if (found == local_index_.end()) {
+            return std::nullopt;
+        }
+        std::vector<Token> statement;
+        if (prefix) {
+            statement.push_back(item.front());
+        }
+        statement.push_back(item[position]);
+        ++position;
+        for (; open > 0U; --open, ++position) {
+            if (position >= item.size() || item[position].kind != TokenKind::RightParen) {
+                return std::nullopt;
+            }
+        }
+        const auto rest = [&] {
+            statement.insert(statement.end(),
+                item.begin() + static_cast<std::ptrdiff_t>(position), item.end());
+            return std::make_pair(std::move(statement), found->second);
+        };
+        if (prefix) {
+            return position == item.size() ? std::optional { rest() } : std::nullopt;
+        }
+        if (position + 1U == item.size() && is_step(item[position])) {
+            return rest();
+        }
+        const auto selects = position;
+        while (position < item.size() && item[position].kind == TokenKind::LeftBracket) {
+            int depth = 0;
+            for (; position < item.size(); ++position) {
+                depth += item[position].kind == TokenKind::LeftBracket ? 1
+                    : item[position].kind == TokenKind::RightBracket   ? -1
+                                                                        : 0;
+                if (depth == 0) {
+                    ++position;
+                    break;
+                }
+            }
+        }
+        if (position + 1U < item.size()
+            && is_blocking_assignment_operator(item[position].kind)) {
+            position = selects;
+            return rest();
+        }
+        return std::nullopt;
+    }
+
+    // Whether match item `item` is a subroutine call (16.11): a task, void
+    // function or system task name, possibly hierarchical or a method, with
+    // or without an argument list, and no assignment.
+    [[nodiscard]] static bool subroutine_call(const std::vector<Token>& item)
+    {
+        if (item.empty() || item.front().kind != TokenKind::Identifier) {
+            return false;
+        }
+        std::size_t position = 1U;
+        while (position + 1U < item.size() && item[position].kind == TokenKind::Dot
+            && item[position + 1U].kind == TokenKind::Identifier) {
+            position += 2U;
+        }
+        if (position == item.size()) {
+            return true;
+        }
+        if (item[position].kind != TokenKind::LeftParen
+            || item.back().kind != TokenKind::RightParen) {
+            return false;
+        }
+        int depth = 0;
+        for (auto at = position; at < item.size(); ++at) {
+            depth += item[at].kind == TokenKind::LeftParen ? 1
+                : item[at].kind == TokenKind::RightParen   ? -1
+                                                           : 0;
+            if (depth == 0 && at + 1U != item.size()) {
+                return false;
+            }
+            if (depth == 1 && (is_blocking_assignment_operator(item[at].kind)
+                                  || item[at].kind == TokenKind::PlusPlus
+                                  || item[at].kind == TokenKind::MinusMinus)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // Whether sequence `index` admits an empty match (16.12.22).
+    [[nodiscard]] bool admits_empty(const std::size_t index) const
+    {
+        const auto& node = nodes_[index];
+        const auto zero = [](const BoundSpec& bound) {
+            return bound.kind == BoundSpec::Kind::literal && bound.value == 0;
+        };
+        switch (node.kind) {
+        case NodeKind::repeat:
+            return zero(node.lo) || admits_empty(node.operands[0]);
+        case NodeKind::goto_repeat:
+        case NodeKind::nonconsecutive_repeat:
+            return zero(node.lo);
+        case NodeKind::delay:
+            return false;
+        case NodeKind::sequence_or:
+            return admits_empty(node.operands[0]) || admits_empty(node.operands[1]);
+        case NodeKind::sequence_and:
+        case NodeKind::intersect:
+            return admits_empty(node.operands[0]) && admits_empty(node.operands[1]);
+        case NodeKind::within:
+            return admits_empty(node.operands[1]);
+        case NodeKind::throughout:
+        case NodeKind::first_match:
+        case NodeKind::clocked:
+        case NodeKind::match_items:
+            return admits_empty(node.operands[0]);
+        default:
+            return false;
+        }
+    }
+
+    // The local variables sequence `index` assigns (16.10, F.5.4).
+    void assigned(const std::size_t index, std::set<std::uint32_t>& locals) const
+    {
+        const auto& node = nodes_[index];
+        if (node.kind == NodeKind::match_items) {
+            for (const auto& item : node.actual_tokens) {
+                if (const auto target = match_item(item)) {
+                    locals.insert(target->second);
+                }
+            }
+        }
+        for (const auto operand : node.operands) {
+            assigned(operand, locals);
+        }
+    }
+
+    // The local set `locals` names in a `join_end` (0 none).
+    std::uint32_t local_set(const std::set<std::uint32_t>& locals)
+    {
+        if (locals.empty()) {
+            return 0U;
+        }
+        std::vector<std::uint32_t> set(locals.begin(), locals.end());
+        const auto found = std::ranges::find(plan.local_sets, set);
+        if (found != plan.local_sets.end()) {
+            return static_cast<std::uint32_t>(found - plan.local_sets.begin()) + 1U;
+        }
+        plan.local_sets.push_back(std::move(set));
+        return static_cast<std::uint32_t>(plan.local_sets.size());
     }
 
     plan::Bound bound(const BoundSpec& spec, const std::int64_t offset = 0)
@@ -1502,7 +2325,38 @@ private:
         sequence.code[head].b = static_cast<std::uint32_t>(sequence.code.size());
     }
 
-    void emit(const std::size_t index, plan::Sequence& sequence)
+    // The semantic leading clock of the sequence `index` with clock
+    // `incoming` in effect (16.16.1): the clock of its first boolean.
+    [[nodiscard]] std::uint32_t leading(const std::size_t index,
+        const std::uint32_t incoming) const
+    {
+        const auto& node = nodes_[index];
+        switch (node.kind) {
+        case NodeKind::clocked:
+        case NodeKind::clocked_property:
+            return leading(node.operands[0], node.clock);
+        case NodeKind::delay:
+            // A leading `##n s` starts with a tick of the clock in effect.
+            return node.leading ? incoming : leading(node.operands[0], incoming);
+        case NodeKind::repeat:
+        case NodeKind::sequence_or:
+        case NodeKind::sequence_and:
+        case NodeKind::intersect:
+        case NodeKind::within:
+        case NodeKind::first_match:
+        case NodeKind::strong:
+        case NodeKind::weak:
+        case NodeKind::match_items:
+        case NodeKind::initialized:
+            return leading(node.operands[0], incoming);
+        default:
+            return incoming;
+        }
+    }
+
+    // `incoming` is the clock in effect at node `index` (16.13.3).
+    void emit(const std::size_t index, plan::Sequence& sequence,
+        const std::uint32_t incoming)
     {
         const auto& node = nodes_[index];
         auto& code = sequence.code;
@@ -1524,24 +2378,72 @@ private:
         } nested { nested_,
             node.kind != NodeKind::boolean && node.kind != NodeKind::delay
                 && node.kind != NodeKind::clocked };
-        switch (node.kind) {
-        case NodeKind::boolean:
-            code.push_back(positioned(
-                instruction(plan::Op::check, guard(node.expression)),
-                node.expression));
-            break;
-        case NodeKind::clocked:
-            if (node.clock != clock_) {
+        // A boolean is checked on the clock in effect at it; only a cycle
+        // delay may change the clock of the thread (16.13.1).
+        const auto on_clock = [&] {
+            if (incoming != clock_) {
                 fail("a clocking event that does not follow ##0 or ##1");
             }
-            emit(node.operands[0], sequence);
+        };
+        switch (node.kind) {
+        case NodeKind::boolean:
+            on_clock();
+            code.push_back(check(node.expression));
+            break;
+        case NodeKind::match_items: {
+            // The items run in order at the end of each match of the
+            // operand (16.10); a leading node's initialization assignments
+            // run at the first tick of the instance's evaluation.
+            std::vector<plan::Instruction> items;
+            for (const auto& item : node.actual_tokens) {
+                auto parsed = match_item(item);
+                if (!parsed && !node.leading && subroutine_call(item)) {
+                    // A subroutine call runs at each end point (16.11).
+                    calls.push_back(item);
+                    plan.calls = static_cast<std::uint32_t>(calls.size());
+                    items.push_back(positioned(instruction(plan::Op::call,
+                                                   plan.calls - 1U),
+                        item));
+                    continue;
+                }
+                if (!parsed) {
+                    fail(node.leading
+                            ? "a local variable initialization assignment"
+                            : "a sequence match item that is neither a local "
+                              "variable assignment, increment or decrement nor a "
+                              "subroutine call (16.10, 16.11)");
+                    return;
+                }
+                items.push_back(positioned(instruction(plan::Op::assign,
+                                               parsed->second,
+                                               expression(std::move(parsed->first),
+                                                   parsed->second + 1U),
+                                               node.leading ? 1U : 0U),
+                    item));
+            }
+            if (node.leading) {
+                code.insert(code.end(), items.begin(), items.end());
+                emit(node.operands[0], sequence, incoming);
+                break;
+            }
+            if (admits_empty(node.operands[0])) {
+                fail("a sequence match item attached to a subsequence that "
+                     "admits an empty match (16.10)");
+                return;
+            }
+            emit(node.operands[0], sequence, incoming);
+            code.insert(code.end(), items.begin(), items.end());
+            break;
+        }
+        case NodeKind::clocked:
+            emit(node.operands[0], sequence, node.clock);
             break;
         case NodeKind::delay: {
             if (!node.leading) {
-                emit(node.operands[0], sequence);
+                emit(node.operands[0], sequence, incoming);
             }
-            const auto& right = nodes_[node.operands.back()];
-            if (right.kind == NodeKind::clocked && right.clock != clock_) {
+            const auto target = leading(node.operands.back(), incoming);
+            if (target != clock_) {
                 // `##1 @(c) s` and `##0 @(c) s` hand the sequence over to
                 // clock c (16.13.1).
                 if (nested_ != 0U || node.lo.kind != BoundSpec::Kind::literal
@@ -1551,12 +2453,12 @@ private:
                     fail("a clock change other than ##0 or ##1 between "
                          "singly clocked sequences");
                 }
-                auto step = instruction(plan::Op::clock, right.clock);
+                auto step = instruction(plan::Op::clock, target);
                 step.lo.value = node.lo.value;
                 step.hi.value = node.lo.value;
                 code.push_back(step);
-                clock_ = right.clock;
-                emit(right.operands[0], sequence);
+                clock_ = target;
+                emit(node.operands.back(), sequence, incoming);
                 break;
             }
             auto step = instruction(plan::Op::delay);
@@ -1565,46 +2467,50 @@ private:
             step.lo = bound(node.lo, offset);
             step.hi = bound(node.hi, offset);
             code.push_back(step);
-            emit(node.operands.back(), sequence);
+            emit(node.operands.back(), sequence, incoming);
             break;
         }
         case NodeKind::repeat:
             repeat(sequence, bound(node.lo), bound(node.hi),
-                [&] { emit(node.operands[0], sequence); });
+                [&] { emit(node.operands[0], sequence, incoming); });
             break;
         case NodeKind::goto_repeat:
         case NodeKind::nonconsecutive_repeat: {
             // b[->n] is (!b[*0:$] ##1 b)[*n]; b[=n] is b[->n] ##1 !b[*0:$].
+            on_clock();
             const auto& condition = nodes_[node.operands[0]].expression;
-            const auto hit = guard(condition);
-            const auto miss = negated_guard(condition);
+            const auto hit = reads_locals(condition)
+                ? positioned(instruction(plan::Op::check_expression,
+                                 expression(condition, 0U)),
+                      condition)
+                : positioned(instruction(plan::Op::check, guard(condition)),
+                      condition);
+            const auto miss = reads_locals(condition)
+                ? positioned(instruction(plan::Op::check_expression,
+                                 expression(negation(condition), 0U)),
+                      condition)
+                : positioned(instruction(plan::Op::check, negated_guard(condition)),
+                      condition);
             plan::Bound zero;
             plan::Bound forever;
             forever.mode = plan::Bound::Mode::unbounded;
             repeat(sequence, bound(node.lo), bound(node.hi), [&] {
-                repeat(sequence, zero, forever, [&] {
-                    code.push_back(positioned(
-                        instruction(plan::Op::check, miss), condition));
-                });
-                code.push_back(positioned(
-                    instruction(plan::Op::check, hit), condition));
+                repeat(sequence, zero, forever, [&] { code.push_back(miss); });
+                code.push_back(hit);
             });
             if (node.kind == NodeKind::nonconsecutive_repeat) {
-                repeat(sequence, zero, forever, [&] {
-                    code.push_back(positioned(
-                        instruction(plan::Op::check, miss), condition));
-                });
+                repeat(sequence, zero, forever, [&] { code.push_back(miss); });
             }
             break;
         }
         case NodeKind::sequence_or: {
             const auto fork = here();
             code.push_back(instruction(plan::Op::fork));
-            emit(node.operands[0], sequence);
+            emit(node.operands[0], sequence, incoming);
             const auto jump = here();
             code.push_back(instruction(plan::Op::jump));
             code[fork].a = here();
-            emit(node.operands[1], sequence);
+            emit(node.operands[1], sequence, incoming);
             code[jump].a = here();
             break;
         }
@@ -1623,30 +2529,50 @@ private:
                 repeat(sequence, zero, forever, [&] {
                     code.push_back(instruction(plan::Op::check, truth));
                 });
-                emit(node.operands[0], sequence);
+                emit(node.operands[0], sequence, incoming);
                 repeat(sequence, zero, forever, [&] {
                     code.push_back(instruction(plan::Op::check, truth));
                 });
             } else {
-                emit(node.operands[0], sequence);
+                emit(node.operands[0], sequence, incoming);
             }
-            code.push_back(instruction(plan::Op::join_end, 0U));
+            // A local variable assigned in exactly one operand flows out of
+            // the composite from that operand; one assigned in both does not
+            // flow out (16.10, F.5.4).
+            std::set<std::uint32_t> left;
+            std::set<std::uint32_t> right;
+            if (!local_index_.empty()) {
+                assigned(node.operands[0], left);
+                assigned(node.operands[1], right);
+            }
+            std::set<std::uint32_t> only_left;
+            std::set<std::uint32_t> only_right;
+            std::ranges::set_difference(left, right,
+                std::inserter(only_left, only_left.end()));
+            std::ranges::set_difference(right, left,
+                std::inserter(only_right, only_right.end()));
+            const auto left_set = local_set(only_left);
+            const auto right_set = local_set(only_right);
+            code.push_back(instruction(plan::Op::join_end, 0U, left_set, right_set));
             code[begin].b = here();
-            emit(node.operands[1], sequence);
-            code.push_back(instruction(plan::Op::join_end, 1U));
+            emit(node.operands[1], sequence, incoming);
+            code.push_back(instruction(plan::Op::join_end, 1U, right_set, left_set));
             code[begin].c = here();
             break;
         }
         case NodeKind::throughout:
-            code.push_back(positioned(
-                instruction(plan::Op::throughout_begin, guard(node.expression)),
+            on_clock();
+            code.push_back(positioned(reads_locals(node.expression)
+                    ? instruction(plan::Op::throughout_begin,
+                          expression(node.expression, 0U), 0U, 1U)
+                    : instruction(plan::Op::throughout_begin, guard(node.expression)),
                 node.expression));
-            emit(node.operands[0], sequence);
+            emit(node.operands[0], sequence, incoming);
             code.push_back(instruction(plan::Op::throughout_end));
             break;
         case NodeKind::first_match:
             code.push_back(instruction(plan::Op::first_match_begin));
-            emit(node.operands[0], sequence);
+            emit(node.operands[0], sequence, incoming);
             code.push_back(instruction(plan::Op::first_match_end));
             break;
         default:
@@ -1654,11 +2580,13 @@ private:
         }
     }
 
-    std::uint32_t sequence(const std::size_t index)
+    // A sequence starts on its semantic leading clock (16.16.1).
+    std::uint32_t sequence(const std::size_t index,
+        const std::uint32_t incoming)
     {
         plan::Sequence compiled;
-        clock_ = 0U;
-        emit(index, compiled);
+        clock_ = leading(index, incoming);
+        emit(index, compiled, incoming);
         compiled.code.push_back(instruction(plan::Op::match));
         plan.sequences.push_back(std::move(compiled));
         return static_cast<std::uint32_t>(plan.sequences.size() - 1U);
@@ -1670,27 +2598,37 @@ private:
         return static_cast<std::uint32_t>(plan.properties.size() - 1U);
     }
 
-    std::uint32_t property(const std::size_t index)
+    // `incoming` is the clock in effect at node `index`: it flows across the
+    // linear operators and distributes to the operands of the branching
+    // ones until a clocking event replaces it (16.13.3).
+    std::uint32_t property(const std::size_t index,
+        const std::uint32_t incoming)
     {
         const auto& node = nodes_[index];
+        if (node.kind == NodeKind::clocked_property) {
+            return property(node.operands[0], node.clock);
+        }
         plan::Property result;
+        result.clock = incoming;
         if (sequence_kind(node.kind)) {
             result.kind = plan::PropertyKind::sequence;
-            result.sequence = sequence(index);
+            result.clock = leading(index, incoming);
+            result.sequence = sequence(index, incoming);
             const auto at = first_position(index);
             result.line = at.first;
             result.column = at.second;
             return add(std::move(result));
         }
         const auto operand = [&](const std::size_t position) {
-            return property(node.operands[position]);
+            return property(node.operands[position], incoming);
         };
         switch (node.kind) {
         case NodeKind::strong:
         case NodeKind::weak:
             result.kind = plan::PropertyKind::sequence;
             result.strong = node.kind == NodeKind::strong;
-            result.sequence = sequence(node.operands[0]);
+            result.clock = leading(node.operands[0], incoming);
+            result.sequence = sequence(node.operands[0], incoming);
             break;
         case NodeKind::negation:
             result.kind = plan::PropertyKind::negation;
@@ -1715,12 +2653,34 @@ private:
                 ? plan::PropertyKind::implication
                 : plan::PropertyKind::followed_by;
             result.overlapped = node.overlapped;
-            result.sequence = sequence(node.operands[0]);
+            result.clock = leading(node.operands[0], incoming);
+            result.sequence = sequence(node.operands[0], incoming);
             result.children = { operand(1) };
             break;
+        case NodeKind::initialized: {
+            // The initialization assignments run when the property's
+            // evaluation begins (16.10).
+            std::vector<std::uint32_t> initializers;
+            for (const auto& item : node.actual_tokens) {
+                auto parsed = match_item(item);
+                if (!parsed) {
+                    fail("a local variable initialization assignment");
+                    return 0U;
+                }
+                initializers.push_back(expression(std::move(parsed->first),
+                    parsed->second + 1U));
+            }
+            const auto inner = operand(0);
+            auto& target = plan.properties[inner].initializers;
+            target.insert(target.begin(), initializers.begin(), initializers.end());
+            return inner;
+        }
         case NodeKind::conditional:
             result.kind = plan::PropertyKind::conditional;
-            result.guard = guard(node.expression);
+            result.guard_expression = reads_locals(node.expression);
+            result.guard = result.guard_expression
+                ? expression(node.expression, 0U)
+                : guard(node.expression);
             result.children = { operand(0) };
             if (node.operands.size() > 1U) {
                 result.children.push_back(operand(1));
@@ -1751,6 +2711,7 @@ private:
                 // p until_with q is p until (p and q).
                 plan::Property both;
                 both.kind = plan::PropertyKind::conjunction;
+                both.clock = incoming;
                 both.children = { operand(0), right };
                 right = add(std::move(both));
             }
@@ -1759,6 +2720,12 @@ private:
         }
         case NodeKind::accept:
         case NodeKind::reject:
+            // An abort condition shall not reference local variables
+            // (16.12.14).
+            if (reads_locals(node.expression)) {
+                fail("an abort condition that references a local variable "
+                     "(16.12.14)");
+            }
             result.kind = node.kind == NodeKind::accept
                 ? plan::PropertyKind::accept
                 : plan::PropertyKind::reject;
@@ -1784,6 +2751,9 @@ private:
 
     const std::vector<Node>& nodes_;
     std::vector<Token> truth_;
+    std::map<std::string, std::uint32_t, std::less<>> local_index_;
+    std::set<std::string, std::less<>> local_names_;
+    std::map<std::string, std::uint32_t, std::less<>> expression_index_;
     std::map<std::string, std::uint32_t, std::less<>> guard_index_;
     std::map<std::string, std::size_t, std::less<>> bound_index_;
     // The clock in effect while a sequence is emitted, and how many
@@ -2360,8 +3330,15 @@ std::optional<SystemVerilogAssertionTree> VerilogParser::build_assertion_tree(
         },
     };
     context.keep_instances = true;
+    context.scopes = sva_name_scopes(unit);
+    context.origin = declaration != nullptr
+        ? declaration_scope(context, *declaration)
+        : context.scopes.size() - 1U;
     if (declaration != nullptr && declaration->clock) {
-        context.clocks.push_back(declaration->clock->event_tokens);
+        auto resolved = resolve_clock(unit, context.scopes,
+            declaration->clock->event_tokens, context.origin);
+        context.clocks.push_back(std::move(resolved.tokens));
+        context.clock_identities.push_back(std::move(resolved.identity));
     }
     TreeParser parser { nodes, std::move(tokens), context, { } };
     const auto parsed = parser.parse();
@@ -2556,6 +3533,12 @@ std::optional<SystemVerilogAssertionTree> VerilogParser::build_assertion_tree(
         }
         case NodeKind::first_match:
             return add(Operator::FirstMatch, true, { child(0) });
+        case NodeKind::match_items:
+        case NodeKind::initialized:
+            // Only the monitor's parse makes these (the published tree keeps
+            // instances and refuses match items).
+            failed = true;
+            return SystemVerilogAssertionTreeOperand { };
         case NodeKind::negation:
             return add(Operator::Not, false, { child(0) });
         case NodeKind::equivalence:
@@ -2784,17 +3767,63 @@ void VerilogParser::publish_assertion_trees(const DesignUnit& unit,
     }
 }
 
+std::vector<SvaNameScope> VerilogParser::sva_name_scopes(
+    const DesignUnit& unit) const
+{
+    if (!sva_scopes_.empty()) {
+        return sva_scopes_;
+    }
+    SvaNameScope scope;
+    const auto add = [&](const auto& items) {
+        for (const auto& item : items) {
+            scope.names.insert(item.name);
+        }
+    };
+    add(unit.parameters);
+    add(unit.ports);
+    add(unit.signals);
+    add(unit.variables);
+    add(unit.instances);
+    add(unit.systemverilog_clocking_blocks);
+    for (const auto& block : unit.systemverilog_clocking_blocks) {
+        scope.clocking_events.emplace(block.name, block.event_tokens);
+    }
+    scope.declarations_end = unit.systemverilog_assertion_declarations.size();
+    return { std::move(scope) };
+}
+
 std::optional<VerilogParser::SvaPrepared> VerilogParser::prepare_sva_property(
     const DesignUnit& unit, const SystemVerilogConcurrentAssertion& directive,
-    std::string& reason, const std::string_view tick_prefix)
+    std::string& reason, const std::string_view tick_prefix,
+    const std::set<std::string>* const expect_names)
 {
     const auto fail = [&](std::string why) -> std::optional<SvaPrepared> {
         reason = std::move(why);
         return std::nullopt;
     };
+    sva_uses_locals_ = false;
     std::vector<Token> tokens;
     std::vector<Token> clock { };
     std::vector<Token> disable;
+    // The initialization assignments of the local variables of each
+    // declaration inlined at the root (16.10), the outermost first.
+    std::vector<std::vector<std::vector<Token>>> root_initializers;
+    // The scopes the clocking events resolve their names in, and the one
+    // the property tokens and the clock are written in: the directive's
+    // (the last) or that of the declaration it instantiates (16.8).
+    ParseContext scoped { unit, { } };
+    scoped.scopes = sva_name_scopes(unit);
+    const auto innermost = scoped.scopes.size() - 1U;
+    std::size_t origin = innermost;
+    std::size_t clock_origin = innermost;
+    // Whether the clock taken so far and `event` written in `event_origin`
+    // are different clocking events (16.16.1).
+    const auto other_clock = [&](const std::span<const Token> event,
+                                 const std::size_t event_origin) {
+        return !clock.empty()
+            && resolve_clock(unit, scoped.scopes, clock, clock_origin).identity
+            != resolve_clock(unit, scoped.scopes, event, event_origin).identity;
+    };
     const bool cover_sequence
         = directive.form == SystemVerilogConcurrentAssertionForm::Sequence;
     if (cover_sequence) {
@@ -2802,10 +3831,16 @@ std::optional<VerilogParser::SvaPrepared> VerilogParser::prepare_sva_property(
             return fail("a sequence directive without its sequence");
         }
         const auto& sequence = *directive.inline_sequence;
-        if (!sequence.local_variables.empty()) {
-            return fail("assertion local variables");
+        if (TreeParser::has_locals(sequence)) {
+            sva_uses_locals_ = true;
+            auto& initializers = root_initializers.emplace_back();
+            if (auto error = TreeParser::declare_locals(scoped, sequence, { },
+                    sequence.expression_tokens, tokens, initializers)) {
+                return fail(std::move(*error));
+            }
+        } else {
+            tokens = sequence.expression_tokens;
         }
-        tokens = sequence.expression_tokens;
         if (sequence.clock) {
             clock = sequence.clock->event_tokens;
         }
@@ -2865,24 +3900,34 @@ std::optional<VerilogParser::SvaPrepared> VerilogParser::prepare_sva_property(
                 actuals = split_top_level(inside, TokenKind::Comma);
             }
         }
-        if (!declaration->local_variables.empty()) {
-            return fail("assertion local variables");
+        std::optional<std::vector<Token>> body;
+        if (TreeParser::has_locals(*declaration)) {
+            sva_uses_locals_ = true;
+            body.emplace();
+            auto& initializers = root_initializers.emplace_back();
+            if (auto error = TreeParser::declare_locals(scoped, *declaration,
+                    actuals, declaration->expression_tokens, *body, initializers)) {
+                return fail(std::move(*error));
+            }
+        } else {
+            body = TreeParser::substituted(
+                *declaration, actuals, declaration->expression_tokens);
         }
-        auto body = TreeParser::substituted(
-            *declaration, actuals, declaration->expression_tokens);
         if (!body) {
             return fail("the instance actuals do not match the formals");
         }
+        origin = declaration_scope(scoped, *declaration);
         if (declaration->clock) {
             auto event = TreeParser::substituted(
                 *declaration, actuals, declaration->clock->event_tokens);
             if (!event) {
                 return fail("the instance clock does not substitute");
             }
-            if (!clock.empty() && spelling(clock) != spelling(*event)) {
+            if (other_clock(*event, origin)) {
                 return fail("more than one clocking event");
             }
             clock = std::move(*event);
+            clock_origin = origin;
         }
         if (declaration->disable) {
             auto condition = TreeParser::substituted(
@@ -2916,10 +3961,11 @@ std::optional<VerilogParser::SvaPrepared> VerilogParser::prepare_sva_property(
             event.push_back(tokens[1]);
             end = 2U;
         }
-        if (!clock.empty() && spelling(clock) != spelling(event)) {
+        if (other_clock(event, origin)) {
             return fail("more than one clocking event");
         }
         clock = std::move(event);
+        clock_origin = origin;
         tokens.erase(tokens.begin(), tokens.begin() + static_cast<std::ptrdiff_t>(end));
     }
     if (tokens.size() > 2U && token_is_keyword(tokens[0], "disable")
@@ -2956,6 +4002,9 @@ std::optional<VerilogParser::SvaPrepared> VerilogParser::prepare_sva_property(
     if (clock.empty()) {
         return fail("no clocking event");
     }
+    // The leading clock as the directive's scope reads it.
+    auto leading_clock = resolve_clock(unit, scoped.scopes, clock, clock_origin);
+    clock = std::move(leading_clock.tokens);
     // It is illegal to use an automatic variable in a clocking event
     // (IEEE 1800-2023 16.14.6).
     for (const auto& token : clock) {
@@ -3013,40 +4062,169 @@ std::optional<VerilogParser::SvaPrepared> VerilogParser::prepare_sva_property(
         { clock },
         0U,
     };
+    context.clock_identities = { std::move(leading_clock.identity) };
+    context.scopes = std::move(scoped.scopes);
+    context.origin = origin;
+    context.locals = std::move(scoped.locals);
+    context.local_names = std::move(scoped.local_names);
+    context.uses_locals = scoped.uses_locals;
     std::vector<Node> nodes;
     TreeParser parser { nodes, tokens, context, { } };
-    const auto root = parser.parse();
+    auto root = parser.parse();
+    sva_uses_locals_ = sva_uses_locals_ || context.uses_locals;
     if (!root) {
         return fail(context.failure);
+    }
+    // The root declarations' initialization assignments run when the
+    // evaluation attempt begins, the outermost declaration's first.
+    for (auto group = root_initializers.rbegin(); group != root_initializers.rend();
+         ++group) {
+        if (group->empty()) {
+            continue;
+        }
+        Node wrapper;
+        wrapper.kind = sequence_kind(nodes[*root].kind) ? NodeKind::match_items
+                                                        : NodeKind::initialized;
+        wrapper.leading = true;
+        wrapper.operands = { *root };
+        wrapper.actual_tokens = std::move(*group);
+        nodes.push_back(std::move(wrapper));
+        root = nodes.size() - 1U;
     }
     if (!disable.empty() && !context.boolean(disable)) {
         return fail("the disable condition is not a boolean expression");
     }
-    const bool multiclocked = context.clocks.size() > 1U;
-    if (multiclocked) {
-        if (tick_prefix.empty()) {
-            return fail("a multiclocked sequence in a procedural assertion");
+    // Neither a disable condition nor a clocking event shall reference a
+    // local variable (16.10, 16.12.14).
+    if (!context.local_names.empty()) {
+        if (mentions_local(disable, context.local_names)) {
+            return fail("a disable condition that references a local variable "
+                        "(16.12)");
         }
-        const auto kind = nodes[*root].kind;
-        if (!sequence_kind(kind) && kind != NodeKind::strong
-            && kind != NodeKind::weak) {
-            return fail("a multiclocked property");
+        for (const auto& event : context.clocks) {
+            if (mentions_local(event, context.local_names)) {
+                return fail("a clocking event that references a local variable "
+                            "(16.10)");
+            }
+        }
+    }
+    const bool multiclocked = context.clocks.size() > 1U;
+    if (multiclocked && (tick_prefix.empty() || expect_names != nullptr)) {
+        return fail("a multiclocked sequence in a procedural assertion");
+    }
+    if (multiclocked && !context.locals.empty()) {
+        // 16.13.7: a multiclocked property's local variable initialization
+        // assignments happen at the earliest tick of each semantic leading
+        // clock, a copy per clock; not evaluated yet.
+        for (const auto& node : nodes) {
+            if (node.kind == NodeKind::initialized) {
+                return fail("local variable initialization assignments of a "
+                            "multiclocked property (16.13.7)");
+            }
         }
     }
     PlanCompiler compiler { nodes, synthetic_tokens("1'b1", directive.span) };
+    {
+        std::vector<std::string> names;
+        for (const auto& local : context.locals) {
+            names.push_back(local.name);
+        }
+        compiler.use_locals(names);
+    }
+    // The clock in effect at the root: the directive's (clock 0).
+    std::uint32_t root_clock = 0U;
+    if (multiclocked) {
+        // The maximal property shall have a unique semantic leading clock
+        // (16.16 e), 16.16.1); attempts start at its ticks, so it becomes
+        // clock 0 of the plan (the directive's clock, when the property
+        // replaces it, keeps the other index).
+        std::set<std::uint32_t> leading;
+        compiler.leading_clocks(*root, 0U, leading);
+        if (leading.size() != 1U) {
+            return fail("a multiclocked property without a unique semantic "
+                        "leading clock (16.16)");
+        }
+        const auto unique = *leading.begin();
+        if (unique != 0U) {
+            std::swap(context.clocks[0], context.clocks[unique]);
+            std::swap(context.clock_identities[0],
+                context.clock_identities[unique]);
+            for (auto& node : nodes) {
+                if (node.kind == NodeKind::clocked
+                    || node.kind == NodeKind::clocked_property) {
+                    node.clock = node.clock == 0U ? unique
+                        : node.clock == unique   ? 0U
+                                                 : node.clock;
+                }
+            }
+            root_clock = unique;
+        }
+    }
     compiler.compile(*root, cover_sequence
-            && directive.kind == SystemVerilogConcurrentAssertionKind::Cover);
+            && directive.kind == SystemVerilogConcurrentAssertionKind::Cover,
+        root_clock);
     if (!compiler.failure.empty()) {
         return fail(compiler.failure);
     }
     SvaPrepared prepared;
-    if (multiclocked) {
-        // Each clock's tick is the triggered state of an event its own
-        // process triggers (15.5.3), which stays set for the time step.
+    // The asynchronous aborts are checked at every time step from the start
+    // of their evaluation, with sampled values, not only at the ticks of
+    // the clock (IEEE 1800-2023 16.12.14). A disable condition reads
+    // current values at any time of an attempt (16.12); one with a sampled
+    // value function or a sequence's triggered state changes value at the
+    // start of a time step without a change of its operands (16.9.3,
+    // 16.13.6), which no continuous assignment sees. Either way the
+    // monitor also evaluates at time steps without a tick of its clock.
+    std::set<std::uint32_t> abort_guards;
+    for (const auto& property : compiler.plan.properties) {
+        if ((property.kind == plan::PropertyKind::accept
+                || property.kind == plan::PropertyKind::reject)
+            && !property.synchronous) {
+            abort_guards.insert(property.guard);
+        }
+    }
+    const auto unwatchable = [&](const std::span<const Token> condition) {
+        for (std::size_t position = 0; position < condition.size();
+             ++position) {
+            const auto& token = condition[position];
+            if (token.kind != TokenKind::Identifier) {
+                continue;
+            }
+            if (token.text.starts_with('$')
+                || (position > 0U
+                    && condition[position - 1U].kind == TokenKind::Dot
+                    && token.text == "triggered")
+                || std::ranges::find(directive.procedural_automatic_names,
+                       token.text)
+                    != directive.procedural_automatic_names.end()
+                || (expect_names != nullptr
+                    && expect_names->contains(std::string { token.text }))) {
+                return true;
+            }
+        }
+        return false;
+    };
+    for (const auto guard : abort_guards) {
+        prepared.async_aborts.push_back(compiler.guards[guard]);
+        prepared.every_step
+            = prepared.every_step || unwatchable(compiler.guards[guard]);
+    }
+    prepared.disable_watched = !disable.empty() && !unwatchable(disable);
+    if (!disable.empty() && !prepared.disable_watched) {
+        prepared.every_step = true;
+    }
+    prepared.wakes = !prepared.async_aborts.empty() || prepared.every_step;
+    if (multiclocked || (prepared.wakes && !tick_prefix.empty())) {
+        // Each clock's tick is a hidden bit its own clock process sets and
+        // the monitor's tick clears (`<prefix>_ck`, `<prefix>_ck<k>` for
+        // clock k of a multiclocked plan), read with its current value
+        // (SvaOperation::wake_signal): a clock ticks when its bit is set and
+        // it has not ticked in the time step yet (16.13, 16.12.14).
         std::vector<std::vector<Token>> ticks;
         for (std::size_t index = 0; index < context.clocks.size(); ++index) {
-            ticks.push_back(synthetic_tokens(std::string { tick_prefix }
-                    + "_tick" + std::to_string(index) + ".triggered",
+            ticks.push_back(synthetic_tokens(multiclocked
+                    ? std::string { tick_prefix } + "_ck" + std::to_string(index)
+                    : std::string { tick_prefix } + "_ck",
                 directive.span));
         }
         compiler.clock_ticks(ticks);
@@ -3057,12 +4235,118 @@ std::optional<VerilogParser::SvaPrepared> VerilogParser::prepare_sva_property(
     prepared.bounds = std::move(compiler.bounds);
     prepared.clock = std::move(clock);
     prepared.disable = std::move(disable);
+    for (auto& local : context.locals) {
+        prepared.locals.push_back({ std::move(local.name), std::move(local.type) });
+    }
+    // A sampled value function in a concurrent assertion without a clocking
+    // argument takes the assertion's clock (IEEE 1800-2023 16.9.3). The
+    // monitor evaluates an expression of local variables, and a subroutine
+    // call's arguments, only when a thread needs them, so the clock is made
+    // explicit there: the function's history then follows the clock's
+    // ticks, not the evaluations. Its argument reads no local (16.9.3).
+    std::string clock_failure;
+    const auto clocked_samples = [&](std::vector<Token>& tokens) {
+        for (std::size_t position = 0; position + 1U < tokens.size(); ++position) {
+            const auto& name = tokens[position].text;
+            const bool past = name == "$past";
+            if (tokens[position].kind != TokenKind::Identifier
+                || tokens[position + 1U].kind != TokenKind::LeftParen
+                || !(past || name == "$rose" || name == "$fell"
+                    || name == "$stable" || name == "$changed")) {
+                continue;
+            }
+            std::size_t depth = 0U;
+            std::size_t commas = 0U;
+            std::size_t close = position + 1U;
+            for (; close < tokens.size(); ++close) {
+                const auto kind = tokens[close].kind;
+                if (kind == TokenKind::LeftParen || kind == TokenKind::LeftBracket
+                    || kind == TokenKind::LeftBrace) {
+                    ++depth;
+                } else if (kind == TokenKind::RightParen
+                    || kind == TokenKind::RightBracket
+                    || kind == TokenKind::RightBrace) {
+                    if (--depth == 0U) {
+                        break;
+                    }
+                } else if (kind == TokenKind::Comma && depth == 1U) {
+                    ++commas;
+                }
+            }
+            if (close >= tokens.size()) {
+                return;
+            }
+            const auto arguments = commas + 1U;
+            if (arguments >= (past ? 4U : 2U)) {
+                continue;
+            }
+            if (multiclocked) {
+                clock_failure = "a sampled value function without a clocking "
+                                "argument in an expression of local variables "
+                                "of a multiclocked property (16.9.3, 16.13)";
+                return;
+            }
+            std::string text;
+            for (auto missing = arguments; missing < (past ? 3U : 1U); ++missing) {
+                text += missing == 1U ? ", 1" : ", ";
+            }
+            auto added = synthetic_tokens(text + ", @(", directive.span);
+            added.insert(added.end(), prepared.clock.begin(),
+                prepared.clock.end());
+            const auto tail = synthetic_tokens(")", directive.span);
+            added.insert(added.end(), tail.begin(), tail.end());
+            tokens.insert(tokens.begin() + static_cast<std::ptrdiff_t>(close),
+                added.begin(), added.end());
+            position = close + added.size();
+        }
+    };
+    for (auto& [expression, target] : compiler.expressions) {
+        clocked_samples(expression);
+        prepared.expressions.push_back({ std::move(expression), target });
+    }
+    for (auto& call : compiler.calls) {
+        clocked_samples(call);
+    }
+    // The guards of a singly clocked directive's monitor too: the monitor
+    // also evaluates at wakes between the ticks, and the function's history
+    // follows the clock's ticks (16.9.3), which the compiled kernel then
+    // reads in place. Only a clock that is an edge of one name, not a
+    // clocking block, is written out; any other keeps the evaluations'
+    // history. An expect statement's guards are left as they are.
+    const auto simple_clock = [&] {
+        const auto& event = prepared.clock;
+        if (event.empty() || event.size() > 2U
+            || event.back().kind != TokenKind::Identifier
+            || event_keyword(event.back())) {
+            return false;
+        }
+        if (event.size() == 2U) {
+            return token_is_keyword(event.front(), "posedge")
+                || token_is_keyword(event.front(), "negedge")
+                || token_is_keyword(event.front(), "edge");
+        }
+        const auto level = name_scope(scoped.scopes, event.back().text, clock_origin);
+        return !level
+            || !scoped.scopes[*level].clocking_events.contains(event.back().text);
+    };
+    if (!multiclocked && !tick_prefix.empty() && expect_names == nullptr
+        && simple_clock()) {
+        for (auto& guard : prepared.guards) {
+            clocked_samples(guard);
+        }
+    }
+    if (!clock_failure.empty()) {
+        return fail(clock_failure);
+    }
+    prepared.calls = std::move(compiler.calls);
     return prepared;
 }
 
 std::vector<Token> VerilogParser::sva_tick_call(const SvaPrepared& prepared,
     const std::uint32_t site, const std::span<const Token> start,
-    const SourceSpan& span, const bool sampled)
+    const SourceSpan& span, const bool sampled,
+    const std::span<const Token> disable_signal,
+    const std::span<const Token> wake)
 {
     std::vector<Token> call;
     const auto emit = [&](const std::string_view text) {
@@ -3103,7 +4387,9 @@ std::vector<Token> VerilogParser::sva_tick_call(const SvaPrepared& prepared,
     emit(", ");
     call.insert(call.end(), start.begin(), start.end());
     emit(", ");
-    if (prepared.disable.empty()) {
+    if (!disable_signal.empty()) {
+        call.insert(call.end(), disable_signal.begin(), disable_signal.end());
+    } else if (prepared.disable.empty()) {
         emit("1'b0");
     } else {
         emit_truth(prepared.disable);
@@ -3113,21 +4399,174 @@ std::vector<Token> VerilogParser::sva_tick_call(const SvaPrepared& prepared,
         call.insert(call.end(), bound.begin(), bound.end());
         emit(")");
     }
+    // Each local variable's witness: the process variable of its type
+    // (16.10), whose width the elaboration gives the plan.
+    for (const auto& local : prepared.locals) {
+        emit(", " + local.name);
+    }
+    if (!wake.empty()) {
+        emit(", ");
+        call.insert(call.end(), wake.begin(), wake.end());
+    }
     emit(")");
     return call;
 }
 
+std::vector<Token> VerilogParser::sva_local_declarations(
+    const SvaPrepared& prepared, const std::string& prefix,
+    const SourceSpan& span) const
+{
+    std::vector<Token> result;
+    const auto emit = [&](const std::string_view text) {
+        auto lexed = synthetic_tokens(text, span);
+        result.insert(result.end(), lexed.begin(), lexed.end());
+    };
+    if (!prepared.calls.empty()) {
+        emit("int " + prefix + "_k; ");
+    }
+    if (prepared.locals.empty()) {
+        return result;
+    }
+    for (const auto& local : prepared.locals) {
+        result.insert(result.end(), local.type.begin(), local.type.end());
+        emit(" " + local.name + "; ");
+    }
+    emit("int " + prefix + "_r; int " + prefix + "_e; int " + prefix + "_a; ");
+    return result;
+}
+
+std::vector<Token> VerilogParser::sva_call_loop(const SvaPrepared& prepared,
+    const std::uint32_t site, const std::string& prefix, const SourceSpan& span)
+{
+    std::vector<Token> result;
+    if (prepared.calls.empty()) {
+        return result;
+    }
+    const auto emit = [&](const std::string_view text) {
+        auto lexed = synthetic_tokens(text, span);
+        result.insert(result.end(), lexed.begin(), lexed.end());
+    };
+    // The subroutine calls the tick queued, in the order the threads
+    // reached their end points (16.11), each with that thread's locals; the
+    // by-value arguments read sampled values, as the request loop does.
+    const auto which = prefix + "_k";
+    const auto site_text = std::to_string(site);
+    const auto next = which + " = $__fsim_sva_call(" + site_text + "); ";
+    // The calls run in the Reactive region, like an action block (16.11);
+    // the process keeps reading sampled values there.
+    emit(next + "if (" + which + " != 0) begin __fsim_act_callregion(); while ("
+        + which + " != 0) begin ");
+    for (std::size_t local = 0; local < prepared.locals.size(); ++local) {
+        emit(prepared.locals[local].name + " = $__fsim_sva_local(" + site_text
+            + ", -1, " + std::to_string(local) + "); ");
+    }
+    for (std::size_t index = 0; index < prepared.calls.size(); ++index) {
+        emit(std::string { index == 0U ? "" : "else " } + "if (" + which
+            + " == " + std::to_string(index + 1U) + ") begin ");
+        result.insert(result.end(), prepared.calls[index].begin(),
+            prepared.calls[index].end());
+        emit("; end ");
+    }
+    emit(next + "end end ");
+    return result;
+}
+
+std::vector<Token> VerilogParser::sva_request_loop(const SvaPrepared& prepared,
+    const std::uint32_t site, const std::span<const Token> tick,
+    const std::string& prefix, const SourceSpan& span)
+{
+    std::vector<Token> result;
+    if (prepared.expressions.empty()) {
+        return result;
+    }
+    const auto emit = [&](const std::string_view text) {
+        auto lexed = synthetic_tokens(text, span);
+        result.insert(result.end(), lexed.begin(), lexed.end());
+    };
+    // A tick that needs the value of an expression for a thread's local
+    // variables returns -(requests) and changes nothing (IEEE 1800-2023
+    // 16.10): each request loads the thread's locals into the process's
+    // variables, evaluates the expression with the sampled values of the
+    // design's (16.5.1), and answers; then the tick runs again.
+    const auto count = prefix + "_n";
+    const auto number = prefix + "_r";
+    const auto which = prefix + "_e";
+    const auto answer = prefix + "_a";
+    const auto site_text = std::to_string(site);
+    emit("while (" + count + " < 0) begin for (" + number + " = 0; " + number
+        + " < -" + count + "; " + number + " = " + number + " + 1) begin ");
+    for (std::size_t local = 0; local < prepared.locals.size(); ++local) {
+        emit(prepared.locals[local].name + " = $__fsim_sva_local(" + site_text
+            + ", " + number + ", " + std::to_string(local) + "); ");
+    }
+    emit(which + " = $__fsim_sva_request(" + site_text + ", " + number + "); ");
+    for (std::size_t index = 0; index < prepared.expressions.size(); ++index) {
+        const auto& expression = prepared.expressions[index];
+        emit(std::string { index == 0U ? "" : "else " } + "if (" + which
+            + " == " + std::to_string(index) + ") ");
+        if (expression.target == 0U) {
+            emit(answer + " = $__fsim_sva_answer(" + site_text + ", " + number
+                + ", ((|(");
+            result.insert(result.end(), expression.tokens.begin(),
+                expression.tokens.end());
+            emit(")) === 1'b1)); ");
+        } else {
+            emit("begin ");
+            result.insert(result.end(), expression.tokens.begin(),
+                expression.tokens.end());
+            emit("; " + answer + " = $__fsim_sva_answer(" + site_text + ", "
+                + number + ", " + prepared.locals[expression.target - 1U].name
+                + "); end ");
+        }
+    }
+    emit("end " + count + " = ");
+    result.insert(result.end(), tick.begin(), tick.end());
+    emit("; end ");
+    return result;
+}
+
 void VerilogParser::resolve_expect_statements(const DesignUnit& scope,
     std::vector<Process>& processes,
-    std::vector<TaskDeclaration>& tasks)
+    std::vector<TaskDeclaration>& tasks,
+    std::vector<SignalDeclaration>& signals,
+    std::vector<Statement>& concurrent_statements)
 {
     using namespace assertion_resolution_detail;
+    // The names the process or task that holds the statement declares
+    // anywhere in it (its arguments, variables, block declarations and loop
+    // variables): a continuous assignment of the scope cannot read them.
+    std::set<std::string> local_names;
+    // The clock processes of the expect statements that set tick bits,
+    // added to the scope once the walk is done.
+    std::vector<Process> clock_processes;
+    const auto collect_locals = [&](const auto& self,
+                                    const std::vector<Statement>& items) -> void {
+        for (const auto& item : items) {
+            for (const auto& declaration : item.declarations) {
+                local_names.insert(declaration.name);
+            }
+            if (!item.loop_variable.empty()) {
+                local_names.insert(item.loop_variable);
+            }
+            self(self, item.statements);
+            self(self, item.else_statements);
+            for (const auto& alternative : item.case_alternatives) {
+                self(self, alternative.statements);
+            }
+        }
+    };
     const auto resolve = [&](Statement& statement) {
         const auto directive = std::move(*statement.procedural_concurrent_assertion);
         statement = Statement { };
         statement.span = directive.span;
         std::string reason;
-        const auto prepared = prepare_sva_property(scope, directive, reason);
+        // A monitor that also evaluates between its clock's ticks (an
+        // asynchronous abort, 16.12.14, or a disable condition no hidden net
+        // can follow, 16.12) tells its ticks from its wakes by the tick bit
+        // `<prefix>_ck` (prepare_sva_property).
+        const auto prefix = "__fsim_ex" + std::to_string(expect_sites_ + 1U);
+        const auto prepared
+            = prepare_sva_property(scope, directive, reason, prefix, &local_names);
         if (!prepared) {
             Token location;
             location.kind = TokenKind::Identifier;
@@ -3137,30 +4576,181 @@ void VerilogParser::resolve_expect_statements(const DesignUnit& scope,
                 "the expect property cannot be evaluated: " + reason);
             return;
         }
+        if (!prepared->locals.empty() || !prepared->calls.empty()) {
+            // The request loop reads the design's values in the assertion
+            // process's sampled mode (16.10, 16.5.1), which an expect's
+            // procedure does not have.
+            Token location;
+            location.kind = TokenKind::Identifier;
+            location.text = "expect";
+            location.span = directive.span;
+            error(location, "FSIM-SV-SEM-200",
+                "the expect property cannot be evaluated: local variables "
+                "or subroutine calls in an expect property (16.17, 16.10, "
+                "16.11)");
+            return;
+        }
         // Every expect statement has its own monitor site: a process may
         // run several, directly or through tasks.
         const auto site = ++expect_sites_;
-        const auto prefix = "__fsim_ex" + std::to_string(site);
         std::vector<Token> body;
         const auto emit = [&](const std::string_view text) {
             auto lexed = synthetic_tokens(text, directive.span);
             body.insert(body.end(), lexed.begin(), lexed.end());
         };
+        // The disable condition reads current values at any time of the
+        // attempt (16.12), as a directive's does: a hidden net of the scope
+        // holds its truth, kept by a continuous assignment, and the engine
+        // watches it (SvaOperation::disable_signal). When it becomes 1 the
+        // attempt ends in the disabled state at once, with the disabled
+        // outcome (SvaOperation::monitor_flags, monitor_expect), and the
+        // statement, which also waits for the net's rising edge, completes
+        // in that time step and region. A condition that reads a sampled
+        // value function, a triggered state or a name of the process or
+        // task is read by the tick at the clock ticks.
+        const auto disable_net = prefix + "_dt";
+        bool watched_disable = prepared->disable_watched;
+        std::optional<Statement> disable_assignment;
+        if (watched_disable) {
+            std::vector<Token> assignment
+                = synthetic_tokens(disable_net + " = ((|(", directive.span);
+            assignment.insert(assignment.end(), prepared->disable.begin(),
+                prepared->disable.end());
+            const auto tail = synthetic_tokens(")) === 1'b1);", directive.span);
+            assignment.insert(assignment.end(), tail.begin(), tail.end());
+            disable_assignment
+                = parse_generated_statement(std::move(assignment), directive.span);
+            if (!disable_assignment
+                || disable_assignment->kind != StatementKind::Assignment) {
+                disable_assignment.reset();
+                watched_disable = false;
+            } else {
+                disable_assignment->assignment_kind = AssignmentKind::Continuous;
+            }
+        }
+        // The asynchronous abort conditions are checked with sampled values
+        // at every time step of the attempt (16.12.14), and a disable
+        // condition that no hidden net can follow is read at every time
+        // step (16.12), as for a directive's monitor: the engine toggles
+        // the wake bit `<prefix>_wk` at the start of such a time step
+        // (after the abort net `<prefix>_ab` changed, or at each one), and
+        // the statement waits for it too. The clock's tick bit pulses in
+        // the time step of each clocking event (its process clears it with
+        // #0, so a wake at the start of a later time step reads 0), and
+        // the tick reads it with its current value.
+        const bool wakes = prepared->wakes;
+        const auto tick_bit = prefix + "_ck";
+        const auto wake_bit = prefix + "_wk";
+        const auto abort_net = prefix + "_ab";
+        const bool abort_watched = wakes && !prepared->every_step
+            && !prepared->async_aborts.empty();
+        std::optional<Statement> abort_assignment;
+        if (abort_watched) {
+            std::vector<Token> assignment
+                = synthetic_tokens(abort_net + " = {", directive.span);
+            for (std::size_t condition = 0;
+                 condition < prepared->async_aborts.size(); ++condition) {
+                const auto head = synthetic_tokens(
+                    condition == 0U ? "((|(" : ", ((|(", directive.span);
+                assignment.insert(assignment.end(), head.begin(), head.end());
+                assignment.insert(assignment.end(),
+                    prepared->async_aborts[condition].begin(),
+                    prepared->async_aborts[condition].end());
+                const auto tail = synthetic_tokens(")) === 1'b1)", directive.span);
+                assignment.insert(assignment.end(), tail.begin(), tail.end());
+            }
+            const auto tail = synthetic_tokens("};", directive.span);
+            assignment.insert(assignment.end(), tail.begin(), tail.end());
+            abort_assignment
+                = parse_generated_statement(std::move(assignment), directive.span);
+            if (!abort_assignment
+                || abort_assignment->kind != StatementKind::Assignment) {
+                return;
+            }
+            abort_assignment->assignment_kind = AssignmentKind::Continuous;
+        }
+        std::optional<Statement> clock_statement;
+        if (wakes) {
+            std::vector<Token> trigger = synthetic_tokens("@(", directive.span);
+            trigger.insert(trigger.end(), prepared->clock.begin(),
+                prepared->clock.end());
+            const auto tail = synthetic_tokens(") begin " + tick_bit + " = 1'b1; #0 "
+                    + tick_bit + " = 1'b0; end",
+                directive.span);
+            trigger.insert(trigger.end(), tail.begin(), tail.end());
+            clock_statement
+                = parse_generated_statement(std::move(trigger), directive.span);
+            if (!clock_statement) {
+                return;
+            }
+        }
         // One attempt starts at the next clocking event; the statement
         // completes with the attempt (16.17).
-        emit("begin int " + prefix + "_n; int " + prefix + "_o; bit " + prefix
-            + "_s; " + prefix + "_s = 1'b1; " + prefix + "_o = 0; while ("
-            + prefix + "_o == 0) begin @(");
-        body.insert(body.end(), prepared->clock.begin(), prepared->clock.end());
-        emit(") " + prefix + "_n = ");
+        emit("begin int " + prefix + "_n; int " + prefix + "_o; int " + prefix
+            + "_c; bit " + prefix + "_s; " + prefix + "_s = 1'b1; " + prefix
+            + "_o = 0; while (" + prefix + "_o == 0) begin ");
+        if (wakes) {
+            emit("if (" + prefix + "_s) @(posedge " + tick_bit + "); else @(posedge "
+                + tick_bit + " or " + wake_bit
+                + (watched_disable ? " or posedge " + disable_net : std::string { })
+                + "); ");
+        } else if (watched_disable) {
+            emit("if (" + prefix + "_s) @(");
+            body.insert(body.end(), prepared->clock.begin(), prepared->clock.end());
+            emit("); else @(");
+            body.insert(body.end(), prepared->clock.begin(), prepared->clock.end());
+            emit(" or posedge " + disable_net + "); ");
+        } else {
+            emit("@(");
+            body.insert(body.end(), prepared->clock.begin(), prepared->clock.end());
+            emit(") ");
+        }
+        emit(prefix + "_n = ");
         const auto call = sva_tick_call(*prepared, site,
             synthetic_tokens(prefix + "_s", directive.span), directive.span,
-            true);
+            true,
+            watched_disable ? synthetic_tokens(disable_net, directive.span)
+                            : std::vector<Token> { },
+            wakes ? synthetic_tokens(wake_bit + ", "
+                            + (abort_watched ? abort_net : std::string { "1'b0" })
+                            + ", "
+                            + std::to_string(semantic::sva::monitor_expect
+                                | (prepared->every_step
+                                        ? semantic::sva::monitor_every_step
+                                        : 0U))
+                            + ", " + tick_bit,
+                        directive.span)
+            : watched_disable
+                ? synthetic_tokens("1'b0, 1'b0, "
+                          + std::to_string(semantic::sva::monitor_expect)
+                          + ", 1'b0",
+                      directive.span)
+                : std::vector<Token> { });
         body.insert(body.end(), call.begin(), call.end());
+        // The pass statement runs on a nonvacuous (1) or vacuous (3)
+        // success and the fail statement on a failure (2) only while the
+        // assertion action controls enable them for this expect statement
+        // (IEEE 1800-2023 20.11; On, Off and Kill do not affect it).
+        std::string label;
+        for (const auto character : directive.label) {
+            if (character == '"' || character == '\\') {
+                label += '\\';
+            }
+            label += character;
+        }
+        const auto control = prefix + "_c";
         emit("; " + prefix + "_s = 1'b0; if (" + prefix + "_n != 0) " + prefix
-            + "_o = $__fsim_sva_outcome(" + std::to_string(site) + "); end if ("
-            + prefix + "_o == 1 || " + prefix + "_o == 3) __fsim_act_success(); "
-            "else if (" + prefix + "_o == 2) __fsim_act_failure(); end");
+            + "_o = $__fsim_sva_outcome(" + std::to_string(site) + "); end "
+            + control + " = $__fsim_assertion_control("
+            + std::to_string(semantic::sva::control_expect) + ", 0, \""
+            + label + "\"); if ((" + prefix + "_o == 1 && (" + control + " & "
+            + std::to_string(semantic::sva::control_pass) + ") != 0) || ("
+            + prefix + "_o == 3 && (" + control + " & "
+            + std::to_string(semantic::sva::control_vacuous)
+            + ") != 0)) __fsim_act_success(); else if (" + prefix
+            + "_o == 2 && (" + control + " & "
+            + std::to_string(semantic::sva::control_fail)
+            + ") != 0) __fsim_act_failure(); end");
         auto generated = parse_generated_statement(std::move(body), directive.span);
         if (!generated) {
             return;
@@ -3201,6 +4791,46 @@ void VerilogParser::resolve_expect_statements(const DesignUnit& scope,
         };
         substitute(substitute, *generated);
         statement = std::move(*generated);
+        const auto hidden_bit = [&](const std::string& name, const std::size_t width) {
+            Type net_type;
+            net_type.domain = ValueDomain::Bit2;
+            net_type.spelling = "bit";
+            if (width > 1U) {
+                const auto msb = static_cast<std::int64_t>(width - 1U);
+                net_type.packed_range = PackedRange { msb, 0, true };
+                net_type.packed_range_expression = PackedRangeExpression {
+                    Expression { ExpressionKind::IntegerLiteral,
+                        std::to_string(msb), { }, directive.span },
+                    Expression { ExpressionKind::IntegerLiteral, "0", { },
+                        directive.span },
+                    directive.span, std::nullopt };
+            }
+            signals.push_back(SignalDeclaration { name, std::move(net_type),
+                PortDirection::Unknown, false, directive.span });
+        };
+        if (wakes) {
+            hidden_bit(tick_bit, 1U);
+            hidden_bit(wake_bit, 1U);
+            Process clock_process;
+            clock_process.kind = ProcessKind::VerilogAlways;
+            clock_process.name = prefix + "_clock0";
+            clock_process.span = directive.span;
+            clock_process.statements.push_back(std::move(*clock_statement));
+            clock_processes.push_back(std::move(clock_process));
+        }
+        if (abort_assignment) {
+            hidden_bit(abort_net, prepared->async_aborts.size());
+            concurrent_statements.push_back(std::move(*abort_assignment));
+        }
+        if (disable_assignment) {
+            Type net_type;
+            net_type.domain = ValueDomain::Bit2;
+            net_type.spelling = "bit";
+            signals.push_back(SignalDeclaration { disable_net,
+                std::move(net_type), PortDirection::Unknown, false,
+                directive.span });
+            concurrent_statements.push_back(std::move(*disable_assignment));
+        }
     };
     const auto walk = [&](const auto& self, auto& statements) -> void {
         for (auto& statement : statements) {
@@ -3217,10 +4847,26 @@ void VerilogParser::resolve_expect_statements(const DesignUnit& scope,
         }
     };
     for (auto& process : processes) {
+        local_names.clear();
+        for (const auto& variable : process.variables) {
+            local_names.insert(variable.name);
+        }
+        collect_locals(collect_locals, process.statements);
         walk(walk, process.statements);
     }
     for (auto& task : tasks) {
+        local_names.clear();
+        for (const auto& argument : task.arguments) {
+            local_names.insert(argument.name);
+        }
+        for (const auto& variable : task.variables) {
+            local_names.insert(variable.name);
+        }
+        collect_locals(collect_locals, task.statements);
         walk(walk, task.statements);
+    }
+    for (auto& clock_process : clock_processes) {
+        processes.push_back(std::move(clock_process));
     }
 }
 
@@ -3244,9 +4890,6 @@ bool VerilogParser::resolve_sva_directive(
         = prepare_sva_property(unit, directive, reason, prefix);
     if (!prepared) {
         return reject(reason);
-    }
-    if (!prepared->clocks.empty() && !directive.procedural_enable.empty()) {
-        return reject("a multiclocked sequence in a procedural assertion");
     }
     const auto& encoded = prepared->plan;
     if (trace_enabled()) {
@@ -3404,40 +5047,125 @@ bool VerilogParser::resolve_sva_directive(
         auto lexed = synthetic_tokens(text, directive.span);
         body.insert(body.end(), lexed.begin(), lexed.end());
     };
-    emit("begin int " + prefix + "_n; int " + prefix + "_o; @(");
-    std::vector<SignalDeclaration> clock_events;
+    // The control read names the process as a concurrent assertion of its
+    // directive type to the assertion controls (IEEE 1800-2023 20.11),
+    // which reach the monitor through the attempt filter and the outcome
+    // pop.
+    const auto control_directive
+        = directive.kind == SystemVerilogConcurrentAssertionKind::Assert
+        ? semantic::sva::control_assert
+        : directive.kind == SystemVerilogConcurrentAssertionKind::Cover
+        ? semantic::sva::control_cover
+        : directive.kind == SystemVerilogConcurrentAssertionKind::Assume
+        ? semantic::sva::control_assume
+        : 0U;
+    emit("begin int " + prefix + "_n; int " + prefix + "_o; int " + prefix
+        + "_c; ");
+    {
+        const auto declarations
+            = sva_local_declarations(*prepared, prefix, directive.span);
+        body.insert(body.end(), declarations.begin(), declarations.end());
+    }
+    emit(prefix + "_c = $__fsim_assertion_control("
+        + std::to_string(semantic::sva::control_concurrent) + ", "
+        + std::to_string(control_directive) + ", \"\"); @(");
     std::vector<Process> clock_processes;
+    // A monitor whose clocks report their ticks through hidden bits (a
+    // singly clocked one that also evaluates between its clock's ticks, and
+    // every multiclocked one, 16.13): each clock's process sets its tick
+    // bit, the monitor waits for any bit's rise (or its wake bit), and its
+    // tick reads the bits with their current values and clears them (a
+    // clock ticks once in a time step).
+    std::vector<std::string> tick_bits;
+    if (prepared->clocks.size() == 1U) {
+        tick_bits.push_back(prefix + "_ck");
+    } else {
+        for (std::size_t clock = 0; clock < prepared->clocks.size(); ++clock) {
+            tick_bits.push_back(prefix + "_ck" + std::to_string(clock));
+        }
+    }
     if (prepared->clocks.empty()) {
         body.insert(body.end(), prepared->clock.begin(), prepared->clock.end());
-    } else {
-        // A multiclocked sequence: each clock triggers an event, and the
-        // monitor runs when any of them did (16.13.1).
-        for (std::size_t clock = 0; clock < prepared->clocks.size(); ++clock) {
-            const auto tick = prefix + "_tick" + std::to_string(clock);
-            auto type = default_verilog_type();
-            type.spelling = "event";
-            type.domain = ValueDomain::Logic4;
-            clock_events.push_back(SignalDeclaration {
-                tick, type, PortDirection::Unknown, false, directive.span });
-            std::vector<Token> trigger = synthetic_tokens("@(", directive.span);
-            trigger.insert(trigger.end(), prepared->clocks[clock].begin(),
-                prepared->clocks[clock].end());
-            const auto tail = synthetic_tokens(") -> " + tick + ";",
-                directive.span);
-            trigger.insert(trigger.end(), tail.begin(), tail.end());
-            auto statement
-                = parse_generated_statement(std::move(trigger), directive.span);
-            if (!statement) {
-                return reject("the generated clock process does not parse");
-            }
-            Process clock_process;
-            clock_process.kind = ProcessKind::VerilogAlways;
-            clock_process.name = prefix + "_clock" + std::to_string(clock);
-            clock_process.span = directive.span;
-            clock_process.statements.push_back(std::move(*statement));
-            clock_processes.push_back(std::move(clock_process));
-            emit((clock == 0U ? "" : " or ") + tick);
+    }
+    for (std::size_t clock = 0; clock < tick_bits.size(); ++clock) {
+        std::vector<Token> trigger = synthetic_tokens("@(", directive.span);
+        trigger.insert(trigger.end(), prepared->clocks[clock].begin(),
+            prepared->clocks[clock].end());
+        const auto tail = synthetic_tokens(") " + tick_bits[clock] + " = 1'b1;",
+            directive.span);
+        trigger.insert(trigger.end(), tail.begin(), tail.end());
+        auto statement
+            = parse_generated_statement(std::move(trigger), directive.span);
+        if (!statement) {
+            return reject("the generated clock process does not parse");
         }
+        Process clock_process;
+        clock_process.kind = ProcessKind::VerilogAlways;
+        clock_process.name = prefix + "_clock" + std::to_string(clock);
+        clock_process.span = directive.span;
+        clock_process.statements.push_back(std::move(*statement));
+        clock_processes.push_back(std::move(clock_process));
+        emit((clock == 0U ? "posedge " : " or posedge ") + tick_bits[clock]);
+    }
+    // A monitor that also evaluates at time steps without a clock tick
+    // waits for its wake bit too, which the engine toggles at the start of
+    // such a time step while an attempt is in progress
+    // (SvaOperation::wake_signal; 16.12, 16.12.14).
+    const auto wake_bit = prefix + "_wk";
+    const auto abort_net = prefix + "_ab";
+    const bool abort_watched
+        = !prepared->every_step && !prepared->async_aborts.empty();
+    if (prepared->wakes) {
+        emit(" or " + wake_bit);
+    }
+    const auto outcome = prefix + "_o";
+    // An outcome whose action block the assertion controls switched off
+    // comes as its code plus 8 (sva::layout::outcome_action_off): it still
+    // counts, but its pass or fail statement does not run (20.11).
+    const auto outcomes = "repeat (" + prefix + "_n) begin " + outcome
+        + " = $__fsim_sva_outcome(0); if (" + outcome
+        + " == 1) __fsim_act_success(); else if (" + outcome
+        + " == 2) __fsim_act_failure(); else if (" + outcome
+        + " == 3) __fsim_act_vacuous(); else if (" + outcome
+        + " == 4) __fsim_act_abort(); else if (" + outcome
+        + " == 9) __fsim_act_success_off(); else if (" + outcome
+        + " == 10) __fsim_act_failure_off(); else if (" + outcome
+        + " == 11) __fsim_act_vacuous_off(); end";
+    // The disable condition reads current values (16.12). Its truth is the
+    // directive's hidden net, which a continuous assignment keeps, and the
+    // tick reads the net as its disabled operand: an attempt that starts
+    // while it is 1 is disabled. The engine watches the net
+    // (SvaOperation::disable_signal), and each time it becomes 1 every
+    // attempt in progress ends in the disabled state at once, between the
+    // clock ticks too (16.12, 39.4.2). A condition with a sampled value
+    // function or a sequence's triggered state changes value at the start
+    // or end of a time step without an update of its operands (16.9.3,
+    // 16.13.6), which a continuous assignment does not see: the tick reads
+    // such a condition itself.
+    // Such a condition, or one with an automatic variable, makes the
+    // monitor evaluate at every time step of an attempt instead
+    // (SvaPrepared::every_step), where the tick reads it.
+    const auto disable_net = prefix + "_dt";
+    const bool watched_disable = prepared->disable_watched;
+    // The asynchronous abort conditions are checked with sampled values at
+    // every time step of an attempt (16.12.14). The directive's hidden abort
+    // net holds their truth, kept by a continuous assignment; the engine
+    // watches it (SvaOperation::abort_signal), and after it changed wakes
+    // the monitor at the start of the next time step, where the tick reads
+    // the conditions' sampled values. A change and its return within one
+    // time step leave the sampled values, and the verdict, unchanged.
+    std::vector<Token> wake;
+    if (!tick_bits.empty()) {
+        // The wake bit, the abort net, the monitor flags and the tick bits.
+        std::string group = (prepared->wakes ? wake_bit : std::string { "1'b0" })
+            + ", " + (abort_watched ? abort_net : std::string { "1'b0" }) + ", "
+            + std::to_string(prepared->every_step
+                    ? semantic::sva::monitor_every_step
+                    : 0U);
+        for (const auto& bit : tick_bits) {
+            group += ", " + bit;
+        }
+        wake = synthetic_tokens(group, directive.span);
     }
     emit(") begin " + prefix + "_n = ");
     {
@@ -3449,20 +5177,51 @@ bool VerilogParser::resolve_sva_directive(
                     ? std::string { "1'b1" }
                     : directive.procedural_enable,
                 directive.span),
-            directive.span);
+            directive.span, false,
+            watched_disable ? synthetic_tokens(disable_net, directive.span)
+                            : std::vector<Token> { },
+            wake);
         body.insert(body.end(), call.begin(), call.end());
+        emit("; ");
+        // The local-variable requests come before the outcomes, while the
+        // process still reads sampled values (16.10).
+        const auto loop
+            = sva_request_loop(*prepared, 0U, call, prefix, directive.span);
+        body.insert(body.end(), loop.begin(), loop.end());
+        const auto calls = sva_call_loop(*prepared, 0U, prefix, directive.span);
+        body.insert(body.end(), calls.begin(), calls.end());
     }
-    const auto outcome = prefix + "_o";
-    emit("; ");
     if (!directive.procedural_enable.empty()) {
-        emit(directive.procedural_enable + " = 1'b0; ");
+        if (tick_bits.empty()) {
+            emit(directive.procedural_enable + " = 1'b0; ");
+        } else {
+            // A monitor with tick bits also runs at the other clocks' ticks
+            // and at its wakes; an attempt starts only at a tick of the
+            // leading clock (16.14.6.2, 16.13), so only that one consumes
+            // the procedure's enable. The monitor reads sampled values, in
+            // which the leading clock's tick bit is never set: a process of
+            // its own consumes the enable when the monitor clears the bit
+            // after a tick of the leading clock.
+            auto consume = parse_generated_statement(
+                synthetic_tokens("@(negedge " + tick_bits.front() + ") "
+                        + directive.procedural_enable + " = 1'b0;",
+                    directive.span),
+                directive.span);
+            if (!consume) {
+                return reject("the generated enable process does not parse");
+            }
+            Process consume_process;
+            consume_process.kind = ProcessKind::VerilogAlways;
+            consume_process.name = prefix + "_enable";
+            consume_process.span = directive.span;
+            consume_process.statements.push_back(std::move(*consume));
+            clock_processes.push_back(std::move(consume_process));
+        }
     }
-    emit("repeat (" + prefix + "_n) begin " + outcome
-        + " = $__fsim_sva_outcome(0); if (" + outcome
-        + " == 1) __fsim_act_success(); else if (" + outcome
-        + " == 2) __fsim_act_failure(); else if (" + outcome
-        + " == 3) __fsim_act_vacuous(); else if (" + outcome
-        + " == 4) __fsim_act_abort(); end end end");
+    for (const auto& bit : tick_bits) {
+        emit(bit + " = 1'b0; ");
+    }
+    emit(outcomes + " end end");
     auto statement = parse_generated_statement(std::move(body), directive.span);
     if (!statement) {
         return reject("the generated process does not parse");
@@ -3475,12 +5234,27 @@ bool VerilogParser::resolve_sva_directive(
             Statement replacement;
             replacement.kind = StatementKind::Block;
             replacement.span = directive.span;
-            if (which == "success") {
+            if (which == "callregion") {
+                Statement region;
+                region.kind = StatementKind::Display;
+                region.output_newline = false;
+                region.output_text = std::string { "\x1f"
+                                                   "fsim.concurrent-assertion-call-region|" }
+                    + process.name;
+                region.span = directive.span;
+                replacement.statements = { std::move(region) };
+            } else if (which == "success") {
                 replacement.statements = { success };
             } else if (which == "failure") {
                 replacement.statements = { failure };
             } else if (which == "vacuous") {
                 replacement.statements = vacuous;
+            } else if (which == "success_off") {
+                replacement.statements = { coverage_marker("pass") };
+            } else if (which == "failure_off") {
+                replacement.statements = { coverage_marker("failure") };
+            } else if (which == "vacuous_off") {
+                replacement.statements = { coverage_marker("vacuous") };
             } else {
                 replacement.statements = disabled;
             }
@@ -3495,6 +5269,47 @@ bool VerilogParser::resolve_sva_directive(
         }
     };
     substitute(substitute, *statement);
+    std::optional<Statement> disable_assignment;
+    if (watched_disable) {
+        std::vector<Token> assignment
+            = synthetic_tokens(disable_net + " = ((|(", directive.span);
+        assignment.insert(assignment.end(), prepared->disable.begin(),
+            prepared->disable.end());
+        const auto tail = synthetic_tokens(")) === 1'b1);", directive.span);
+        assignment.insert(assignment.end(), tail.begin(), tail.end());
+        disable_assignment
+            = parse_generated_statement(std::move(assignment), directive.span);
+        if (!disable_assignment
+            || disable_assignment->kind != StatementKind::Assignment) {
+            return reject("the generated disable condition does not parse");
+        }
+        disable_assignment->assignment_kind = AssignmentKind::Continuous;
+    }
+    std::optional<Statement> abort_assignment;
+    if (abort_watched) {
+        std::vector<Token> assignment
+            = synthetic_tokens(abort_net + " = {", directive.span);
+        for (std::size_t condition = 0;
+             condition < prepared->async_aborts.size(); ++condition) {
+            const auto head = synthetic_tokens(
+                condition == 0U ? "((|(" : ", ((|(", directive.span);
+            assignment.insert(assignment.end(), head.begin(), head.end());
+            assignment.insert(assignment.end(),
+                prepared->async_aborts[condition].begin(),
+                prepared->async_aborts[condition].end());
+            const auto tail = synthetic_tokens(")) === 1'b1)", directive.span);
+            assignment.insert(assignment.end(), tail.begin(), tail.end());
+        }
+        const auto tail = synthetic_tokens("};", directive.span);
+        assignment.insert(assignment.end(), tail.begin(), tail.end());
+        abort_assignment
+            = parse_generated_statement(std::move(assignment), directive.span);
+        if (!abort_assignment
+            || abort_assignment->kind != StatementKind::Assignment) {
+            return reject("the generated abort conditions do not parse");
+        }
+        abort_assignment->assignment_kind = AssignmentKind::Continuous;
+    }
     process.statements.push_back(coverage_marker("register"));
     if (checks) {
         process.statements.push_back(std::move(obligation));
@@ -3502,11 +5317,45 @@ bool VerilogParser::resolve_sva_directive(
     }
     process.statements.push_back(std::move(*statement));
     unit.processes.push_back(std::move(process));
-    for (auto& event : clock_events) {
-        unit.signals.push_back(std::move(event));
-    }
     for (auto& clock_process : clock_processes) {
         unit.processes.push_back(std::move(clock_process));
+    }
+    if (disable_assignment) {
+        Type net_type;
+        net_type.domain = ValueDomain::Bit2;
+        net_type.spelling = "bit";
+        unit.signals.push_back(SignalDeclaration { disable_net,
+            std::move(net_type), PortDirection::Unknown, false,
+            directive.span });
+        unit.concurrent_statements.push_back(std::move(*disable_assignment));
+    }
+    const auto hidden_bits = [&](const std::string& name,
+                                 const std::size_t width) {
+        Type net_type;
+        net_type.domain = ValueDomain::Bit2;
+        net_type.spelling = "bit";
+        if (width > 1U) {
+            const auto msb = static_cast<std::int64_t>(width - 1U);
+            net_type.packed_range = PackedRange { msb, 0, true };
+            net_type.packed_range_expression = PackedRangeExpression {
+                Expression { ExpressionKind::IntegerLiteral,
+                    std::to_string(msb), { }, directive.span },
+                Expression { ExpressionKind::IntegerLiteral, "0", { },
+                    directive.span },
+                directive.span, std::nullopt };
+        }
+        unit.signals.push_back(SignalDeclaration { name, std::move(net_type),
+            PortDirection::Unknown, false, directive.span });
+    };
+    if (prepared->wakes) {
+        hidden_bits(wake_bit, 1U);
+    }
+    for (const auto& bit : tick_bits) {
+        hidden_bits(bit, 1U);
+    }
+    if (abort_assignment) {
+        hidden_bits(abort_net, prepared->async_aborts.size());
+        unit.concurrent_statements.push_back(std::move(*abort_assignment));
     }
     return true;
 }

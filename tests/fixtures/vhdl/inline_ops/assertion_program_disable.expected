@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
+inl program default=1008 explicit=127 rst=967 reject=1
+inl module default=1008 explicit=127 rst=967 reject=1
+inl assign w=15 dw=1008

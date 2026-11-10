@@ -680,6 +680,14 @@ void Simulation::Impl::register_save_sections()
             // marker that consumes them.
             FSIM_RS_IDLE("sim.impl", reset_arguments);
             busy(!reset_arguments.empty(), "the arguments of a $reset");
+            // Likewise the `arg|` payloads of an assertion control task.
+            FSIM_RS_IDLE("sim.impl", assertion_control_arguments);
+            busy(!assertion_control_arguments.empty(),
+                "the arguments of an assertion control task");
+            // And the `src|` payload that names the task's call site.
+            FSIM_RS_IDLE("sim.impl", assertion_control_sources);
+            busy(!assertion_control_sources.empty(),
+                "the call site of an assertion control task");
             // A $reset or $restart stops the run at its call; the request is
             // carried out before the run reaches another save point.
             FSIM_RS_IDLE("sim.impl", reset_requests);
@@ -693,6 +701,63 @@ void Simulation::Impl::register_save_sections()
                 vpi_callbacks->audit_rest_state(messages);
             }
         },
+    });
+
+    // The specializations the run made from class types whose actuals read
+    // a running specialization's parameters (IEEE 1800-2023 8.25): their
+    // objects and static properties name them, so the restoring run makes
+    // them again, in the same order, before it reads those back. Each recipe
+    // travels in the class-specialization record form the design artifact
+    // encodes: the running specialization as its identity, the class type
+    // as its one parameter's type.
+    section_registry.add({
+        .name = "app.class_specializations",
+        .version = 1U,
+        .save = [this](RunStateArchive& archive) {
+            std::vector<semantic::sv::ClassSpecialization> recipes;
+            recipes.reserve(class_specialization_recipes.size());
+            for (const auto& [type, context] : class_specialization_recipes) {
+                auto& recipe = recipes.emplace_back();
+                recipe.specialization_identity = context;
+                recipe.parameters.emplace_back().type = type;
+            }
+            diagnostic::Engine diagnostics;
+            auto bytes = serialize_systemverilog_class_specializations(
+                recipes, diagnostics);
+            if (!bytes) {
+                archive.fail("the class specializations made by the run "
+                             "cannot be encoded");
+                return;
+            }
+            archive.io(*bytes);
+        },
+        .restore = [this](RunStateArchive& archive) {
+            std::string bytes;
+            archive.io(bytes);
+            if (!archive.ok()) {
+                return;
+            }
+            diagnostic::Engine diagnostics;
+            const auto recipes = deserialize_systemverilog_class_specializations(
+                bytes, "app.class_specializations", diagnostics);
+            if (!recipes) {
+                archive.fail("the class specializations made by the saved "
+                             "run do not decode");
+                return;
+            }
+            for (const auto& recipe : *recipes) {
+                if (recipe.parameters.size() != 1U
+                    || !recipe.parameters.front().type
+                    || !make_class_type_specialization(
+                        *recipe.parameters.front().type,
+                        recipe.specialization_identity)) {
+                    archive.fail("a class specialization made by the saved "
+                                 "run cannot be made again");
+                    return;
+                }
+            }
+        },
+        .present = [this] { return !class_specialization_recipes.empty(); },
     });
 
     // The class heap with the parameter context of each object (IEEE
@@ -869,32 +934,63 @@ void Simulation::Impl::register_save_sections()
     // The concurrent-assertion bookkeeping the application keeps beside the
     // evaluators (IEEE 1800-2023 16.14, 39.5.2): counters, events, the
     // enables and overrides, and the end-of-simulation obligations.
+    // The assertion controls (20.11) of each assertion in the order
+    // build_assertion_controls made them from the artifact: On, pass,
+    // vacuous pass, fail and lock bits and the Kill count, packed.
     const auto assertions_io = [this](RunStateArchive& archive) {
         archive.io(concurrent_assertion_coverage);
         archive.io(concurrent_assertion_indices);
         archive.io(concurrent_assertion_design_processes);
-        archive.io(disabled_vpi_assertion_processes);
-        archive.io(enabled_vpi_assertion_processes);
         archive.io(concurrent_assertion_actions_suppressed);
         archive.io(pending_concurrent_assertions);
         archive.io(sva_obligations);
         archive.io(sva_vacuous_obligations);
-        archive.io(concurrent_assertions_enabled);
-        archive.io(concurrent_assertion_pass_actions_enabled);
-        archive.io(concurrent_assertion_vacuous_actions_enabled);
-        archive.io(concurrent_assertion_failure_actions_enabled);
-        archive.io(concurrent_assertion_action_overrides);
+        std::vector<std::uint64_t> controls;
+        controls.reserve(assertion_controls.size());
+        for (const auto& control : assertion_controls) {
+            controls.push_back((control.on ? 1U : 0U)
+                | (control.pass ? 2U : 0U) | (control.vacuous ? 4U : 0U)
+                | (control.fail ? 8U : 0U) | (control.locked ? 16U : 0U)
+                | (std::uint64_t { control.kills } << 32U));
+        }
+        archive.io(controls);
+        if (archive.saving() || !archive.ok()) {
+            return;
+        }
+        if (controls.size() != assertion_controls.size()) {
+            throw std::runtime_error {
+                "the saved assertion controls do not match the design"
+            };
+        }
+        for (std::size_t index = 0U; index < controls.size(); ++index) {
+            auto& control = assertion_controls[index];
+            const auto bits = controls[index];
+            control.on = (bits & 1U) != 0U;
+            control.pass = (bits & 2U) != 0U;
+            control.vacuous = (bits & 4U) != 0U;
+            control.fail = (bits & 8U) != 0U;
+            control.locked = (bits & 16U) != 0U;
+            control.kills = static_cast<std::uint32_t>(bits >> 32U);
+            publish_assertion_control(index);
+        }
+        interpreter->refresh_sva_actions();
     };
     section_registry.add({
         .name = "app.assertions",
-        .version = 2U,
+        .version = 3U,
         .save = assertions_io,
         .restore = assertions_io,
         .present = [this] {
             return !concurrent_assertion_coverage.empty()
                 || !concurrent_assertion_indices.empty()
                 || !pending_concurrent_assertions.empty()
-                || !sva_obligations.empty() || !sva_vacuous_obligations.empty();
+                || !sva_obligations.empty() || !sva_vacuous_obligations.empty()
+                || std::ranges::any_of(assertion_controls,
+                    [](const AssertionControl& control) {
+                        return !control.on || !control.pass
+                            || !control.vacuous || !control.fail
+                            || control.locked || control.kills != 0U;
+                    });
         },
     });
 }

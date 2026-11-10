@@ -13,6 +13,8 @@
 // simir_static_kernel_*.cpp units.
 #include "simir_static_kernel_compiled_internal.hpp"
 
+#include "fsim/runtime/sva_storage.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
@@ -21,6 +23,7 @@
 #include <limits>
 #include <map>
 #include <queue>
+#include <set>
 #include <typeinfo>
 #include <cstring>
 #include <optional>
@@ -597,7 +600,65 @@ namespace {
 /// and whose sequences use only the delay, fork, jump, repetition counter and
 /// match programs (no throughout, first_match, and, intersect or clock
 /// switch: their threads carry joins and groups). Everything else keeps the
-/// host call: `reason` names the first unsupported feature.
+/// host call: `reason` names the first unsupported feature. (Since wave AF
+/// the property trees, joins, throughout, first_match and multiclocked plans
+/// of any root, 16.13, are covered too; only a malformed plan is refused.)
+/// The local-variable constants of `plan` (IEEE 1800-2023 16.10;
+/// sva::Monitor::build lays out the same): false when the plan's references
+/// to its locals, expressions and local sets are out of range.
+bool sva_native_locals(const semantic::sva::Plan& plan, SvaNativePlan& native)
+{
+    namespace sv = semantic::sva;
+    for (const auto& local : plan.locals) {
+        native.local_offset.push_back(native.locals_words);
+        native.local_size.push_back(sv::local_words(local.width));
+        native.local_width.push_back(local.width);
+        native.locals_words += native.local_size.back();
+    }
+    std::uint32_t result_words = 0U;
+    for (const auto& expression : plan.expressions) {
+        if (expression.target > plan.locals.size()) {
+            return false;
+        }
+        native.expression_target.push_back(expression.target);
+        result_words = std::max(result_words,
+            expression.target == 0U ? 1U : native.local_size[expression.target - 1U]);
+    }
+    for (const auto& set : plan.local_sets) {
+        if (std::ranges::any_of(set,
+                [&](const std::uint32_t local) { return local >= plan.locals.size(); })) {
+            return false;
+        }
+    }
+    native.local_sets = plan.local_sets;
+    if (!plan.expressions.empty()) {
+        native.memo_stride = static_cast<std::uint32_t>(runtime::sva::layout::memo_e_locals)
+            + native.locals_words + result_words;
+    }
+    return true;
+}
+
+/// The local-variable constants of the plan of the tick of `site` among
+/// `operations`, for the request operations of that site (KOp::sva_tick sub
+/// 1 to 4): nullopt when there is no such tick or its plan is malformed.
+std::optional<SvaNativePlan> sva_native_requests(
+    const std::vector<Operation>& operations, const std::uint32_t site)
+{
+    for (const auto& item : operations) {
+        const auto* op = operation_get_if<SvaOperation>(&item);
+        if (op == nullptr || op->kind != SvaKind::tick || op->site != site) {
+            continue;
+        }
+        const auto decoded = semantic::sva::decode(op->plan);
+        SvaNativePlan native;
+        if (!decoded || !sva_native_locals(*decoded, native)) {
+            return std::nullopt;
+        }
+        return native;
+    }
+    return std::nullopt;
+}
+
 std::optional<SvaNativePlan> sva_native_plan(const SvaOperation& operation,
     std::string& reason)
 {
@@ -609,12 +670,6 @@ std::optional<SvaNativePlan> sva_native_plan(const SvaOperation& operation,
     }
     const auto& plan = *decoded;
     if (plan.root >= plan.properties.size()) {
-        reason = "plan";
-        return std::nullopt;
-    }
-    // A multiclocked plan must be a sequence (the host refuses others).
-    if (plan.clock_guards.size() > 1U
-        && plan.properties[plan.root].kind != sv::PropertyKind::sequence) {
         reason = "plan";
         return std::nullopt;
     }
@@ -720,7 +775,8 @@ std::optional<SvaNativePlan> sva_native_plan(const SvaOperation& operation,
         if ((property.kind == sv::PropertyKind::conditional
                 || property.kind == sv::PropertyKind::accept
                 || property.kind == sv::PropertyKind::reject)
-            && property.guard >= plan.guards) {
+            && property.guard >= (property.guard_expression ? plan.expressions.size()
+                                                            : std::size_t { plan.guards })) {
             reason = "plan";
             return false;
         }
@@ -789,6 +845,11 @@ std::optional<SvaNativePlan> sva_native_plan(const SvaOperation& operation,
         return false;
     };
     SvaNativePlan native;
+    if (!sva_native_locals(plan, native)) {
+        reason = "plan";
+        return std::nullopt;
+    }
+    const auto expressions = plan.expressions.size();
     std::uint32_t base = 0U;
     for (std::size_t index = 0U; index < plan.sequences.size(); ++index) {
         const auto& sequence = plan.sequences[index];
@@ -799,7 +860,9 @@ std::optional<SvaNativePlan> sva_native_plan(const SvaOperation& operation,
             native.sequences.push_back(std::move(compiled));
             continue;
         }
-        compiled.counters = sequence.counters;
+        // A thread's local variables follow its repetition counters.
+        compiled.counters = sequence.counters + native.locals_words;
+        compiled.locals_base = sequence.counters;
         for (const auto& instruction : sequence.code) {
             switch (instruction.op) {
             case sv::Op::check:
@@ -820,8 +883,27 @@ std::optional<SvaNativePlan> sva_native_plan(const SvaOperation& operation,
             case sv::Op::join_begin:
             case sv::Op::join_end:
                 break;
+            case sv::Op::check_expression:
+                if (instruction.a >= expressions) {
+                    reason = "plan";
+                    return std::nullopt;
+                }
+                break;
+            case sv::Op::assign:
+                if (instruction.a >= plan.locals.size() || instruction.b >= expressions
+                    || native.expression_target[instruction.b] != instruction.a + 1U) {
+                    reason = "plan";
+                    return std::nullopt;
+                }
+                break;
+            case sv::Op::call:
+                if (instruction.a >= plan.calls) {
+                    reason = "plan";
+                    return std::nullopt;
+                }
+                break;
             case sv::Op::clock:
-                if (plan.clock_guards.size() <= 1U || instruction.a >= plan.clock_guards.size()) {
+                if (plan.clock_guards.empty() || instruction.a >= plan.clock_guards.size()) {
                     reason = "plan";
                     return std::nullopt;
                 }
@@ -834,6 +916,12 @@ std::optional<SvaNativePlan> sva_native_plan(const SvaOperation& operation,
                 reason = "plan";
                 return std::nullopt;
             }
+            if (instruction.op == sv::Op::join_end
+                && (instruction.b > plan.local_sets.size()
+                    || instruction.c > plan.local_sets.size())) {
+                reason = "plan";
+                return std::nullopt;
+            }
             if (instruction.op == sv::Op::join_begin
                 && (instruction.b > sequence.code.size() || instruction.c > sequence.code.size()
                     || instruction.a > 1U)) {
@@ -841,7 +929,7 @@ std::optional<SvaNativePlan> sva_native_plan(const SvaOperation& operation,
                 return std::nullopt;
             }
             if (instruction.op == sv::Op::throughout_begin
-                && instruction.a >= plan.guards) {
+                && instruction.a >= (instruction.c == 1U ? expressions : plan.guards)) {
                 reason = "plan";
                 return std::nullopt;
             }
@@ -865,6 +953,14 @@ std::optional<SvaNativePlan> sva_native_plan(const SvaOperation& operation,
         SvaNativeProperty compiled;
         compiled.kind = property.kind;
         compiled.overlapped = property.overlapped;
+        compiled.synchronous = property.synchronous;
+        // A multiclocked property's clock (16.13.3); 0 for a singly clocked
+        // plan.
+        if (property.clock != 0U && property.clock >= plan.clock_guards.size()) {
+            reason = "plan";
+            return std::nullopt;
+        }
+        compiled.clock = property.clock;
         compiled.sequence = property.sequence;
         compiled.child = property.children.empty()
             ? -1 : static_cast<std::int32_t>(property.children[0]);
@@ -887,11 +983,19 @@ std::optional<SvaNativePlan> sva_native_plan(const SvaOperation& operation,
         }
         compiled.line = property.line;
         compiled.column = property.column;
+        compiled.guard_expression = property.guard_expression;
+        compiled.initializers = property.initializers;
+        if (std::ranges::any_of(property.initializers, [&](const std::uint32_t expression) {
+                return expression >= expressions || native.expression_target[expression] == 0U;
+            })) {
+            reason = "plan";
+            return std::nullopt;
+        }
         native.properties.push_back(compiled);
     }
     native.root = plan.root;
     native.every_match = plan.every_match && root.kind == sv::PropertyKind::sequence;
-    if (plan.clock_guards.size() > 1U) {
+    if (!plan.clock_guards.empty()) {
         native.clock_guards = plan.clock_guards;
     }
     for (const auto& span : plan.guard_spans) {
@@ -972,8 +1076,12 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
     // A recursive VHDL callable keeps real frames: its packed registers go
     // on the body's growable frame stack at each call (KOp::frame_push,
     // frame_pop); the lists are the pushes' (a pop names only what it keeps).
+    // The callables whose frames also list strings, containers or private
+    // arrays (storage_frames) save and restore those through the runtime,
+    // which owns them (frame_storage).
     bool recursive_frames = false;
     std::map<std::uint32_t, std::vector<RegisterId>> frame_lists;
+    std::set<std::uint32_t> storage_frames;
     if (whole) {
         // Automatic frames compile to nothing when each callable owns its
         // registers (native_isolated) and no call chain recurses.
@@ -1070,8 +1178,12 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                 }
             }
             if (recursive_frames) {
-                // Strings, containers and private arrays in a frame, and any
-                // other language, have no compiled frame yet.
+                // Any other language has no compiled frame yet. Strings,
+                // containers and private arrays in a frame are a behavioral
+                // member's (the static tiers take no string or container
+                // registers): each activation gets its own (IEEE 1076-2019
+                // 14.6 b), 4.3) through the push and pop (KOp::frame_push
+                // and frame_pop sub 1).
                 if (!vhdl) {
                     throw reject("recursive_call");
                 }
@@ -1081,7 +1193,10 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                         push != nullptr
                         && (!push->strings.empty() || !push->containers.empty()
                             || member.private_frame(push->identity))) {
-                        throw reject("recursive_frame_storage");
+                        if (!behavioral) {
+                            throw reject("recursive_frame_storage");
+                        }
+                        storage_frames.insert(push->identity);
                     }
                 }
             }
@@ -1159,7 +1274,8 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
         std::vector<std::uint32_t> sites;
         for (const auto& operation : member.operations()) {
             if (const auto* sva = operation_get_if<SvaOperation>(&operation);
-                sva != nullptr && std::ranges::find(sites, sva->site) == sites.end()) {
+                sva != nullptr && sva->kind != SvaKind::control
+                && std::ranges::find(sites, sva->site) == sites.end()) {
                 sites.push_back(sva->site);
             }
         }
@@ -1173,6 +1289,22 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
     // ReadContainerObject.
     std::vector<std::uint32_t> container_of_register(
         member.container_registers.begin(), member.container_registers.end());
+    // The width of local variable `local` of the plan of the tick at `site`
+    // (the lowering filled it in; 16.10).
+    const auto sva_local_width = [&](const std::uint32_t site,
+                                     const std::uint32_t local) -> std::uint32_t {
+        for (const auto& operation : member.operations()) {
+            const auto* sva = operation_get_if<SvaOperation>(&operation);
+            if (sva == nullptr || sva->kind != SvaKind::tick || sva->site != site) {
+                continue;
+            }
+            const auto plan = semantic::sva::decode(sva->plan);
+            if (plan && local < plan->locals.size()) {
+                return plan->locals[local].width;
+            }
+        }
+        throw reject("operation");
+    };
     bool changed = true;
     std::uint32_t defining = 0U;
     // A register's width only moves from unknown to a width to polymorphic,
@@ -1243,8 +1375,12 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                     define(op.destination, op.selection
                         ? op.selection->width : signal_width(op.signal));
                 } else if constexpr (std::is_same_v<T, SvaOperation>) {
-                    // The outcome count or outcome code (run_sva).
-                    define(op.result, 32U);
+                    // The outcome count or outcome code (run_sva); a local
+                    // variable's read has the local's width, which the
+                    // tick's plan of the site holds (IEEE 1800-2023 16.10).
+                    define(op.result, op.kind == SvaKind::local
+                            ? sva_local_width(op.site, op.guard_count)
+                            : 32U);
                 } else if constexpr (std::is_same_v<T, WaitOn>) {
                     // A VHDL wait with a timeout (IEEE 1076-2019 10.2): the
                     // thread runner writes the one-bit timed-out flag when
@@ -1522,9 +1658,13 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
     // the registers its identity's pushes list, those a pop keeps marked.
     // The items (register-file indices) follow the wide storage's
     // assignment, at the end of the translation.
+    // A frame whose callable lists strings, containers or private arrays
+    // (storage_frames) has sub 1 and y its operation: the runtime saves or
+    // restores those after the registers (frame_storage).
     const auto lower_frame = [&](KInst& inst, const std::uint32_t identity,
                                  const bool push,
-                                 const std::vector<RegisterId>& preserve) {
+                                 const std::vector<RegisterId>& preserve,
+                                 const std::uint32_t pc) {
         const auto found = frame_lists.find(identity);
         if (found == frame_lists.end()) {
             throw reject("frame_identity");
@@ -1544,6 +1684,10 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
         inst.op = push ? KOp::frame_push : KOp::frame_pop;
         inst.x = body.frame_stack_base;
         inst.aux = static_cast<std::uint32_t>(body.frame_saves.size());
+        if (storage_frames.contains(identity)) {
+            inst.sub = 1U;
+            inst.y = pc;
+        }
         body.frame_saves.push_back(save);
     };
     // A jump to an activation's exit operation (body_end) ends the body. A
@@ -1666,13 +1810,23 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
         case SignalReadKind::stable:
         case SignalReadKind::changed:
         case SignalReadKind::past:
-            if (!op.clock || op.ticks == 0U) {
-                return false;
-            }
-            return impl_.planned_sampled_ring_offset(Impl::SampledHistoryKey {
+            if (!op.clock || op.ticks == 0U
+                || !impl_.planned_sampled_ring_offset(Impl::SampledHistoryKey {
                            op.signal, op.clock, op.clock_edge, op.gate,
                            ProcessSchedulingDomain::systemverilog })
-                .has_value();
+                        .has_value()) {
+                return false;
+            }
+            if (op.kind == SignalReadKind::sampled || op.kind == SignalReadKind::past) {
+                return true;
+            }
+            // A value change function also reads the Preponed value, which a
+            // time step that is not a tick of its clock compares (16.9.3);
+            // the signals of clocked reads are in the sampled-value mask.
+            impl_.ensure_sampled_value_word_layout();
+            return op.signal < impl_.sampled_value_word_offsets.size()
+                && impl_.sampled_value_word_offsets[op.signal]
+                    != Impl::no_sampled_value_words;
         default:
             return false;
         }
@@ -2553,21 +2707,24 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                     }
                 } else if constexpr (std::is_same_v<T, CallableFramePush>
                     || std::is_same_v<T, CallableFramePop>) {
-                    // Isolated; frames that save private arrays run through the
-                    // generic bridge, and a recursive callable's frames are
-                    // real (frame_push, frame_pop).
-                    if (member.private_frame(op.identity)) {
-                        inst.op = KOp::generic;
-                        inst.x = pc;
-                        inst.y = 0U;
-                    } else if (body.frame_stack_base != 0U) {
+                    // Isolated; a recursive callable's frames are real
+                    // (frame_push, frame_pop; with the runtime's part when
+                    // they list strings, containers or private arrays), and
+                    // other frames that save private arrays run through the
+                    // generic bridge.
+                    if (body.frame_stack_base != 0U) {
                         if constexpr (std::is_same_v<T, CallableFramePush>) {
-                            lower_frame(inst, op.identity, true, { });
+                            lower_frame(inst, op.identity, true, { }, pc);
                         } else {
                             lower_frame(inst, op.identity, false,
                                 std::vector<RegisterId>(op.preserve_packed.begin(),
-                                    op.preserve_packed.end()));
+                                    op.preserve_packed.end()),
+                                pc);
                         }
+                    } else if (member.private_frame(op.identity)) {
+                        inst.op = KOp::generic;
+                        inst.x = pc;
+                        inst.y = 0U;
                     } else {
                         inst.op = KOp::nop;
                     }
@@ -3370,6 +3527,14 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                         && chunked(op.guards)) {
                         wide_source = op.guards;
                     }
+                    // A local variable wider than 64 bits (16.10) is read
+                    // into, or answered from, the chunks of one register.
+                    if (op.kind == SvaKind::local && chunked(op.result)) {
+                        wide_source = op.result;
+                    }
+                    if (op.kind == SvaKind::answer && chunked(op.guards)) {
+                        wide_source = op.guards;
+                    }
                 }
             }, operation);
             // A concatenation's null-range operands contribute no bits
@@ -3803,11 +3968,12 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                     // are real.
                     if (body.frame_stack_base != 0U) {
                         if constexpr (std::is_same_v<T, CallableFramePush>) {
-                            lower_frame(inst, op.identity, true, { });
+                            lower_frame(inst, op.identity, true, { }, pc);
                         } else {
                             lower_frame(inst, op.identity, false,
                                 std::vector<RegisterId>(op.preserve_packed.begin(),
-                                    op.preserve_packed.end()));
+                                    op.preserve_packed.end()),
+                                pc);
                         }
                     } else {
                         inst.op = KOp::nop;
@@ -3871,6 +4037,20 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                     }
                     impl_.sampled_ring_layout_baked = true;
                     inst.x = static_cast<std::uint32_t>(*ring);
+                    if (op.kind != SignalReadKind::sampled
+                        && op.kind != SignalReadKind::past) {
+                        // $rose, $fell, $stable, $changed: between two
+                        // ticks the Preponed value is the current one
+                        // (16.9.3), at y - 1 in the sampled words.
+                        impl_.ensure_sampled_value_word_layout();
+                        const auto words = op.signal < impl_.sampled_value_word_offsets.size()
+                            ? impl_.sampled_value_word_offsets[op.signal]
+                            : Impl::no_sampled_value_words;
+                        if (words == Impl::no_sampled_value_words) {
+                            throw reject("sampled_words");
+                        }
+                        inst.y = words + 1U;
+                    }
                     if (const auto& initial = impl_.get_signal(op.signal).initial_value;
                         signal_width(op.signal) > 64U || initial.is_logic9()) {
                         // A wide or Logic9 signal's ring entries are several
@@ -4494,10 +4674,71 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                 inst.width = op.function == SystemVerilogMathFunction::Stime ? 32U : 64U;
                 inst.imm_a = *ticks;
             } else if constexpr (std::is_same_v<T, SvaOperation>) {
+                if (op.kind == SvaKind::control) {
+                    // An assertion control read (IEEE 1800-2023 20.11): an
+                    // inline load of the control word of site x of the
+                    // member's process (StaticKernelSvaTable::controls).
+                    inst.op = KOp::sva_sampled_load;
+                    sva_table_used_ = true;
+                    inst.d = narrow(op.result);
+                    inst.width = 32U;
+                    inst.aux = 8U;
+                    inst.x = op.site;
+                    return;
+                }
                 // A concurrent assertion's clock tick or outcome pop (IEEE
                 // 1800-2023 16.14; task #186): x the operation, y the
                 // register base (fused bodies add theirs), aux the
                 // directive's entry in the member's block table.
+                if (op.kind == SvaKind::request || op.kind == SvaKind::local
+                    || op.kind == SvaKind::answer || op.kind == SvaKind::call) {
+                    // A local-variable request of the directive's last tick
+                    // (IEEE 1800-2023 16.10): the tick's entry with sub 1
+                    // (request), 2 (local) or 3 (answer) reads and writes
+                    // the request's memo entry (StaticKernel::
+                    // execute_sva_memo).
+                    inst.op = KOp::sva_tick;
+                    sva_table_used_ = true;
+                    inst.sub = op.kind == SvaKind::request ? 1U
+                        : op.kind == SvaKind::local        ? 2U
+                        : op.kind == SvaKind::answer       ? 3U
+                                                           : 4U;
+                    inst.d = op.result;
+                    inst.width = op.kind == SvaKind::local ? width[op.result] : 32U;
+                    inst.x = pc;
+                    inst.y = 0U;
+                    inst.aux = sva_site_ordinal(op.site);
+                    if (op.kind != SvaKind::call) {
+                        (void)narrow(op.start);
+                    }
+                    if (op.kind == SvaKind::answer && !chunked(op.guards)) {
+                        (void)narrow(op.guards);
+                    }
+                    // The operations are generated code over the block's
+                    // memo and calls regions with the plan's local
+                    // constants (z the plan's index plus one; imm_a the
+                    // request and answer registers, imm_b guard_count).
+                    static const bool requests_native = [] {
+                        const char* text = std::getenv("FSIM_KERNEL_SVA_NATIVE");
+                        return text == nullptr || std::string_view { text } != "0";
+                    }();
+                    if (requests_native) {
+                        if (auto locals = sva_native_requests(member.operations(), op.site)) {
+                            const auto found = std::ranges::find(body.sva_plans, *locals);
+                            if (found == body.sva_plans.end()) {
+                                body.sva_plans.push_back(std::move(*locals));
+                                inst.z = static_cast<std::uint32_t>(body.sva_plans.size());
+                            } else {
+                                inst.z = static_cast<std::uint32_t>(
+                                    found - body.sva_plans.begin()) + 1U;
+                            }
+                            inst.imm_a = static_cast<std::uint64_t>(op.start)
+                                | (static_cast<std::uint64_t>(op.guards) << 32U);
+                            inst.imm_b = op.guard_count;
+                        }
+                    }
+                    return;
+                }
                 inst.op = op.kind == SvaKind::tick ? KOp::sva_tick : KOp::sva_outcome;
                 sva_table_used_ = true;
                 inst.d = narrow(op.result);

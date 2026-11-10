@@ -3260,6 +3260,9 @@ void Interpreter::Impl::commit_driver(
     const std::optional<SignalChangeOrigin> origin,
     const bool route_path)
 {
+    // The change is this driver's write (a nonblocking update, a staged or
+    // kernel-published write of the process).
+    const SignalChangeWriterScope writer_scope { *this, process };
     if (package_static_initialization_active) {
         initialize_package_static_signal(signal_id, std::move(value));
         return;
@@ -3460,6 +3463,7 @@ void Interpreter::Impl::commit_driver_slice(
     const std::optional<SignalChangeOrigin> origin,
     const bool route_path)
 {
+    const SignalChangeWriterScope writer_scope { *this, process };
     if (package_static_initialization_active) {
         if (signal_id >= driven_values.size()
             || offset > driven_values[signal_id].width()

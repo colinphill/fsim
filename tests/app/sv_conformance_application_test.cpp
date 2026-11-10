@@ -610,6 +610,98 @@ endmodule
     fsim::diagnostic::Engine nba_diagnostics;
     assert(!fsim::app::build_project(rejected_nba, nba_diagnostics));
     assert(has_diagnostic(nba_diagnostics, "FSIM-ELAB-SVASSIGN-001"));
+
+    // IEEE 1800-2023 10.4.2, 6.21: no element, at any level of the target,
+    // of a dynamically sized array variable (dynamic array, associative
+    // array or queue, 6.24.1, 7.4) is written by a nonblocking assignment.
+    const std::pair<const char*, const char*> dynamic_targets[] {
+        { "queue", "int q[$]; initial begin q = '{1}; q[0] <= 2; end" },
+        { "associative", "int a[int]; initial a[3] <= 2;" },
+        { "nested-queue",
+          "int q[2][$]; initial begin q[1] = '{1}; q[1][0] <= 2; end" },
+        { "member",
+          "typedef struct { int d[]; } holder_t; holder_t h;\n"
+          "  initial begin h.d = new[1]; h.d[0] <= 2; end" },
+        { "part-select",
+          "logic [7:0] d[]; initial begin d = new[1]; d[0][3:0] <= 4'd5; end" },
+    };
+    for (const auto& [name, body] : dynamic_targets) {
+        const auto rejected_source
+            = assignments / (std::string { "dynamic-nba-" } + name + ".sv");
+        write_text(rejected_source,
+            std::string { "module assignment_revision(output logic [31:0] "
+                          "result);\n  " }
+                + body + "\nendmodule\n");
+        fsim::project::Config rejected = rejected_nba;
+        rejected.project.name
+            = std::string { "sv-2023-dynamic-nba-" } + name;
+        rejected.source_sets = { identity_source_set(
+            fsim::project::Language::system_verilog, "2023",
+            rejected_source) };
+        fsim::diagnostic::Engine diagnostics;
+        assert(!fsim::app::build_project(rejected, diagnostics));
+        assert(has_diagnostic(diagnostics, "FSIM-ELAB-SVASSIGN-001"));
+    }
+
+    // The whole dynamically sized variable remains a legal target.
+    const auto whole_source = assignments / "dynamic-nba-whole.sv";
+    write_text(
+        whole_source,
+        R"(module assignment_revision(output logic [31:0] result);
+  int values[];
+  int q[$];
+  initial begin
+    values = '{1, 2};
+    q = '{3};
+    values <= '{5, 6};
+    q <= '{7, 8};
+    result = values[0] * 1000 + values[1] * 100 + q[0] * 10 + q.size();
+    #1 result = result * 10000 + values[0] * 1000 + values[1] * 100
+        + q[0] * 10 + q.size();
+  end
+endmodule
+)");
+    fsim::project::Config whole = rejected_nba;
+    whole.project.name = "sv-2023-dynamic-nba-whole";
+    whole.source_sets = { identity_source_set(
+        fsim::project::Language::system_verilog, "2023", whole_source) };
+    const auto whole_interpreted = run_assignment_result(
+        whole, fsim::app::SimulationEngine::interpreter);
+    assert(whole_interpreted == 1231U * 10000U + 5672U);
+    whole.build.optimization = fsim::project::Optimization::o2;
+    whole.build.cache_path = assignments / "whole-cache-o2";
+    assert(run_assignment_result(whole, fsim::app::SimulationEngine::compiled)
+        == whole_interpreted);
+
+    // An automatic variable is never a nonblocking target (IEEE 1800-2017
+    // and 1800-2023 6.21, 10.4.2), in any profile.
+    const std::pair<const char*, const char*> automatic_targets[] {
+        { "automatic-block",
+          "initial begin automatic int k; k <= 1; end" },
+        { "automatic-always",
+          "always @(result) begin : b automatic logic [3:0] k; k <= 4'd1; "
+          "end" },
+        { "automatic-task-local",
+          "task t(); automatic int k; k <= 1; endtask\n  initial t();" },
+    };
+    for (const auto* standard : { "2017", "2023" }) {
+        for (const auto& [name, body] : automatic_targets) {
+            const auto rejected_source = assignments
+                / (std::string { "nba-" } + name + "-" + standard + ".sv");
+            write_text(rejected_source,
+                std::string { "module assignment_revision(output logic "
+                              "[31:0] result);\n  " }
+                    + body + "\nendmodule\n");
+            fsim::project::Config rejected = rejected_nba;
+            rejected.project.name = std::string { "sv-nba-" } + name;
+            rejected.source_sets = { identity_source_set(
+                fsim::project::Language::system_verilog, standard,
+                rejected_source) };
+            fsim::diagnostic::Engine diagnostics;
+            assert(!fsim::app::build_project(rejected, diagnostics));
+            assert(has_diagnostic(diagnostics, "FSIM-SV-SEM-397"));
+        }
+    }
 }
 
 void test_streaming_and_aggregate_assignment_rules(

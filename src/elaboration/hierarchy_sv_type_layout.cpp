@@ -810,18 +810,43 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
             return 0U;
         }
     };
+    // The element count of a list of ranges.
+    const auto product = [](const std::vector<runtime::SystemVerilogVpiRange>& ranges) {
+        std::uint64_t result = 1U;
+        for (const auto& range : ranges) {
+            result *= elaboration_detail::index_distance(range.left, range.right)
+                + 1U;
+        }
+        return result;
+    };
     // Binding composes a typedef's own dimensions into the reference that
-    // names it; they belong to the named level.
+    // names it; they belong to the named level. A packed array typedef over
+    // another named packed array holds only its own dimensions, the rest
+    // being its element's (37.25 detail 8), so all of them are matched
+    // first.
     const auto drop_named = [](std::vector<runtime::SystemVerilogVpiRange>& ranges,
                                 const Typespec& named) {
-        if (named.name.empty() || named.ranges.empty()
-            || named.ranges.size() > ranges.size()
-            || !std::equal(named.ranges.begin(), named.ranges.end(),
-                ranges.end()
-                    - static_cast<std::ptrdiff_t>(named.ranges.size()))) {
+        if (named.name.empty() || named.ranges.empty()) {
             return;
         }
-        ranges.resize(ranges.size() - named.ranges.size());
+        const auto drop = [&](const std::vector<runtime::SystemVerilogVpiRange>& own) {
+            if (own.size() > ranges.size()
+                || !std::equal(own.begin(), own.end(),
+                    ranges.end() - static_cast<std::ptrdiff_t>(own.size()))) {
+                return false;
+            }
+            ranges.resize(ranges.size() - own.size());
+            return true;
+        };
+        auto all = named.ranges;
+        for (const auto* level = &named; level->kind == Kind::PackedArray
+             && !level->element.empty();) {
+            level = &level->element.front();
+            all.insert(all.end(), level->ranges.begin(), level->ranges.end());
+        }
+        if (all.size() == named.ranges.size() || !drop(all)) {
+            (void)drop(named.ranges);
+        }
     };
     support::ActiveSet<semantic::sv::TypeReference> build_active;
     const auto build = [&](const auto& self,
@@ -1009,15 +1034,6 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
                 = support::with_stack([&] { return self(self, element_reference, use_scope, depth + 1U); });
                 element && !element->name.empty()) {
                 const auto element_bits = bits(bits, *element);
-                const auto product = [](const auto& ranges) {
-                    std::uint64_t result = 1U;
-                    for (const auto& range : ranges) {
-                        result *= elaboration_detail::index_distance(
-                                      range.left, range.right)
-                            + 1U;
-                    }
-                    return result;
-                };
                 const auto total = product(dimensions);
                 auto outer = dimensions;
                 if (element_bits != 0U && total % element_bits == 0U) {
@@ -1031,6 +1047,12 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
                         array.ranges = std::move(outer);
                         array.element.push_back(std::move(*element));
                         return array;
+                    }
+                    // No dimensions over the typedef: the type is that
+                    // typedef itself, whose shape a typedef of it copied
+                    // (7.4.1, 37.25 details 1, 8).
+                    if (total == element_bits) {
+                        return element;
                     }
                 }
             }
@@ -1165,12 +1187,43 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
                 element.packed_range.reset();
                 element.packed_over_named_type = false;
             }
-            auto inner = support::with_stack([&] { return self(self, element, record_scope, depth + 1U); });
+            // Packed dimensions composed over a named typedef (`elem_t
+            // [1:3]`, `parrtype [2:1]`, 7.4.1): the element is that typedef,
+            // which keeps its name, and the leading dimensions whose element
+            // count is the composed width over the typedef's are this
+            // typedef's own (37.25 details 1, 8).
+            std::optional<Typespec> inner;
+            if (array.kind == Kind::PackedArray
+                && record->base.composed_over.target.valid()) {
+                semantic::sv::TypeReference over;
+                over.target = record->base.composed_over;
+                auto composed = support::with_stack([&] { return self(self, over, record_scope, depth + 1U); });
+                const auto element_bits = composed && !composed->name.empty()
+                    ? bits(bits, *composed)
+                    : 0U;
+                const auto total = product(array.ranges);
+                if (element_bits != 0U && total % element_bits == 0U) {
+                    auto outer = array.ranges;
+                    while (!outer.empty()
+                        && product(outer) > total / element_bits) {
+                        outer.pop_back();
+                    }
+                    if (product(outer) == total / element_bits) {
+                        array.ranges = std::move(outer);
+                        inner = std::move(composed);
+                    }
+                }
+            }
+            const bool composed_element = inner.has_value();
+            if (!composed_element) {
+                inner = support::with_stack([&] { return self(self, element, record_scope, depth + 1U); });
+            }
             if (!inner) {
                 return std::nullopt;
             }
             // The last range may be the flattened width of all of them.
-            if (array.kind == Kind::PackedArray && !array.ranges.empty()) {
+            if (!composed_element && array.kind == Kind::PackedArray
+                && !array.ranges.empty()) {
                 std::uint64_t outer = 1U;
                 for (std::size_t index = 0U; index + 1U < array.ranges.size();
                      ++index) {
@@ -1191,14 +1244,20 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
             if (array.ranges.empty() && array.kind == Kind::PackedArray) {
                 // A typedef of another named type is an alias of it; one of
                 // the structure its own declaration defines is that type.
+                // A typedef of a named packed array is that array (37.25
+                // detail 1).
                 auto aliased = std::move(*inner);
                 named = aliased;
                 named->alias.clear();
-                if (!base_definition->systemverilog->name.starts_with('@')) {
+                if (composed_element
+                        ? !aliased.name.empty()
+                        : !base_definition->systemverilog->name.starts_with('@')) {
                     named->alias.push_back(std::move(aliased));
                 }
                 named->name = record->name;
-                named->ranges.clear();
+                if (!composed_element) {
+                    named->ranges.clear();
+                }
                 drop_named(dimensions, *named);
                 if (dimensions.empty()) {
                     return named;

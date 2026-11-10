@@ -1005,41 +1005,71 @@ namespace {
         return inspect(inspect, expression_id);
     }
 
-    bool vhdl_predefined_character_subtype(
+    // The predefined enumeration type a subtype indication's chain of
+    // subtype and alias declarations ends at: BOOLEAN, BIT or CHARACTER of
+    // STD.STANDARD (IEEE 1076-2019 16.3) or STD_ULOGIC of
+    // IEEE.STD_LOGIC_1164 (16.7). A retained declaration of one is known by
+    // its declaration, an enumeration type declared in that package; a type
+    // mark whose declaration the compiler provides (the base of `X01Z`, or
+    // CHARACTER without a retained STD.STANDARD) by what the mark denotes
+    // where its declaration is (12.3, 12.4).
+    std::optional<support::VhdlIntrinsicEnumeration>
+    vhdl_predefined_intrinsic_enumeration(
         const semantic::SpecializedHirUnit& unit,
         const semantic::vhdl::SubtypeIndication& subtype,
         const semantic::ScopeId use_scope,
         const std::span<const semantic::CompiledBindingFrame> binding_frames)
     {
+        using Intrinsic = support::VhdlIntrinsicEnumeration;
         const semantic::CompiledDesignResolver resolver {
             unit, binding_frames
         };
         std::unordered_set<std::uint32_t> visited;
-        const auto standard_character_definition = [&](const auto& definition) {
-            if (definition.form != semantic::vhdl::TypeForm::enumeration
-                || !same_hir_identifier(
-                    definition.name, "character", true)) {
-                return false;
-            }
-            const auto declaration = unit.find_declaration(
-                definition.declaration);
+        // An enumeration type declared in STD.STANDARD or
+        // IEEE.STD_LOGIC_1164: the declaration with that expanded name.
+        const auto standard_definition = [&](const auto& definition)
+            -> std::optional<Intrinsic> {
+            const auto declaration = definition.form
+                    == semantic::vhdl::TypeForm::enumeration
+                ? unit.find_declaration(definition.declaration)
+                : std::nullopt;
             if (!declaration || declaration->vhdl == nullptr) {
-                return false;
+                return std::nullopt;
             }
-            return unit.design().vhdl_scope_in_package(
-                declaration->vhdl->scope, "std", "standard");
+            const auto scope = declaration->vhdl->scope;
+            const auto declared = [&](const std::string_view library,
+                                      const std::string_view package,
+                                      const std::string_view name) {
+                return same_hir_identifier(definition.name, name, true)
+                    && unit.design().vhdl_scope_in_package(
+                        scope, library, package);
+            };
+            if (declared("std", "standard", "boolean")) {
+                return Intrinsic::boolean;
+            }
+            if (declared("std", "standard", "bit")) {
+                return Intrinsic::bit;
+            }
+            if (declared("std", "standard", "character")) {
+                return Intrinsic::character;
+            }
+            if (declared("ieee", "std_logic_1164", "std_ulogic")) {
+                return Intrinsic::std_ulogic;
+            }
+            return std::nullopt;
         };
         const auto classify = [&](const auto& self,
                                   semantic::vhdl::SubtypeIndication current,
-                                  const semantic::ScopeId scope) -> bool {
-            auto target = current.type_mark.target;
+                                  const semantic::ScopeId scope)
+            -> std::optional<Intrinsic> {
+            const auto target = current.type_mark.target;
             if (target.valid()) {
                 if (!visited.insert(target.value()).second) {
-                    return false;
+                    return std::nullopt;
                 }
                 const auto type = unit.find_type(target);
                 if (!type || type->vhdl == nullptr) {
-                    return false;
+                    return std::nullopt;
                 }
                 const auto& definition = *type->vhdl;
                 if (definition.form == semantic::vhdl::TypeForm::subtype
@@ -1053,35 +1083,38 @@ namespace {
                     }
                     return self(self, definition.base, definition_scope);
                 }
-                return standard_character_definition(definition);
+                return standard_definition(definition);
             }
-
-            auto spelling
-                = std::string_view { current.type_mark.spelling };
-            constexpr auto builtin_prefix = semantic::vhdl::builtin_prefix;
-            const bool compiler_builtin
-                = spelling.starts_with(builtin_prefix);
-            if (compiler_builtin) {
-                spelling.remove_prefix(builtin_prefix.size());
+            const auto spelling = semantic::vhdl::without_builtin_prefix(
+                current.type_mark.spelling);
+            if (spelling.empty()) {
+                return std::nullopt;
             }
-            if (same_hir_identifier(
-                    spelling, "std.standard.character", true)) {
-                return true;
-            }
-
-            if (!compiler_builtin && !spelling.empty()) {
+            if (!current.type_mark.spelling.starts_with(
+                    semantic::vhdl::builtin_prefix)) {
                 if (const auto resolved
                     = resolver.resolve_vhdl_named_type(spelling, scope)) {
                     current.type_mark.target = *resolved;
                     return self(self, std::move(current), scope);
                 }
             }
-            if (same_hir_identifier(spelling, "standard.character", true)) {
-                return true;
-            }
-            return same_hir_identifier(spelling, "character", true);
+            return resolver.resolve_vhdl_intrinsic_enumeration(
+                spelling, scope);
         };
         return classify(classify, subtype, use_scope);
+    }
+
+    // Whether a subtype indication denotes CHARACTER of STD.STANDARD or a
+    // subtype of it (IEEE 1076-2019 16.3).
+    bool vhdl_predefined_character_subtype(
+        const semantic::SpecializedHirUnit& unit,
+        const semantic::vhdl::SubtypeIndication& subtype,
+        const semantic::ScopeId use_scope,
+        const std::span<const semantic::CompiledBindingFrame> binding_frames)
+    {
+        return vhdl_predefined_intrinsic_enumeration(
+                   unit, subtype, use_scope, binding_frames)
+            == support::VhdlIntrinsicEnumeration::character;
     }
 
     // The array types of IEEE numeric_std, by simple name.
@@ -1792,6 +1825,39 @@ Lowerer::hir_vhdl_discrete_subtype_choice(
     return std::pair { std::min(*left, *right), std::max(*left, *right) };
 }
 
+std::optional<std::int64_t> Lowerer::hir_vhdl_bound_position(
+    const semantic::ExpressionId expression_id) const
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return std::nullopt;
+    }
+    const auto bound = specialized_hir_unit_->find_expression(expression_id);
+    if (!bound || bound->vhdl == nullptr) {
+        return std::nullopt;
+    }
+    // A bound of `T range L to R`, which the parser keeps as T'(L): the
+    // position of L in T.
+    if (bound->vhdl->kind == semantic::vhdl::ExpressionKind::call
+        && bound->vhdl->operands.size() == 1U
+        && bound->vhdl->text.starts_with(
+            semantic::vhdl::qualified_expression_prefix)) {
+        return hir_vhdl_bound_position(bound->vhdl->operands.front());
+    }
+    if (bound->vhdl->kind == semantic::vhdl::ExpressionKind::logic_literal) {
+        const auto type = support::find_vhdl_intrinsic_enumeration(
+            bound->vhdl->resolved_builtin_type);
+        return type ? support::vhdl_intrinsic_enumeration_position(
+                          *type, bound->vhdl->text)
+                    : std::nullopt;
+    }
+    // A STD_ULOGIC-valued attribute (`X01Z'LEFT` bounding `array (X01Z)`).
+    if (bound->vhdl->kind == semantic::vhdl::ExpressionKind::call
+        && bound->vhdl->text.starts_with('\'')) {
+        return specialized_hir_unit_->evaluate_vhdl_position(expression_id);
+    }
+    return std::nullopt;
+}
+
 std::optional<std::int64_t> Lowerer::hir_vhdl_subtype_name_bound(
     const semantic::ExpressionId expression_id, const std::size_t depth) const
 {
@@ -1846,17 +1912,16 @@ std::optional<std::int64_t> Lowerer::hir_vhdl_subtype_name_bound(
     const auto bound = [&](const std::optional<std::int64_t> value,
                            const std::optional<semantic::ExpressionId> bound_id)
         -> std::optional<std::int64_t> {
+        // A character literal bound is its position in the type its context
+        // gave it (9.3.2): 'X' of `X01Z` is STD_ULOGIC's position 1, not
+        // CHARACTER's 88.
+        if (bound_id) {
+            if (const auto position = hir_vhdl_bound_position(*bound_id)) {
+                return position;
+            }
+        }
         if (value || !bound_id) {
             return value;
-        }
-        const auto literal = specialized_hir_unit_->find_expression(*bound_id);
-        if (literal && literal->vhdl != nullptr
-            && literal->vhdl->kind
-                == semantic::vhdl::ExpressionKind::logic_literal
-            && literal->vhdl->text.size() == 3U
-            && literal->vhdl->text.front() == '\'') {
-            return static_cast<std::int64_t>(
-                static_cast<unsigned char>(literal->vhdl->text[1]));
         }
         if (const auto nested = support::with_stack([&] { return hir_vhdl_subtype_name_bound(
                 *bound_id, depth + 1U); })) {
@@ -2311,6 +2376,16 @@ std::optional<std::int64_t> Lowerer::hir_constant_integer(
                 if (const auto code = hir_vhdl_character_literal_code(candidate, 0U)) {
                     return finish(static_cast<std::int64_t>(*code));
                 }
+            }
+            // So is one the context-typing pass gave STD_ULOGIC its
+            // STD_ULOGIC position, '1' is 3 (9.3.2, 16.7), as an index or
+            // a slice bound uses it (8.4, 8.5), never its value encoding.
+            if (support::find_vhdl_intrinsic_enumeration(
+                    literal->vhdl->resolved_builtin_type)
+                == support::VhdlIntrinsicEnumeration::std_ulogic) {
+                return finish(support::vhdl_intrinsic_enumeration_position(
+                    support::VhdlIntrinsicEnumeration::std_ulogic,
+                    literal->vhdl->text));
             }
         }
         // A name a callable frame binds (a class parameter of the running
@@ -4991,7 +5066,22 @@ bool Lowerer::hir_expression_signed(
         return false;
     }
     if (hir_vhdl_runtime_string_bound(expression_id)
-        || hir_captured_signed_.contains(expression_id.value())) {
+        || hir_captured_signed_.contains(expression_id.value())
+        || hir_probed_iterator_signed_.contains(expression_id.value())) {
+        return true;
+    }
+    if (hir_vhdl_loop_parameter_subtype(expression_id)) {
+        return false;
+    }
+    // A scalar T'VALUE of an integer type is a signed integer (IEEE
+    // 1076-2019 16.2.2, 5.2.3).
+    if (const auto value_prefix
+        = hir_vhdl_value_attribute_prefix(expression_id);
+        value_prefix && !hir_vhdl_composite_value_form(*value_prefix)
+        && hir_effective_vhdl_subtype(*value_prefix)
+                .value_or(*value_prefix)
+                .domain
+            == semantic::vhdl::ValueDomain::integer) {
         return true;
     }
     // A VPI system function has the shape its registration gives it
@@ -5276,6 +5366,77 @@ bool Lowerer::hir_expression_signed(
             && (hir_container_object_binding(expression->systemverilog->operands.front())
                 || hir_static_container_expression_type(expression->systemverilog->operands.front()))) {
             return true;
+        }
+        // exists(), first(), last(), next() and prev() return int (IEEE
+        // 1800-2023 7.9.3-7.9.7); $clog2 an integer (20.8.1).
+        if (expression->systemverilog != nullptr
+            && expression->systemverilog->kind == semantic::sv::ExpressionKind::call
+            && (((expression->systemverilog->text == ".exists"
+                     || expression->systemverilog->text == ".first"
+                     || expression->systemverilog->text == ".last"
+                     || expression->systemverilog->text == ".next"
+                     || expression->systemverilog->text == ".prev")
+                    && expression->systemverilog->operands.size() == 2U
+                    && (hir_container_object_binding(
+                            expression->systemverilog->operands.front())
+                        || hir_static_container_expression_type(
+                            expression->systemverilog->operands.front())))
+                || (expression->systemverilog->text == "$clog2"
+                    && expression->systemverilog->operands.size() == 1U))) {
+            return true;
+        }
+        // A reduction has the element type's signedness, or the with
+        // expression's with the iterator an element (IEEE 1800-2023 7.12.3).
+        if (expression->systemverilog != nullptr
+            && expression->systemverilog->kind == semantic::sv::ExpressionKind::call
+            && (expression->systemverilog->text == ".sum"
+                || expression->systemverilog->text == ".product"
+                || expression->systemverilog->text == ".and"
+                || expression->systemverilog->text == ".or"
+                || expression->systemverilog->text == ".xor")
+            && !expression->systemverilog->operands.empty()
+            && expression->systemverilog->operands.size() <= 3U) {
+            const auto& operands = expression->systemverilog->operands;
+            auto receiver = hir_static_container_expression_type(
+                operands.front());
+            if (!receiver) {
+                if (const auto binding
+                    = hir_container_object_binding(operands.front());
+                    binding && binding->type != nullptr) {
+                    receiver = *binding->type;
+                }
+            }
+            if (receiver
+                && (receiver->element_kind == ContainerElementKind::Packed
+                    || receiver->element_kind
+                        == ContainerElementKind::Scalar)) {
+                if (operands.size() == 1U) {
+                    return receiver->signed_elements;
+                }
+                const auto iterator = operands.size() == 3U
+                    ? specialized_hir_unit_->find_expression(operands[1])
+                    : std::nullopt;
+                const auto iterator_name
+                    = iterator && iterator->systemverilog != nullptr
+                    ? std::string_view { iterator->systemverilog->text }
+                    : std::string_view { "item" };
+                std::vector<std::uint32_t> probed;
+                if (receiver->signed_elements) {
+                    for (const auto& [id, is_index] :
+                        hir_container_iterator_references(
+                            operands.back(), iterator_name)) {
+                        if (!is_index
+                            && hir_probed_iterator_signed_.insert(id).second) {
+                            probed.push_back(id);
+                        }
+                    }
+                }
+                const bool result = hir_expression_signed(operands.back());
+                for (const auto id : probed) {
+                    hir_probed_iterator_signed_.erase(id);
+                }
+                return result;
+            }
         }
         if (expression->systemverilog != nullptr
             && expression->systemverilog->kind == semantic::sv::ExpressionKind::call
@@ -5618,32 +5779,34 @@ bool Lowerer::hir_dynamic_index_supported(
     }
     return ((*index_domain == frontend::ValueDomain::Integer
                 && (*index_width == 32U || *index_width == 64U))
-            || hir_vhdl_enumeration_index(index, process_scope))
+            || hir_vhdl_position_index(index, process_scope))
         && range_width - 1U
         <= static_cast<std::uint64_t>(
             std::numeric_limits<std::int32_t>::max());
 }
 
-// A loop parameter of a BOOLEAN range (`for b in boolean`, `false to
-// true`) is BOOLEAN (IEEE 1076-2008 10.10); its loop counter still steps as
-// an integer position.
-bool Lowerer::hir_vhdl_boolean_loop_parameter(
+// The for-loop statement whose parameter (IEEE 1076-2008 10.10) a VHDL name
+// denotes, or null.
+const semantic::vhdl::Statement* Lowerer::hir_vhdl_parameter_loop(
     const semantic::ExpressionId expression_id) const
 {
+    if (specialized_hir_unit_ == nullptr) {
+        return nullptr;
+    }
     const auto expression = specialized_hir_unit_->find_expression(
         expression_id);
     if (!expression || expression->vhdl == nullptr
         || expression->vhdl->kind != semantic::vhdl::ExpressionKind::name
         || !expression->vhdl->referenced_name
         || !expression->vhdl->referenced_name->selected) {
-        return false;
+        return nullptr;
     }
     const auto declaration = specialized_hir_unit_->find_declaration(
         *expression->vhdl->referenced_name->selected);
     if (!declaration || declaration->vhdl == nullptr
         || declaration->vhdl->form
             != semantic::vhdl::DeclarationForm::constant) {
-        return false;
+        return nullptr;
     }
     const auto loop_scope = declaration->vhdl->scope;
     const auto& statements = specialized_hir_unit_->design().vhdl_hir.statements();
@@ -5661,28 +5824,111 @@ bool Lowerer::hir_vhdl_boolean_loop_parameter(
     const auto candidates = index.parameter_loops_by_scope->find(
         loop_scope.value());
     if (candidates == index.parameter_loops_by_scope->end()) {
-        return false;
+        return nullptr;
     }
     const auto position = std::ranges::find_if(candidates->second,
         [&](const std::size_t candidate) {
             return same_hir_identifier(statements[candidate].loop_variable,
                 declaration->vhdl->name, true);
         });
-    if (position == candidates->second.end()) {
-        return false;
+    return position == candidates->second.end() ? nullptr
+                                                : &statements[*position];
+}
+
+// A loop parameter of a BOOLEAN range (`for b in boolean`, `false to
+// true`, `boolean'low to boolean'high`, a subtype of BOOLEAN) is BOOLEAN
+// (IEEE 1076-2019 10.10); its loop counter still steps as an integer
+// position.
+bool Lowerer::hir_vhdl_boolean_loop_parameter(
+    const semantic::ExpressionId expression_id) const
+{
+    return hir_vhdl_intrinsic_loop_parameter(expression_id)
+        == support::VhdlIntrinsicEnumeration::boolean;
+}
+
+// A loop parameter has the base type of its discrete range (IEEE 1076-2019
+// 10.10, 5.2.1): BOOLEAN, BIT, CHARACTER or STD_ULOGIC for a range whose
+// bounds are literals of BOOLEAN or literals the context typed as one of the
+// others (`false to true`, `'X' to 'Z'`), whose bounds are T'LEFT, T'RIGHT,
+// T'LOW or T'HIGH of a type mark T denoting one of these types or a subtype
+// of one (16.2.2: `boolean'low to boolean'high`, `lower'high downto
+// lower'low`), or for the range of such a type mark (`std_ulogic`, `X01Z`,
+// `boolean'range`).
+std::optional<support::VhdlIntrinsicEnumeration>
+Lowerer::hir_vhdl_intrinsic_loop_parameter(
+    const semantic::ExpressionId expression_id) const
+{
+    using Intrinsic = support::VhdlIntrinsicEnumeration;
+    const auto* declared_loop = hir_vhdl_parameter_loop(expression_id);
+    if (declared_loop == nullptr || !declared_loop->loop_initial) {
+        return std::nullopt;
     }
-    const auto declared_loop = statements.begin()
-        + static_cast<std::ptrdiff_t>(*position);
-    const auto boolean_bound = [&](const std::optional<semantic::ExpressionId> id) {
-        const auto bound = id ? specialized_hir_unit_->find_expression(*id)
-                              : std::nullopt;
-        return bound && bound->vhdl != nullptr
-            && bound->vhdl->kind
-                == semantic::vhdl::ExpressionKind::boolean_literal;
+    // The predefined enumeration a type mark denotes, through its subtype
+    // chain (`X01Z`, `lower`): its declaration when the design retains one,
+    // else what the name denotes where it is written.
+    const auto type_mark_type = [&](const semantic::ExpressionId mark_id)
+        -> std::optional<Intrinsic> {
+        const auto mark = specialized_hir_unit_->find_expression(mark_id);
+        if (!mark || mark->vhdl == nullptr
+            || mark->vhdl->kind != semantic::vhdl::ExpressionKind::name) {
+            return std::nullopt;
+        }
+        semantic::vhdl::SubtypeIndication subtype;
+        subtype.type_mark.spelling = mark->vhdl->text;
+        if (const auto selected_id = hir_referenced_declaration(mark_id)) {
+            const auto selected
+                = specialized_hir_unit_->find_declaration(*selected_id);
+            if (selected && selected->vhdl != nullptr) {
+                if (!selected->vhdl->declared_type) {
+                    return std::nullopt;
+                }
+                subtype.type_mark.target = *selected->vhdl->declared_type;
+            }
+        }
+        return vhdl_predefined_intrinsic_enumeration(*specialized_hir_unit_,
+            subtype, mark->vhdl->scope, hir_generic_binding_frames_);
     };
-    if (boolean_bound(declared_loop->loop_initial)
-        && boolean_bound(declared_loop->loop_limit)) {
-        return true;
+    const auto bound_type = [&](const std::optional<semantic::ExpressionId> id)
+        -> std::optional<Intrinsic> {
+        auto bound = id ? specialized_hir_unit_->find_expression(*id)
+                        : std::nullopt;
+        // A bound of `T range L to R`, which the parser keeps as T'(L).
+        if (bound && bound->vhdl != nullptr
+            && bound->vhdl->kind == semantic::vhdl::ExpressionKind::call
+            && bound->vhdl->operands.size() == 1U
+            && bound->vhdl->text.starts_with(
+                semantic::vhdl::qualified_expression_prefix)) {
+            bound = specialized_hir_unit_->find_expression(
+                bound->vhdl->operands.front());
+        }
+        if (!bound || bound->vhdl == nullptr) {
+            return std::nullopt;
+        }
+        // FALSE and TRUE (16.3).
+        if (bound->vhdl->kind
+            == semantic::vhdl::ExpressionKind::boolean_literal) {
+            return Intrinsic::boolean;
+        }
+        // A character literal is of the type the context-typing pass gave
+        // it (9.3.2).
+        if (bound->vhdl->kind == semantic::vhdl::ExpressionKind::logic_literal) {
+            return support::find_vhdl_intrinsic_enumeration(
+                bound->vhdl->resolved_builtin_type);
+        }
+        // T'LEFT, T'RIGHT, T'LOW or T'HIGH of a type mark is a value of the
+        // base type of T (16.2.2).
+        if (bound->vhdl->kind == semantic::vhdl::ExpressionKind::call
+            && bound->vhdl->operands.size() == 1U
+            && semantic::vhdl::is_scalar_bound_attribute(bound->vhdl->text)) {
+            return type_mark_type(bound->vhdl->operands.front());
+        }
+        return std::nullopt;
+    };
+    if (declared_loop->loop_limit) {
+        const auto left = bound_type(declared_loop->loop_initial);
+        return left && left == bound_type(declared_loop->loop_limit)
+            ? left
+            : std::nullopt;
     }
     const auto range = specialized_hir_unit_->find_expression(
         *declared_loop->loop_initial);
@@ -5691,25 +5937,149 @@ bool Lowerer::hir_vhdl_boolean_loop_parameter(
         || range->vhdl->operands.size() != 1U
         || (range->vhdl->text != "'range"
             && range->vhdl->text != "'reverse_range")) {
-        return false;
+        return std::nullopt;
     }
-    const auto prefix = specialized_hir_unit_->find_expression(
-        range->vhdl->operands.front());
-    if (!prefix || prefix->vhdl == nullptr
-        || prefix->vhdl->kind != semantic::vhdl::ExpressionKind::name
-        || !same_hir_identifier(
-            simple_name_of(prefix->vhdl->text), "boolean", true)) {
-        return false;
-    }
-    // STD.STANDARD.BOOLEAN, not a user type of that name.
-    const auto selected = prefix->vhdl->referenced_name
-            && prefix->vhdl->referenced_name->selected
-        ? specialized_hir_unit_->find_declaration(
-              *prefix->vhdl->referenced_name->selected)
+    return type_mark_type(range->vhdl->operands.front());
+}
+
+std::optional<support::VhdlIntrinsicEnumeration>
+Lowerer::hir_vhdl_scalar_loop_parameter(
+    const semantic::ExpressionId expression_id) const
+{
+    const auto type = hir_vhdl_intrinsic_loop_parameter(expression_id);
+    return type == support::VhdlIntrinsicEnumeration::boolean
+            || type == support::VhdlIntrinsicEnumeration::bit
+            || type == support::VhdlIntrinsicEnumeration::std_ulogic
+        ? type
         : std::nullopt;
-    return !selected || selected->vhdl == nullptr
-        || specialized_hir_unit_->design().vhdl_scope_in_package(
-            selected->vhdl->scope, "std", "standard");
+}
+
+// The base type of the discrete range (IEEE 1076-2019 10.10): the declaration
+// of STD.STANDARD's BOOLEAN or BIT or of IEEE.STD_LOGIC_1164's STD_ULOGIC,
+// which its expanded name denotes when the design retains it, else a subtype
+// of the type the compiler provides, of that type's value domain.
+std::optional<semantic::vhdl::SubtypeIndication>
+Lowerer::hir_vhdl_scalar_loop_parameter_subtype(
+    const semantic::ExpressionId expression_id) const
+{
+    const auto type = hir_vhdl_scalar_loop_parameter(expression_id);
+    if (!type) {
+        return std::nullopt;
+    }
+    const auto domain = *type == support::VhdlIntrinsicEnumeration::std_ulogic
+        ? semantic::vhdl::ValueDomain::logic9
+        : *type == support::VhdlIntrinsicEnumeration::bit
+        ? semantic::vhdl::ValueDomain::bit2
+        : semantic::vhdl::ValueDomain::boolean;
+    const std::string_view name
+        = *type == support::VhdlIntrinsicEnumeration::std_ulogic ? "std_ulogic"
+        : *type == support::VhdlIntrinsicEnumeration::bit        ? "bit"
+                                                                 : "boolean";
+    const std::string_view package
+        = *type == support::VhdlIntrinsicEnumeration::std_ulogic
+        ? "ieee.std_logic_1164."
+        : "std.standard.";
+    semantic::vhdl::SubtypeIndication subtype;
+    subtype.type_mark.spelling = std::string { package } + std::string { name };
+    if (auto resolved = hir_effective_vhdl_subtype(subtype);
+        resolved && resolved->domain == domain
+        && vhdl_subtype_width(*resolved).value_or(1U) == 1U) {
+        return resolved;
+    }
+    subtype.type_mark.spelling = std::string { name };
+    subtype.domain = domain;
+    subtype.executable_width = 1U;
+    return subtype;
+}
+
+// The subtype every use of a for-loop parameter's name sees: the base type of
+// its discrete range (IEEE 1076-2019 10.10) when that is an enumeration type,
+// BOOLEAN, BIT or STD_ULOGIC as above, CHARACTER (16.3) or a type the design
+// declares (5.2.2.1). Its loop counter holds the position (5.2.2.1), which
+// is also the value's encoding for every one of these but STD_ULOGIC. No
+// subtype for any other name, nor for a loop over an integer range.
+std::optional<semantic::vhdl::SubtypeIndication>
+Lowerer::hir_vhdl_loop_parameter_subtype(
+    const semantic::ExpressionId expression_id) const
+{
+    const auto* const declared_loop = hir_vhdl_parameter_loop(expression_id);
+    if (declared_loop == nullptr) {
+        return std::nullopt;
+    }
+    // The subtypes of the bounds of a range `L to R`; none for a range given
+    // by a type mark or an attribute.
+    const auto bound_subtype = [&](
+        const std::optional<semantic::ExpressionId> bound)
+        -> std::optional<semantic::vhdl::SubtypeIndication> {
+        return declared_loop->loop_limit && bound
+            ? hir_vhdl_expression_subtype(*bound)
+            : std::nullopt;
+    };
+    const auto left = bound_subtype(declared_loop->loop_initial);
+    const auto right = bound_subtype(declared_loop->loop_limit);
+    // A range of integers, the usual one, is no enumeration's.
+    const auto integer_bound = [&](
+        const std::optional<semantic::ExpressionId> bound,
+        const std::optional<semantic::vhdl::SubtypeIndication>& subtype) {
+        const auto literal = bound
+            ? specialized_hir_unit_->find_expression(*bound)
+            : std::nullopt;
+        return (literal && literal->vhdl != nullptr
+                   && literal->vhdl->kind
+                       == semantic::vhdl::ExpressionKind::integer_literal)
+            || (subtype
+                && subtype->domain == semantic::vhdl::ValueDomain::integer);
+    };
+    if (declared_loop->loop_limit
+        && (integer_bound(declared_loop->loop_initial, left)
+            || integer_bound(declared_loop->loop_limit, right))) {
+        return std::nullopt;
+    }
+    if (auto scalar = hir_vhdl_scalar_loop_parameter_subtype(expression_id)) {
+        return scalar;
+    }
+    // CHARACTER: the range of a type mark of it or of a subtype of it
+    // (`lower`), or a range whose bounds are values of it (`character range
+    // 'a' to 'c'`, kept as qualified bounds, or `lower'high downto
+    // lower'low`).
+    const auto character_bound = [&](
+        const std::optional<semantic::vhdl::SubtypeIndication>& subtype) {
+        return subtype
+            && hir_vhdl_predefined_character_subtype(
+                *subtype, declared_loop->scope);
+    };
+    if (hir_vhdl_intrinsic_loop_parameter(expression_id)
+            == support::VhdlIntrinsicEnumeration::character
+        || (character_bound(left) && character_bound(right))) {
+        semantic::vhdl::SubtypeIndication character;
+        character.type_mark.spelling = "std.standard.character";
+        if (auto resolved = hir_effective_vhdl_subtype(character);
+            resolved && vhdl_subtype_width(*resolved).value_or(0U) == 8U) {
+            return resolved;
+        }
+        character.domain = semantic::vhdl::ValueDomain::bit2;
+        character.executable_width = 8U;
+        return character;
+    }
+    const auto enumeration = hir_vhdl_loop_parameter_enumeration(
+        expression_id);
+    const auto type = enumeration
+        ? specialized_hir_unit_->find_type(*enumeration)
+        : std::nullopt;
+    if (!type || type->vhdl == nullptr) {
+        return std::nullopt;
+    }
+    semantic::vhdl::SubtypeIndication subtype;
+    subtype.type_mark.target = *enumeration;
+    subtype.type_mark.spelling = type->vhdl->name;
+    // An enumeration value is held as its position (bit2); a type held
+    // otherwise (a retained STD_ULOGIC) is not one the counter encodes.
+    auto resolved = hir_effective_vhdl_subtype(subtype);
+    if (!resolved || resolved->domain != semantic::vhdl::ValueDomain::bit2
+        || !vhdl_subtype_width(*resolved)) {
+        return std::nullopt;
+    }
+    return resolved;
 }
 
 std::optional<semantic::TypeId>
@@ -5800,11 +6170,17 @@ Lowerer::hir_vhdl_loop_parameter_enumeration(
         }
         return result;
     };
+    // The name of a loop parameter has the type of its own loop's range
+    // (IEEE 1076-2019 10.10), found below without a search of the bounds.
+    const auto* const declared_loop = hir_vhdl_parameter_loop(value);
     // A directly overloaded enumeration literal can be a discrete-range
     // bound even though it has no selected declaration yet. Resolve it only
     // from the exact candidate declarations visible at that occurrence and
     // the common nominal enum of both endpoints.
     for (const auto& declared_statement : unit.design().vhdl_hir.statements()) {
+        if (declared_loop != nullptr) {
+            break;
+        }
         if (!declared_statement.loop_initial
             || !declared_statement.loop_limit
             || (*declared_statement.loop_initial != value
@@ -5826,35 +6202,14 @@ Lowerer::hir_vhdl_loop_parameter_enumeration(
             }
         }
     }
-    const auto expression = unit.find_expression(value);
-    if (!expression || expression->vhdl == nullptr
-        || expression->vhdl->kind != semantic::vhdl::ExpressionKind::name
-        || !expression->vhdl->referenced_name
-        || !expression->vhdl->referenced_name->selected) {
-        return std::nullopt;
-    }
-    const auto declaration = unit.find_declaration(
-        *expression->vhdl->referenced_name->selected);
-    if (!declaration || declaration->vhdl == nullptr
-        || declaration->vhdl->form
-            != semantic::vhdl::DeclarationForm::constant) {
-        return std::nullopt;
-    }
-    const auto loop_scope = declaration->vhdl->scope;
-    const auto& statements = unit.design().vhdl_hir.statements();
-    const auto declared_loop = std::ranges::find_if(
-        statements, [&](const semantic::vhdl::Statement& statement) {
-            return statement.nested_scope == loop_scope
-                && statement.loop_initial.has_value();
-        });
-    if (declared_loop == statements.end()) {
+    if (declared_loop == nullptr) {
         return std::nullopt;
     }
     const auto specialized_loop = unit.find_statement(declared_loop->id);
     const auto* loop = specialized_loop && specialized_loop->vhdl != nullptr
             && specialized_loop->vhdl->loop_initial
         ? specialized_loop->vhdl
-        : &*declared_loop;
+        : declared_loop;
     if (loop->loop_limit) {
         const auto common = common_range_enumeration(
             *loop->loop_initial, *loop->loop_limit);
@@ -6133,6 +6488,19 @@ bool Lowerer::hir_vhdl_enumeration_index(
         && vhdl_enumeration_definition(
                *specialized_hir_unit_, subtype->type_mark.target)
         != nullptr;
+}
+
+bool Lowerer::hir_vhdl_position_index(
+    const semantic::ExpressionId index,
+    const semantic::ScopeId process_scope) const
+{
+    if (hir_vhdl_enumeration_index(index, process_scope)) {
+        return true;
+    }
+    return hir_expression_width(index, process_scope)
+            == std::optional<std::size_t> { 1U }
+        && hir_expression_domain(index, process_scope)
+        == std::optional { frontend::ValueDomain::Logic9 };
 }
 
 std::optional<std::size_t> Lowerer::hir_dynamic_part_width(
@@ -15246,18 +15614,15 @@ Lowerer::hir_vhdl_attribute_profile(
     // A subtype's own range whose bounds do not fold here is not its base
     // type's range; the unit's evaluator may still fold it.
     bool own_range_unfolded { };
-    const semantic::vhdl::RangeConstraint* unfolded_range { };
     if (constraint != prefix_profile->subtype.constraints.end()) {
         scalar_range = concrete_range(*constraint);
         own_range_unfolded = !scalar_range;
-        unfolded_range = &*constraint;
     }
     if (!scalar_range && !own_range_unfolded && prefix_profile->definition
         && prefix_profile->definition->scalar_range) {
         scalar_range = concrete_range(
             *prefix_profile->definition->scalar_range);
         own_range_unfolded = !scalar_range;
-        unfolded_range = &*prefix_profile->definition->scalar_range;
     }
     if (own_range_unfolded) {
         if (source.operands.size() != 1U || implicit_object_value
@@ -15265,39 +15630,15 @@ Lowerer::hir_vhdl_attribute_profile(
             return fail(HirVhdlAttributeFailure::scalar_profile);
         }
         const auto prefix_width = vhdl_subtype_width(prefix_profile->subtype);
-        auto bound = specialized_hir_unit_->evaluate_integral_expression(
+        // The bound as a position, the runtime encoding of an enumeration
+        // value: a STD_ULOGIC-valued attribute's integral fold is not one.
+        // (A range of STD_ULOGIC literals, `'X' to '1'`, folds above: its
+        // bounds are positions in the type their context gives them.)
+        auto bound = specialized_hir_unit_->evaluate_vhdl_position(
             expression_id);
-        // A STD_ULOGIC range's bounds are character literals ('X' to '1'):
-        // their positions in STD_ULOGIC (IEEE 1164).
-        if (!bound && prefix_width == std::optional<std::size_t> { 1U }
-            && vhdl_value_domain(prefix_profile->subtype.domain)
-                == frontend::ValueDomain::Logic9) {
-            constexpr std::string_view literals = "UX01ZWLH-";
-            const auto position = [&](const std::optional<semantic::ExpressionId>
-                                          id) -> std::optional<std::int64_t> {
-                const auto node = id
-                    ? specialized_hir_unit_->find_expression(*id)
-                    : std::nullopt;
-                if (!node || node->vhdl == nullptr
-                    || node->vhdl->text.size() != 3U
-                    || node->vhdl->text.front() != '\'') {
-                    return std::nullopt;
-                }
-                const auto found = literals.find(node->vhdl->text[1]);
-                return found == std::string_view::npos
-                    ? std::nullopt
-                    : std::optional { static_cast<std::int64_t>(found) };
-            };
-            const auto left = position(unfolded_range->left_expression);
-            const auto right = position(unfolded_range->right_expression);
-            if (left && right) {
-                const auto low = std::min(*left, *right);
-                const auto high = std::max(*left, *right);
-                bound = source.text == "'left" ? *left
-                    : source.text == "'right"  ? *right
-                    : source.text == "'low"    ? low
-                                               : high;
-            }
+        if (!bound) {
+            bound = specialized_hir_unit_->evaluate_integral_expression(
+                expression_id);
         }
         if (!bound || !prefix_width || *prefix_width == 0U) {
             return fail(HirVhdlAttributeFailure::scalar_profile);
@@ -15889,7 +16230,8 @@ Lowerer::hir_vhdl_attribute_profile(
                     || nested_attribute == "'val" || nested_attribute == "'succ"
                     || nested_attribute == "'pred"
                     || nested_attribute == "'leftof"
-                    || nested_attribute == "'rightof";
+                    || nested_attribute == "'rightof"
+                    || nested_attribute == "'value";
                 const auto nested_prefix = enumeration_valued
                     ? hir_vhdl_type_actual(
                           value_expression->vhdl->operands.front())
@@ -16720,6 +17062,23 @@ std::optional<frontend::ValueDomain> Lowerer::hir_expression_domain(
         = hir_captured_update_indices_.find(expression_id.value());
         captured != hir_captured_update_indices_.end()) {
         return register_domain(captured->second);
+    }
+    // A loop parameter of an enumeration type is a value of that type
+    // (IEEE 1076-2019 10.10), not its integer loop counter.
+    if (const auto loop = hir_vhdl_loop_parameter_subtype(expression_id)) {
+        return vhdl_value_domain(loop->domain);
+    }
+    // A scalar T'VALUE is a value of the base type of T (IEEE 1076-2019
+    // 16.2.2).
+    if (const auto value_prefix
+        = hir_vhdl_value_attribute_prefix(expression_id);
+        value_prefix && !hir_vhdl_composite_value_form(*value_prefix)) {
+        const auto effective = hir_effective_vhdl_subtype(*value_prefix)
+                                   .value_or(*value_prefix);
+        if (const auto domain = vhdl_value_domain(effective.domain);
+            domain != frontend::ValueDomain::Unknown) {
+            return domain;
+        }
     }
     if (const auto shaped = hir_vhdl_shaped_domain(expression_id)) {
         return shaped;
@@ -20478,6 +20837,11 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
     }
+    // A loop parameter of an enumeration type is one value of its type
+    // (IEEE 1076-2019 10.10), not its integer loop counter.
+    if (const auto loop = hir_vhdl_loop_parameter_subtype(expression_id)) {
+        return vhdl_subtype_width(*loop);
+    }
     // A name selected through a package instance is sized with that
     // instance's generics (IEEE 1076-2008 4.9).
     const SizeRestoreGuard instance_frames { hir_generic_binding_frames_ };
@@ -20518,6 +20882,11 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
         captured != hir_captured_update_indices_.end()) {
         return register_width(captured->second);
     }
+    if (const auto probed
+        = hir_probed_iterator_widths_.find(expression_id.value());
+        probed != hir_probed_iterator_widths_.end()) {
+        return probed->second;
+    }
     if (const auto* task = hir_user_system_task(expression_id)) {
         return task->width;
     }
@@ -20537,11 +20906,26 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
             || reduction->systemverilog->text == ".and"
             || reduction->systemverilog->text == ".or"
             || reduction->systemverilog->text == ".xor")
-        && reduction->systemverilog->operands.size() >= 2U
+        && !reduction->systemverilog->operands.empty()
         && reduction->systemverilog->operands.size() <= 3U) {
         const auto& operands = reduction->systemverilog->operands;
-        const auto receiver = hir_static_container_expression_type(
+        auto receiver = hir_static_container_expression_type(
             operands.front());
+        if (!receiver) {
+            if (const auto binding
+                = hir_container_object_binding(operands.front());
+                binding && binding->type != nullptr) {
+                receiver = *binding->type;
+            }
+        }
+        // Without a with clause the result has the element type (IEEE
+        // 1800-2023 7.12.3).
+        if (operands.size() == 1U && receiver
+            && (receiver->element_kind == ContainerElementKind::Packed
+                || receiver->element_kind == ContainerElementKind::Scalar)
+            && (!receiver->fixed || receiver->dimensions.size() <= 1U)) {
+            return receiver->element_width;
+        }
         const auto iterator = operands.size() == 3U
             ? specialized_hir_unit_->find_expression(operands[1])
             : std::nullopt;
@@ -20560,18 +20944,50 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
                 && transformation->systemverilog->text == iterator_name) {
                 return receiver->element_width;
             }
+            // Otherwise it has the with expression's type, with the
+            // iterator at the element's width and `item.index` an int, as
+            // the reduction loop lowers it.
+            if (transformation) {
+                const auto references = hir_container_iterator_references(
+                    operands.back(), iterator_name);
+                std::vector<std::uint32_t> probed;
+                probed.reserve(references.size());
+                for (const auto& [id, is_index] : references) {
+                    if (hir_probed_iterator_widths_.try_emplace(id,
+                            is_index ? std::size_t { 32U }
+                                     : receiver->element_width).second) {
+                        probed.push_back(id);
+                    }
+                }
+                const auto width = hir_expression_width(
+                    operands.back(), process_scope);
+                for (const auto id : probed) {
+                    hir_probed_iterator_widths_.erase(id);
+                }
+                if (width && *width != 0U) {
+                    return width;
+                }
+            }
         }
     }
     if (const auto target = hir_vhdl_alias_target_expression(expression_id)) {
         return hir_expression_width(*target, process_scope, vhdl_array_context);
     }
     // T'VALUE of a composite type has the width of its subtype, bounded by
-    // a static parameter when T is unconstrained (IEEE 1076-2019 16.2.2).
+    // a static parameter when T is unconstrained; a scalar T'VALUE is a
+    // value of the base type of T and has its width (IEEE 1076-2019
+    // 16.2.2).
     if (const auto value_prefix
-        = hir_vhdl_value_attribute_prefix(expression_id);
-        value_prefix && hir_vhdl_composite_value_form(*value_prefix)) {
-        const auto subtype = hir_vhdl_expression_subtype_ref(expression_id);
-        return subtype ? hir_vhdl_value_natural_width(*subtype) : std::nullopt;
+        = hir_vhdl_value_attribute_prefix(expression_id)) {
+        if (hir_vhdl_composite_value_form(*value_prefix)) {
+            const auto subtype
+                = hir_vhdl_expression_subtype_ref(expression_id);
+            return subtype ? hir_vhdl_value_natural_width(*subtype)
+                           : std::nullopt;
+        }
+        if (const auto width = hir_vhdl_value_natural_width(*value_prefix)) {
+            return width;
+        }
     }
     // An external name has the width of the object it denotes (IEEE
     // 1076-2008 8.7).
@@ -21515,6 +21931,23 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
             && (hir_container_object_binding(source.operands.front())
                 || hir_static_container_expression_type(
                     source.operands.front()))) {
+            return 32U;
+        }
+        // exists(), first(), last(), next() and prev() of an associative
+        // array return int (IEEE 1800-2023 7.9.3-7.9.7).
+        if (source.kind == semantic::sv::ExpressionKind::call
+            && (source.text == ".exists" || source.text == ".first"
+                || source.text == ".last" || source.text == ".next"
+                || source.text == ".prev")
+            && source.operands.size() == 2U
+            && (hir_container_object_binding(source.operands.front())
+                || hir_static_container_expression_type(
+                    source.operands.front()))) {
+            return 32U;
+        }
+        // $clog2 returns an integer (IEEE 1800-2023 20.8.1).
+        if (source.kind == semantic::sv::ExpressionKind::call
+            && source.text == "$clog2" && source.operands.size() == 1U) {
             return 32U;
         }
         if (const auto method = sv_container_method_call(source.text);
@@ -24615,6 +25048,11 @@ Lowerer::compute_hir_vhdl_expression_subtype(
         = hir_vhdl_generate_iterator_literal_bound(expression_id)) {
         return hir_vhdl_expression_subtype(*bound);
     }
+    // So does a loop parameter (10.10): one of an enumeration type is a
+    // value of that type wherever its name is used.
+    if (auto loop = hir_vhdl_loop_parameter_subtype(expression_id)) {
+        return loop;
+    }
     // An object alias without its own constrained subtype has the subtype
     // of the name it aliases (IEEE 1076-2008 6.6.2).
     if (const auto target = hir_vhdl_alias_target_expression(expression_id)) {
@@ -27481,6 +27919,90 @@ Lowerer::compute_hir_vhdl_array_selection(
                 && operand->vhdl->operands.size() == 2U
             ? operand->vhdl
             : nullptr;
+        // A character literal index, or a bound of a slice's discrete range,
+        // denotes the element at its position in the index type (8.4, 8.5,
+        // 9.3.2): STD_ULOGIC's 'U' is 0 and its '1' is 3 (16.7), never the
+        // literal's value encoding.
+        const auto literal_position = [&](const semantic::ExpressionId
+                                              selector_id)
+            -> std::optional<std::int64_t> {
+            const auto selector
+                = specialized_hir_unit_->find_expression(selector_id);
+            if (!selector || selector->vhdl == nullptr
+                || selector->vhdl->kind
+                    != semantic::vhdl::ExpressionKind::logic_literal
+                || array == nullptr
+                || index >= array->array_dimensions.size()) {
+                return std::nullopt;
+            }
+            const auto& literal = *selector->vhdl;
+            const auto& index_name = array->array_dimensions[index].index_subtype;
+            const auto index_declaration = index_name.selected
+                ? specialized_hir_unit_->find_declaration(*index_name.selected)
+                : std::nullopt;
+            const auto array_declaration
+                = specialized_hir_unit_->find_declaration(array->declaration);
+            const auto index_scope = array_declaration
+                    && array_declaration->vhdl != nullptr
+                ? array_declaration->vhdl->scope
+                : literal.scope;
+            // The index type mark by what it denotes where the array type is
+            // declared (12.3, 12.4): its declaration, else the type of that
+            // name, else BOOLEAN, BIT, CHARACTER or STD_ULOGIC whose
+            // declaration the compiler provides (16.3, 16.7).
+            auto type_id = index_declaration && index_declaration->vhdl != nullptr
+                    && index_declaration->vhdl->declared_type
+                ? *index_declaration->vhdl->declared_type
+                : semantic::TypeId { };
+            if (!type_id.valid() && !index_name.selected) {
+                type_id = hir_resolver()
+                              .resolve_vhdl_named_type(
+                                  index_name.text(), index_scope)
+                              .value_or(semantic::TypeId { });
+            }
+            semantic::vhdl::SubtypeIndication index_subtype;
+            index_subtype.type_mark.spelling = index_name.spelling;
+            index_subtype.type_mark.target = type_id;
+            auto intrinsic = vhdl_predefined_intrinsic_enumeration(
+                *specialized_hir_unit_, index_subtype, index_scope,
+                hir_generic_binding_frames_);
+            // A subtype of one whose name this lookup does not resolve
+            // (`X01Z` of the compiler-provided IEEE.STD_LOGIC_1164): the
+            // type the context-typing pass gave the literal from the index
+            // subtype (9.3.2, 12.5).
+            if (!intrinsic && !type_id.valid()) {
+                if (literal.resolved_type) {
+                    type_id = *literal.resolved_type;
+                } else {
+                    intrinsic = support::find_vhdl_intrinsic_enumeration(
+                        literal.resolved_builtin_type);
+                }
+            }
+            if (intrinsic) {
+                return support::vhdl_intrinsic_enumeration_position(
+                    *intrinsic, literal.text);
+            }
+            std::unordered_set<std::uint32_t> visiting;
+            while (type_id.valid() && visiting.insert(type_id.value()).second) {
+                const auto type = specialized_hir_unit_->find_type(type_id);
+                if (!type || type->vhdl == nullptr) {
+                    return std::nullopt;
+                }
+                if (!type->vhdl->enumeration_literals.empty()) {
+                    const auto found = std::ranges::find_if(
+                        type->vhdl->enumeration_literals,
+                        [&](const semantic::vhdl::EnumerationLiteral& candidate) {
+                            return candidate.spelling == literal.text;
+                        });
+                    return found == type->vhdl->enumeration_literals.end()
+                        ? std::nullopt
+                        : std::optional<std::int64_t> {
+                              static_cast<std::int64_t>(found->ordinal) };
+                }
+                type_id = type->vhdl->base.type_mark.target;
+            }
+            return std::nullopt;
+        };
         std::optional<HirPackedRange> attribute_range;
         if (range_operand == nullptr && operand && operand->vhdl != nullptr
             && operand->vhdl->kind
@@ -27741,14 +28263,22 @@ Lowerer::compute_hir_vhdl_array_selection(
             attribute_range = profile->discrete_range;
         }
         if (range_operand != nullptr || attribute_range) {
+            const auto literal_left = range_operand != nullptr
+                ? literal_position(range_operand->operands.front())
+                : std::nullopt;
+            const auto literal_right = range_operand != nullptr
+                ? literal_position(range_operand->operands.back())
+                : std::nullopt;
             const auto selected_left = attribute_range
                 ? std::optional { attribute_range->left }
-                : hir_constant_integer(
-                      range_operand->operands.front());
+                : literal_left
+                ? literal_left
+                : hir_constant_integer(range_operand->operands.front());
             const auto selected_right = attribute_range
                 ? std::optional { attribute_range->right }
-                : hir_constant_integer(
-                      range_operand->operands.back());
+                : literal_right
+                ? literal_right
+                : hir_constant_integer(range_operand->operands.back());
             const auto selected_descending = attribute_range
                 ? attribute_range->descending
                 : range_operand->text == "downto";
@@ -27798,82 +28328,7 @@ Lowerer::compute_hir_vhdl_array_selection(
                 : range_operand->source;
             continue;
         }
-        // A character literal indexes an enumeration index subtype by its
-        // position (STD_ULOGIC's 'U' is 0).
-        const auto character_position = [&]() -> std::optional<std::int64_t> {
-            if (operand == std::nullopt || operand->vhdl == nullptr
-                || operand->vhdl->kind
-                    != semantic::vhdl::ExpressionKind::logic_literal
-                || array == nullptr
-                || index >= array->array_dimensions.size()) {
-                return std::nullopt;
-            }
-            const auto& index_name = array->array_dimensions[index].index_subtype;
-            const auto index_declaration = index_name.selected
-                ? specialized_hir_unit_->find_declaration(*index_name.selected)
-                : std::nullopt;
-            auto type_id = index_declaration && index_declaration->vhdl != nullptr
-                    && index_declaration->vhdl->declared_type
-                ? *index_declaration->vhdl->declared_type
-                : semantic::TypeId { };
-            auto simple = std::string_view { index_name.spelling };
-            simple = simple_name_of(simple);
-            const auto& literal_text = operand->vhdl->text;
-            if (!type_id.valid() && literal_text.size() == 3U
-                && literal_text.front() == '\'') {
-                if (same_hir_identifier(simple, "bit", true)) {
-                    return literal_text[1] == '0' ? std::optional<std::int64_t> { 0 }
-                        : literal_text[1] == '1' ? std::optional<std::int64_t> { 1 }
-                                                 : std::nullopt;
-                }
-                if (same_hir_identifier(simple, "character", true)) {
-                    return static_cast<std::int64_t>(
-                        static_cast<unsigned char>(literal_text[1]));
-                }
-                if (same_hir_identifier(simple, "std_ulogic", true)
-                    || same_hir_identifier(simple, "std_logic", true)) {
-                    // STD_ULOGIC positions (IEEE 1164).
-                    constexpr std::string_view positions { "UX01ZWLH-" };
-                    const auto position = positions.find(literal_text[1]);
-                    return position == std::string_view::npos
-                        ? std::nullopt
-                        : std::optional<std::int64_t> {
-                              static_cast<std::int64_t>(position) };
-                }
-            }
-            if (!type_id.valid()) {
-                for (const auto* candidate :
-                    specialized_hir_unit_->vhdl_types_named(simple)) {
-                    if (!candidate->enumeration_literals.empty()) {
-                        if (type_id.valid()) {
-                            type_id = { };
-                            break;
-                        }
-                        type_id = candidate->id;
-                    }
-                }
-            }
-            std::unordered_set<std::uint32_t> visiting;
-            while (type_id.valid() && visiting.insert(type_id.value()).second) {
-                const auto type = specialized_hir_unit_->find_type(type_id);
-                if (!type || type->vhdl == nullptr) {
-                    return std::nullopt;
-                }
-                if (!type->vhdl->enumeration_literals.empty()) {
-                    const auto literal = std::ranges::find_if(
-                        type->vhdl->enumeration_literals,
-                        [&](const semantic::vhdl::EnumerationLiteral& candidate) {
-                            return candidate.spelling == operand->vhdl->text;
-                        });
-                    return literal == type->vhdl->enumeration_literals.end()
-                        ? std::nullopt
-                        : std::optional<std::int64_t> {
-                              static_cast<std::int64_t>(literal->ordinal) };
-                }
-                type_id = type->vhdl->base.type_mark.target;
-            }
-            return std::nullopt;
-        }();
+        const auto character_position = literal_position(selectors[index]);
         const auto constant_selected = character_position
             ? character_position
             : hir_constant_integer(selectors[index]);
@@ -27905,7 +28360,7 @@ Lowerer::compute_hir_vhdl_array_selection(
             if (!index_width
                 || (((*index_width != 32U && *index_width != 64U)
                         || index_domain != frontend::ValueDomain::Integer)
-                    && !hir_vhdl_enumeration_index(
+                    && !hir_vhdl_position_index(
                         selectors[index], hir_process_scope_))
                 || element_width
                     > static_cast<std::size_t>(
@@ -29303,8 +29758,18 @@ bool Lowerer::can_lower_hir_expression(
             return supported;
         }
         if (source.kind == semantic::sv::ExpressionKind::call
+            && source.text == "$__fsim_assertion_control") {
+            // Constant operands: two integers and a string literal.
+            erase();
+            return true;
+        }
+        if (source.kind == semantic::sv::ExpressionKind::call
             && (source.text == "$__fsim_sva_tick"
-                || source.text == "$__fsim_sva_outcome")) {
+                || source.text == "$__fsim_sva_outcome"
+                || source.text == "$__fsim_sva_request"
+                || source.text == "$__fsim_sva_local"
+                || source.text == "$__fsim_sva_answer"
+                || source.text == "$__fsim_sva_call")) {
             // The plan operand is a string literal; the others are packed.
             supported = true;
             for (std::size_t index = 0; index < source.operands.size();

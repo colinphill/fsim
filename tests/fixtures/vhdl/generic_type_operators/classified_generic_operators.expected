@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+cgop user + called
+cgop count sum 7
+cgop user count < called
+cgop count less true
+cgop integer sum 3
+cgop integer less false
+cgop user level < called
+cgop level less true
+cgop user level = called
+cgop level same false

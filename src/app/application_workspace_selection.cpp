@@ -204,6 +204,33 @@ namespace {
             }
         }
 
+        // A class declared in a compilation unit's $unit scope, whose
+        // canonical identity names that scope (`<library>::$unit@<unit>::`).
+        static bool compilation_unit_class(const library::UnitIndexEntry& unit)
+        {
+            return unit.language == "systemverilog" && unit.kind == "class"
+                && !unit.primary_name.empty()
+                && unit.name.find("::$unit@" + unit.primary_name + "::")
+                    != std::string::npos;
+        }
+
+        void select_compilation_unit_classes(
+            std::string_view library, std::string_view compilation_unit)
+        {
+            for (std::size_t index = 0; index < records_.size(); ++index) {
+                if (selected_[index] || location(index).name != library) {
+                    continue;
+                }
+                if (std::ranges::any_of(artifact(index).units,
+                        [&](const auto& owned) {
+                            return owned.unit.primary_name == compilation_unit
+                                && compilation_unit_class(owned.unit);
+                        })) {
+                    select_record(index);
+                }
+            }
+        }
+
         bool in_scope(std::string_view candidate, const Target& target,
             std::string_view owner_library) const
         {
@@ -758,6 +785,27 @@ namespace {
             select_instances(*design);
             for (const auto& reference : design->references()) {
                 select_reference(*design, reference);
+            }
+            // A compilation unit that holds part of the design brings every
+            // class of its $unit scope: their static properties are
+            // initialized whether or not the design names the class (IEEE
+            // 1800-2023 3.12.1, 6.21, 8.9).
+            std::set<std::string> compilation_units;
+            for (const auto& unit : design->systemverilog_units()) {
+                if ((unit.kind == semantic::sv::UnitKind::module
+                        || unit.kind == semantic::sv::UnitKind::interface
+                        || unit.kind == semantic::sv::UnitKind::program)
+                    && !unit.compilation_unit_identity.empty()) {
+                    compilation_units.insert(unit.compilation_unit_identity);
+                }
+            }
+            for (const auto& owned : record.units) {
+                if (compilation_unit_class(owned.unit)) {
+                    compilation_units.insert(owned.unit.primary_name);
+                }
+            }
+            for (const auto& identity : compilation_units) {
+                select_compilation_unit_classes(location(index).name, identity);
             }
             for (const auto& unit : design->systemverilog_units()) {
                 select_configuration(unit);

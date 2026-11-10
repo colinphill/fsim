@@ -223,6 +223,49 @@ void round_trip(const fsim::project::Config& config,
       == RunStateTestAccess::interpreter(*restored).run_state_hash());
 }
 
+// The values a client reads are not run state of the kernel: a run that took
+// a value reference (read_signal) before the save, or one that takes it only
+// after, and a restored run that took one before the restore, all restore the
+// same file (#128; the watches an observer asks for are the observers', and a
+// restored run's observers ask again). The restored run that read `signal` at
+// time zero holds the saved value after the restore, and both runs continue
+// alike.
+void restore_with_other_reads(const fsim::project::Config& config,
+    const fsim::app::SimulationEngine engine, const std::string& signal,
+    const fsim::runtime::SimulationTick save_at,
+    const fsim::runtime::SimulationTick finish_at,
+    const std::uint64_t value_at_save) {
+  auto original = make_simulation(config, engine);
+  static_cast<void>(original->run(save_at));
+  fsim::runtime::RunStateImage image { "run-state-application-test" };
+  fsim::runtime::simir::RunStateReport report;
+  const bool saved =
+      RunStateTestAccess::interpreter(*original).record_run_state(image, report);
+  for (const auto& message : report.messages) {
+    std::cerr << message << '\n';
+  }
+  assert(saved);
+
+  auto restored = make_simulation(config, engine);
+  restored->start();
+  // Read before the restore: the value at time zero.
+  assert(value_of(*restored, signal) == 0U);
+  fsim::runtime::simir::RunStateReport restore_report;
+  const bool ok = RunStateTestAccess::interpreter(*restored)
+                      .restore_run_state(image, restore_report);
+  for (const auto& message : restore_report.messages) {
+    std::cerr << message << '\n';
+  }
+  assert(ok);
+  assert(value_of(*restored, signal) == value_at_save);
+  assert(value_of(*original, signal) == value_at_save);
+
+  static_cast<void>(original->run(finish_at));
+  static_cast<void>(restored->run(finish_at));
+  assert(value_of(*original, signal) == value_of(*restored, signal));
+  assert(original->now() == restored->now());
+}
+
 // The foreign sections: the data sets by id, the highest id and the restart
 // callback registrations survive the archive, and the sections register as
 // optional ones (a run without that interface writes none).
@@ -417,6 +460,77 @@ endmodule
            fsim::app::SimulationEngine::v4 }) {
     // unverified: run(27) leaves the scheduler at a save point.
     round_trip(sv_config, engine, "run_state_top.count", 27, 60, 3);
+    restore_with_other_reads(sv_config, engine, "run_state_top.count", 27, 60, 3);
+  }
+  // Class specializations made at run time. holder#(P) in maker#(4)'s
+  // post_randomize reads the running specialization's P, so the design names
+  // no holder#(4) and the run makes it on the first randomize at 5 (IEEE
+  // 1800-2023 8.25, 18.6.1), with static storage of its own: count is 4 at
+  // the save at 10. The restored run makes holder#(4) again before its
+  // statics come back, and the randomize at 25 adds 4 more: 8 at 40.
+  const auto specialization_source
+      = directory.path / "run_state_specializations.sv";
+  {
+    std::ofstream output(specialization_source, std::ios::binary);
+    output << R"(
+class holder #(int P = 1);
+  static int count;
+  static function int touch();
+    count = count + P;
+    return count;
+  endfunction
+endclass
+
+class maker #(int P = 1);
+  rand bit [3:0] x;
+  int last;
+  function void post_randomize();
+    void'(holder #(P)::touch());
+    last = holder #(P)::count;
+  endfunction
+endclass
+
+module run_state_specializations;
+  maker #(4) m;
+  logic [7:0] observed = 8'd0;
+  initial begin
+    m = new;
+    #5;
+    void'(m.randomize());
+    observed = m.last;
+    #20;
+    void'(m.randomize());
+    observed = m.last;
+  end
+endmodule
+)";
+  }
+  const auto specialization_config = make_config(directory.path,
+      specialization_source, fsim::project::Language::system_verilog,
+      "sv:work.run_state_specializations");
+  // The class heap, the made specializations and the class statics are
+  // sections of the application (app.class_*), so the case saves and
+  // restores through the state file, not the interpreter's image alone.
+  for (const auto engine : { fsim::app::SimulationEngine::interpreter,
+           fsim::app::SimulationEngine::v4 }) {
+    const auto state = directory.path / "run_state_specializations.state";
+    auto original = make_simulation(specialization_config, engine);
+    static_cast<void>(original->run(10));
+    assert(value_of(*original, "run_state_specializations.observed") == 4U);
+    const auto saved = original->save_state(state, false);
+    if (!saved.ok) {
+      std::cerr << saved.error << '\n';
+    }
+    assert(saved.ok);
+    auto restored = make_simulation(specialization_config, engine);
+    const auto result = restored->restore_state(state);
+    if (!result.ok) {
+      std::cerr << result.error << '\n';
+    }
+    assert(result.ok);
+    assert(value_of(*restored, "run_state_specializations.observed") == 4U);
+    static_cast<void>(restored->run(40));
+    assert(value_of(*restored, "run_state_specializations.observed") == 8U);
   }
   for (const auto engine : { fsim::app::SimulationEngine::interpreter,
            fsim::app::SimulationEngine::v4 }) {
@@ -452,6 +566,8 @@ end architecture;
            fsim::app::SimulationEngine::v4 }) {
     // The auto resolution of a VHDL design is 1 fs: 17 ns and 30 ns.
     round_trip(vhdl_config, engine, "run_state_counter.count",
+        17'000'000, 30'000'000, 3);
+    restore_with_other_reads(vhdl_config, engine, "run_state_counter.count",
         17'000'000, 30'000'000, 3);
   }
   // unverified: add_host_driver on process 0 of this design (the process that

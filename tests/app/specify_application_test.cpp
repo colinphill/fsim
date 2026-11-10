@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "change_mismatch_report.hpp"
 #include "fsim/app/application.hpp"
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/runtime/vcd_writer.hpp"
@@ -129,8 +130,11 @@ struct Capture {
     std::vector<std::tuple<
         fsim::runtime::simir::SignalId,
         std::string,
-        fsim::runtime::SimulationTick>>
+        fsim::runtime::SimulationTick,
+        std::uint64_t>>
         changes;
+    // The changes in the order the hook heard them, with their writers.
+    std::vector<fsim::test::WrittenChange> written;
     std::string vcd;
     std::size_t compiled_processes { };
     std::size_t compiled_modules { };
@@ -234,16 +238,12 @@ Capture execute(
         [&](const fsim::runtime::simir::SignalId signal,
             const fsim::runtime::PackedLogic4& value,
             const fsim::runtime::SimulationTick time,
-            const std::uint64_t) {
+            const std::uint64_t delta) {
             capture.changes.emplace_back(
-                signal, value.to_msb_string(), time);
-            vcd.set_time(time);
-            if (signal == *native)
-                vcd.change(vcd_native, value);
-            if (signal == *wide)
-                vcd.change(vcd_wide, value);
-            if (signal == *mixed)
-                vcd.change(vcd_mixed, value);
+                signal, value.to_msb_string(), time, delta);
+            capture.written.push_back({ std::to_string(signal),
+                value.to_msb_string(), time, delta,
+                simulation.signal_change_writer() });
         });
 
     const auto before_force = simulation.run(3);
@@ -265,6 +265,24 @@ Capture execute(
         capture.notifier_values.push_back(
             simulation.design().signals().at(notifier).name + "="
             + simulation.read_signal(notifier).to_msb_string());
+    }
+    // The trace is written after the run from the log ordered by delta cycle
+    // and signal (IEEE 1800-2023 4.7), so it compares across engines.
+    fsim::test::order_changes_by_delta_and_object(
+        capture.changes, [](const auto& change) {
+            const auto& [signal, value, time, delta] = change;
+            return std::tie(time, delta, signal);
+        });
+    for (const auto& [signal, value, time, delta] : capture.changes) {
+        const auto packed
+            = fsim::runtime::PackedLogic4::from_msb_string(value);
+        vcd.set_time(time);
+        if (signal == *native)
+            vcd.change(vcd_native, packed);
+        if (signal == *wide)
+            vcd.change(vcd_wide, packed);
+        if (signal == *mixed)
+            vcd.change(vcd_mixed, packed);
     }
     vcd.flush();
     capture.vcd = vcd_text.str();
@@ -369,15 +387,20 @@ void compare(const Capture& reference, const Capture& candidate)
             const auto describe = [index](const auto& changes) {
                 if (index >= changes.size())
                     return std::string { "-" };
-                const auto& [signal, value, time] = changes[index];
+                const auto& [signal, value, time, delta] = changes[index];
                 return std::to_string(signal) + '=' + value + " @"
-                    + std::to_string(time);
+                    + std::to_string(time) + '+' + std::to_string(delta);
             };
             std::cerr << "  [" << index << "] " << describe(reference.changes)
                       << " | " << describe(candidate.changes) << '\n';
         }
     }
     assert(reference.changes == candidate.changes);
+    // The order IEEE 1800-2023 4.6 a), b) fixes: one process's changes in
+    // one delta cycle.
+    std::size_t compared { };
+    assert(fsim::test::same_writer_order_matches(
+        "specify", reference.written, candidate.written, compared));
     assert(reference.vcd == candidate.vcd);
     assert(reference.path_identities == candidate.path_identities);
     assert(reference.timing_check_identities

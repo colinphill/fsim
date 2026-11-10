@@ -2050,6 +2050,7 @@ void HierarchyBuilder::finish()
             "elaboration_output_routes" };
         compose_vhdl_output_routes();
     }
+    schedule_program_assertion_nets();
     {
         const support::ScopedPhaseProfile drivers_phase {
             "elaboration_validate_drivers" };
@@ -2376,6 +2377,56 @@ void HierarchyBuilder::set_resolution(
 {
     design_.signal_info_.at(signal).resolution = resolution;
     design_.signals_.at(signal).resolution = resolution;
+}
+
+void HierarchyBuilder::schedule_program_assertion_nets()
+{
+    // A program's continuous assignments are scheduled in the Reactive
+    // region (IEEE 1800-2023 24.3.1), but its concurrent assertions have
+    // the scheduling of design code: the disable condition is read with
+    // the current values of the Observed region in which an attempt starts
+    // (16.12), and the asynchronous abort conditions change with the
+    // design (16.12.14). The continuous assignment that keeps an
+    // assertion's hidden disable or abort net (SvaOperation::disable_signal,
+    // abort_signal) therefore runs in the Active region, as it does in a
+    // module.
+    std::unordered_set<SignalId> nets;
+    const auto count = design_.process_count();
+    for (std::size_t index = 0U; index < count; ++index) {
+        const auto process = design_.process_view(index);
+        if (!process.program_owner()) {
+            continue;
+        }
+        for (const auto& operation : process.operations()) {
+            const auto* const sva = operation_get_if<SvaOperation>(&operation);
+            if (sva == nullptr) {
+                continue;
+            }
+            if (sva->disable_signal) {
+                nets.insert(*sva->disable_signal);
+            }
+            if (sva->abort_signal) {
+                nets.insert(*sva->abort_signal);
+            }
+        }
+    }
+    if (nets.empty()) {
+        return;
+    }
+    for (std::size_t index = 0U; index < count; ++index) {
+        const auto view = design_.process_view(index);
+        const auto& regions = view.driver_regions();
+        if (!view.reactive() || !view.program_owner() || regions.empty()
+            || !std::ranges::all_of(regions,
+                [&](const Process::DriverRegion& region) {
+                    return nets.contains(region.signal);
+                })) {
+            continue;
+        }
+        auto process = view.materialize();
+        process.reactive = false;
+        design_.rebuild_process_record(index, std::move(process));
+    }
 }
 
 void HierarchyBuilder::validate_process_drivers()

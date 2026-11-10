@@ -322,6 +322,10 @@ VerilogParser::parse_matches_conditional_assignment()
 [[gnu::noinline]] std::optional<Statement>
 VerilogParser::parse_if_statement(const Token& start)
 {
+    // In a unique, unique0 or priority if, an else-if continues the series
+    // of conditions and a begin-end around a nested if ends it (IEEE
+    // 1800-2023 12.4.2): such a block is kept.
+    const bool qualified_chain = std::exchange(qualified_if_chain_, false);
     // `if (e matches p [&&& g]) s1 else s2` (IEEE 1800-2017 12.6.2) is the
     // case statement `case (e) matches p [&&& g]: s1 default: s2`. A chain
     // `e1 matches p1 &&& e2 matches p2 &&& g` nests one such case per
@@ -460,12 +464,19 @@ VerilogParser::parse_if_statement(const Token& start)
         }
     }
     if (match_keyword("else")) {
-        if (auto false_branch = parse_statement()) {
+        qualified_if_chain_ = qualified_chain && keyword("if");
+        auto false_branch = parse_statement();
+        qualified_if_chain_ = false;
+        if (false_branch) {
             if (false_branch->kind == StatementKind::Block
                 && false_branch->label.empty()
                 && false_branch->declarations.empty()
                 && false_branch->systemverilog_imports.empty()
-                && false_branch->type_aliases.empty()) {
+                && false_branch->type_aliases.empty()
+                && !(qualified_chain
+                    && false_branch->statements.size() == 1U
+                    && false_branch->statements.front().kind
+                        == StatementKind::If)) {
                 statement.else_statements = std::move(false_branch->statements);
             } else {
                 statement.else_statements.push_back(
@@ -507,7 +518,8 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
         note_system_service_standard(current().text, *required, current());
     }
     // A system task argument may name a hierarchical scope
-    // (`$printtimescale(top)`, `$dumpvars(1, top)`) rather than an object of
+    // (`$printtimescale(top)`, `$dumpvars(1, top)`) or an assertion
+    // (`$assertoff(0, a1)`, IEEE 1800-2023 20.11) rather than an object of
     // this unit; it is resolved when the task runs, so it is not reported
     // as undeclared here.
     struct ContextRestore {
@@ -524,6 +536,14 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
         std::string_view { "$showvars" }, std::string_view { "$showscopes" },
         std::string_view { "$countdrivers" }, std::string_view { "$deposit" },
         std::string_view { "$sdf_annotate" },
+        std::string_view { "$assertcontrol" }, std::string_view { "$asserton" },
+        std::string_view { "$assertoff" }, std::string_view { "$assertkill" },
+        std::string_view { "$assertpasson" },
+        std::string_view { "$assertpassoff" },
+        std::string_view { "$assertfailon" },
+        std::string_view { "$assertfailoff" },
+        std::string_view { "$assertnonvacuouson" },
+        std::string_view { "$assertvacuousoff" },
     };
     if (at(TokenKind::Identifier) && current().text.starts_with('$')
         && std::ranges::find(scope_tasks, std::string_view { current().text })
@@ -616,9 +636,16 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
         }
         if (keyword("if")) {
             // unique, unique0 and priority if select the same branch as a
-            // plain if; their violation reports are not issued (IEEE
-            // 1800-2017 12.4.2).
-            return parse_statement();
+            // plain if; the qualifier applies to the whole series of
+            // if-else-if conditions and decides its violation reports (IEEE
+            // 1800-2023 12.4.2).
+            qualified_if_chain_ = true;
+            auto statement = parse_statement();
+            qualified_if_chain_ = false;
+            if (statement && statement->kind == StatementKind::If) {
+                statement->case_qualifier = qualifier;
+            }
+            return statement;
         }
         error(qualifier_start, "FSIM-SV-UNSUPPORTED-017",
             "bounded unique and priority qualifiers require a case statement");
@@ -1967,8 +1994,25 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
 
     bool container_method_statement = false;
     if (at(TokenKind::Identifier)) {
+        // `C #(4)::q.push_back(v);` selects a static container of a
+        // specialization (IEEE 1800-2023 8.23, 8.25.1); its parameter
+        // value assignment is not a call's argument list.
+        std::size_t first = 1;
+        if (at(TokenKind::Hash, first)
+            && at(TokenKind::LeftParen, first + 1U)) {
+            ++first;
+            std::size_t depth { };
+            do {
+                if (at(TokenKind::LeftParen, first)) {
+                    ++depth;
+                } else if (at(TokenKind::RightParen, first)) {
+                    --depth;
+                }
+                ++first;
+            } while (depth != 0U && !at(TokenKind::EndOfFile, first));
+        }
         std::size_t square_depth = 0;
-        for (std::size_t lookahead = 1;
+        for (std::size_t lookahead = first;
             lookahead < 4096;
             ++lookahead) {
             const auto kind = current(lookahead).kind;

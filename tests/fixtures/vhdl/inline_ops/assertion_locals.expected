@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+inl pipe pass=11 fail=65,
+inl dis pass=11 fail=
+inl cond pass=11 fail=15,
+inl neg pass=9 fail=25,35,95,
+inl or pass=11 fail=35,
+inl and pass=12 fail=
+inl goto pass=12 fail=
+inl acc pass=11 fail=105,
+inl wide pass=11 fail=25,
+inl init pass=11 fail=65,
+inl lf pass=11 fail=65,
+inl act pass=11 fail=65,
+inl samp pass=12 fail=
+inl past pass=12 fail=
+inl call pass=12 fail= calls=v33@35,c3@35,w34@45,v73@75,c7@75,w74@85,
+inl abort pass=12 fail=
+inl rej pass=11 fail=60,
+inl sdis pass=11 fail=
+inl pdis pass=12 fail=

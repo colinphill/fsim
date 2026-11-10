@@ -68,6 +68,7 @@ else()
     active_inactive_nba
     active_inactive_nba_verilog
     nba_batch_before_active
+    nba_execution_order
     derived_clock_nba
     packed_vector_edge_sensitivity
     strobe_end_of_slot
@@ -75,6 +76,8 @@ else()
     monitor_once_per_slot
     reactive_reinactive_re_nba
     mixed_domain_boundary
+    mixed_region_port
+    mixed_clocked_port
     inertial_maturation_order
     delayed_concat_select
     named_event_triggered_nba)
@@ -97,6 +100,20 @@ foreach(case_name IN LISTS cases)
       compile -q --standard 2008 mixed_language_leaf.vhd)
     run_fsim_step("${case_name}" compile_sv
       compile -q mixed_domain_boundary.sv)
+  elseif(EXISTS "${FSIM_FIXTURE_DIR}/${case_name}.vhd")
+    # A mixed case whose VHDL half has the case's name: the VHDL units are
+    # analyzed first; the top, a SystemVerilog module or a VHDL entity of
+    # the case's name, instantiates the other language's units.
+    file(COPY_FILE
+      "${FSIM_FIXTURE_DIR}/${case_name}.vhd"
+      "${case_dir}/${case_name}.vhd")
+    file(COPY_FILE
+      "${FSIM_FIXTURE_DIR}/${case_name}.sv"
+      "${case_dir}/${case_name}.sv")
+    run_fsim_step("${case_name}" compile_vhdl
+      compile -q --standard 2008 "${case_name}.vhd")
+    run_fsim_step("${case_name}" compile_sv
+      compile -q "${case_name}.sv")
   elseif(case_name STREQUAL "continuous_active_verilog"
       OR case_name STREQUAL "implicit_port_active_verilog"
       OR case_name STREQUAL "active_inactive_nba_verilog"

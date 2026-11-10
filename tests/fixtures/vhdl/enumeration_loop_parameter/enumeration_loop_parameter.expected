@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: Apache-2.0
+enumloop control color:blue shade:dark tri:'Z' character:q 12 1113 blue,red 'Z','1' <q
+enumloop color red color:red 10 0 red red false true false red,red r
+enumloop color green color:green 11 1 green green false true true green,red g
+enumloop color blue color:blue 12 2 blue blue true false true blue,red b
+enumloop color yellow color:yellow 13 3 yellow yellow false false true yellow,red b
+enumloop color_reverse yellow color:yellow 13 1
+enumloop color_reverse blue color:blue 12 2
+enumloop color_reverse green color:green 11 3
+enumloop color_reverse red color:red 10 4
+enumloop color_subtype green color:green false
+enumloop color_subtype blue color:blue true
+enumloop color_literals color:green 1
+enumloop color_literals color:blue 2
+enumloop shade_reverse dark shade:dark true
+enumloop shade_reverse light shade:light false
+enumloop tri '0' tri:'0' 0 false false '0','1' v
+enumloop tri '1' tri:'1' 1 false true '1','1' v
+enumloop tri 'Z' tri:'Z' 2 true true 'Z','1' z
+enumloop character 'a' <a a character:a 1097 A false false 'b' 97
+enumloop character 'b' <b b character:b 1098 B true true 'c' 98
+enumloop character 'c' <c c character:c 1099 ? true false 'd' 99
+enumloop character_reverse c character:c
+enumloop character_reverse b character:b
+enumloop character_reverse a character:a
+enumloop character_subtype a character:a 1097
+enumloop character_subtype b character:b 1098
+enumloop character_subtype c character:c 1099
+enumloop character_subtype d character:d 1100
+enumloop character_subtype e character:e 1101
+enumloop character_attributes e! character:e
+enumloop character_attributes d! character:d
+enumloop character_attributes c! character:c
+enumloop character_attributes b! character:b
+enumloop character_attributes a! character:a

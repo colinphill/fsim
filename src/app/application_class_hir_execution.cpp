@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_class_hir_execution.hpp"
+#include "application_systemverilog_hir_internal.hpp"
+#include "fsim/semantic/sva_plan.hpp"
+#include "fsim/semantic/systemverilog_type_state.hpp"
 #include "fsim/support/index_distance.hpp"
 #include "fsim/support/stack_growth.hpp"
 #include "fsim/support/uvm_identity.hpp"
@@ -140,6 +143,22 @@ constexpr std::size_t maximum_literal_width = 16U * 1024U * 1024U;
         : std::string_view { };
 }
 
+// Whether a property type is an array of class handles kept as a handle
+// container (IEEE 1800-2023 7.4, 7.8, 7.10).
+[[nodiscard]] bool handle_container_type(const semantic::sv::TypeReference& type)
+{
+    return type.container_form && !type.class_identity.empty()
+        && !semantic::sv::nested_class_handle_container(type);
+}
+
+// Whether an expression allocates an object (`new`, IEEE 1800-2023 8.7).
+[[nodiscard]] bool class_allocation(const semantic::sv::Expression* value)
+{
+    return value != nullptr
+        && (value->kind == semantic::sv::ExpressionKind::class_allocation
+            || value->text.starts_with("@sv-new:"));
+}
+
 [[nodiscard]] const semantic::sv::SpecializedClassProperty*
 static_class_property(
     const std::span<const semantic::sv::ClassSpecialization> specializations,
@@ -170,6 +189,30 @@ static_class_property(
         }
     }
     return selected;
+}
+
+// The static string property an expression names (IEEE 1800-2023 8.9),
+// or null.
+[[nodiscard]] const semantic::sv::SpecializedClassProperty*
+static_string_property(
+    const std::span<const semantic::sv::ClassSpecialization> specializations,
+    const semantic::sv::Expression& expression)
+{
+    constexpr std::string_view prefix { "@sv-static-property:" };
+    if (expression.kind != semantic::sv::ExpressionKind::class_static_property
+        && !expression.text.starts_with(prefix)) {
+        return nullptr;
+    }
+    const auto* property = static_class_property(specializations,
+        marker_payload(expression, prefix),
+        expression.referenced_name ? expression.referenced_name->selected
+                                   : std::nullopt);
+    if (property == nullptr || property->type.container_form
+        || !property->type.unpacked_dimensions.empty()
+        || property->type.value_form != semantic::sv::TypeForm::string) {
+        return nullptr;
+    }
+    return property;
 }
 
 [[nodiscard]] std::optional<runtime::PackedLogic4> cast_integral_index(
@@ -288,6 +331,10 @@ static_class_property(
     else if (operation == "!=") binary = BinaryOperator::not_equal;
     else if (operation == "===") binary = BinaryOperator::case_equal;
     else if (operation == "!==") binary = BinaryOperator::case_equal;
+    // Wildcard equality (IEEE 1800-2023 11.4.6): an X or Z bit of the right
+    // operand matches any bit; `!=?` is its logical inverse.
+    else if (operation == "==?" || operation == "!=?")
+        binary = BinaryOperator::wildcard_equal;
     else if (operation == "~^" || operation == "^~")
         binary = BinaryOperator::bit_xor;
     if (!binary)
@@ -312,7 +359,7 @@ static_class_property(
     }();
     if (!result)
         return std::nullopt;
-    if (operation == "!==")
+    if (operation == "!==" || operation == "!=?")
         result->set(0U, runtime::logic_not(result->get(0U)));
     if (operation == "~^" || operation == "^~") {
         for (std::size_t bit = 0U; bit < result->width(); ++bit)
@@ -487,14 +534,32 @@ private:
     std::string previous_hierarchy_;
 };
 
+// The value a variable of this type holds before anything writes it (IEEE
+// 1800-2023 6.8 Table 6-7): X for a 4-state type, 0 for a 2-state one, and
+// null for a class handle, chandle or virtual interface (8.4), which
+// compares equal to `null` (11.4.5).
+[[nodiscard]] runtime::PackedLogic4 uninitialized_value(
+    const semantic::sv::TypeReference& type, const std::size_t width,
+    const bool four_state)
+{
+    const bool handle = !type.container_form
+        && type.unpacked_dimensions.empty()
+        && (type.value_form == semantic::sv::TypeForm::class_handle
+            || !type.class_identity.empty() || type.virtual_interface);
+    return runtime::PackedLogic4(width,
+        four_state && !handle ? runtime::Logic4::x : runtime::Logic4::zero);
+}
+
 } // namespace
 
 SystemVerilogClassHirExecution::SystemVerilogClassHirExecution(
     const std::span<const semantic::sv::ClassSpecialization> specializations,
     const semantic::sv::Hir& hir,
-    const runtime::SystemVerilogClassHeap& heap)
+    const runtime::SystemVerilogClassHeap& heap,
+    const semantic::Model* semantics)
     : specializations_(specializations)
     , hir_(hir)
+    , semantics_(semantics)
     , heap_(heap)
 {
 }
@@ -542,6 +607,1594 @@ SystemVerilogClassHirExecution::specialization(
         }
     }
     return selected;
+}
+
+std::string SystemVerilogClassHirExecution::running_specialization(
+    const runtime::SystemVerilogClassHandle handle) const
+{
+    if (handle != 0U && heap_.contains(handle))
+        return heap_.object(handle).specialization_identity;
+    return static_specialization_;
+}
+
+std::string SystemVerilogClassHirExecution::ancestor_specialization(
+    const std::string_view identity,
+    const std::string_view declaration_identity) const
+{
+    std::vector<std::string> followed;
+    std::string current { identity };
+    while (!current.empty()) {
+        // A base chain that returns to a class already followed ends.
+        if (std::ranges::find(followed, current) != followed.end())
+            break;
+        const auto* found = specialization(current);
+        if (found == nullptr)
+            break;
+        if (found->declaration_identity == declaration_identity
+            || found->specialization_identity == declaration_identity) {
+            return found->specialization_identity;
+        }
+        followed.push_back(std::move(current));
+        current = found->base ? found->base->specialization_identity
+                              : std::string { };
+    }
+    return { };
+}
+
+std::string SystemVerilogClassHirExecution::static_member_specialization(
+    const semantic::sv::Expression& selection,
+    const std::string_view member_owner,
+    const runtime::SystemVerilogClassHandle handle) const
+{
+    auto running = running_specialization(handle);
+    std::string selected;
+    if (!selection.class_owner.empty()) {
+        // `C#(4)::m`, `typedef C#(4) T; T::m`, or `C#(P)::m` whose actuals
+        // read the running class's parameters (IEEE 1800-2023 8.25.1).
+        if (!class_type_specialization_)
+            return { };
+        auto named = class_type_specialization_(
+            selection.class_owner.front(), running);
+        if (!named)
+            return { };
+        selected = std::move(*named);
+    } else {
+        selected = std::move(running);
+    }
+    if (selected.empty() || member_owner.empty())
+        return selected;
+    // A member a base class declares lives in the base's specialization.
+    return ancestor_specialization(selected, member_owner);
+}
+
+SystemVerilogClassHirExecution::StaticPropertySelection
+SystemVerilogClassHirExecution::static_property_selection(
+    const semantic::sv::Expression& selection,
+    const std::string_view marker,
+    const runtime::SystemVerilogClassHandle handle) const
+{
+    const auto identity = marker_payload(selection, marker);
+    const auto declaration_id = selection.referenced_name
+        ? selection.referenced_name->selected
+        : std::nullopt;
+    const auto* shared = static_class_property(
+        specializations_, identity, declaration_id);
+    // A property whose type reads the class's parameters differs between
+    // specializations; the class that declares it owns its identity.
+    std::string_view owner;
+    if (shared != nullptr) {
+        owner = shared->owner_identity;
+    } else if (const auto separator = identity.rfind("::");
+        separator != std::string_view::npos) {
+        owner = identity.substr(0U, separator);
+    }
+    StaticPropertySelection result;
+    result.specialization
+        = static_member_specialization(selection, owner, handle);
+    if (const auto* selected = specialization(result.specialization)) {
+        const auto found = std::ranges::find_if(selected->properties,
+            [&](const semantic::sv::SpecializedClassProperty& candidate) {
+                return candidate.static_storage
+                    && (identity.empty()
+                            ? declaration_id
+                                && candidate.declaration == *declaration_id
+                            : candidate.canonical_identity == identity);
+            });
+        if (found != selected->properties.end())
+            result.property = &*found;
+    }
+    if (result.property == nullptr)
+        result.property = shared;
+    return result;
+}
+
+std::string SystemVerilogClassHirExecution::type_specialization(
+    const semantic::sv::TypeReference& type,
+    const std::string_view context) const
+{
+    if (!type.class_specialization.empty() || !type.class_identity.empty()) {
+        if (!class_type_specialization_)
+            return { };
+        auto named = class_type_specialization_(type, context);
+        return named ? std::move(*named) : std::string { };
+    }
+    if (!type.target.target.valid() || type.container_form)
+        return { };
+    const auto* definition = type_definition(type.target.target);
+    if (definition == nullptr)
+        return { };
+    // A typedef names what its type names, its actuals read in the class
+    // that declares it (IEEE 1800-2023 6.18, 8.25).
+    if (definition->form == semantic::sv::TypeForm::alias)
+        return type_specialization(definition->base, context);
+    if (definition->form != semantic::sv::TypeForm::type_parameter)
+        return { };
+    // A class type parameter names the class the specialization binds it
+    // to, in the running class or the base that declares it (8.25).
+    std::vector<std::string_view> followed;
+    for (const auto* current = specialization(context);
+         current != nullptr;) {
+        if (std::ranges::find(followed, current->specialization_identity)
+            != followed.end()) {
+            break;
+        }
+        followed.push_back(current->specialization_identity);
+        for (const auto& parameter : current->parameters) {
+            if (parameter.type_parameter
+                && parameter.declaration == definition->declaration
+                && parameter.type) {
+                return type_specialization(
+                    *parameter.type, current->specialization_identity);
+            }
+        }
+        current = current->base
+            ? specialization(current->base->specialization_identity)
+            : nullptr;
+    }
+    return { };
+}
+
+semantic::TypeId SystemVerilogClassHirExecution::named_type_target(
+    const semantic::sv::TypeReference& type,
+    const semantic::ScopeId scope) const
+{
+    const auto& spelling = type.target.spelling;
+    if (semantics_ == nullptr || !scope.valid()
+        || scope.value() >= semantics_->scopes().size()
+        || type.target.target.valid() || spelling.empty()
+        || !type.class_identity.empty() || type.virtual_interface
+        || type.value_form == semantic::sv::TypeForm::class_handle
+        || type.value_form == semantic::sv::TypeForm::string) {
+        return { };
+    }
+    return systemverilog_hir_detail::find_systemverilog_hir_type(
+        *semantics_, hir_, scope, spelling, type.source_order);
+}
+
+bool SystemVerilogClassHirExecution::four_state_type(
+    const semantic::sv::TypeReference& type,
+    const std::string_view context,
+    const semantic::ScopeId scope) const
+{
+    if (semantic::sv::named_type_four_state(type, hir_))
+        return true;
+    if (const auto target = named_type_target(type, scope); target.valid()) {
+        auto named = type;
+        named.target.target = target;
+        return four_state_type(named, context);
+    }
+    if (!type.target.target.valid() || !type.class_identity.empty())
+        return false;
+    // A class type parameter holds what the specialization binds it to, in
+    // the running class or the base that declares it (8.25); a typedef of
+    // one names what it names (6.18).
+    const auto* definition = type_definition(type.target.target);
+    if (definition != nullptr
+        && definition->form == semantic::sv::TypeForm::alias) {
+        return four_state_type(definition->base, context);
+    }
+    if (definition != nullptr
+        && definition->form != semantic::sv::TypeForm::type_parameter) {
+        return false;
+    }
+    std::vector<std::string_view> followed;
+    for (const auto* current = specialization(context);
+         current != nullptr;) {
+        if (std::ranges::find(followed, current->specialization_identity)
+            != followed.end()) {
+            break;
+        }
+        followed.push_back(current->specialization_identity);
+        for (const auto& parameter : current->parameters) {
+            if (!parameter.type_parameter || !parameter.type)
+                continue;
+            const auto* formal = declaration(parameter.declaration);
+            const bool named = definition != nullptr
+                ? parameter.declaration == definition->declaration
+                : formal != nullptr && formal->declared_type
+                    && *formal->declared_type == type.target.target;
+            if (named) {
+                return four_state_type(
+                    *parameter.type, current->specialization_identity);
+            }
+        }
+        current = current->base
+            ? specialization(current->base->specialization_identity)
+            : nullptr;
+    }
+    return false;
+}
+
+std::size_t SystemVerilogClassHirExecution::variable_width(
+    const semantic::sv::TypeReference& type,
+    const std::string_view context,
+    const semantic::ScopeId use_scope) const
+{
+    if (const auto target = named_type_target(type, use_scope);
+        target.valid()) {
+        auto named = type;
+        named.target.target = target;
+        return variable_width(named, context);
+    }
+    std::vector<semantic::TypeId> followed;
+    const auto resolve = [&](const auto& self,
+                             const semantic::sv::TypeReference& reference,
+                             const std::string_view scope)
+        -> std::optional<std::size_t> {
+        if (reference.executable_width && *reference.executable_width != 0U
+            && *reference.executable_width
+                <= std::numeric_limits<std::size_t>::max()) {
+            return static_cast<std::size_t>(*reference.executable_width);
+        }
+        if (reference.container_form || !reference.unpacked_dimensions.empty()
+            || !reference.class_identity.empty()
+            || reference.virtual_interface) {
+            return std::nullopt;
+        }
+        // Packed dimensions with constant bounds (7.4.1): their element
+        // count times the element's width.
+        if (reference.packed_range || !reference.packed_dimensions.empty()) {
+            std::size_t count { 1U };
+            const auto multiply = [&](const semantic::sv::PackedRange& range) {
+                if (!range.left || !range.right)
+                    return false;
+                const auto extent
+                    = support::index_distance(*range.left, *range.right);
+                if (extent >= std::numeric_limits<std::size_t>::max()
+                    || extent + 1U > std::numeric_limits<std::size_t>::max()
+                            / count) {
+                    return false;
+                }
+                count *= static_cast<std::size_t>(extent + 1U);
+                return true;
+            };
+            if (!reference.packed_dimensions.empty()) {
+                for (const auto& range : reference.packed_dimensions) {
+                    if (!multiply(range))
+                        return std::nullopt;
+                }
+            } else if (!multiply(*reference.packed_range)) {
+                return std::nullopt;
+            }
+            auto element = reference;
+            element.packed_range.reset();
+            element.packed_dimensions.clear();
+            element.executable_width.reset();
+            // `[3:0]` alone (implicit logic, 6.7.1) has 1-bit elements.
+            const auto element_width = !element.target.target.valid()
+                    && element.target.spelling.empty()
+                ? std::optional<std::size_t> { 1U }
+                : self(self, element, scope);
+            if (!element_width || *element_width == 0U
+                || *element_width
+                    > std::numeric_limits<std::size_t>::max() / count) {
+                return std::nullopt;
+            }
+            return count * *element_width;
+        }
+        if (!reference.target.target.valid()) {
+            const auto& builtin = reference.target.spelling;
+            if (builtin == "bit" || builtin == "logic"
+                || builtin == "reg") {
+                return 1U;
+            }
+            if (builtin == "byte")
+                return 8U;
+            if (builtin == "shortint")
+                return 16U;
+            if (builtin == "int" || builtin == "integer")
+                return 32U;
+            if (builtin == "longint" || builtin == "time")
+                return 64U;
+            return std::nullopt;
+        }
+        if (std::ranges::find(followed, reference.target.target)
+            != followed.end()) {
+            return std::nullopt;
+        }
+        followed.push_back(reference.target.target);
+        const auto* definition = type_definition(reference.target.target);
+        if (definition != nullptr
+            && definition->form != semantic::sv::TypeForm::type_parameter) {
+            return self(self, definition->base, scope);
+        }
+        // A class type parameter: what the specialization binds it to, in
+        // the running class or the base that declares it (8.25).
+        std::vector<std::string_view> classes;
+        for (const auto* current = specialization(scope);
+             current != nullptr;) {
+            if (std::ranges::find(classes, current->specialization_identity)
+                != classes.end()) {
+                break;
+            }
+            classes.push_back(current->specialization_identity);
+            for (const auto& parameter : current->parameters) {
+                if (!parameter.type_parameter || !parameter.type)
+                    continue;
+                const auto* formal = declaration(parameter.declaration);
+                const bool named = definition != nullptr
+                    ? parameter.declaration == definition->declaration
+                    : formal != nullptr && formal->declared_type
+                        && *formal->declared_type == reference.target.target;
+                if (named) {
+                    return self(self, *parameter.type,
+                        current->specialization_identity);
+                }
+            }
+            current = current->base
+                ? specialization(current->base->specialization_identity)
+                : nullptr;
+        }
+        return std::nullopt;
+    };
+    return resolve(resolve, type, context).value_or(width(type));
+}
+
+std::optional<std::pair<std::int64_t, std::int64_t>>
+SystemVerilogClassHirExecution::packed_select_bounds(
+    const semantic::sv::TypeReference& type,
+    const std::string_view context,
+    const semantic::ScopeId use_scope) const
+{
+    using Bounds = std::pair<std::int64_t, std::int64_t>;
+    if (const auto target = named_type_target(type, use_scope);
+        target.valid()) {
+        auto named = type;
+        named.target.target = target;
+        return packed_select_bounds(named, context);
+    }
+    std::vector<semantic::TypeId> followed;
+    const auto resolve = [&](const auto& self,
+                             const semantic::sv::TypeReference& reference,
+                             const std::string_view scope)
+        -> std::optional<Bounds> {
+        if (reference.container_form || !reference.unpacked_dimensions.empty()
+            || !reference.class_identity.empty()
+            || reference.virtual_interface
+            || reference.packed_dimensions.size() > 1U) {
+            return std::nullopt;
+        }
+        const auto& builtin = reference.target.spelling;
+        const bool bit_element = !reference.target.target.valid()
+            && (builtin.empty() || builtin == "bit" || builtin == "logic"
+                || builtin == "reg");
+        // An integer atom takes no packed dimension (A.2.2.1); a range kept
+        // with one is its own `[W-1:0]`.
+        const bool integer_atom = !reference.target.target.valid()
+            && (builtin == "byte" || builtin == "shortint" || builtin == "int"
+                || builtin == "integer" || builtin == "longint"
+                || builtin == "time");
+        if (reference.packed_range) {
+            // Only a vector of single bits; a packed array of a named type
+            // is not one.
+            if ((!bit_element && !integer_atom) || !reference.packed_range->left
+                || !reference.packed_range->right) {
+                return std::nullopt;
+            }
+            return Bounds { *reference.packed_range->left,
+                *reference.packed_range->right };
+        }
+        if (!reference.target.target.valid()) {
+            // Integer atoms are `[W-1:0]` vectors (6.11.1); a 1-bit scalar
+            // takes only the select `[0]`.
+            if (bit_element)
+                return Bounds { 0, 0 };
+            if (builtin == "byte")
+                return Bounds { 7, 0 };
+            if (builtin == "shortint")
+                return Bounds { 15, 0 };
+            if (builtin == "int" || builtin == "integer")
+                return Bounds { 31, 0 };
+            if (builtin == "longint" || builtin == "time")
+                return Bounds { 63, 0 };
+            return std::nullopt;
+        }
+        if (std::ranges::find(followed, reference.target.target)
+            != followed.end()) {
+            return std::nullopt;
+        }
+        followed.push_back(reference.target.target);
+        const auto* definition = type_definition(reference.target.target);
+        if (definition != nullptr
+            && definition->form == semantic::sv::TypeForm::enumeration
+            && !definition->base.target.target.valid()
+            && definition->base.target.spelling.empty()
+            && !definition->base.packed_range) {
+            return Bounds { 31, 0 };
+        }
+        if (definition != nullptr
+            && (definition->form == semantic::sv::TypeForm::alias
+                || definition->form == semantic::sv::TypeForm::enumeration
+                || definition->form
+                    == semantic::sv::TypeForm::packed_integral)) {
+            return self(self, definition->base, scope);
+        }
+        if (definition != nullptr
+            && definition->form != semantic::sv::TypeForm::type_parameter) {
+            return std::nullopt;
+        }
+        // A class type parameter: what the specialization binds it to, in
+        // the running class or the base that declares it (8.25).
+        std::vector<std::string_view> classes;
+        for (const auto* current = specialization(scope);
+             current != nullptr;) {
+            if (std::ranges::find(classes, current->specialization_identity)
+                != classes.end()) {
+                break;
+            }
+            classes.push_back(current->specialization_identity);
+            for (const auto& parameter : current->parameters) {
+                if (!parameter.type_parameter || !parameter.type)
+                    continue;
+                const auto* formal = declaration(parameter.declaration);
+                const bool named = definition != nullptr
+                    ? parameter.declaration == definition->declaration
+                    : formal != nullptr && formal->declared_type
+                        && *formal->declared_type == reference.target.target;
+                if (named) {
+                    return self(self, *parameter.type,
+                        current->specialization_identity);
+                }
+            }
+            current = current->base
+                ? specialization(current->base->specialization_identity)
+                : nullptr;
+        }
+        return std::nullopt;
+    };
+    return resolve(resolve, type, context);
+}
+
+std::string SystemVerilogClassHirExecution::target_class_specialization(
+    const semantic::ExpressionId target_id,
+    const runtime::SystemVerilogClassHandle handle,
+    const PackedEnvironment& environment) const
+{
+    using semantic::sv::ExpressionKind;
+    const auto* target = expression(target_id);
+    if (target == nullptr)
+        return { };
+    const auto running = running_specialization(handle);
+    constexpr std::string_view property_prefix { "@sv-property:" };
+    constexpr std::string_view static_prefix { "@sv-static-property:" };
+    if (target->kind == ExpressionKind::class_static_property
+        || target->text.starts_with(static_prefix)) {
+        const auto selected
+            = static_property_selection(*target, static_prefix, handle);
+        return selected.property != nullptr
+            ? type_specialization(selected.property->type,
+                  selected.specialization.empty()
+                      ? std::string_view { running }
+                      : std::string_view { selected.specialization })
+            : std::string { };
+    }
+    if (target->kind == ExpressionKind::class_property
+        || target->text.starts_with(property_prefix)) {
+        auto owner = handle;
+        if (!target->operands.empty()) {
+            // Only a receiver read without side effects is followed here;
+            // the assignment reads it again.
+            const auto* receiver = expression(target->operands.front());
+            if (receiver == nullptr || receiver->kind != ExpressionKind::name)
+                return { };
+            if (receiver->text != "this") {
+                const auto found = environment.find(receiver->text);
+                if (found == environment.end()
+                    || found->second.width() != 64U
+                    || found->second.low_word().bval != 0U) {
+                    return { };
+                }
+                owner = found->second.low_word().aval;
+            }
+        }
+        const auto* property = instance_property(
+            owner, marker_payload(*target, property_prefix));
+        return property != nullptr
+            ? type_specialization(property->type, running_specialization(owner))
+            : std::string { };
+    }
+    if (target->kind != ExpressionKind::name || !target->referenced_name
+        || !target->referenced_name->selected) {
+        return { };
+    }
+    const auto id = *target->referenced_name->selected;
+    if (const auto* property = instance_property(handle, id))
+        return type_specialization(property->type, running);
+    // A static property named in its class: the running specialization's
+    // own entry, or the base's that declares it.
+    std::vector<std::string_view> followed;
+    for (const auto* current = specialization(running); current != nullptr;) {
+        if (std::ranges::find(followed, current->specialization_identity)
+            != followed.end()) {
+            break;
+        }
+        followed.push_back(current->specialization_identity);
+        const auto found = std::ranges::find_if(current->properties,
+            [&](const semantic::sv::SpecializedClassProperty& candidate) {
+                return candidate.static_storage && candidate.declaration == id;
+            });
+        if (found != current->properties.end()) {
+            return type_specialization(
+                found->type, current->specialization_identity);
+        }
+        current = current->base
+            ? specialization(current->base->specialization_identity)
+            : nullptr;
+    }
+    const auto* selected = declaration(id);
+    return selected != nullptr && selected->type
+        ? type_specialization(*selected->type, running)
+        : std::string { };
+}
+
+std::optional<runtime::PackedLogic4>
+SystemVerilogClassHirExecution::evaluate_class_cast(
+    const semantic::sv::Expression& cast,
+    const runtime::SystemVerilogClassHandle handle,
+    PackedEnvironment& environment)
+{
+    const auto source = evaluate_packed(
+        cast.operands.back(), handle, environment, 64U);
+    if (!source || source->width() != 64U || source->low_word().bval != 0U)
+        return std::nullopt;
+    const auto object = source->low_word().aval;
+    constexpr std::string_view prefix { "@sv-dollar-cast:" };
+    std::string declaration_identity = !cast.class_member_identity.empty()
+        ? cast.class_member_identity
+        : cast.text.starts_with(prefix) ? cast.text.substr(prefix.size())
+                                        : std::string { };
+    // The destination's class type names one specialization; an object of
+    // another specialization of the class does not convert to it (IEEE
+    // 1800-2023 8.25).
+    auto destination = target_class_specialization(
+        cast.operands.front(), handle, environment);
+    if (const auto* selected = specialization(destination)) {
+        if (declaration_identity.empty())
+            declaration_identity = selected->declaration_identity;
+        else if (selected->declaration_identity != declaration_identity)
+            destination.clear();
+    } else {
+        destination.clear();
+    }
+    if (declaration_identity.empty())
+        return std::nullopt;
+    // A null source converts, as the elaborated cast does (8.16).
+    bool compatible = object == 0U;
+    if (!compatible) {
+        if (!heap_.contains(object))
+            return std::nullopt;
+        const auto& stored = heap_.object(object);
+        bool same_class { };
+        std::vector<std::string_view> followed;
+        for (const auto* current = specialization(
+                 stored.specialization_identity);
+             current != nullptr;) {
+            if (std::ranges::find(followed, current->specialization_identity)
+                != followed.end()) {
+                break;
+            }
+            followed.push_back(current->specialization_identity);
+            if (current->declaration_identity == declaration_identity) {
+                same_class = true;
+                compatible = destination.empty()
+                    || current->specialization_identity == destination;
+                break;
+            }
+            current = current->base
+                ? specialization(current->base->specialization_identity)
+                : nullptr;
+        }
+        // An interface class the object's class implements (8.26).
+        if (!same_class) {
+            compatible = std::ranges::find(stored.assignable_declared_types,
+                             declaration_identity)
+                != stored.assignable_declared_types.end();
+        }
+    }
+    if (compatible) {
+        StringEnvironment empty_strings;
+        auto& strings = strings_ != nullptr ? *strings_ : empty_strings;
+        auto reference = variable_reference(
+            cast.operands.front(), handle, environment, strings);
+        if (!reference || reference->string_value || !reference->write_packed
+            || !reference->write_packed(
+                runtime::PackedLogic4::from_aval_bval(64U, object, 0U))) {
+            return std::nullopt;
+        }
+    }
+    return runtime::PackedLogic4::from_aval_bval(1U, compatible ? 1U : 0U, 0U);
+}
+
+std::optional<SystemVerilogClassHirExecution::HandleContainerTarget>
+SystemVerilogClassHirExecution::handle_container_target(
+    const semantic::sv::Expression& container,
+    const runtime::SystemVerilogClassHandle handle,
+    PackedEnvironment& environment)
+{
+    using semantic::sv::ExpressionKind;
+    constexpr std::string_view static_container_prefix {
+        "@sv-static-container-property:"
+    };
+    constexpr std::string_view static_prefix { "@sv-static-property:" };
+    constexpr std::string_view container_prefix { "@sv-container-property:" };
+    constexpr std::string_view property_prefix { "@sv-property:" };
+    const bool static_container
+        = container.text.starts_with(static_container_prefix);
+    const bool instance_container
+        = container.text.starts_with(container_prefix);
+    const auto marker = static_container ? static_container_prefix
+        : instance_container             ? container_prefix
+        : container.kind == ExpressionKind::class_static_property
+            || container.text.starts_with(static_prefix)
+        ? static_prefix
+        : property_prefix;
+    const auto identity = marker_payload(container, marker);
+    // Only a property some class declares as an array of handles is one;
+    // a receiver is read only then.
+    const bool declared = std::ranges::any_of(specializations_,
+        [&](const semantic::sv::ClassSpecialization& candidate) {
+            return std::ranges::any_of(candidate.properties,
+                [&](const semantic::sv::SpecializedClassProperty& property) {
+                    return property.canonical_identity == identity
+                        && handle_container_type(property.type);
+                });
+        });
+    if (identity.empty() || !declared)
+        return std::nullopt;
+    HandleContainerTarget result;
+    if (marker == static_container_prefix || marker == static_prefix) {
+        auto selected = static_property_selection(container, marker, handle);
+        result.property = selected.property;
+        result.specialization = std::move(selected.specialization);
+    } else if (container.kind == ExpressionKind::class_property
+        || container.text.starts_with(marker)) {
+        result.owner = handle;
+        if (!container.operands.empty()) {
+            const auto receiver = evaluate_packed(
+                container.operands.front(), handle, environment, 64U);
+            if (!receiver || receiver->width() != 64U
+                || receiver->low_word().bval != 0U) {
+                return std::nullopt;
+            }
+            result.owner = receiver->low_word().aval;
+        }
+        if (result.owner == 0U || !heap_.contains(result.owner)) {
+            throw std::invalid_argument {
+                "class HIR array of handles is selected through a null or stale handle"
+            };
+        }
+        result.property = instance_property(result.owner, identity);
+    } else {
+        return std::nullopt;
+    }
+    if (result.property == nullptr
+        || !handle_container_type(result.property->type)) {
+        return std::nullopt;
+    }
+    return result;
+}
+
+namespace {
+
+// The value profile of a static array, queue or associative array of
+// integral or string values before anything has written it, when no
+// process of the design names it and it lives in the static store.
+[[nodiscard]] std::optional<runtime::simir::ContainerType>
+static_value_container_type(const semantic::sv::TypeReference& type,
+    const semantic::sv::Hir& hir)
+{
+    using semantic::sv::TypeForm;
+    if (!type.container_form || type.container_element_types.size() != 1U
+        || !type.unpacked_dimensions.empty()) {
+        return std::nullopt;
+    }
+    const auto& element = type.container_element_types.front();
+    runtime::simir::ContainerType result;
+    if (element.value_form == TypeForm::string) {
+        result.element_kind = runtime::simir::ContainerElementKind::String;
+        result.element_width = 0U;
+    } else if ((element.value_form == TypeForm::packed_integral
+                   || element.value_form == TypeForm::enumeration)
+        && !element.container_form && element.executable_width
+        && *element.executable_width != 0U
+        && *element.executable_width
+            <= std::numeric_limits<std::uint32_t>::max()) {
+        result.element_width
+            = static_cast<std::uint32_t>(*element.executable_width);
+        result.two_state = !element.four_state;
+        result.signed_elements = element.signed_value;
+    } else {
+        return std::nullopt;
+    }
+    switch (*type.container_form) {
+    case TypeForm::queue:
+        // A bounded queue's bound is a constant the elaborated storage
+        // keeps; such a queue always has that storage.
+        if (type.queue_maximum)
+            return std::nullopt;
+        result.queue = true;
+        return result;
+    case TypeForm::dynamic_array:
+        return result;
+    case TypeForm::associative_array: {
+        if (!type.associative_index_metadata)
+            return std::nullopt;
+        const auto& index = *type.associative_index_metadata;
+        result.associative = true;
+        if (index.value_form == TypeForm::string) {
+            result.string_indices = true;
+            return result;
+        }
+        if (!is_integral_associative_index(index, hir)
+            || !index.executable_width || *index.executable_width == 0U
+            || *index.executable_width > 64U) {
+            return std::nullopt;
+        }
+        result.index_width = static_cast<std::uint32_t>(*index.executable_width);
+        result.signed_indices = index.signed_value;
+        result.two_state_indices = !index.four_state;
+        return result;
+    }
+    default:
+        return std::nullopt;
+    }
+}
+
+} // namespace
+
+std::optional<SystemVerilogClassHirExecution::StaticValueContainer>
+SystemVerilogClassHirExecution::static_value_container(
+    const semantic::ExpressionId selection,
+    const runtime::SystemVerilogClassHandle handle) const
+{
+    constexpr std::string_view static_container_prefix {
+        "@sv-static-container-property:"
+    };
+    constexpr std::string_view static_prefix { "@sv-static-property:" };
+    const auto* base = expression(selection);
+    if (base == nullptr || !base->operands.empty())
+        return std::nullopt;
+    const auto marker = base->text.starts_with(static_container_prefix)
+        ? static_container_prefix
+        : base->kind == semantic::sv::ExpressionKind::class_static_property
+            || base->text.starts_with(static_prefix)
+        ? static_prefix
+        : std::string_view { };
+    if (marker.empty())
+        return std::nullopt;
+    auto selected = static_property_selection(*base, marker, handle);
+    const auto* property = selected.property;
+    // An array of class handles is a handle container (7.8, 8.9).
+    if (property == nullptr || !property->type.container_form
+        || handle_container_type(property->type)
+        || semantic::sv::nested_class_handle_container(property->type)) {
+        return std::nullopt;
+    }
+    if (!read_static_property_value_ || !write_static_property_container_) {
+        throw std::invalid_argument {
+            "class HIR static container storage is unavailable"
+        };
+    }
+    auto stored = read_static_property_value_(
+        property->canonical_identity, selected.specialization);
+    if (!stored)
+        return std::nullopt;
+    StaticValueContainer result;
+    result.property = property;
+    result.specialization = std::move(selected.specialization);
+    if (stored->container) {
+        result.value = std::move(*stored->container);
+    } else if (const auto type
+        = static_value_container_type(property->type, hir_)) {
+        // Before its first write the property holds its type's default
+        // value (7.4.5, 7.8, 7.10).
+        result.value = runtime::simir::default_container_value(*type);
+    } else {
+        throw std::invalid_argument {
+            "class HIR static container has no storage of its element type"
+        };
+    }
+    return result;
+}
+
+void SystemVerilogClassHirExecution::store_static_value_container(
+    const StaticValueContainer& container,
+    runtime::simir::ContainerValue value) const
+{
+    if (!write_static_property_container_
+        || !write_static_property_container_(
+            container.property->canonical_identity,
+            container.specialization, std::move(value))) {
+        throw std::invalid_argument {
+            "class HIR static container write is not executable"
+        };
+    }
+}
+
+bool SystemVerilogClassHirExecution::assign_static_container_element(
+    const semantic::sv::Statement& item,
+    const semantic::sv::Expression& target,
+    const runtime::SystemVerilogClassHandle handle,
+    PackedEnvironment& environment,
+    StringEnvironment& strings)
+{
+    if (target.kind != semantic::sv::ExpressionKind::index
+        || target.operands.size() != 2U || !item.value) {
+        return false;
+    }
+    auto container = static_value_container(target.operands.front(), handle);
+    if (!container)
+        return false;
+    if (item.assignment_kind != semantic::sv::AssignmentKind::blocking) {
+        throw std::invalid_argument {
+            "class HIR nonblocking static container element write is not executable"
+        };
+    }
+    auto value = std::move(container->value);
+    const auto type = value.type;
+    const bool string_elements
+        = type.element_kind == runtime::simir::ContainerElementKind::String;
+    if (!string_elements
+        && type.element_kind != runtime::simir::ContainerElementKind::Packed
+        && type.element_kind != runtime::simir::ContainerElementKind::Scalar) {
+        throw std::invalid_argument {
+            "class HIR static container element type is not executable"
+        };
+    }
+    const auto index_id = target.operands.back();
+    // The index is evaluated before the value, as the lowered write does.
+    std::optional<std::string> string_key;
+    std::optional<runtime::PackedLogic4> key;
+    std::optional<std::int64_t> position;
+    if (type.associative && type.string_indices) {
+        string_key = evaluate_string(index_id, strings, handle);
+        if (!string_key) {
+            throw std::invalid_argument {
+                "class HIR associative array index is not executable"
+            };
+        }
+    } else {
+        const auto* index_expression = expression(index_id);
+        const auto index = evaluate_packed(index_id, handle, environment);
+        if (index_expression == nullptr || !index) {
+            throw std::invalid_argument {
+                "class HIR static container index is not executable"
+            };
+        }
+        if (type.associative) {
+            key = cast_integral_index(*index, type.index_width,
+                index_expression->signed_value, !type.two_state_indices);
+            if (!key) {
+                throw std::invalid_argument {
+                    "class HIR associative array index is not executable"
+                };
+            }
+        } else if (!packed_has_unknown(*index)) {
+            position = index_expression->signed_value
+                ? index->known_signed_value()
+                : [&]() -> std::optional<std::int64_t> {
+                      const auto known = index->known_unsigned_value();
+                      if (!known
+                          || *known > static_cast<std::uint64_t>(
+                              std::numeric_limits<std::int64_t>::max())) {
+                          return std::nullopt;
+                      }
+                      return static_cast<std::int64_t>(*known);
+                  }();
+        }
+    }
+    std::optional<std::string> text;
+    std::optional<runtime::PackedLogic4> packed;
+    if (string_elements) {
+        text = evaluate_string(*item.value, strings, handle);
+        if (!text) {
+            throw std::invalid_argument {
+                "class HIR static container element value is not executable"
+            };
+        }
+    } else {
+        packed = evaluate_packed(*item.value, handle, environment,
+            type.element_width);
+        if (!packed) {
+            throw std::invalid_argument {
+                "class HIR static container element value is not executable"
+            };
+        }
+        packed = resize_packed(*packed, type.element_width);
+        if (type.two_state) {
+            for (std::size_t bit = 0U; bit < packed->width(); ++bit) {
+                const auto state = packed->get(bit);
+                if (state == runtime::Logic4::x || state == runtime::Logic4::z)
+                    packed->set(bit, runtime::Logic4::zero);
+            }
+        }
+    }
+    // The value read before the index and the value were evaluated may be
+    // stale: either can call code that changes this container.
+    container = static_value_container(target.operands.front(), handle);
+    if (!container)
+        return false;
+    value = std::move(container->value);
+    const auto write = [&](const std::size_t at, const bool insert) {
+        if (string_elements) {
+            if (insert) {
+                value.string_elements.insert(
+                    value.string_elements.begin()
+                        + static_cast<std::ptrdiff_t>(at),
+                    std::move(*text));
+            } else {
+                value.string_elements[at] = std::move(*text);
+            }
+        } else if (insert) {
+            value.elements.insert(
+                value.elements.begin() + static_cast<std::ptrdiff_t>(at),
+                std::move(*packed));
+        } else {
+            value.elements[at] = std::move(*packed);
+        }
+    };
+    const auto size = runtime::simir::container_value_size(value);
+    if (string_key) {
+        const auto found = std::ranges::lower_bound(
+            value.string_keys, *string_key);
+        const auto at = static_cast<std::size_t>(
+            found - value.string_keys.begin());
+        const bool present = found != value.string_keys.end()
+            && *found == *string_key;
+        if (!present) {
+            if (size >= runtime::simir::maximum_container_elements(type)) {
+                throw std::length_error {
+                    "associative array exceeds the per-container owning-storage budget"
+                };
+            }
+            value.string_keys.insert(found, *string_key);
+        }
+        write(at, !present);
+    } else if (key) {
+        // A key with X or Z bits names no element; the write is ignored
+        // (IEEE 1800-2023 7.8.6).
+        if (packed_has_unknown(*key)) {
+            if (report_) {
+                report_(report_process_,
+                    "associative array write ignored because index contains X or Z",
+                    runtime::simir::AssertionSeverity::warning,
+                    item.source);
+            }
+            return true;
+        }
+        const auto found = std::ranges::lower_bound(value.keys, *key,
+            [&](const runtime::PackedLogic4& left,
+                const runtime::PackedLogic4& right) {
+                return runtime::simir::associative_index_key_less(
+                    type, left, right);
+            });
+        const auto at = static_cast<std::size_t>(found - value.keys.begin());
+        const bool present = found != value.keys.end() && *found == *key;
+        if (!present) {
+            if (size >= runtime::simir::maximum_container_elements(type)) {
+                throw std::length_error {
+                    "associative array exceeds the per-container owning-storage budget"
+                };
+            }
+            value.keys.insert(found, *key);
+        }
+        write(at, !present);
+    } else {
+        // A write through an unknown, negative or out-of-range position
+        // writes nothing; a queue write one past its last element appends
+        // (7.4.6, 7.10.1).
+        if (!position || *position < 0
+            || !std::in_range<std::size_t>(*position)) {
+            return true;
+        }
+        const auto at = static_cast<std::size_t>(*position);
+        if (at < size) {
+            write(at, false);
+        } else if (type.queue && at == size
+            && (!type.maximum_elements || size < *type.maximum_elements)) {
+            if (size >= runtime::simir::maximum_container_elements(type)) {
+                throw std::length_error {
+                    "queue exceeds the per-container owning-storage budget"
+                };
+            }
+            write(at, true);
+        } else {
+            return true;
+        }
+    }
+    store_static_value_container(*container, std::move(value));
+    return true;
+}
+
+std::optional<std::pair<runtime::PackedLogic4, bool>>
+SystemVerilogClassHirExecution::static_container_element(
+    const semantic::sv::Expression& index,
+    const runtime::SystemVerilogClassHandle handle,
+    PackedEnvironment& environment)
+{
+    if (index.kind != semantic::sv::ExpressionKind::index
+        || index.operands.size() != 2U) {
+        return std::nullopt;
+    }
+    auto container = static_value_container(index.operands.front(), handle);
+    if (!container)
+        return std::nullopt;
+    const auto type = container->value.type;
+    if (type.element_kind != runtime::simir::ContainerElementKind::Packed
+        && type.element_kind != runtime::simir::ContainerElementKind::Scalar) {
+        return std::nullopt;
+    }
+    const auto missing = runtime::PackedLogic4(type.element_width,
+        type.two_state ? runtime::Logic4::zero : runtime::Logic4::x);
+    const auto index_id = index.operands.back();
+    std::optional<std::size_t> at;
+    if (type.associative && type.string_indices) {
+        StringEnvironment empty_strings;
+        auto& strings = strings_ != nullptr ? *strings_ : empty_strings;
+        const auto key = evaluate_string(index_id, strings, handle);
+        if (!key) {
+            throw std::invalid_argument {
+                "class HIR associative array index is not executable"
+            };
+        }
+        container = static_value_container(index.operands.front(), handle);
+        if (!container)
+            return std::nullopt;
+        const auto& keys = container->value.string_keys;
+        const auto found = std::ranges::lower_bound(keys, *key);
+        if (found != keys.end() && *found == *key)
+            at = static_cast<std::size_t>(found - keys.begin());
+    } else {
+        const auto* index_expression = expression(index_id);
+        const auto value = evaluate_packed(index_id, handle, environment);
+        if (index_expression == nullptr || !value) {
+            throw std::invalid_argument {
+                "class HIR static container index is not executable"
+            };
+        }
+        container = static_value_container(index.operands.front(), handle);
+        if (!container)
+            return std::nullopt;
+        const auto& stored = container->value;
+        if (type.associative) {
+            const auto key = cast_integral_index(*value, type.index_width,
+                index_expression->signed_value, !type.two_state_indices);
+            if (key && !packed_has_unknown(*key)) {
+                const auto found = std::ranges::lower_bound(stored.keys, *key,
+                    [&](const runtime::PackedLogic4& left,
+                        const runtime::PackedLogic4& right) {
+                        return runtime::simir::associative_index_key_less(
+                            type, left, right);
+                    });
+                if (found != stored.keys.end() && *found == *key)
+                    at = static_cast<std::size_t>(found - stored.keys.begin());
+            }
+        } else if (!packed_has_unknown(*value)) {
+            const auto position = index_expression->signed_value
+                ? value->known_signed_value()
+                : [&]() -> std::optional<std::int64_t> {
+                      const auto known = value->known_unsigned_value();
+                      if (!known
+                          || *known > static_cast<std::uint64_t>(
+                              std::numeric_limits<std::int64_t>::max())) {
+                          return std::nullopt;
+                      }
+                      return static_cast<std::int64_t>(*known);
+                  }();
+            if (position && *position >= 0
+                && std::in_range<std::size_t>(*position)
+                && static_cast<std::size_t>(*position)
+                    < stored.elements.size()) {
+                at = static_cast<std::size_t>(*position);
+            }
+        }
+    }
+    const auto& elements = container->value.elements;
+    return std::pair { at && *at < elements.size() ? elements[*at] : missing,
+        type.signed_elements };
+}
+
+std::optional<runtime::PackedLogic4>
+SystemVerilogClassHirExecution::static_container_method(
+    const semantic::sv::Expression& call,
+    const std::string_view method_name,
+    const runtime::SystemVerilogClassHandle handle,
+    PackedEnvironment& environment)
+{
+    if (call.operands.empty())
+        return std::nullopt;
+    auto container = static_value_container(call.operands.front(), handle);
+    if (!container)
+        return std::nullopt;
+    auto value = std::move(container->value);
+    const auto type = value.type;
+    const bool string_elements
+        = type.element_kind == runtime::simir::ContainerElementKind::String;
+    const bool packed_elements
+        = type.element_kind == runtime::simir::ContainerElementKind::Packed
+        || type.element_kind == runtime::simir::ContainerElementKind::Scalar;
+    const auto size = runtime::simir::container_value_size(value);
+    const auto integer = [](const std::uint64_t result) {
+        return runtime::PackedLogic4::from_aval_bval(32U, result, 0U);
+    };
+    const auto arguments = call.operands.size() - 1U;
+    StringEnvironment empty_strings;
+    auto& strings = strings_ != nullptr ? *strings_ : empty_strings;
+    // size() and num() (7.5.2, 7.9.1, 7.10.2.1).
+    if ((method_name == "size" || method_name == "num") && arguments == 0U)
+        return integer(size);
+    // An element to add, evaluated before the container is read again: it
+    // can call code that changes this container.
+    const auto element_value = [&](const semantic::ExpressionId id)
+        -> std::pair<std::optional<runtime::PackedLogic4>,
+            std::optional<std::string>> {
+        if (string_elements) {
+            auto text = evaluate_string(id, strings, handle);
+            if (!text) {
+                throw std::invalid_argument {
+                    "class HIR static container element value is not executable"
+                };
+            }
+            return { std::nullopt, std::move(text) };
+        }
+        auto packed = evaluate_packed(id, handle, environment,
+            type.element_width);
+        if (!packed || !packed_elements) {
+            throw std::invalid_argument {
+                "class HIR static container element value is not executable"
+            };
+        }
+        return { resize_packed(*packed, type.element_width), std::nullopt };
+    };
+    const auto reread = [&] {
+        container = static_value_container(call.operands.front(), handle);
+        if (!container) {
+            throw std::invalid_argument {
+                "class HIR static container storage is unavailable"
+            };
+        }
+        value = std::move(container->value);
+    };
+    // push_back and push_front of a queue (7.10.2.6, 7.10.2.7).
+    if (type.queue && arguments == 1U
+        && (method_name == "push_back" || method_name == "push_front")) {
+        auto [packed, text] = element_value(call.operands[1U]);
+        reread();
+        const auto current = runtime::simir::container_value_size(value);
+        // A bounded queue keeps at most its bound's elements (7.10.5).
+        if (type.maximum_elements && current >= *type.maximum_elements)
+            return runtime::PackedLogic4::from_aval_bval(1U, 0U, 0U);
+        if (current >= runtime::simir::maximum_container_elements(type)) {
+            throw std::length_error {
+                "queue exceeds the per-container owning-storage budget"
+            };
+        }
+        const bool back = method_name == "push_back";
+        if (text) {
+            value.string_elements.insert(back ? value.string_elements.end()
+                                              : value.string_elements.begin(),
+                std::move(*text));
+        } else {
+            value.elements.insert(back ? value.elements.end()
+                                       : value.elements.begin(),
+                std::move(*packed));
+        }
+        store_static_value_container(*container, std::move(value));
+        return runtime::PackedLogic4::from_aval_bval(1U, 0U, 0U);
+    }
+    // delete() empties the container (7.5.3, 7.9.2, 7.10.2.3).
+    if (method_name == "delete" && arguments == 0U) {
+        value.elements.clear();
+        value.string_elements.clear();
+        value.nested_elements.clear();
+        value.keys.clear();
+        value.string_keys.clear();
+        store_static_value_container(*container, std::move(value));
+        return runtime::PackedLogic4::from_aval_bval(1U, 0U, 0U);
+    }
+    // exists(index) and delete(index) of an associative array (7.9.2,
+    // 7.9.3).
+    if (type.associative && arguments == 1U
+        && (method_name == "exists" || method_name == "delete")) {
+        std::optional<std::size_t> at;
+        if (type.string_indices) {
+            const auto key = evaluate_string(call.operands[1U], strings, handle);
+            if (!key) {
+                throw std::invalid_argument {
+                    "class HIR associative array index is not executable"
+                };
+            }
+            reread();
+            const auto found = std::ranges::lower_bound(value.string_keys, *key);
+            if (found != value.string_keys.end() && *found == *key)
+                at = static_cast<std::size_t>(found - value.string_keys.begin());
+        } else {
+            const auto* index_expression = expression(call.operands[1U]);
+            const auto index = evaluate_packed(
+                call.operands[1U], handle, environment);
+            const auto key = index && index_expression != nullptr
+                ? cast_integral_index(*index, type.index_width,
+                      index_expression->signed_value, !type.two_state_indices)
+                : std::nullopt;
+            if (!key) {
+                throw std::invalid_argument {
+                    "class HIR associative array index is not executable"
+                };
+            }
+            reread();
+            if (!packed_has_unknown(*key)) {
+                const auto found = std::ranges::lower_bound(value.keys, *key,
+                    [&](const runtime::PackedLogic4& left,
+                        const runtime::PackedLogic4& right) {
+                        return runtime::simir::associative_index_key_less(
+                            type, left, right);
+                    });
+                if (found != value.keys.end() && *found == *key)
+                    at = static_cast<std::size_t>(found - value.keys.begin());
+            }
+        }
+        if (method_name == "exists")
+            return integer(at ? 1U : 0U);
+        if (at) {
+            const auto offset = static_cast<std::ptrdiff_t>(*at);
+            if (type.string_indices) {
+                value.string_keys.erase(value.string_keys.begin() + offset);
+            } else {
+                value.keys.erase(value.keys.begin() + offset);
+            }
+            if (string_elements) {
+                value.string_elements.erase(
+                    value.string_elements.begin() + offset);
+            } else {
+                value.elements.erase(value.elements.begin() + offset);
+            }
+            store_static_value_container(*container, std::move(value));
+        }
+        return runtime::PackedLogic4::from_aval_bval(1U, 0U, 0U);
+    }
+    // pop_front and pop_back of a queue of integral values (7.10.2.4,
+    // 7.10.2.5); an empty queue returns the element type's default.
+    if (type.queue && packed_elements && arguments == 0U
+        && (method_name == "pop_front" || method_name == "pop_back")) {
+        if (value.elements.empty()) {
+            return runtime::PackedLogic4(type.element_width,
+                type.two_state ? runtime::Logic4::zero : runtime::Logic4::x);
+        }
+        const bool front = method_name == "pop_front";
+        auto result = front ? value.elements.front() : value.elements.back();
+        value.elements.erase(front ? value.elements.begin()
+                                   : value.elements.end() - 1);
+        store_static_value_container(*container, std::move(value));
+        return result;
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string>
+SystemVerilogClassHirExecution::handle_container_key(
+    const semantic::sv::TypeReference& container_type,
+    const semantic::ExpressionId index,
+    const runtime::SystemVerilogClassHandle handle,
+    PackedEnvironment& environment)
+{
+    using semantic::sv::TypeForm;
+    const auto& index_type = container_type.associative_index_metadata;
+    if (!index_type)
+        return std::nullopt;
+    const auto unavailable = [] {
+        return std::invalid_argument {
+            "class HIR associative array index is not executable"
+        };
+    };
+    if (index_type->value_form == TypeForm::string
+        || index_type->target.spelling == "string") {
+        StringEnvironment empty_strings;
+        auto& strings = strings_ != nullptr ? *strings_ : empty_strings;
+        auto key = evaluate_string(index, strings, handle);
+        if (!key)
+            throw unavailable();
+        return key;
+    }
+    if (index_type->value_form == TypeForm::class_handle
+        || !index_type->class_identity.empty()) {
+        // A class-handle index names the object (7.8.4).
+        const auto key = evaluate_packed(index, handle, environment, 64U);
+        if (!key || key->width() != 64U || key->low_word().bval != 0U)
+            throw unavailable();
+        return std::to_string(key->low_word().aval);
+    }
+    if (!is_integral_associative_index(*index_type, hir_)
+        || !index_type->executable_width
+        || *index_type->executable_width == 0U
+        || *index_type->executable_width > 64U) {
+        throw unavailable();
+    }
+    const auto* index_expression = expression(index);
+    const auto key = evaluate_packed(index, handle, environment);
+    if (index_expression == nullptr || !key)
+        throw unavailable();
+    const auto width = static_cast<std::size_t>(*index_type->executable_width);
+    const auto converted = cast_integral_index(*key, width,
+        index_expression->signed_value, index_type->four_state);
+    if (!converted)
+        throw unavailable();
+    // An index with X or Z bits selects no element (7.8.6).
+    if (converted->low_word().bval != 0U)
+        return std::nullopt;
+    const auto mask = width == 64U ? std::numeric_limits<std::uint64_t>::max()
+                                   : (UINT64_C(1) << width) - 1U;
+    return std::to_string(converted->low_word().aval & mask);
+}
+
+std::optional<runtime::PackedLogic4>
+SystemVerilogClassHirExecution::evaluate_handle_container_method(
+    const semantic::sv::Expression& call,
+    const std::string_view method_name,
+    const runtime::SystemVerilogClassHandle handle,
+    PackedEnvironment& environment)
+{
+    using semantic::sv::TypeForm;
+    constexpr std::string_view container_method_prefix {
+        "@sv-container-method:"
+    };
+    if (call.operands.empty())
+        return std::nullopt;
+    std::optional<HandleContainerTarget> target;
+    if (call.text.starts_with(container_method_prefix)) {
+        // `obj.q.push_back(h)`: the receiver and the property in the call.
+        const auto operation = std::string_view { call.text }.substr(
+            container_method_prefix.size());
+        const auto separator = operation.find(':');
+        if (separator == std::string_view::npos)
+            return std::nullopt;
+        semantic::sv::Expression property;
+        property.kind = semantic::sv::ExpressionKind::call;
+        property.text = "@sv-container-property:"
+            + std::string { operation.substr(separator + 1U) };
+        property.operands.push_back(call.operands.front());
+        target = handle_container_target(property, handle, environment);
+    } else if (const auto* container = expression(call.operands.front())) {
+        target = handle_container_target(*container, handle, environment);
+    }
+    if (!target || !update_class_handle_container_)
+        return std::nullopt;
+    const auto& type = target->property->type;
+    const auto form = *type.container_form;
+    const auto& identity = target->property->canonical_identity;
+    const auto arguments = std::span { call.operands }.subspan(1U);
+    const auto change = [&](const ClassHandleContainerChange& update) {
+        update_class_handle_container_(
+            target->owner, identity, target->specialization, update);
+    };
+    const auto current = [&]() -> runtime::SystemVerilogClassHandleContainer {
+        if (target->owner != 0U) {
+            const auto& stored = heap_.property(target->owner, identity);
+            if (!stored.handle_container) {
+                throw std::invalid_argument {
+                    "class HIR array of handles has no storage"
+                };
+            }
+            return *stored.handle_container;
+        }
+        auto stored = read_static_property_value_
+            ? read_static_property_value_(identity, target->specialization)
+            : std::nullopt;
+        if (!stored || !stored->handle_container) {
+            throw std::invalid_argument {
+                "class HIR static array of handles has no storage"
+            };
+        }
+        return std::move(*stored->handle_container);
+    };
+    const auto done = [] {
+        return runtime::PackedLogic4::from_aval_bval(1U, 0U, 0U);
+    };
+    const auto integer = [](const std::uint64_t value) {
+        return runtime::PackedLogic4::from_aval_bval(
+            32U, value & 0xffffffffU, 0U);
+    };
+    const auto handle_argument = [&](const std::size_t position)
+        -> std::optional<runtime::SystemVerilogClassHandle> {
+        if (position >= arguments.size())
+            return std::nullopt;
+        const ScopedValue<std::string> allocation { allocation_specialization_,
+            class_allocation(expression(arguments[position]))
+                ? type_specialization(type.container_element_types.size() == 1U
+                          ? type.container_element_types.front()
+                          : type,
+                      running_specialization(handle))
+                : std::string { } };
+        const auto value = evaluate_packed(
+            arguments[position], handle, environment, 64U);
+        if (!value || value->width() != 64U || value->low_word().bval != 0U)
+            return std::nullopt;
+        return value->low_word().aval;
+    };
+    const auto position_argument = [&](const std::size_t position)
+        -> std::optional<std::int64_t> {
+        if (position >= arguments.size())
+            return std::nullopt;
+        const auto value = evaluate_packed(arguments[position], handle,
+            environment);
+        return value ? value->known_signed_value() : std::nullopt;
+    };
+    // `size()` and `num()` (7.5.1, 7.9.1, 7.10.2.1).
+    if ((method_name == "size" || method_name == "num")
+        && arguments.empty()) {
+        return integer(current().size());
+    }
+    if (form == TypeForm::associative_array) {
+        if (method_name == "exists" && arguments.size() == 1U) {
+            const auto key = handle_container_key(
+                type, arguments.front(), handle, environment);
+            return integer(
+                key && current().keyed_values().contains(*key) ? 1U : 0U);
+        }
+        if (method_name == "delete" && arguments.size() <= 1U) {
+            std::optional<std::string> key;
+            if (!arguments.empty()) {
+                key = handle_container_key(
+                    type, arguments.front(), handle, environment);
+                // An index with X or Z bits deletes nothing (7.8.6).
+                if (!key)
+                    return done();
+            }
+            change([&](auto& container, auto&) {
+                if (key) {
+                    static_cast<void>(container.erase(*key));
+                    return;
+                }
+                std::vector<std::string> keys;
+                for (const auto& [name, element] : container.keyed_values())
+                    keys.push_back(name);
+                for (const auto& name : keys)
+                    static_cast<void>(container.erase(name));
+            });
+            return done();
+        }
+        return std::nullopt;
+    }
+    if (form != TypeForm::queue && form != TypeForm::dynamic_array)
+        return std::nullopt;
+    // A queue rebuilt from a new element sequence (7.10.2).
+    const auto replace = [&](std::vector<runtime::SystemVerilogClassHandle>
+                                 elements) {
+        change([&](auto& container, auto& heap) {
+            container.resize(elements.size());
+            for (std::size_t index { }; index < elements.size(); ++index)
+                container.set(heap, index, elements[index]);
+        });
+    };
+    const auto elements = [&] {
+        const auto held = current();
+        const auto values = held.sequential_values();
+        return std::vector<runtime::SystemVerilogClassHandle> {
+            values.begin(), values.end()
+        };
+    };
+    if (method_name == "delete" && arguments.size() <= 1U) {
+        if (arguments.empty()) {
+            replace({ });
+            return done();
+        }
+        if (form != TypeForm::queue)
+            return std::nullopt;
+        const auto position = position_argument(0U);
+        if (!position)
+            return std::nullopt;
+        auto held = elements();
+        // An index outside the queue deletes nothing (7.10.2.3).
+        if (*position >= 0 && std::in_range<std::size_t>(*position)
+            && static_cast<std::size_t>(*position) < held.size()) {
+            held.erase(held.begin() + static_cast<std::ptrdiff_t>(*position));
+            replace(std::move(held));
+        }
+        return done();
+    }
+    if (form != TypeForm::queue)
+        return std::nullopt;
+    if (method_name == "push_back" && arguments.size() == 1U) {
+        const auto value = handle_argument(0U);
+        if (!value)
+            return std::nullopt;
+        change([&](auto& container, auto& heap) {
+            container.push_back(heap, *value);
+        });
+        return done();
+    }
+    if (method_name == "push_front" && arguments.size() == 1U) {
+        const auto value = handle_argument(0U);
+        if (!value)
+            return std::nullopt;
+        auto held = elements();
+        held.insert(held.begin(), *value);
+        replace(std::move(held));
+        return done();
+    }
+    if (method_name == "insert" && arguments.size() == 2U) {
+        const auto position = position_argument(0U);
+        const auto value = handle_argument(1U);
+        if (!position || !value)
+            return std::nullopt;
+        auto held = elements();
+        // An index outside 0 to size() inserts nothing (7.10.2.2).
+        if (*position >= 0 && std::in_range<std::size_t>(*position)
+            && static_cast<std::size_t>(*position) <= held.size()) {
+            held.insert(
+                held.begin() + static_cast<std::ptrdiff_t>(*position), *value);
+            replace(std::move(held));
+        }
+        return done();
+    }
+    if ((method_name == "pop_front" || method_name == "pop_back")
+        && arguments.empty()) {
+        runtime::SystemVerilogClassHandle popped { };
+        change([&](auto& container, auto&) {
+            popped = method_name == "pop_front" ? container.pop_front()
+                                                : container.pop_back();
+        });
+        return runtime::PackedLogic4::from_aval_bval(64U, popped, 0U);
+    }
+    return std::nullopt;
+}
+
+SystemVerilogClassHirExecution::OwnerParameterBinding
+SystemVerilogClassHirExecution::owner_parameter(
+    const runtime::SystemVerilogClassHandle handle,
+    const semantic::DeclarationId declaration) const
+{
+    return read_owner_parameter_(handle, declaration,
+        handle == 0U ? std::string_view { static_specialization_ }
+                     : std::string_view { });
+}
+
+const semantic::sv::SpecializedClassMethod*
+SystemVerilogClassHirExecution::specialization_method(
+    const std::string_view identity,
+    const std::string_view canonical_identity) const
+{
+    std::vector<std::string_view> followed;
+    const auto* current = specialization(identity);
+    while (current != nullptr) {
+        if (std::ranges::find(followed, current->specialization_identity)
+            != followed.end()) {
+            break;
+        }
+        followed.push_back(current->specialization_identity);
+        const auto found = std::ranges::find(current->methods,
+            canonical_identity,
+            &semantic::sv::SpecializedClassMethod::canonical_identity);
+        // Inherited entries are listed too; the declaring class's own
+        // entry carries the method as that specialization sees it.
+        if (found != current->methods.end()
+            && found->owner_identity == current->declaration_identity) {
+            return &*found;
+        }
+        current = current->base
+            ? specialization(current->base->specialization_identity)
+            : nullptr;
+    }
+    return nullptr;
 }
 
 const semantic::sv::Declaration*
@@ -735,6 +2388,48 @@ SystemVerilogClassHirExecution::variable_reference(
     const auto* actual = expression(actual_id);
     if (actual == nullptr)
         return std::nullopt;
+    // A static property of the specialization the selection names (IEEE
+    // 1800-2023 8.9, 8.25.1).
+    constexpr std::string_view static_prefix { "@sv-static-property:" };
+    if (actual->kind == semantic::sv::ExpressionKind::class_static_property
+        || actual->text.starts_with(static_prefix)) {
+        const auto selected
+            = static_property_selection(*actual, static_prefix, handle);
+        const std::string identity { marker_payload(*actual, static_prefix) };
+        const auto specialization = selected.specialization;
+        VariableReference reference;
+        reference.string_value = selected.property != nullptr
+            && is_string(selected.property->type);
+        if (reference.string_value) {
+            if (!read_static_property_value_ || !write_static_string_property_)
+                return std::nullopt;
+            reference.read_string = [this, identity, specialization]()
+                -> std::optional<std::string> {
+                const auto stored
+                    = read_static_property_value_(identity, specialization);
+                return stored ? std::optional { stored->string }
+                              : std::nullopt;
+            };
+            reference.write_string = [this, identity, specialization](
+                                         const std::string_view value) {
+                return write_static_string_property_(
+                    identity, specialization, value);
+            };
+        } else {
+            if (!read_static_property_ || !write_static_property_)
+                return std::nullopt;
+            reference.read_packed = [this, identity, handle, specialization]()
+                -> std::optional<runtime::PackedLogic4> {
+                return read_static_property_(identity, handle, specialization);
+            };
+            reference.write_packed = [this, identity, handle, specialization](
+                                         const runtime::PackedLogic4& value) {
+                write_static_property_(identity, value, handle, specialization);
+                return true;
+            };
+        }
+        return reference;
+    }
     constexpr std::string_view property_prefix { "@sv-property:" };
     if (actual->kind == semantic::sv::ExpressionKind::class_property
         || actual->text.starts_with(property_prefix)) {
@@ -1350,6 +3045,22 @@ SystemVerilogClassHirExecution::evaluate_string(
         return property != nullptr && is_string(property->type)
             ? read_string_property_(owner, property->canonical_identity)
             : std::nullopt;
+    }
+    // A static string property, in the specialization the selection or the
+    // running method names (IEEE 1800-2023 8.25.1).
+    if (value != nullptr && read_static_property_value_) {
+        if (const auto* property
+            = static_string_property(specializations_, *value)) {
+            const auto stored = read_static_property_value_(
+                property->canonical_identity,
+                static_member_specialization(
+                    *value, property->owner_identity, handle));
+            return stored
+                    && stored->kind
+                        == runtime::SystemVerilogClassPropertyKind::String
+                ? std::optional<std::string> { stored->string }
+                : std::nullopt;
+        }
     }
     if (value != nullptr
         && value->kind == semantic::sv::ExpressionKind::call
@@ -2175,7 +3886,9 @@ SystemVerilogClassHirExecution::evaluate_class_array_query(
             if (property == nullptr || !read_static_property_value_)
                 return std::nullopt;
             auto storage = read_static_property_value_(
-                property->canonical_identity);
+                property->canonical_identity,
+                static_member_specialization(
+                    *source, property->owner_identity, handle));
             if (!storage)
                 return std::nullopt;
             return QueryTarget {
@@ -2950,16 +4663,13 @@ SystemVerilogClassHirExecution::evaluate_class_handle_index(
             || !base->text.starts_with(static_container_prefix)) {
             return std::nullopt;
         }
-        const auto identity = marker_payload(*base, static_container_prefix);
-        const auto declaration_id = base->referenced_name
-            ? base->referenced_name->selected
-            : std::nullopt;
-        const auto* property = static_class_property(
-                specializations_, identity, declaration_id);
+        const auto selected = static_property_selection(
+            *base, static_container_prefix, handle);
+        const auto* property = selected.property;
         if (property == nullptr || !read_static_property_value_)
             return std::nullopt;
         static_storage = read_static_property_value_(
-            property->canonical_identity);
+            property->canonical_identity, selected.specialization);
         if (!static_storage)
             return std::nullopt;
         type = &property->type;
@@ -2974,6 +4684,21 @@ SystemVerilogClassHirExecution::evaluate_class_handle_index(
 
     const auto& container = *storage->handle_container;
     const auto form = type->container_form;
+    // An element of an associative array of handles; a key with no element
+    // reads null (IEEE 1800-2023 7.8.6).
+    if (form == TypeForm::associative_array) {
+        if (indices.size() != 1U
+            || container.kind()
+                != runtime::SystemVerilogClassContainerKind::AssociativeArray) {
+            return std::nullopt;
+        }
+        const auto key = handle_container_key(
+            *type, indices.front(), handle, environment);
+        const auto& elements = container.keyed_values();
+        const auto found = key ? elements.find(*key) : elements.end();
+        return runtime::PackedLogic4::from_aval_bval(
+            64U, found == elements.end() ? 0U : found->second, 0U);
+    }
     if (form == TypeForm::static_array) {
         auto ranges = type->unpacked_dimensions;
         if (ranges.empty() && type->target.target.valid()) {
@@ -4270,14 +5995,15 @@ SystemVerilogClassHirExecution::evaluate_packed(
     };
     // A value parameter of the object's class takes the value of the
     // object's specialization (IEEE 1800-2017 8.25), not its default.
-    if (handle != 0U && read_owner_parameter_
+    if ((handle != 0U || !static_specialization_.empty())
+        && read_owner_parameter_
         && value->kind == semantic::sv::ExpressionKind::name
         && value->referenced_name && value->referenced_name->selected) {
         const auto selected = *value->referenced_name->selected;
         const bool class_parameter
             = hir_index().class_value_parameters.contains(selected.value());
         if (class_parameter) {
-            const auto binding = read_owner_parameter_(handle, selected);
+            const auto binding = owner_parameter(handle, selected);
             if (binding.found && binding.value) {
                 const auto* declared = declaration(selected);
                 return apply_context(*binding.value,
@@ -4298,6 +6024,13 @@ SystemVerilogClassHirExecution::evaluate_packed(
         && value->text.starts_with("@sv-container-index:")) {
         return evaluate_class_handle_index(*value, handle, environment);
     }
+    if ((value->kind == ExpressionKind::class_cast
+            || (value->kind == ExpressionKind::call
+                && (value->text == "@sv-dollar-cast"
+                    || value->text.starts_with("@sv-dollar-cast:"))))
+        && value->operands.size() == 2U) {
+        return evaluate_class_cast(*value, handle, environment);
+    }
     // `T'(x)`: an integral cast to a built-in, sign or size target, or to a
     // typedef of a packed integral type (IEEE 1800-2017 6.24.1).
     if (constexpr auto cast_prefix = std::string_view { "@sv-cast:" };
@@ -4307,6 +6040,20 @@ SystemVerilogClassHirExecution::evaluate_packed(
         const auto name = std::string_view { value->text }.substr(
             cast_prefix.size());
         const auto* operand_expression = expression(value->operands.front());
+        // `void'(f())` calls a function and discards its value (IEEE
+        // 1800-2023 6.24.1, 13.4.1); the value may be a string.
+        if (name == "void") {
+            if (evaluate_packed(value->operands.front(), handle, environment))
+                return runtime::PackedLogic4::from_aval_bval(1U, 0U, 0U);
+            StringEnvironment empty_strings;
+            auto& current_strings = strings_ != nullptr
+                ? *strings_ : empty_strings;
+            if (!evaluate_string(
+                    value->operands.front(), current_strings, handle)) {
+                return std::nullopt;
+            }
+            return runtime::PackedLogic4::from_aval_bval(1U, 0U, 0U);
+        }
         auto operand = evaluate_packed(
             value->operands.front(), handle, environment);
         if (!operand || operand_expression == nullptr) {
@@ -4380,6 +6127,12 @@ SystemVerilogClassHirExecution::evaluate_packed(
             *value, handle, environment);
         if (indexed)
             return indexed;
+        // An element of a class's static array, queue or associative array
+        // of values (7.4.4, 7.8, 7.10.1, 8.9).
+        if (const auto element = static_container_element(
+                *value, handle, environment)) {
+            return apply_context(element->first, element->second);
+        }
     }
     const auto package_container_id = [&](
                                           const semantic::ExpressionId receiver_id)
@@ -4529,10 +6282,11 @@ SystemVerilogClassHirExecution::evaluate_packed(
                 return apply_context(found->second, selected_signed, true);
         }
         bool owner_context_available { };
-        if (handle != 0U && value->referenced_name
+        if ((handle != 0U || !static_specialization_.empty())
+            && value->referenced_name
             && value->referenced_name->selected
             && read_owner_parameter_) {
-            const auto binding = read_owner_parameter_(
+            const auto binding = owner_parameter(
                 handle, *value->referenced_name->selected);
             owner_context_available = binding.context_available;
             if (binding.found && binding.value)
@@ -4647,7 +6401,7 @@ SystemVerilogClassHirExecution::evaluate_packed(
                             != semantic::sv::DeclarationForm::enumeration_literal) {
                         continue;
                     }
-                    const auto owner = read_owner_parameter_(
+                    const auto owner = owner_parameter(
                         handle, unit_literal_declaration->id);
                     const bool owner_matches
                         = owner.owner_unit && *owner.owner_unit == unit.id
@@ -4799,13 +6553,14 @@ SystemVerilogClassHirExecution::evaluate_packed(
     if (value->kind == ExpressionKind::class_static_property
         || value->text.starts_with(static_property_prefix)) {
         const auto identity = marker_payload(*value, static_property_prefix);
-        const auto packed = read_static_property_(identity, handle);
-        const auto* property = static_class_property(
-            specializations_, identity,
-            value->referenced_name
-                ? value->referenced_name->selected : std::nullopt);
-        return apply_context(
-            packed, property != nullptr && property->type.signed_value, true);
+        const auto selected = static_property_selection(
+            *value, static_property_prefix, handle);
+        const auto packed = read_static_property_(identity, handle,
+            selected.specialization);
+        return apply_context(packed,
+            selected.property != nullptr
+                && selected.property->type.signed_value,
+            true);
     }
     constexpr std::string_view method_prefix { "@sv-method:" };
     constexpr std::string_view base_method_prefix { "@sv-base-method:" };
@@ -4945,6 +6700,25 @@ SystemVerilogClassHirExecution::evaluate_packed(
     if ((value->kind == ExpressionKind::class_allocation
             || value->text.starts_with("@sv-new:"))
         && construct_ && !value->class_identity.empty()) {
+        // `C#(4)::new` constructs the specialization it names; a bare `new`
+        // the one of the assignment target's class type (IEEE 1800-2023
+        // 8.7, 8.25). An allocation among the actuals has a target of its
+        // own.
+        auto constructed = std::exchange(
+            allocation_specialization_, std::string { });
+        if (!value->class_owner.empty()) {
+            constructed = type_specialization(value->class_owner.front(),
+                running_specialization(handle));
+        }
+        if (!constructed.empty()) {
+            const auto* selected = specialization(constructed);
+            if (selected == nullptr
+                || selected->declaration_identity != value->class_identity) {
+                constructed.clear();
+            }
+        }
+        if (constructed.empty())
+            constructed = value->class_identity;
         std::vector<runtime::PackedLogic4> actuals;
         std::vector<std::string> string_actuals;
         for (const auto operand : value->operands) {
@@ -4975,7 +6749,7 @@ SystemVerilogClassHirExecution::evaluate_packed(
         auto names = value->argument_names;
         names.resize(actuals.size());
         const auto object = construct_(
-            value->class_identity, actuals, string_actuals, names, handle);
+            constructed, actuals, string_actuals, names, handle);
         return runtime::PackedLogic4::from_aval_bval(64U, object, 0U);
     }
     constexpr std::string_view static_method_prefix {
@@ -5060,6 +6834,19 @@ SystemVerilogClassHirExecution::evaluate_packed(
             : std::string_view { value->text }.substr(1U);
         const auto separator = operation.find(':');
         const auto method_name = operation.substr(0U, separator);
+        // A method of an object's or a class's array of handles.
+        if (auto result = evaluate_handle_container_method(
+                *value, method_name, handle, environment)) {
+            return apply_context(*result,
+                result->width() == 32U, true);
+        }
+        // A method of a class's static array, queue or associative array
+        // of values (7.5, 7.9, 7.10).
+        if (auto result = static_container_method(
+                *value, method_name, handle, environment)) {
+            return apply_context(*result,
+                result->width() == 32U, true);
+        }
         const auto declaration_id
             = package_container_id(value->operands.front());
         if (declaration_id && method_name == "push_back"
@@ -5172,6 +6959,7 @@ SystemVerilogClassHirExecution::evaluate_packed(
             }
         }
         std::vector<runtime::PackedLogic4> actuals;
+        std::vector<std::string> string_actuals;
         for (std::size_t index = 0U; index < value->operands.size(); ++index) {
             const auto operand = value->operands[index];
             const semantic::sv::Declaration* formal { };
@@ -5179,6 +6967,19 @@ SystemVerilogClassHirExecution::evaluate_packed(
                 && mapped_formals.size() == value->operands.size()) {
                 formal = declaration(selected_method->formals[
                     mapped_formals[index]]);
+            }
+            // A string input formal takes the actual's text (6.16, 13.5),
+            // as the statement form of the call passes it.
+            if (formal != nullptr && formal->type
+                && is_input(formal->direction) && is_string(*formal->type)) {
+                StringEnvironment empty_strings;
+                auto& strings = strings_ != nullptr ? *strings_ : empty_strings;
+                auto text = evaluate_string(operand, strings, handle);
+                if (!text)
+                    return std::nullopt;
+                actuals.emplace_back(64U, runtime::Logic4::zero);
+                string_actuals.push_back(std::move(*text));
+                continue;
             }
             const auto actual = evaluate_packed(
                 operand, handle, environment,
@@ -5190,11 +6991,19 @@ SystemVerilogClassHirExecution::evaluate_packed(
             if (!actual)
                 return std::nullopt;
             actuals.push_back(*actual);
+            string_actuals.emplace_back();
         }
-        std::vector<std::string> string_actuals(actuals.size());
+        // Each specialization has static methods of its own (IEEE 1800-2023
+        // 8.25.1): `C#(4)::f()` runs in C#(4), an unqualified call in the
+        // running class's specialization.
+        const auto target = static_member_specialization(*value,
+            selected_method != nullptr
+                ? std::string_view { selected_method->owner_identity }
+                : std::string_view { },
+            handle);
         const auto result = invoke_static_function_(
             identity, actuals,
-            string_actuals, names, { }, ActualReferences { });
+            string_actuals, names, { }, ActualReferences { }, target);
         return selected_method != nullptr && selected_method->return_type
             ? apply_context(result, selected_method->return_type->signed_value,
                   true)
@@ -5470,6 +7279,7 @@ SystemVerilogClassHirExecution::evaluate_packed(
             const auto& operation = current->text;
             if (operation == "==" || operation == "!="
                 || operation == "===" || operation == "!=="
+                || operation == "==?" || operation == "!=?"
                 || operation == "<" || operation == "<="
                 || operation == ">" || operation == ">="
                 || operation == "&&" || operation == "||") {
@@ -5496,8 +7306,98 @@ SystemVerilogClassHirExecution::evaluate_packed(
                     lhs->signed_value && rhs->signed_value };
             }
         }
+        // Bit vector and integer query functions (20.6.2, 20.8.1, 20.9),
+        // $signed/$unsigned (11.7), inside (11.4.13).
+        if (current->kind == ExpressionKind::call) {
+            const auto& function = current->text;
+            if (function == "$bits" || function == "$clog2"
+                || function == "$countones" || function == "$countbits") {
+                return ExpressionShape { 32U, true };
+            }
+            if (function == "$onehot" || function == "$onehot0"
+                || function == "$isunknown" || function == "inside") {
+                return ExpressionShape { 1U, false };
+            }
+            if ((function == "$signed" || function == "$unsigned")
+                && current->operands.size() == 1U) {
+                const auto operand
+                    = self(self, current->operands.front(), depth + 1U);
+                if (operand) {
+                    return ExpressionShape {
+                        operand->width, function == "$signed" };
+                }
+            }
+        }
+        // Concatenations and selects are unsigned (11.4.12, 11.5.1).
+        const auto literal_count = [this](const semantic::ExpressionId id)
+            -> std::optional<std::size_t> {
+            const auto* literal = expression(id);
+            std::size_t parsed { };
+            if (literal == nullptr
+                || literal->kind != ExpressionKind::integer_literal
+                || std::from_chars(literal->text.data(),
+                       literal->text.data() + literal->text.size(), parsed)
+                        .ptr
+                    != literal->text.data() + literal->text.size()) {
+                return std::nullopt;
+            }
+            return parsed;
+        };
+        if ((current->kind == ExpressionKind::concatenation
+                || current->kind == ExpressionKind::replication)
+            && !current->operands.empty()) {
+            const bool replication
+                = current->kind == ExpressionKind::replication;
+            const auto count = replication
+                ? literal_count(current->operands.front())
+                : std::optional<std::size_t> { 1U };
+            if (!count)
+                return std::nullopt;
+            std::size_t total { };
+            for (std::size_t index = replication ? 1U : 0U;
+                 index < current->operands.size(); ++index) {
+                const auto item
+                    = self(self, current->operands[index], depth + 1U);
+                if (!item)
+                    return std::nullopt;
+                total += item->width;
+            }
+            return ExpressionShape { total * *count, false };
+        }
+        if (current->kind == ExpressionKind::slice
+            && current->operands.size() == 3U) {
+            if (current->text == "+:" || current->text == "-:") {
+                const auto count = literal_count(current->operands[2U]);
+                return count && *count != 0U
+                    ? std::optional { ExpressionShape { *count, false } }
+                    : std::nullopt;
+            }
+            const auto left = literal_count(current->operands[1U]);
+            const auto right = literal_count(current->operands[2U]);
+            if (left && right) {
+                return ExpressionShape {
+                    (*left > *right ? *left - *right : *right - *left) + 1U,
+                    false };
+            }
+        }
         return std::nullopt;
     };
+    if (auto result = evaluate_pure_packed(*value, handle, environment,
+            context_width, context_signed,
+            [&](const semantic::ExpressionId id)
+                -> std::optional<std::pair<std::size_t, bool>> {
+                const auto shape
+                    = expression_shape(expression_shape, id, 0U);
+                if (!shape)
+                    return std::nullopt;
+                return std::pair { shape->width, shape->signed_value };
+            },
+            [&](const semantic::ExpressionId id)
+                -> std::optional<semantic::sv::TypeReference> {
+                return expression_type(expression_type, id, 0U);
+            })) {
+        return result;
+    }
     if (value->kind == ExpressionKind::unary
         && value->operands.size() == 1U) {
         const auto operand_id = value->operands.front();
@@ -5650,6 +7550,8 @@ SystemVerilogClassHirExecution::evaluate_packed(
             return property != nullptr && is_string(property->type)
                 && static_cast<bool>(read_string_property_);
         }
+        if (static_string_property(specializations_, *operand) != nullptr)
+            return static_cast<bool>(read_static_property_value_);
         if (operand->kind == ExpressionKind::call
             && operand->referenced_name
             && operand->referenced_name->selected) {
@@ -5767,7 +7669,8 @@ SystemVerilogClassHirExecution::evaluate_packed(
         return std::nullopt;
     const bool context_sized = !relational && !logical && !shift
         && value->text != "==" && value->text != "!="
-        && value->text != "===" && value->text != "!==";
+        && value->text != "===" && value->text != "!=="
+        && value->text != "==?" && value->text != "!=?";
     const bool natural_signed_operation = shift
         ? (lhs_shape ? lhs_shape->signed_value
                      : lhs_expression->signed_value)
@@ -5981,6 +7884,7 @@ SystemVerilogClassHirExecution::evaluate_packed(
                     || operation == "<" || operation == "<="
                     || operation == ">" || operation == ">="
                     || operation == "&&" || operation == "||"
+                    || operation == "==?" || operation == "!=?"
                     || operation == "inside" || operation == "matches") {
                     return false;
                 }
@@ -6125,10 +8029,518 @@ SystemVerilogClassHirExecution::evaluate_packed(
         return std::nullopt;
     const bool one_bit_result = value->text == "=="
         || value->text == "!=" || value->text == "==="
-        || value->text == "!==";
+        || value->text == "!==" || value->text == "==?"
+        || value->text == "!=?";
     return apply_context(*result,
         !one_bit_result && (power_operation
             ? power_base_signed : signed_operation));
+}
+
+std::optional<runtime::PackedLogic4>
+SystemVerilogClassHirExecution::evaluate_pure_packed(
+    const semantic::sv::Expression& value,
+    const runtime::SystemVerilogClassHandle handle,
+    PackedEnvironment& environment,
+    const std::optional<std::size_t> context_width,
+    const std::optional<bool> context_signed,
+    const ExpressionShapeQuery& shape,
+    const ExpressionTypeQuery& type)
+{
+    using runtime::Logic4;
+    using runtime::PackedLogic4;
+    using semantic::sv::ExpressionKind;
+    const auto apply_context = [context_width](
+                                   const PackedLogic4& packed,
+                                   const bool signed_value)
+        -> std::optional<PackedLogic4> {
+        if (!context_width || packed.width() >= *context_width)
+            return packed;
+        return resize_expression_operand(
+            packed, *context_width, signed_value);
+    };
+    const auto integer = [](const std::size_t count) {
+        return PackedLogic4::from_aval_bval(
+            32U, static_cast<std::uint32_t>(count), 0U);
+    };
+    const auto boolean = [](const bool truth) {
+        return PackedLogic4::from_aval_bval(1U, truth ? 1U : 0U, 0U);
+    };
+    const auto signed_of = [&](const semantic::ExpressionId id) {
+        if (const auto found = shape(id))
+            return found->second;
+        const auto* node = expression(id);
+        return node != nullptr && node->signed_value;
+    };
+    // The integer an index, bound or count holds; absent when it has an X
+    // or Z bit or is beyond the 64-bit range.
+    const auto integer_of = [&](const semantic::ExpressionId id,
+                                const PackedLogic4& packed)
+        -> std::optional<std::int64_t> {
+        if (signed_of(id))
+            return packed.known_signed_value();
+        const auto known = packed.known_unsigned_value();
+        if (!known || *known > static_cast<std::uint64_t>(
+                std::numeric_limits<std::int64_t>::max())) {
+            return std::nullopt;
+        }
+        return static_cast<std::int64_t>(*known);
+    };
+    const auto running = running_specialization(handle);
+    // Where a typedef a variable's type names is looked up from.
+    const auto use_scope = [&](const semantic::ExpressionId id) {
+        const auto* node = expression(id);
+        if (node != nullptr && node->kind == ExpressionKind::name
+            && node->referenced_name && node->referenced_name->selected) {
+            if (const auto* selected
+                = declaration(*node->referenced_name->selected)) {
+                return selected->scope;
+            }
+        }
+        return node != nullptr ? node->scope : value.scope;
+    };
+
+    // `c ? a : b` (11.4.11): a known condition selects one operand; an
+    // unknown one combines both bit by bit, keeping the bits they agree on
+    // as 0 or 1 and making every other bit X (Table 11-20).
+    if (value.kind == ExpressionKind::call && value.text == "?:"
+        && value.operands.size() == 3U) {
+        const auto condition
+            = evaluate_packed(value.operands[0U], handle, environment);
+        if (!condition)
+            return std::nullopt;
+        const auto lhs = shape(value.operands[1U]);
+        const auto rhs = shape(value.operands[2U]);
+        auto branch_width = context_width;
+        auto branch_signed = context_width && context_signed
+            ? context_signed : std::optional<bool> { };
+        if (lhs && rhs) {
+            branch_width = std::max(
+                { lhs->first, rhs->first, context_width.value_or(0U) });
+            if (!branch_signed)
+                branch_signed = lhs->second && rhs->second;
+        }
+        const bool result_signed = branch_signed.value_or(false);
+        std::optional<bool> truth;
+        bool unknown { };
+        for (std::size_t bit = 0U; bit < condition->width(); ++bit) {
+            const auto state = condition->get(bit);
+            if (state == Logic4::one) {
+                truth = true;
+                break;
+            }
+            unknown = unknown || state != Logic4::zero;
+        }
+        if (!truth && !unknown)
+            truth = false;
+        if (truth) {
+            const auto chosen = evaluate_packed(
+                value.operands[*truth ? 1U : 2U], handle, environment,
+                branch_width, branch_signed);
+            return chosen ? apply_context(*chosen, result_signed)
+                          : std::nullopt;
+        }
+        if (!lhs || !rhs)
+            return std::nullopt;
+        for (const auto id : { value.operands[1U], value.operands[2U] }) {
+            const auto operand_type = type(id);
+            if (operand_type
+                && (!operand_type->class_identity.empty()
+                    || operand_type->value_form
+                        == semantic::sv::TypeForm::class_handle)) {
+                return std::nullopt;
+            }
+        }
+        const auto first = evaluate_packed(value.operands[1U], handle,
+            environment, branch_width, branch_signed);
+        const auto second = evaluate_packed(value.operands[2U], handle,
+            environment, branch_width, branch_signed);
+        if (!first || !second)
+            return std::nullopt;
+        const auto width = std::max(first->width(), second->width());
+        const auto left = resize_expression_operand(
+            *first, width, result_signed);
+        const auto right = resize_expression_operand(
+            *second, width, result_signed);
+        if (!left || !right)
+            return std::nullopt;
+        auto merged = PackedLogic4(width, Logic4::x);
+        for (std::size_t bit = 0U; bit < width; ++bit) {
+            const auto state = left->get(bit);
+            if (state == right->get(bit)
+                && (state == Logic4::zero || state == Logic4::one)) {
+                merged.set(bit, state);
+            }
+        }
+        return apply_context(merged, result_signed);
+    }
+
+    // `{a, b}` and `{n{a, b}}` (11.4.12): self-determined operands, the
+    // first one leftmost; a replication of zero contributes nothing to a
+    // concatenation (11.4.12.1).
+    const auto replication_count = [&](const semantic::sv::Expression& node)
+        -> std::optional<std::size_t> {
+        const auto count
+            = evaluate_packed(node.operands.front(), handle, environment);
+        const auto known = count
+            ? integer_of(node.operands.front(), *count) : std::nullopt;
+        if (!known || *known < 0)
+            return std::nullopt;
+        return static_cast<std::size_t>(*known);
+    };
+    const auto concatenate = [&](const std::span<const semantic::ExpressionId>
+                                     items,
+                                 const std::size_t copies)
+        -> std::optional<PackedLogic4> {
+        std::vector<PackedLogic4> parts;
+        std::size_t total { };
+        for (const auto id : items) {
+            const auto* node = expression(id);
+            if (node == nullptr)
+                return std::nullopt;
+            if (node->kind == ExpressionKind::replication
+                && !node->operands.empty()) {
+                const auto count = replication_count(*node);
+                if (!count)
+                    return std::nullopt;
+                if (*count == 0U)
+                    continue;
+            }
+            auto part = evaluate_packed(id, handle, environment);
+            if (!part || part->width() == 0U || part->is_logic9())
+                return std::nullopt;
+            total += part->width();
+            parts.push_back(std::move(*part));
+        }
+        if (total == 0U || copies == 0U)
+            return std::nullopt;
+        auto result = PackedLogic4(total * copies, Logic4::zero);
+        auto offset = total * copies;
+        for (std::size_t copy = 0U; copy < copies; ++copy) {
+            for (const auto& part : parts) {
+                offset -= part.width();
+                result.insert_bits(part, offset);
+            }
+        }
+        return result;
+    };
+    if (value.kind == ExpressionKind::concatenation
+        && !value.operands.empty()) {
+        const auto result = concatenate(value.operands, 1U);
+        return result ? apply_context(*result, false) : std::nullopt;
+    }
+    if (value.kind == ExpressionKind::replication
+        && value.operands.size() >= 2U) {
+        const auto count = replication_count(value);
+        if (!count)
+            return std::nullopt;
+        const auto result = concatenate(
+            std::span { value.operands }.subspan(1U), *count);
+        return result ? apply_context(*result, false) : std::nullopt;
+    }
+
+    // A bit-select, part-select or indexed part-select of a packed vector
+    // (11.5.1). A bit outside the declared range, and every bit when an
+    // index has an X or Z bit, reads as X for a 4-state vector and 0 for a
+    // 2-state one.
+    const bool bit_select = value.kind == ExpressionKind::index
+        && value.text == "index" && value.operands.size() == 2U;
+    const bool part_select = value.kind == ExpressionKind::slice
+        && value.operands.size() == 3U
+        && (value.text == ":" || value.text == "+:" || value.text == "-:");
+    if (bit_select || part_select) {
+        const auto base_id = value.operands.front();
+        const auto base_type = type(base_id);
+        if (!base_type)
+            return std::nullopt;
+        const auto scope = use_scope(base_id);
+        const auto bounds = packed_select_bounds(*base_type, running, scope);
+        if (!bounds)
+            return std::nullopt;
+        const auto [left, right] = *bounds;
+        const auto base = evaluate_packed(base_id, handle, environment);
+        if (!base || base->is_logic9()
+            || support::index_distance(left, right) + 1U != base->width()) {
+            return std::nullopt;
+        }
+        const auto fill = four_state_type(*base_type, running, scope)
+            ? Logic4::x : Logic4::zero;
+        const bool descending = left >= right;
+        const auto bit_at = [&](const std::int64_t index) {
+            if (index < std::min(left, right) || index > std::max(left, right))
+                return fill;
+            return base->get(static_cast<std::size_t>(
+                descending ? index - right : right - index));
+        };
+        const auto first = evaluate_packed(
+            value.operands[1U], handle, environment);
+        if (!first)
+            return std::nullopt;
+        const auto first_index = integer_of(value.operands[1U], *first);
+        if (bit_select) {
+            return apply_context(PackedLogic4(1U,
+                first_index ? bit_at(*first_index) : fill), false);
+        }
+        const auto second = evaluate_packed(
+            value.operands[2U], handle, environment);
+        if (!second)
+            return std::nullopt;
+        const auto second_index = integer_of(value.operands[2U], *second);
+        // The constant bounds of `[msb:lsb]` and the width of `+:`/`-:`
+        // are known (11.5.1).
+        if (!second_index || (value.text == ":" && !first_index))
+            return std::nullopt;
+        std::size_t width { };
+        std::optional<std::int64_t> lsb_index;
+        constexpr auto limit = std::numeric_limits<std::int64_t>::max() / 4;
+        if (value.text == ":") {
+            if (*first_index > limit || *first_index < -limit
+                || *second_index > limit || *second_index < -limit) {
+                return std::nullopt;
+            }
+            width = static_cast<std::size_t>(
+                support::index_distance(*first_index, *second_index) + 1U);
+            lsb_index = *second_index;
+        } else {
+            if (*second_index <= 0 || *second_index > limit)
+                return std::nullopt;
+            width = static_cast<std::size_t>(*second_index);
+            // `b +: w` is `[b+w-1:b]` of a descending vector and
+            // `[b:b+w-1]` of an ascending one; `b -: w` is `[b:b-w+1]` and
+            // `[b-w+1:b]`.
+            if (first_index && *first_index <= limit
+                && *first_index >= -limit) {
+                const bool plus = value.text == "+:";
+                lsb_index = plus == descending ? *first_index
+                    : plus ? *first_index + *second_index - 1
+                           : *first_index - *second_index + 1;
+            }
+        }
+        auto result = PackedLogic4(width, fill);
+        if (lsb_index) {
+            for (std::size_t bit = 0U; bit < width; ++bit) {
+                const auto step = static_cast<std::int64_t>(bit);
+                result.set(bit, bit_at(descending
+                    ? *lsb_index + step : *lsb_index - step));
+            }
+        }
+        return apply_context(result, false);
+    }
+
+    // `a inside {b, [lo:hi]}` (11.4.13) of integral values: the OR of the
+    // comparisons `a ==? b` and `lo <= a && a <= hi`, 1 on a match, else X
+    // when one is X, else 0. The operands are sized and signed together,
+    // as the expressions of a case statement are (12.5).
+    if (value.kind == ExpressionKind::call && value.text == "inside"
+        && value.operands.size() >= 2U) {
+        std::vector<semantic::ExpressionId> operands { value.operands.front() };
+        std::vector<bool> ranges;
+        for (std::size_t index = 1U; index < value.operands.size(); ++index) {
+            const auto* item = expression(value.operands[index]);
+            if (item == nullptr)
+                return std::nullopt;
+            if (item->kind == ExpressionKind::call
+                && item->text == "@inside-range") {
+                if (item->operands.size() != 2U)
+                    return std::nullopt;
+                operands.push_back(item->operands[0U]);
+                operands.push_back(item->operands[1U]);
+                ranges.push_back(true);
+                continue;
+            }
+            if (item->kind == ExpressionKind::call
+                && item->text.starts_with('@')) {
+                return std::nullopt;
+            }
+            operands.push_back(value.operands[index]);
+            ranges.push_back(false);
+        }
+        std::size_t common_width { };
+        bool common_signed = true;
+        for (const auto id : operands) {
+            const auto operand_type = type(id);
+            if (operand_type
+                && (operand_type->container_form
+                    || !operand_type->unpacked_dimensions.empty()
+                    || !operand_type->class_identity.empty()
+                    || operand_type->value_form
+                        == semantic::sv::TypeForm::string)) {
+                return std::nullopt;
+            }
+            const auto found = shape(id);
+            if (!found)
+                return std::nullopt;
+            common_width = std::max(common_width, found->first);
+            common_signed = common_signed && found->second;
+        }
+        std::vector<PackedLogic4> values;
+        for (const auto id : operands) {
+            auto evaluated = evaluate_packed(
+                id, handle, environment, common_width, common_signed);
+            if (!evaluated || evaluated->is_logic9())
+                return std::nullopt;
+            common_width = std::max(common_width, evaluated->width());
+            values.push_back(std::move(*evaluated));
+        }
+        for (auto& operand : values) {
+            auto resized = resize_expression_operand(
+                operand, common_width, common_signed);
+            if (!resized)
+                return std::nullopt;
+            operand = std::move(*resized);
+        }
+        auto result = Logic4::zero;
+        std::size_t next = 1U;
+        for (const bool range : ranges) {
+            auto comparison = Logic4::x;
+            if (range) {
+                using runtime::simir::BinaryOperator;
+                const auto order = common_signed
+                    ? BinaryOperator::less_equal_signed
+                    : BinaryOperator::less_equal_unsigned;
+                comparison = runtime::logic_and(
+                    runtime::simir::binary_value(
+                        order, values[next], values.front()).get(0U),
+                    runtime::simir::binary_value(
+                        order, values.front(), values[next + 1U]).get(0U));
+                next += 2U;
+            } else {
+                comparison = runtime::simir::binary_value(
+                    runtime::simir::BinaryOperator::wildcard_equal,
+                    values.front(), values[next]).get(0U);
+                ++next;
+            }
+            result = runtime::logic_or(result, comparison);
+        }
+        return apply_context(PackedLogic4(1U, result), false);
+    }
+
+    if (value.kind != ExpressionKind::call || !value.type_operand.empty())
+        return std::nullopt;
+    const auto& function = value.text;
+    // $bits (20.6.2) of a packed expression: the width of its type; the
+    // expression is not evaluated.
+    if (function == "$bits" && value.operands.size() == 1U) {
+        const auto operand = value.operands.front();
+        std::vector<semantic::TypeId> followed;
+        auto current = type(operand);
+        const auto scope = use_scope(operand);
+        while (current) {
+            if (current->container_form
+                || !current->unpacked_dimensions.empty()
+                || !current->class_identity.empty()
+                || current->virtual_interface
+                || current->value_form == semantic::sv::TypeForm::string
+                || current->value_form
+                    == semantic::sv::TypeForm::class_handle) {
+                return std::nullopt;
+            }
+            auto target = current->target.target;
+            if (!target.valid())
+                target = named_type_target(*current, scope);
+            if (!target.valid()) {
+                const auto& builtin = current->target.spelling;
+                constexpr std::array<std::string_view, 10> integral {
+                    "", "bit", "logic", "reg", "byte", "shortint", "int",
+                    "integer", "longint", "time"
+                };
+                if (std::ranges::find(integral, builtin) == integral.end())
+                    return std::nullopt;
+                break;
+            }
+            if (std::ranges::find(followed, target) != followed.end())
+                return std::nullopt;
+            followed.push_back(target);
+            const auto* definition = type_definition(target);
+            if (definition == nullptr)
+                return std::nullopt;
+            if (definition->form == semantic::sv::TypeForm::alias) {
+                current = definition->base;
+                continue;
+            }
+            if (definition->form != semantic::sv::TypeForm::enumeration
+                && definition->form
+                    != semantic::sv::TypeForm::packed_integral
+                && definition->form
+                    != semantic::sv::TypeForm::packed_structure
+                && definition->form
+                    != semantic::sv::TypeForm::packed_union) {
+                return std::nullopt;
+            }
+            break;
+        }
+        // A typed operand has its type's width (a named type's through the
+        // typedef it names); any other its self-determined width.
+        if (const auto operand_type = type(operand)) {
+            const auto width = variable_width(*operand_type, running, scope);
+            if (width == 0U)
+                return std::nullopt;
+            return apply_context(integer(width), true);
+        }
+        const auto found = shape(operand);
+        if (!found || found->first == 0U)
+            return std::nullopt;
+        return apply_context(integer(found->first), true);
+    }
+    const bool counting = function == "$countones" || function == "$onehot"
+        || function == "$onehot0" || function == "$isunknown"
+        || function == "$countbits";
+    const bool conversion = function == "$signed" || function == "$unsigned";
+    if (!counting && !conversion && function != "$clog2")
+        return std::nullopt;
+    if (function == "$countbits" ? value.operands.size() < 2U
+                                 : value.operands.size() != 1U) {
+        return std::nullopt;
+    }
+    const auto operand
+        = evaluate_packed(value.operands.front(), handle, environment);
+    if (!operand || operand->width() == 0U || operand->is_logic9())
+        return std::nullopt;
+    // $signed and $unsigned (11.7) keep the bits of their self-determined
+    // operand.
+    if (conversion)
+        return apply_context(*operand, function == "$signed");
+    // $clog2 (20.8.1): the ceiling of log2 of the unsigned operand, 0 for
+    // 0; X for an operand with an X or Z bit.
+    if (function == "$clog2") {
+        if (packed_has_unknown(*operand))
+            return apply_context(PackedLogic4(32U, Logic4::x), true);
+        std::optional<std::size_t> highest;
+        std::size_t ones { };
+        for (std::size_t bit = 0U; bit < operand->width(); ++bit) {
+            if (operand->get(bit) == Logic4::one) {
+                highest = bit;
+                ++ones;
+            }
+        }
+        return apply_context(integer(!highest ? 0U
+                : ones == 1U ? *highest : *highest + 1U), true);
+    }
+    // $countbits counts the bits that hold one of its control bits, each
+    // the LSB of its argument; the others count 1 bits, or X and Z bits for
+    // $isunknown (20.9).
+    std::array<bool, 4U> counted { };
+    if (function == "$countbits") {
+        for (std::size_t index = 1U; index < value.operands.size(); ++index) {
+            const auto control
+                = evaluate_packed(value.operands[index], handle, environment);
+            if (!control || control->width() == 0U || control->is_logic9())
+                return std::nullopt;
+            counted[static_cast<std::size_t>(control->get(0U))] = true;
+        }
+    } else if (function == "$isunknown") {
+        counted[static_cast<std::size_t>(Logic4::x)] = true;
+        counted[static_cast<std::size_t>(Logic4::z)] = true;
+    } else {
+        counted[static_cast<std::size_t>(Logic4::one)] = true;
+    }
+    std::size_t count { };
+    for (std::size_t bit = 0U; bit < operand->width(); ++bit)
+        count += counted[static_cast<std::size_t>(operand->get(bit))] ? 1U : 0U;
+    if (function == "$countones" || function == "$countbits")
+        return apply_context(integer(count), true);
+    return apply_context(boolean(function == "$onehot" ? count == 1U
+            : function == "$onehot0" ? count <= 1U
+                                     : count != 0U), false);
 }
 
 SystemVerilogClassHirExecution::PackedEnvironment
@@ -6155,11 +8567,18 @@ SystemVerilogClassHirExecution::bind_actuals(
         assigned[formal] = true;
         if (actual_formals != nullptr)
             actual_formals->push_back(formal);
-        const auto formal_width = width(
-            method.formal_types[formal], actuals[index].width());
+        const auto formal_width
+            = formal_declaration->direction == semantic::sv::Direction::output
+            ? variable_width(method.formal_types[formal],
+                  running_specialization(handle), formal_declaration->scope)
+            : width(method.formal_types[formal], actuals[index].width());
         environment.emplace(formal_declaration->name,
             formal_declaration->direction == semantic::sv::Direction::output
-                ? runtime::PackedLogic4(formal_width, runtime::Logic4::x)
+                ? uninitialized_value(method.formal_types[formal],
+                      formal_width,
+                      four_state_type(method.formal_types[formal],
+                          running_specialization(handle),
+                          formal_declaration->scope))
                 : resize_packed(actuals[index], formal_width));
     }
     for (std::size_t index = 0U; index < method.formals.size(); ++index) {
@@ -6210,11 +8629,21 @@ SystemVerilogClassHirExecution::bind_actuals(
                 continue;
             }
         }
-        const auto local_width = width(*local->type);
+        const auto local_width = variable_width(
+            *local->type, running_specialization(handle), local->scope);
+        // `C h = new;` constructs the local's class type (8.7).
+        const ScopedValue<std::string> allocation { allocation_specialization_,
+            local->initializer
+                    && class_allocation(expression(*local->initializer))
+                ? type_specialization(
+                      *local->type, running_specialization(handle))
+                : std::string { } };
         const auto value = local->initializer
             ? evaluate_packed(*local->initializer, handle, environment)
             : std::optional<runtime::PackedLogic4> {
-                  runtime::PackedLogic4(local_width, runtime::Logic4::x)
+                  uninitialized_value(*local->type, local_width,
+                      four_state_type(*local->type,
+                          running_specialization(handle), local->scope))
               };
         if (!value) {
             throw std::invalid_argument {
@@ -6567,9 +8996,140 @@ SystemVerilogClassHirExecution::execute(
                     continue;
                 }
             }
+            // A static string property of the specialization the selection
+            // or the running method names (IEEE 1800-2023 8.25.1).
+            if (const auto* property
+                = static_string_property(specializations_, *target);
+                property != nullptr && write_static_string_property_) {
+                const auto text = evaluate_string(
+                    *item->value, string_environment, handle);
+                if (!text
+                    || !write_static_string_property_(
+                        marker_payload(*target, "@sv-static-property:"),
+                        static_member_specialization(
+                            *target, property->owner_identity, handle),
+                        *text)) {
+                    throw std::invalid_argument {
+                        "class HIR static string property assignment is not executable"
+                    };
+                }
+                continue;
+            }
+            // An element of a class's static array, queue or associative
+            // array of values (IEEE 1800-2023 7.4.4, 7.8, 7.10.1, 8.9).
+            if (assign_static_container_element(*item, *target, handle,
+                    environment, string_environment)) {
+                continue;
+            }
             constexpr std::string_view container_index_prefix {
                 "@sv-container-index:"
             };
+            // An element of an object's or a class's array of handles: an
+            // associative array's by its key, a queue's or dynamic array's
+            // by its position (IEEE 1800-2023 7.4.4, 7.8, 7.10.1).
+            std::optional<HandleContainerTarget> element_container;
+            std::optional<semantic::ExpressionId> element_index;
+            if (target->kind == semantic::sv::ExpressionKind::index
+                && target->operands.size() == 2U) {
+                if (const auto* base = expression(target->operands.front())) {
+                    element_container = handle_container_target(
+                        *base, handle, environment);
+                    element_index = target->operands.back();
+                }
+            } else if (target->kind == semantic::sv::ExpressionKind::call
+                && target->text.starts_with(container_index_prefix)
+                && target->operands.size() == 2U) {
+                semantic::sv::Expression property;
+                property.kind = semantic::sv::ExpressionKind::call;
+                property.text = "@sv-container-property:"
+                    + std::string { marker_payload(
+                        *target, container_index_prefix) };
+                property.operands.push_back(target->operands.front());
+                element_container = handle_container_target(
+                    property, handle, environment);
+                // A fixed-size array keeps the path below.
+                if (element_container
+                    && element_container->property->type.container_form
+                        == semantic::sv::TypeForm::static_array) {
+                    element_container.reset();
+                }
+                element_index = target->operands.back();
+            }
+            if (element_container && update_class_handle_container_) {
+                using semantic::sv::TypeForm;
+                const auto& type = element_container->property->type;
+                const auto form = *type.container_form;
+                if ((form != TypeForm::associative_array
+                        && form != TypeForm::queue
+                        && form != TypeForm::dynamic_array)
+                    || item->assignment_kind
+                        != semantic::sv::AssignmentKind::blocking) {
+                    throw std::invalid_argument {
+                        "class HIR array of handles element assignment is not executable"
+                    };
+                }
+                std::optional<std::string> key;
+                std::optional<std::int64_t> position;
+                if (form == TypeForm::associative_array) {
+                    key = handle_container_key(
+                        type, *element_index, handle, environment);
+                } else {
+                    const auto index = evaluate_packed(
+                        *element_index, handle, environment);
+                    position = index ? index->known_signed_value()
+                                     : std::nullopt;
+                }
+                const ScopedValue<std::string> allocation {
+                    allocation_specialization_,
+                    class_allocation(expression(*item->value))
+                        ? type_specialization(
+                              type.container_element_types.size() == 1U
+                                  ? type.container_element_types.front()
+                                  : type,
+                              running_specialization(handle))
+                        : std::string { } };
+                const auto value = evaluate_packed(
+                    *item->value, handle, environment, 64U);
+                if (!value || value->width() != 64U
+                    || value->low_word().bval != 0U) {
+                    throw std::invalid_argument {
+                        "class HIR array of handles element value is not a known class handle"
+                    };
+                }
+                if (form == TypeForm::associative_array && !key) {
+                    if (report_) {
+                        report_(report_process_,
+                            "associative array write ignored because index contains X or Z",
+                            runtime::simir::AssertionSeverity::warning,
+                            item->source);
+                    }
+                    continue;
+                }
+                const auto element = value->low_word().aval;
+                update_class_handle_container_(element_container->owner,
+                    element_container->property->canonical_identity,
+                    element_container->specialization,
+                    [&](auto& container, auto& heap) {
+                        if (key) {
+                            container.set(heap, *key, element);
+                            return;
+                        }
+                        // A position outside the array writes nothing; one
+                        // past a queue's last element appends (7.10.1).
+                        if (!position || *position < 0
+                            || !std::in_range<std::size_t>(*position)) {
+                            return;
+                        }
+                        const auto at = static_cast<std::size_t>(*position);
+                        if (at < container.size()) {
+                            container.set(heap, at, element);
+                        } else if (form == TypeForm::queue
+                            && at == container.size()) {
+                            container.push_back(heap, element);
+                        }
+                    });
+                continue;
+            }
             if (target->kind == semantic::sv::ExpressionKind::call
                 && target->text.starts_with(container_index_prefix)) {
                 using semantic::sv::TypeForm;
@@ -6830,6 +9390,13 @@ SystemVerilogClassHirExecution::execute(
                     value->low_word().aval);
                 continue;
             }
+            // A bare `new` constructs the target's class type (8.7).
+            const ScopedValue<std::string> allocation {
+                allocation_specialization_,
+                class_allocation(expression(*item->value))
+                    ? target_class_specialization(
+                          *item->target, handle, environment)
+                    : std::string { } };
             const auto value = evaluate_packed(
                 *item->value, handle, environment,
                 assignment_context_width(*item->target));
@@ -6880,8 +9447,10 @@ SystemVerilogClassHirExecution::execute(
             if (target->kind
                     == semantic::sv::ExpressionKind::class_static_property
                 || target->text.starts_with(static_prefix)) {
-                write_static_property_(
-                    marker_payload(*target, static_prefix), *value, handle);
+                const auto identity = marker_payload(*target, static_prefix);
+                write_static_property_(identity, *value, handle,
+                    static_property_selection(*target, static_prefix, handle)
+                        .specialization);
                 continue;
             }
             if (target->kind == semantic::sv::ExpressionKind::name) {
@@ -6979,13 +9548,26 @@ SystemVerilogClassHirExecution::execute(
                             declaration_id.value(), *value);
                     }
                 } else {
-                    const auto local_width = width(*local->type);
+                    const auto local_width = variable_width(*local->type,
+                        running_specialization(handle), local->scope);
+                    const ScopedValue<std::string> allocation {
+                        allocation_specialization_,
+                        local->initializer
+                                && class_allocation(
+                                    expression(*local->initializer))
+                            ? type_specialization(*local->type,
+                                  running_specialization(handle))
+                            : std::string { } };
                     const auto value = local->initializer
                         ? evaluate_packed(
                               *local->initializer, handle, environment,
                               local_width)
                         : std::optional<runtime::PackedLogic4> {
-                              runtime::PackedLogic4(local_width, runtime::Logic4::x)
+                              uninitialized_value(*local->type,
+                                  local_width,
+                                  four_state_type(*local->type,
+                                      running_specialization(handle),
+                                      local->scope))
                           };
                     if (!value)
                         throw std::invalid_argument { "class HIR block initializer is not executable" };
@@ -7090,31 +9672,52 @@ SystemVerilogClassHirExecution::execute(
                 };
             }
             constexpr std::string_view task_prefix { "@sv-task:" };
-            if (spelling.starts_with(task_prefix)
-                && !item->task_arguments.empty()
-                && item->task_arguments.front().actual) {
-                const auto* receiver_expression
-                    = expression(*item->task_arguments.front().actual);
-                const auto receiver = evaluate_packed(
-                    *item->task_arguments.front().actual, handle, environment);
+            constexpr std::string_view static_task_prefix {
+                "@sv-static-task:"
+            };
+            // A static method called as a statement runs without an object
+            // in the running class's specialization or the base's that
+            // declares it (IEEE 1800-2023 8.10, 8.25.1, 13.4.1); the
+            // library's native calls (`@uvm-...`) are not class methods.
+            const bool static_task = spelling.starts_with(static_task_prefix)
+                && !std::string_view { spelling }
+                        .substr(static_task_prefix.size())
+                        .starts_with('@');
+            if (static_task
+                || (spelling.starts_with(task_prefix)
+                    && !item->task_arguments.empty()
+                    && item->task_arguments.front().actual)) {
+                const auto* receiver_expression = static_task
+                    ? nullptr
+                    : expression(*item->task_arguments.front().actual);
+                const auto receiver = static_task
+                    ? std::optional { runtime::PackedLogic4::from_aval_bval(
+                          64U, 0U, 0U) }
+                    : evaluate_packed(*item->task_arguments.front().actual,
+                          handle, environment);
                 if (!receiver || receiver->low_word().bval != 0U) {
                     throw std::invalid_argument {
                         "class HIR method receiver is not a handle"
                     };
                 }
-                const bool virtual_dispatch = receiver_expression == nullptr
-                    || receiver_expression->text != "super";
+                const bool virtual_dispatch = !static_task
+                    && (receiver_expression == nullptr
+                        || receiver_expression->text != "super");
                 const auto method_identity
-                    = std::string_view { spelling }.substr(task_prefix.size());
-                const auto* selected_method = method(
-                    receiver->low_word().aval, method_identity,
-                    virtual_dispatch);
+                    = std::string_view { spelling }.substr(static_task
+                            ? static_task_prefix.size()
+                            : task_prefix.size());
+                const auto* selected_method = static_task
+                    ? static_method(method_identity)
+                    : method(receiver->low_word().aval, method_identity,
+                          virtual_dispatch);
                 std::vector<runtime::PackedLogic4> actuals;
                 std::vector<std::string> string_actuals;
                 std::vector<std::string> names;
                 std::vector<semantic::ExpressionId> actual_expressions;
                 for (const auto& association :
-                    item->task_arguments | std::views::drop(1)) {
+                    item->task_arguments
+                        | std::views::drop(static_task ? 0 : 1)) {
                     if (!association.actual) {
                         throw std::invalid_argument {
                             "class HIR method argument is open"
@@ -7250,10 +9853,35 @@ SystemVerilogClassHirExecution::execute(
                 }
                 const PendingFrameGuard pending_guard { pending_call_frames_,
                     typed_frame };
-                (void)invoke_function_(receiver->low_word().aval,
-                    method_identity,
-                    actuals, string_actuals, names, directions,
-                    virtual_dispatch, actual_references);
+                if (static_task) {
+                    if (!invoke_static_function_) {
+                        throw std::invalid_argument {
+                            "class HIR static method dispatch is unavailable"
+                        };
+                    }
+                    const auto owner_identity = selected_method != nullptr
+                        ? std::string_view { selected_method->owner_identity }
+                        : std::string_view { };
+                    // `C#(4)::t();` runs in the specialization it selects,
+                    // which the statement keeps as its value; otherwise in
+                    // the running class's (IEEE 1800-2023 8.25.1).
+                    const auto* selection = item->value
+                        ? expression(*item->value)
+                        : nullptr;
+                    (void)invoke_static_function_(method_identity, actuals,
+                        string_actuals, names, directions, actual_references,
+                        selection != nullptr && !selection->class_owner.empty()
+                            ? static_member_specialization(
+                                  *selection, owner_identity, handle)
+                            : ancestor_specialization(
+                                  running_specialization(handle),
+                                  owner_identity));
+                } else {
+                    (void)invoke_function_(receiver->low_word().aval,
+                        method_identity,
+                        actuals, string_actuals, names, directions,
+                        virtual_dispatch, actual_references);
+                }
                 if (typed_frame && !pending_call_frames_.back().consumed) {
                     throw std::invalid_argument {
                         "class HIR typed actual did not reach its selected method"
@@ -7478,9 +10106,14 @@ SystemVerilogClassHirExecution::execute(
             continue;
         }
         if (item->kind == semantic::sv::StatementKind::selection
-            && item->case_match == semantic::sv::CaseMatchKind::exact
+            && (item->case_match == semantic::sv::CaseMatchKind::exact
+                || item->case_match == semantic::sv::CaseMatchKind::wildcard_z
+                || item->case_match
+                    == semantic::sv::CaseMatchKind::wildcard_xz)
             && item->condition) {
-            // A case statement compares with === (IEEE 1800-2017 12.5).
+            // A case statement compares with === (IEEE 1800-2017 12.5);
+            // casez treats a Z bit of either side, casex an X or Z bit, as
+            // a do-not-care (12.5.1).
             const auto selector = evaluate_packed(
                 *item->condition, handle, environment);
             if (!selector) {
@@ -7492,6 +10125,16 @@ SystemVerilogClassHirExecution::execute(
                 const auto width = std::max(selector->width(), choice.width());
                 const auto left = resize_packed(*selector, width);
                 const auto right = resize_packed(choice, width);
+                if (item->case_match != semantic::sv::CaseMatchKind::exact) {
+                    return runtime::simir::binary_value(
+                               item->case_match
+                                       == semantic::sv::CaseMatchKind::wildcard_z
+                                   ? runtime::simir::BinaryOperator::casez_equal
+                                   : runtime::simir::BinaryOperator::casex_equal,
+                               left, right)
+                               .get(0U)
+                        == runtime::Logic4::one;
+                }
                 for (std::size_t bit = 0; bit < width; ++bit) {
                     if (left.get(bit) != right.get(bit))
                         return false;
@@ -7529,6 +10172,89 @@ SystemVerilogClassHirExecution::execute(
                     return_context_width);
                 if (result.returned || result.broke || result.continued)
                     return result;
+            }
+            continue;
+        }
+        // An immediate assertion (IEEE 1800-2023 16.3): checked while its
+        // assertion control has it on (20.11). A true (nonzero known)
+        // condition runs the pass action; a false, X or Z one the fail
+        // action, by default $error with the assertion's message. Each
+        // action runs only while its control enables it, and the run goes
+        // on after a failure.
+        if (item->kind == semantic::sv::StatementKind::assertion) {
+            if (!item->condition
+                || item->assertion_message.starts_with(
+                    "concurrent assertion '")) {
+                throw std::invalid_argument {
+                    "class HIR concurrent assertion is not executable"
+                };
+            }
+            if (item->delay || item->output_postponed) {
+                throw std::invalid_argument {
+                    "class HIR deferred immediate assertion (IEEE 1800-2023 "
+                    "16.4) is not executable"
+                };
+            }
+            const auto probe = [&](const runtime::simir::ExecutionPointKind kind) {
+                if (execution_probe_)
+                    execution_probe_(report_process_, kind, item->source);
+            };
+            probe(runtime::simir::ExecutionPointKind::assertion);
+            const auto control = assertion_control_
+                ? assertion_control_(item->id)
+                : semantic::sva::control_default;
+            if ((control & semantic::sva::control_on) == 0)
+                continue;
+            const auto condition = evaluate_packed(
+                *item->condition, handle, environment);
+            if (!condition) {
+                throw std::invalid_argument {
+                    "class HIR assertion condition is not a known packed value"
+                };
+            }
+            bool condition_true { };
+            for (std::size_t bit = 0U; bit < condition->width(); ++bit) {
+                if (condition->get(bit) == runtime::Logic4::one) {
+                    condition_true = true;
+                    break;
+                }
+            }
+            probe(condition_true
+                    ? runtime::simir::ExecutionPointKind::assertion_pass
+                    : runtime::simir::ExecutionPointKind::assertion_fail);
+            if (condition_true) {
+                if ((control & semantic::sva::control_pass) == 0)
+                    continue;
+                auto result = execute(item->statements, handle, environment,
+                    string_environment, constructor, return_context_width);
+                if (result.returned || result.broke || result.continued)
+                    return result;
+                continue;
+            }
+            if ((control & semantic::sva::control_fail) == 0)
+                continue;
+            if (item->assertion_has_failure_action) {
+                auto result = execute(item->else_statements, handle,
+                    environment, string_environment, constructor,
+                    return_context_width);
+                if (result.returned || result.broke || result.continued)
+                    return result;
+                continue;
+            }
+            if (report_) {
+                report_(report_process_,
+                    item->assertion_message.empty()
+                        ? std::string_view { "assertion failed" }
+                        : std::string_view { item->assertion_message },
+                    elaboration::runtime_assertion_severity(
+                        item->assertion_severity),
+                    item->source);
+            }
+            if (item->assertion_severity
+                == semantic::sv::AssertionSeverity::failure) {
+                throw std::invalid_argument {
+                    "class method executed $fatal"
+                };
             }
             continue;
         }
@@ -7858,8 +10584,15 @@ std::string SystemVerilogClassHirExecution::format_display(
             };
         }
         const auto runtime_format = elaboration::runtime_output_format(format);
+        // $signed and $unsigned set the signedness %d shows (11.7).
+        const bool signed_value = source != nullptr
+            && (source->kind == semantic::sv::ExpressionKind::call
+                    && (source->text == "$signed"
+                        || source->text == "$unsigned")
+                ? source->text == "$signed"
+                : source->signed_value);
         return runtime::simir::make_formatted_output({ }, { }, runtime_format,
-            *packed, source != nullptr && source->signed_value,
+            *packed, signed_value,
             suppress_leading_zero, minimum_width, left_justify, zero_pad,
             frontend::SystemVerilogScalarKind::None, precision);
     };
@@ -8187,7 +10920,9 @@ SystemVerilogClassHirExecution::evaluate_string_call(
         if (!invoke_static_function_)
             return std::nullopt;
         (void)invoke_static_function_(canonical_identity, actuals,
-            string_actuals, invocation_names, {}, actual_references);
+            string_actuals, invocation_names, {}, actual_references,
+            static_member_specialization(*value,
+                selected_method->owner_identity, handle));
     } else {
         if (!invoke_function_)
             return std::nullopt;
@@ -8239,10 +10974,16 @@ runtime::PackedLogic4 SystemVerilogClassHirExecution::invoke_function(
     const std::span<const std::string> actual_names_view,
     const std::span<const std::uint8_t> actual_directions_view,
     const ActualReferences actual_references,
-    const std::optional<runtime::simir::ProcessId> report_process)
+    const std::optional<runtime::simir::ProcessId> report_process,
+    const std::string_view specialization)
 {
     const ExecutionContextGuard context_guard { report_process_,
         report_process, active_hierarchy_, method.canonical_identity };
+    // A static method runs in its class's specialization: its static
+    // properties, parameters and unqualified static calls are that
+    // specialization's (IEEE 1800-2023 8.25.1).
+    const ScopedValue<std::string> static_context { static_specialization_,
+        handle == 0U ? std::string { specialization } : std::string { } };
     return invoke_function_impl(method, handle, actuals, string_actuals,
         actual_names_view, actual_directions_view, actual_references, nullptr);
 }

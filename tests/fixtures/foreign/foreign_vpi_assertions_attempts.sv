@@ -5,11 +5,15 @@
 // starts. rst is 1 from 30 to 40 and $finish runs at 52.
 //
 // p_dis (weak sequence in assert property, 16.12.2): attempts start at 5, 15,
-// 25, 35 and 45. The attempt of 5 matches at 25. At the edge of 35 `disable
-// iff (rst)` holds, and the attempts of 15 and 25 and the one that starts
-// there end in the disabled state: one cbAssertionDisabledEvaluation for each,
-// carrying that attempt's own start. The attempt of 45 is running at the end
-// of simulation and, being weak, does not fail.
+// 25, 35 and 45. The attempt of 5 matches at 25. The disable condition reads
+// current values and disables every attempt in progress when it becomes true
+// (16.12), so when rst rises at 30 the attempts of 15 and 25 reach the
+// disabled state at 30, between the clock edges: one
+// cbAssertionDisabledEvaluation for each, its cb_time the time the attempt
+// reached the disabled state (39.4.2), carrying that attempt's own start. At
+// the edge of 35 rst is still 1: the attempt that starts there is disabled at
+// its start (39.4.2). The attempt of 45 is running at the end of simulation
+// and, being weak, does not fail.
 //
 // p_eos (strong sequence, 16.12.2): attempts start at 7, 17, 27, 37 and 47 and
 // match at 27, 37 and 47. The attempts of 37 and 47 are running when the

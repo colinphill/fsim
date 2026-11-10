@@ -178,11 +178,22 @@ check_fixture(members)
 check_fixture(kernel_paths)
 
 # SystemVerilog threads: threads.sv (delays, an event control, nonblocking
-# writes) and classes.sv (one thread per class of effect the reference replay
+# writes), classes.sv (one thread per class of effect the reference replay
 # shadows: blocking write, $display, task call, fork-join_none, string
-# operations, file output and input). Their output lines must equal the
-# .expected files on every engine, and the verified run must replay thread
-# activations without skipping a member.
+# operations, file output and input) and replay_effects.sv (effects the replay
+# makes as the compiled run made them: an automatic function's private array
+# restored by its frame, a switch output the kernel mirrors from the host,
+# $sscanf, $fscanf and $value$plusargs into module variables, nonblocking
+# writes of every element form of unpacked arrays held as kernel slots: whole
+# elements, constant, indexed and partly out-of-range part-selects, bit-selects,
+# unknown indices and bases, multidimensional indices) and mirror_reads.sv
+# (kernel processes reading host signals through the kernel's mirrors: a
+# 72-bit net driven by cmos switches and a part-select assignment, and a
+# 72-bit net whose one driver the kernel mirrors as it writes; the verified
+# run checks each mirror against the host's value). Their output lines must
+# equal the .expected files on every engine, and the verified run must
+# replay thread activations without skipping a member. Arguments after NAME
+# are given to every simulation (plusargs).
 function(check_sv_fixture NAME)
   # One workspace per fixture: both define a module `top`, and a library does
   # not hold two units of one name.
@@ -204,7 +215,7 @@ function(check_sv_fixture NAME)
       set(ENV{FSIM_PROFILE_KERNEL} 1)
     endif()
     execute_process(
-      COMMAND "${FSIM_EXECUTABLE}" simulate --engine ${engine}
+      COMMAND "${FSIM_EXECUTABLE}" simulate --engine ${engine} ${ARGN}
       WORKING_DIRECTORY "${case_dir}"
       RESULT_VARIABLE result
       OUTPUT_VARIABLE stdout
@@ -233,3 +244,5 @@ endfunction()
 
 check_sv_fixture(threads)
 check_sv_fixture(classes)
+check_sv_fixture(replay_effects +replay_count=7 +replay_name=fsim)
+check_sv_fixture(mirror_reads)

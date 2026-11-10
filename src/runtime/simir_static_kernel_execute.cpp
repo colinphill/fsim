@@ -3,6 +3,7 @@
 // KIR execution of the engine v4 static kernel: the interpreter tier,
 // deoptimization, the generic bridge and the slow instruction semantics.
 #include "simir_static_kernel_compiled_internal.hpp"
+#include "fsim/semantic/sva_plan.hpp"
 #include "fsim/support/index_distance.hpp"
 
 #include <algorithm>
@@ -655,6 +656,10 @@ void Interpreter::Impl::StaticKernel::execute_body(
                 }
             }
             registers[inst.x] = { depth + save.pairs, 0U };
+            if (inst.sub != 0U) {
+                // The frame's strings, containers and private arrays.
+                frame_storage(member_index, inst.y, true);
+            }
             break;
         }
         case KOp::frame_pop: {
@@ -676,6 +681,9 @@ void Interpreter::Impl::StaticKernel::execute_body(
                 }
             }
             registers[inst.x] = { top, 0U };
+            if (inst.sub != 0U) {
+                frame_storage(member_index, inst.y, false);
+            }
             break;
         }
         case KOp::suspend:
@@ -1178,12 +1186,28 @@ void Interpreter::Impl::StaticKernel::plan_sva_table()
     std::uint32_t total = 0U;
     std::vector<std::uint32_t> sites;
     Operation scratch;
+    // An assertion control read (SvaKind::control) has no block: its word
+    // is the process's control site (Impl::assertion_controls).
     const auto note = [&](const Operation& operation) {
         if (const auto* sva = operation_get_if<SvaOperation>(&operation);
-            sva != nullptr && std::ranges::find(sites, sva->site) == sites.end()) {
+            sva != nullptr && sva->kind != SvaKind::control
+            && std::ranges::find(sites, sva->site) == sites.end()) {
             sites.push_back(sva->site);
         }
     };
+    // The host member's sites are those of its original program, which
+    // the scheduler's stub replaced (host_program_).
+    impl_.plan_assertion_controls(host_process_,
+        host_program_ ? &*host_program_ : nullptr);
+    sva_control_base_.assign(members_.size(), 0U);
+    for (std::size_t index = 0U; index < members_.size(); ++index) {
+        const auto process = members_[index].process;
+        if (process < impl_.assertion_control_base.size()
+            && impl_.assertion_control_base[process]
+                != Impl::no_assertion_control) {
+            sva_control_base_[index] = impl_.assertion_control_base[process];
+        }
+    }
     for (std::size_t index = 0U; index < members_.size(); ++index) {
         sva_member_base_[index] = total;
         sites.clear();
@@ -1209,6 +1233,8 @@ void Interpreter::Impl::StaticKernel::plan_sva_table()
     sva_table_.rings = impl_.sampled_ring_words.data();
     sva_table_.sampled = impl_.sampled_value_words.data();
     sva_table_.now = &sva_now_;
+    sva_table_.control_base = sva_control_base_.data();
+    sva_table_.controls = impl_.assertion_controls.data();
     if (total == 0U) {
         // No directive; an inline sampled read in procedural code still
         // reads the sampled words and rings through the table.
@@ -1233,7 +1259,8 @@ void Interpreter::Impl::StaticKernel::execute_sva_outcome(Word* registers,
     // The ring pop of sva::AttemptStorage::pop_outcome, inline on the block
     // (the same words generated code reads): the outcome code, with the
     // attempt's start, the fail position and the pop serial left in the
-    // header for the host's callback (39.4.2).
+    // header for the host's callback (39.4.2), and outcome_action_off added
+    // when the action controls skip the outcome's action block (20.11).
     using namespace sva::layout;
     auto* const block = sva_block(inst, member_index);
     const auto record = [&] {
@@ -1252,7 +1279,9 @@ void Interpreter::Impl::StaticKernel::execute_sva_outcome(Word* registers,
     const auto capacity = static_cast<std::uint64_t>(block[h_outcomes_cap]);
     const auto row = static_cast<std::uint64_t>(block[h_outcomes_off])
         + head * outcome_stride;
-    registers[inst.d] = { static_cast<std::uint64_t>(block[row]), 0U };
+    registers[inst.d] = { static_cast<std::uint64_t>(
+                              outcome_code(block[row], block[h_flags])),
+        0U };
     block[h_last_start] = block[row + 1U];
     block[h_last_fail_line] = block[row + 2U];
     block[h_last_fail_column] = block[row + 3U];
@@ -1338,8 +1367,19 @@ void Interpreter::Impl::StaticKernel::execute_sva_sampled_load(
     // The reads of run_sampled_read over the host's sampled words and rings.
     // The Logic4 signals of at most 64 bits read their one word pair; a wide
     // or Logic9 signal's ring (aux bit 1) reads its planes by chunk.
-    (void)member_index;
     const auto m = kw::mask(inst.width);
+    if (inst.aux == 8U) {
+        // An assertion control read (IEEE 1800-2023 20.11): the word of
+        // site x of the member's process (Impl::assertion_controls).
+        const auto index = std::size_t { member_index < sva_control_base_.size()
+                                   ? sva_control_base_[member_index] : 0U }
+            + inst.x;
+        const auto word = index < impl_.assertion_controls.size()
+            ? impl_.assertion_controls[index]
+            : semantic::sva::control_default;
+        registers[inst.d] = { static_cast<std::uint64_t>(word) & m, 0U };
+        return;
+    }
     if (inst.aux == 4U) {
         // $time (sub 0) or $stime (sub 1): the time step in the unit's ticks
         // (imm_a each), rounded half up (systemverilog_time_function).
@@ -1359,6 +1399,14 @@ void Interpreter::Impl::StaticKernel::execute_sva_sampled_load(
     }
     using Ring = Impl::SampledRing;
     const auto* const ring = impl_.sampled_ring_words.data() + inst.x;
+    // Whether the clock's sample of this time step is in the ring (the
+    // clock's publication appended it): this time step is a tick (16.9.3).
+    const auto sampled_now_in = [this](const std::uint64_t* const words) {
+        return words[Ring::slot_valid] != 0U
+            && words[Ring::slot_time] == static_cast<std::uint64_t>(kernel_now())
+            && words[Ring::slot_process_domain]
+                == static_cast<std::uint64_t>(ProcessSchedulingDomain::systemverilog);
+    };
     static_assert(SampledEntryReader::capacity_word == Ring::capacity
         && SampledEntryReader::first_word == Ring::first
         && SampledEntryReader::value_words_word == Ring::value_words
@@ -1381,26 +1429,42 @@ void Interpreter::Impl::StaticKernel::execute_sva_sampled_load(
             return;
         }
         if (kind_now == SignalReadKind::past) {
-            const bool sampled_now = ring[Ring::slot_valid] != 0U
-                && ring[Ring::slot_time] == static_cast<std::uint64_t>(kernel_now())
-                && ring[Ring::slot_process_domain]
-                    == static_cast<std::uint64_t>(ProcessSchedulingDomain::systemverilog);
-            const auto prior = count_now - (sampled_now ? 1U : 0U);
+            const auto prior = count_now - (sampled_now_in(ring) ? 1U : 0U);
             registers[inst.d] = reader.coerced(prior >= inst.z, prior - inst.z, 0U,
                 chunk_bits(0U));
             registers[inst.d].a &= m;
             registers[inst.d].b &= m;
             return;
         }
+        // In a time step that is not a tick of the clock the current value
+        // is the Preponed one (y - 1 in the sampled words, Logic4) and the
+        // previous one the ring's last sample (16.9.3). A SystemVerilog
+        // reader compares the values it reads: a Logic9 entry through the
+        // Logic4 mapping (21.2.1.3; strength is not part of the value).
+        const bool between_ticks = inst.y != 0U && !sampled_now_in(ring);
+        const auto* const preponed = between_ticks
+            ? impl_.sampled_value_words.data() + (inst.y - 1U) : nullptr;
+        const auto previous_back = between_ticks ? 1U : 2U;
         const bool have_current = count_now >= 1U;
-        const bool have_previous = count_now >= 2U;
+        const bool have_previous = count_now >= previous_back;
         const auto current_index = count_now - 1U;
-        const auto previous_index = count_now - 2U;
+        const auto previous_index = count_now - previous_back;
+        const auto current_value = [&](const std::uint64_t chunk) {
+            if (preponed == nullptr) {
+                return reader.coerced(have_current, current_index, chunk,
+                    chunk_bits(chunk));
+            }
+            const auto bits_mask = kw::mask(chunk_bits(chunk));
+            return Word { preponed[chunk] & bits_mask,
+                preponed[chunks + chunk] & bits_mask };
+        };
+        const auto previous_value = [&](const std::uint64_t chunk) {
+            return reader.coerced(have_previous, previous_index, chunk,
+                chunk_bits(chunk));
+        };
         if (kind_now == SignalReadKind::rose || kind_now == SignalReadKind::fell) {
-            const auto current = reader.coerced(have_current, current_index, 0U,
-                chunk_bits(0U));
-            const auto previous = reader.coerced(have_previous, previous_index, 0U,
-                chunk_bits(0U));
+            const auto current = current_value(0U);
+            const auto previous = previous_value(0U);
             const bool rose = kind_now == SignalReadKind::rose;
             const auto level = [&](const Word word) {
                 return rose ? (word.a & 1U) != 0U && (word.b & 1U) == 0U
@@ -1409,16 +1473,12 @@ void Interpreter::Impl::StaticKernel::execute_sva_sampled_load(
             registers[inst.d] = { level(current) && !level(previous) ? 1U : 0U, 0U };
             return;
         }
-        // $stable and $changed compare every plane (PackedLogic4 equality).
+        // $stable and $changed compare every chunk of the values read.
         bool equal = true;
-        for (std::uint64_t chunk = 0U; chunk < chunks; ++chunk) {
-            const auto bits_mask = kw::mask(chunk_bits(chunk));
-            for (std::uint64_t plane = 0U; plane < reader.planes; ++plane) {
-                equal = equal
-                    && (reader.word(have_current, current_index, plane, chunk) & bits_mask)
-                        == (reader.word(have_previous, previous_index, plane, chunk)
-                            & bits_mask);
-            }
+        for (std::uint64_t chunk = 0U; chunk < chunks && equal; ++chunk) {
+            const auto current = current_value(chunk);
+            const auto previous = previous_value(chunk);
+            equal = current.a == previous.a && current.b == previous.b;
         }
         const bool result = kind_now == SignalReadKind::stable ? equal : !equal;
         registers[inst.d] = { result ? 1U : 0U, 0U };
@@ -1443,28 +1503,36 @@ void Interpreter::Impl::StaticKernel::execute_sva_sampled_load(
     if (kind == SignalReadKind::past) {
         // The sample of this time step (the clock's publication appended
         // it) is not a past one (16.9.3).
-        const bool sampled_now = ring[Ring::slot_valid] != 0U
-            && ring[Ring::slot_time] == static_cast<std::uint64_t>(kernel_now())
-            && ring[Ring::slot_process_domain]
-                == static_cast<std::uint64_t>(ProcessSchedulingDomain::systemverilog);
-        const auto prior = count - (sampled_now ? 1U : 0U);
+        const auto prior = count - (sampled_now_in(ring) ? 1U : 0U);
         const auto past = prior >= inst.z ? value(prior - inst.z) : fallback;
         registers[inst.d] = { past.a & m, past.b & m };
         return;
     }
-    const auto previous = count >= 2U ? value(count - 2U) : fallback;
+    // A value change function compares the sampled value of this time step
+    // with the sample of the most recent strictly prior tick (16.9.3): at a
+    // tick the ring's last two samples, in any other time step the Preponed
+    // value (y - 1 in the sampled words) and the ring's last sample. Every
+    // bit of the signal (offset bits) is compared.
+    const bool between_ticks = inst.y != 0U && !sampled_now_in(ring);
+    const auto now_value = between_ticks
+        ? Word { impl_.sampled_value_words[inst.y - 1U],
+              impl_.sampled_value_words[inst.y] }
+        : current;
+    const auto previous = between_ticks ? current
+        : count >= 2U ? value(count - 2U) : fallback;
     const auto one = [](const Word word) {
         return (word.a & 1U) != 0U && (word.b & 1U) == 0U;
     };
     const auto zero = [](const Word word) {
         return (word.a & 1U) == 0U && (word.b & 1U) == 0U;
     };
-    const bool equal = (current.a & m) == (previous.a & m)
-        && (current.b & m) == (previous.b & m);
+    const auto signal_mask = kw::mask(inst.offset);
+    const bool equal = (now_value.a & signal_mask) == (previous.a & signal_mask)
+        && (now_value.b & signal_mask) == (previous.b & signal_mask);
     const bool result = kind == SignalReadKind::rose
-        ? one(current) && !one(previous)
+        ? one(now_value) && !one(previous)
         : kind == SignalReadKind::fell
-        ? zero(current) && !zero(previous)
+        ? zero(now_value) && !zero(previous)
         : kind == SignalReadKind::stable ? equal : !equal;
     registers[inst.d] = { result ? 1U : 0U, 0U };
 }
@@ -2525,13 +2593,20 @@ void Interpreter::Impl::StaticKernel::native_effect(
     try {
         const auto& body = *static_cast<const CompiledBody*>(frame->program);
         const auto inst = with_bound_offset(body.code[at], frame->bindings);
-        if constexpr (Op == KOp::frame_push) {
-            if (za != 0U) {
+        if constexpr (Op == KOp::frame_push || Op == KOp::frame_pop) {
+            if (Op == KOp::frame_push && za == 1U) {
                 // Capacity growth of the body's frame stack: xa is the
                 // depth, ya the pairs the frame needs.
                 auto& instance = *static_cast<CompiledBody*>(frame->instance);
                 kernel.grow_frame_stack(instance.frame_entries,
                     xa & kw::mask(32U), ya, frame->member, at);
+                return;
+            }
+            if (za == 2U) {
+                // The runtime's part of the frame (sub 1): its strings,
+                // containers and private arrays.
+                kernel.frame_storage(frame->member, inst.y,
+                    Op == KOp::frame_push);
                 return;
             }
         }

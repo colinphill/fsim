@@ -2397,12 +2397,26 @@ bool Interpreter::Impl::StaticKernel::commit_domains()
             }
         };
         for (std::uint32_t index = 0U; index < count; ++index) {
+            deliver_until(index, 0U);
+            const auto& item = writes_.data[index];
+            // An update that changes an output again lands after every
+            // output changed before it, as in commit_pending (IEEE
+            // 1800-2023 4.6 b)), whichever lane commits it.
+            if (item.kind == 0U && slots_[item.slot].output
+                && slots_[item.slot].output_pending) {
+                const auto* const before
+                    = index != 0U ? &writes_.data[index - 1U] : nullptr;
+                if (before == nullptr || before->kind != 0U
+                    || before->slot != item.slot
+                    || before->member != item.member
+                    || (item.instruction & write_continues) == 0U) {
+                    publish(true);
+                }
+            }
             if (commit_owner_[index] != no_slot) {
                 deliver_until(index, 1U);
                 continue;
             }
-            deliver_until(index, 0U);
-            const auto& item = writes_.data[index];
             if (item.kind == 0U) {
                 write_slot_word(item.slot, { item.a, item.b }, item.offset,
                     item.width, item.member);

@@ -270,6 +270,8 @@ static_assert(offsetof(runtime::simir::StaticKernelSvaTable, pop_serial) == 16U)
 static_assert(offsetof(runtime::simir::StaticKernelSvaTable, rings) == 24U);
 static_assert(offsetof(runtime::simir::StaticKernelSvaTable, sampled) == 32U);
 static_assert(offsetof(runtime::simir::StaticKernelSvaTable, now) == 40U);
+static_assert(offsetof(runtime::simir::StaticKernelSvaTable, control_base) == 48U);
+static_assert(offsetof(runtime::simir::StaticKernelSvaTable, controls) == 56U);
 static_assert(offsetof(runtime::simir::StaticKernelContainerInfo, slot) == 4U);
 static_assert(offsetof(runtime::simir::StaticKernelContainerInfo, count) == 8U);
 static_assert(offsetof(runtime::simir::StaticKernelContainerInfo, left) == 16U);
@@ -380,6 +382,107 @@ struct Pair {
     return enabled;
 }
 
+/// Appends the bytes of a directive's plan that its automaton depends on;
+/// the source positions only with `positions` (a template's key: its
+/// position tables), not for the automaton's own symbol (sva_automaton_
+/// symbol), which every site of the plan shares.
+void append_sva_plan(std::string& text, const detail::SvaNativePlan& plan, const bool positions)
+{
+    const auto append = [&](const auto& value) {
+        text.append(reinterpret_cast<const char*>(&value), sizeof(value));
+    };
+    const auto append_all = [&](const auto& values) {
+        append(values.size());
+        for (const auto& value : values) {
+            append(value);
+        }
+    };
+    append(plan.root);
+    append(plan.every_match);
+    append_all(plan.clock_guards);
+    append(plan.sequences.size());
+    for (const auto& sequence : plan.sequences) {
+        append(sequence.counters);
+        append(sequence.locals_base);
+        append(sequence.state_base);
+        append(sequence.code.size());
+        for (const auto& step : sequence.code) {
+            append(step.op);
+            append(step.a);
+            append(step.b);
+            append(step.c);
+            append(step.lo);
+            append(step.hi);
+            if (positions) {
+                append(step.line);
+                append(step.column);
+            }
+            append(step.lo_slot);
+            append(step.hi_slot);
+        }
+    }
+    append(plan.properties.size());
+    for (const auto& property : plan.properties) {
+        append(property.kind);
+        append(property.overlapped);
+        append(property.synchronous);
+        append(property.clock);
+        append(property.sequence);
+        append(property.child);
+        append_all(property.children);
+        append(property.guard);
+        append(property.lo);
+        append(property.lo_slot);
+        append(property.hi);
+        append(property.hi_slot);
+        if (positions) {
+            append(property.line);
+            append(property.column);
+        }
+        append(property.guard_expression);
+        append_all(property.initializers);
+    }
+    if (positions) {
+        append_all(plan.guard_positions);
+    } else {
+        append(plan.guard_positions.size());
+    }
+    append_all(plan.local_offset);
+    append_all(plan.local_size);
+    append_all(plan.local_width);
+    append(plan.locals_words);
+    append_all(plan.expression_target);
+    append(plan.local_sets.size());
+    for (const auto& set : plan.local_sets) {
+        append_all(set);
+    }
+    append(plan.memo_stride);
+}
+
+/// The symbol of a plan's automaton (SvaAutomatonEmitter::tick_function):
+/// one function per distinct plan for the whole design, which every tick
+/// site of the plan, in any template, calls with its own arguments. The
+/// name is a hash of the plan without its source positions and of the
+/// check and verify modes the code is generated for.
+[[nodiscard]] std::string sva_automaton_symbol(const detail::SvaNativePlan& plan)
+{
+    std::string text;
+    append_sva_plan(text, plan, false);
+    text.push_back(sva_check_enabled() ? '1' : '0');
+    text.push_back(sva_verify_enabled() ? '1' : '0');
+    const auto hash = llvm::xxh3_128bits(llvm::ArrayRef {
+        reinterpret_cast<const std::uint8_t*>(text.data()), text.size() });
+    static constexpr char digits[] = "0123456789abcdef";
+    std::string name = "fsim_sk_sva_";
+    for (std::size_t nibble = 0U; nibble < 16U; ++nibble) {
+        name.push_back(digits[(hash.high64 >> (60U - 4U * nibble)) & 15U]);
+    }
+    for (std::size_t nibble = 0U; nibble < 16U; ++nibble) {
+        name.push_back(digits[(hash.low64 >> (60U - 4U * nibble)) & 15U]);
+    }
+    return name;
+}
+
 /// Generated code for a concurrent assertion directive's attempt automaton
 /// (IEEE 1800-2023 16.14, 39.4.2; task #186): the plan is constant at kernel
 /// build, so `sva::Monitor::tick` (Instance::step and Matcher::run of
@@ -415,14 +518,53 @@ public:
     {
     }
 
-    /// The tick function of instruction `inst` (at position `at`):
-    /// `void (ptr frame, ptr registers)`. `guard_storage` is the register
-    /// index of the guards' word (the first chunk of a wide register).
-    [[nodiscard]] llvm::Function* tick_function(const KInst& inst,
-        const std::uint32_t at, const std::uint32_t guard_storage)
+    /// The type of a plan's automaton (tick_function): `void (ptr frame,
+    /// ptr registers, i32 at, i64 aux, i64 guards, i64 start, i64 disabled,
+    /// i64 result, ptr positions)`. Everything of one tick site is an
+    /// argument: the instruction's position `at`, its block entry `aux`,
+    /// the register indices of the guards' word (the first chunk of a wide
+    /// register), the start and disabled flags and the result, and the
+    /// site's source positions (position_words), so that every site and
+    /// template of a plan calls one function.
+    [[nodiscard]] static llvm::FunctionType* automaton_type(llvm::LLVMContext& context)
     {
-        at_ = at;
-        guard_storage_ = guard_storage;
+        auto* i64 = llvm::Type::getInt64Ty(context);
+        auto* ptr = llvm::PointerType::getUnqual(context);
+        return llvm::FunctionType::get(llvm::Type::getVoidTy(context),
+            { ptr, ptr, llvm::Type::getInt32Ty(context), i64, i64, i64, i64, i64, ptr }, false);
+    }
+
+    /// The source positions of a plan, which its automaton reads from the
+    /// site's table: each guard's line and column, then each step's of each
+    /// sequence in order, then each property's (at least two words).
+    [[nodiscard]] static std::vector<std::uint64_t> position_words(
+        const detail::SvaNativePlan& plan)
+    {
+        std::vector<std::uint64_t> words;
+        for (const auto& position : plan.guard_positions) {
+            words.push_back(position.first);
+            words.push_back(position.second);
+        }
+        for (const auto& sequence : plan.sequences) {
+            for (const auto& step : sequence.code) {
+                words.push_back(step.line);
+                words.push_back(step.column);
+            }
+        }
+        for (const auto& property : plan.properties) {
+            words.push_back(property.line);
+            words.push_back(property.column);
+        }
+        if (words.empty()) {
+            words = { 0U, 0U };
+        }
+        return words;
+    }
+
+    /// The plan's automaton, an external function named `name` of
+    /// automaton_type in this emitter's module.
+    [[nodiscard]] llvm::Function* tick_function(const std::string& name)
+    {
         const auto& plan = plan_;
         const auto root = plan.properties[plan.root];
         // Matcher functions of the sequences the root uses.
@@ -451,7 +593,7 @@ public:
                 matchers_.emplace(sequence, matcher_function(sequence));
             }
         }
-        return build_tick(inst, guard_storage);
+        return build_tick(name);
     }
 
 private:
@@ -646,7 +788,7 @@ private:
         auto* type = llvm::FunctionType::get(llvm::Type::getVoidTy(context_),
             { ptr_, i32_, i32_, i64_ }, false);
         auto* callee = module_.getOrInsertFunction("fsim_sk_sva_grow", type).getCallee();
-        builder_.CreateCall(type, callee, { frame_, k32(at_), k32(region), needed });
+        builder_.CreateCall(type, callee, { frame_, at_, k32(region), needed });
         check_status();
     }
     /// Room for `words` more words in the alternate heap.
@@ -690,14 +832,12 @@ private:
 
     /// Bit `bit` of the known-one words of register `reg` (a guard, the start
     /// or disabled flag): the a word's bit set and the b word's clear.
-    [[nodiscard]] llvm::Value* known_one(const std::uint32_t reg, const std::uint32_t bit)
+    [[nodiscard]] llvm::Value* known_one(llvm::Value* reg, const std::uint32_t bit)
     {
-        const auto chunk = reg + bit / 64U;
-        auto* a = builder_.CreateLoad(i64_,
-            builder_.CreateInBoundsGEP(i64_, registers_, k(static_cast<std::uint64_t>(chunk) * 2U)));
+        auto* at_word = mul(add(reg, bit / 64U), 2U);
+        auto* a = builder_.CreateLoad(i64_, builder_.CreateInBoundsGEP(i64_, registers_, at_word));
         auto* b = builder_.CreateLoad(i64_,
-            builder_.CreateInBoundsGEP(i64_, registers_,
-                k(static_cast<std::uint64_t>(chunk) * 2U + 1U)));
+            builder_.CreateInBoundsGEP(i64_, registers_, add(at_word, 1U)));
         auto* mask = k(std::uint64_t { 1 } << (bit % 64U));
         return builder_.CreateAnd(ne0(builder_.CreateAnd(a, mask)),
             builder_.CreateICmpEQ(builder_.CreateAnd(b, mask), k(0U)));
@@ -757,12 +897,219 @@ private:
     llvm::Value* registers_ { };
     llvm::Value* slot_addr_ { };
     llvm::BasicBlock* failure_ { };
-    std::uint32_t at_ { };
-    std::uint32_t guard_storage_ { };
+    /// The site's arguments as the current function sees them (the tick's
+    /// parameters; env[8] to env[10] in the matchers and the memo): the
+    /// instruction's position (i32), the guards' register index (i64) and
+    /// the position table (position_words).
+    llvm::Value* at_ { };
+    llvm::Value* guard_storage_ { };
+    llvm::Value* positions_ { };
     std::map<std::uint32_t, llvm::Function*> matchers_;
-    llvm::GlobalVariable* positions_ { };
     llvm::Value* env_ { };
     llvm::Value* tick_ { };
+    llvm::Function* memo_ { };
+
+    // ---- local variables (IEEE 1800-2023 16.10) ----
+    //
+    // A valuation of the plan's locals is locals_words() words (each local's
+    // value chunks, then its unknown chunks); a thread keeps it in its
+    // counter words from the sequence's locals_base, an instance record
+    // after its ten header words. An expression's value for a valuation
+    // comes from the block's memo (CompiledPlan::evaluate): a value the memo
+    // lacks becomes a request (an unanswered entry), and the tick notes the
+    // miss in env[6]; the tick that missed restores the block and returns
+    // minus the requests (Monitor::tick).
+
+    [[nodiscard]] std::uint64_t locals_words() const noexcept
+    {
+        return plan_.locals_words;
+    }
+    /// The words of an instance record's header: ten, then the locals.
+    [[nodiscard]] std::uint64_t header_words() const noexcept
+    {
+        return 10U + plan_.locals_words;
+    }
+    [[nodiscard]] bool has_expressions() const noexcept
+    {
+        return !plan_.expression_target.empty();
+    }
+    /// The memo's result words of an entry (the widest expression).
+    [[nodiscard]] std::uint64_t result_area() const noexcept
+    {
+        return plan_.memo_stride == 0U
+            ? 1U
+            : plan_.memo_stride - runtime::sva::layout::memo_e_locals - plan_.locals_words;
+    }
+
+    /// `void memo(frame, registers, slot_addr, env, expression, locals,
+    /// out)`: CompiledPlan::evaluate of expression `expression` for the
+    /// valuation at `locals` into the result_area() words at `out` (zero
+    /// while unknown; a miss sets env[6]).
+    [[nodiscard]] llvm::Function* memo_function()
+    {
+        namespace l = runtime::sva::layout;
+        if (memo_ != nullptr) {
+            return memo_;
+        }
+        auto* type = llvm::FunctionType::get(llvm::Type::getVoidTy(context_),
+            { ptr_, ptr_, ptr_, ptr_, i64_, ptr_, ptr_ }, false);
+        auto* saved_fn = fn_;
+        auto* saved_frame = frame_;
+        auto* saved_registers = registers_;
+        auto* saved_slot = slot_addr_;
+        auto* saved_failure = failure_;
+        auto* saved_at = at_;
+        auto* saved_guards = guard_storage_;
+        auto* saved_positions = positions_;
+        auto saved_point = builder_.saveIP();
+        fn_ = llvm::Function::Create(type, llvm::Function::InternalLinkage,
+            "fsim_sk_sva_memo_" + std::to_string(next_function_id()), module_);
+        fn_->addFnAttr(llvm::Attribute::NoInline);
+        fn_->addFnAttr(llvm::Attribute::NoUnwind);
+        memo_ = fn_;
+        frame_ = fn_->getArg(0);
+        registers_ = fn_->getArg(1);
+        slot_addr_ = fn_->getArg(2);
+        auto* env = fn_->getArg(3);
+        auto* expression = fn_->getArg(4);
+        auto* locals = fn_->getArg(5);
+        auto* out = fn_->getArg(6);
+        auto* entry = block("entry");
+        failure_ = block("failure");
+        builder_.SetInsertPoint(failure_);
+        builder_.CreateRetVoid();
+        builder_.SetInsertPoint(entry);
+        load_site(env);
+        const std::uint64_t stride = plan_.memo_stride;
+        const std::uint64_t words = locals_words();
+        const std::uint64_t results = result_area();
+        const auto local_word = [&](const std::uint64_t index) {
+            return builder_.CreateLoad(i64_, builder_.CreateConstInBoundsGEP1_64(i64_, locals, index));
+        };
+        const auto out_word = [&](const std::uint64_t index) {
+            return builder_.CreateConstInBoundsGEP1_64(i64_, out, index);
+        };
+        const auto missed = [&] {
+            builder_.CreateStore(k(1U), builder_.CreateConstInBoundsGEP1_64(i64_, env, 6U));
+            for (std::uint64_t word = 0U; word < results; ++word) {
+                builder_.CreateStore(k(0U), out_word(word));
+            }
+            builder_.CreateRetVoid();
+        };
+        auto* count = builder_.CreateUDiv(rd(l::h_memo_used), k(stride));
+        auto* index = var("memo_entry");
+        auto* head = block("memo_scan");
+        auto* body = block("memo_body");
+        auto* absent = block("memo_absent");
+        set(index, k(0U));
+        builder_.CreateBr(head);
+        builder_.SetInsertPoint(head);
+        builder_.CreateCondBr(builder_.CreateICmpULT(get(index), count), body, absent);
+        builder_.SetInsertPoint(body);
+        auto* at = add(rd(l::h_memo_off), mul(get(index), stride));
+        llvm::Value* same = builder_.CreateICmpEQ(rd(add(at, l::memo_e_expression)), expression);
+        for (std::uint64_t word = 0U; word < words; ++word) {
+            same = builder_.CreateAnd(same,
+                builder_.CreateICmpEQ(rd(add(at, l::memo_e_locals + word)), local_word(word)));
+        }
+        auto* found = block("memo_found");
+        auto* next = block("memo_next");
+        builder_.CreateCondBr(same, found, next);
+        builder_.SetInsertPoint(next);
+        set(index, add(get(index), 1U));
+        builder_.CreateBr(head);
+        builder_.SetInsertPoint(found);
+        auto* known = block("memo_known");
+        auto* waiting = block("memo_waiting");
+        builder_.CreateCondBr(ne0(rd(add(at, l::memo_e_answered))), known, waiting);
+        builder_.SetInsertPoint(waiting);
+        missed();
+        builder_.SetInsertPoint(known);
+        {
+            auto* result = add(rd(l::h_memo_off), mul(get(index), stride));
+            for (std::uint64_t word = 0U; word < results; ++word) {
+                builder_.CreateStore(rd(add(result, l::memo_e_locals + words + word)),
+                    out_word(word));
+            }
+            builder_.CreateRetVoid();
+        }
+        // A new request: an unanswered entry with the valuation.
+        builder_.SetInsertPoint(absent);
+        auto* used = rd(l::h_memo_used);
+        auto* needed = add(used, stride);
+        if_then(builder_.CreateICmpUGT(needed, rd(l::h_memo_cap)), [&] { grow(7U, needed); });
+        auto* first = add(rd(l::h_memo_off), rd(l::h_memo_used));
+        wr(add(first, l::memo_e_expression), expression);
+        wr(add(first, l::memo_e_answered), k(0U));
+        for (std::uint64_t word = 0U; word < words; ++word) {
+            wr(add(first, l::memo_e_locals + word), local_word(word));
+        }
+        for (std::uint64_t word = 0U; word < results; ++word) {
+            wr(add(first, l::memo_e_locals + words + word), k(0U));
+        }
+        wr(l::h_memo_used, add(rd(l::h_memo_used), stride));
+        wr(l::h_memo_pending, add(rd(l::h_memo_pending), 1U));
+        missed();
+        fn_ = saved_fn;
+        frame_ = saved_frame;
+        registers_ = saved_registers;
+        slot_addr_ = saved_slot;
+        failure_ = saved_failure;
+        at_ = saved_at;
+        guard_storage_ = saved_guards;
+        positions_ = saved_positions;
+        builder_.restoreIP(saved_point);
+        return memo_;
+    }
+
+    /// CompiledPlan::evaluate of `expression` (a value) for the valuation
+    /// at `locals` (a pointer) into `out` (an array of result_area() words).
+    void evaluate(llvm::Value* expression, llvm::Value* locals, llvm::AllocaInst* out)
+    {
+        auto* function = memo_function();
+        builder_.CreateCall(function->getFunctionType(), function,
+            { frame_, registers_, slot_addr_, env_, expression,
+                locals != nullptr ? locals : llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(ptr_)),
+                builder_.CreateConstInBoundsGEP2_64(out->getAllocatedType(), out, 0U, 0U) });
+        check_status();
+    }
+    /// CompiledPlan::truth: word 0 of the value is nonzero.
+    [[nodiscard]] llvm::Value* truth(llvm::Value* expression, llvm::Value* locals)
+    {
+        auto* out = array("memo_value", result_area());
+        evaluate(expression, locals, out);
+        return ne0(builder_.CreateLoad(i64_, element(out, 0U)));
+    }
+    /// AttemptStorage::push_call: call `call` with the valuation at `locals`.
+    void push_call(const std::uint32_t call, llvm::Value* locals)
+    {
+        namespace l = runtime::sva::layout;
+        const std::uint64_t words = locals_words();
+        auto* needed = add(rd(l::h_calls_used), 1U + words);
+        if_then(builder_.CreateICmpUGT(needed, rd(l::h_calls_cap)), [&] { grow(8U, needed); });
+        auto* at = add(rd(l::h_calls_off), rd(l::h_calls_used));
+        wr(at, k(call));
+        for (std::uint64_t word = 0U; word < words; ++word) {
+            wr(add(at, 1U + word),
+                builder_.CreateLoad(i64_, builder_.CreateConstInBoundsGEP1_64(i64_, locals, word)));
+        }
+        wr(l::h_calls_used, add(rd(l::h_calls_used), 1U + words));
+    }
+    /// Whether the valuation at `left` comes before the one at `right` (a
+    /// std::set of valuation words: lexicographic, signed); `words` words
+    /// each, `left_at`/`right_at` their word getters.
+    [[nodiscard]] llvm::Value* precedes(const std::function<llvm::Value*(std::uint64_t)>& left,
+        const std::function<llvm::Value*(std::uint64_t)>& right, const std::uint64_t words)
+    {
+        llvm::Value* less = llvm::ConstantInt::getFalse(context_);
+        for (std::uint64_t word = words; word-- > 0U;) {
+            auto* a = left(word);
+            auto* b = right(word);
+            less = builder_.CreateOr(builder_.CreateICmpSLT(a, b),
+                builder_.CreateAnd(builder_.CreateICmpEQ(a, b), less));
+        }
+        return less;
+    }
 
     // ---- the sequence matcher (Matcher::step and Matcher::run) ----
 
@@ -869,6 +1216,9 @@ private:
             case semantic::sva::Op::match:
                 continue;
             case semantic::sva::Op::check:
+            case semantic::sva::Op::check_expression:
+            case semantic::sva::Op::assign:
+            case semantic::sva::Op::call:
             case semantic::sva::Op::delay:
             case semantic::sva::Op::counter_set:
             case semantic::sva::Op::counter_increment:
@@ -924,11 +1274,12 @@ private:
             auto* joins = guarded_old(present, get(position));
             set(position, add(get(position), 1U));
             auto* join = var("record_join");
+            const std::uint64_t end_words = 1U + locals_words();
             for_count(join, joins, [&] {
                 auto* thread = add(get(position), 2U);
                 auto* ends = add(thread, encoded_thread_length(thread, shape));
-                auto* second = add(add(ends, old_word(ends)), 1U);
-                set(position, add(add(second, old_word(second)), 1U));
+                auto* second = add(add(ends, mul(old_word(ends), end_words)), 1U);
+                set(position, add(add(second, mul(old_word(second), end_words)), 1U));
             });
             return sub(get(position), at);
         }
@@ -937,22 +1288,42 @@ private:
 
     llvm::Value* position_table()
     {
-        if (positions_ == nullptr) {
-            std::vector<std::uint64_t> words;
-            for (const auto& position : plan_.guard_positions) {
-                words.push_back(position.first);
-                words.push_back(position.second);
-            }
-            if (words.empty()) {
-                words = { 0U, 0U };
-            }
-            positions_ = new llvm::GlobalVariable(module_,
-                llvm::ArrayType::get(i64_, words.size()), true,
-                llvm::GlobalValue::PrivateLinkage,
-                llvm::ConstantDataArray::get(context_, llvm::ArrayRef<std::uint64_t>(words)),
-                "sva_guard_positions");
-        }
         return positions_;
+    }
+    /// Word `index` of the site's position table.
+    [[nodiscard]] llvm::Value* position_word(const std::uint64_t index)
+    {
+        return builder_.CreateLoad(i64_,
+            builder_.CreateConstInBoundsGEP1_64(i64_, positions_, index));
+    }
+    /// The line of step `pc` of sequence `sequence` (position_words); its
+    /// column is the next word.
+    [[nodiscard]] std::uint64_t step_position(const std::uint32_t sequence,
+        const std::size_t pc) const
+    {
+        std::uint64_t index = 2U * plan_.guard_positions.size();
+        for (std::uint32_t before = 0U; before < sequence; ++before) {
+            index += 2U * plan_.sequences[before].code.size();
+        }
+        return index + 2U * pc;
+    }
+    [[nodiscard]] std::uint64_t property_position(const std::uint64_t property) const
+    {
+        std::uint64_t index = 2U * plan_.guard_positions.size();
+        for (const auto& sequence : plan_.sequences) {
+            index += 2U * sequence.code.size();
+        }
+        return index + 2U * property;
+    }
+    /// Loads the site's arguments of a matcher or the memo from its env.
+    void load_site(llvm::Value* env)
+    {
+        const auto env_word = [&](const std::uint64_t index) {
+            return builder_.CreateLoad(i64_, builder_.CreateConstInBoundsGEP1_64(i64_, env, index));
+        };
+        at_ = builder_.CreateTrunc(env_word(8U), i32_);
+        guard_storage_ = env_word(9U);
+        positions_ = builder_.CreateIntToPtr(env_word(10U), ptr_);
     }
 
     /// The step events (39.4.2) of a check: when the attempt is stepping
@@ -1003,10 +1374,12 @@ private:
         return builder_.CreateAnd(ne0(bit_a), builder_.CreateICmpEQ(bit_b, k(0U)));
     }
 
-    /// `i64 matcher(frame, registers, slot_addr, env, in_off, start)`: Matcher::step of
+    /// `i64 matcher(frame, registers, slot_addr, env, in_off, start, point)`: Matcher::step of
     /// sequence `sequence` at tick env[0]. The matcher's input record is at
     /// `in_off` words into the current heap (-1: a new matcher started at
-    /// `start`); its output record (Matcher::encode) follows the alternate
+    /// `start`; in a multiclocked plan `start` is a time step and `point` the
+    /// instance's start point flags, and the first thread waits on the
+    /// sequence's leading clock as a switching thread does); its output record (Matcher::encode) follows the alternate
     /// heap's cursor, and the result has bit 0 set when the sequence matched
     /// and bit 1 when no thread is left (Matcher::dead). The position of the
     /// last boolean that ended a thread goes to env[4] and env[5].
@@ -1047,12 +1420,17 @@ private:
                 key_words.push_back(word);
             }
         }
-        auto* type = llvm::FunctionType::get(i64_, { ptr_, ptr_, ptr_, ptr_, i64_, i64_ }, false);
+        auto* type = llvm::FunctionType::get(i64_,
+            { ptr_, ptr_, ptr_, ptr_, i64_, i64_, i64_, ptr_ }, false);
+        auto* saved_env = env_;
         auto* saved_fn = fn_;
         auto* saved_frame = frame_;
         auto* saved_registers = registers_;
         auto* saved_slot = slot_addr_;
         auto* saved_failure = failure_;
+        auto* saved_at = at_;
+        auto* saved_guards = guard_storage_;
+        auto* saved_positions = positions_;
         auto saved_point = builder_.saveIP();
         fn_ = llvm::Function::Create(type, llvm::Function::InternalLinkage,
             "fsim_sk_sva_matcher_" + std::to_string(next_function_id()), module_);
@@ -1065,11 +1443,17 @@ private:
         auto* env = fn_->getArg(3);
         auto* in_off = fn_->getArg(4);
         auto* start = fn_->getArg(5);
+        auto* point = fn_->getArg(6);
+        // The valuation of the local variables a new matcher starts with
+        // (16.10; unused without locals).
+        auto* start_locals = fn_->getArg(7);
+        env_ = env;
         auto* entry = block("entry");
         failure_ = block("failure");
         builder_.SetInsertPoint(failure_);
         builder_.CreateRet(k(0U));
         builder_.SetInsertPoint(entry);
+        load_site(env);
 
         const auto env_word = [&](const std::uint64_t index) {
             return builder_.CreateLoad(i64_, builder_.CreateConstInBoundsGEP1_64(i64_, env, index));
@@ -1094,6 +1478,9 @@ private:
         auto* queue_tail = var("queue_tail");
         auto* out_count = var("threads");
         auto* matched = var("matched");
+        // The distinct valuations of the locals the sequence matched with
+        // (Matcher::matches; scratch entries tagged 7).
+        auto* match_count = var("match_count");
         auto* fail_line = var("fail_line");
         auto* fail_column = var("fail_column");
         auto* next_group = var("next_group", 1U);
@@ -1154,6 +1541,42 @@ private:
         };
         const auto cur_at = [&](llvm::Value* index) {
             return builder_.CreateInBoundsGEP(cur->getAllocatedType(), cur, { k(0U), index });
+        };
+        // The thread's local variables: its counter words from locals_base.
+        const std::uint64_t locals_at = 7U + plan_.sequences[sequence].locals_base;
+        const std::uint64_t local_count = locals_words();
+        const auto locals_of = [&](llvm::AllocaInst* thread) -> llvm::Value* {
+            return builder_.CreateConstInBoundsGEP2_64(thread->getAllocatedType(), thread, 0U,
+                locals_at);
+        };
+        const auto start_local = [&](const std::uint64_t word) -> llvm::Value* {
+            return builder_.CreateLoad(i64_,
+                builder_.CreateConstInBoundsGEP1_64(i64_, start_locals, word - locals_at));
+        };
+        const auto is_local = [&](const std::uint64_t word) {
+            return word >= locals_at && word < locals_at + local_count;
+        };
+        // A throughout entry's condition word (Matcher::condition): a guard,
+        // or (bit 32) an expression over the thread's locals; and the guard
+        // its step event reports (-1 for an expression).
+        const auto condition_holds = [&](llvm::Value* word, llvm::AllocaInst* thread)
+            -> llvm::Value* {
+            if (!has_expressions()) {
+                return known_one_dynamic(word);
+            }
+            auto* holds = var("condition_holds");
+            auto* is_expression = ne0(builder_.CreateLShr(word, k(32U)));
+            if_else(is_expression, [&] {
+                set(holds, builder_.CreateZExt(
+                    truth(builder_.CreateAnd(word, k(0xffff'ffffU)), locals_of(thread)), i64_));
+            }, [&] { set(holds, builder_.CreateZExt(known_one_dynamic(word), i64_)); });
+            return ne0(get(holds));
+        };
+        const auto step_guard = [&](llvm::Value* word) -> llvm::Value* {
+            if (!has_expressions()) {
+                return word;
+            }
+            return builder_.CreateSelect(ne0(builder_.CreateLShr(word, k(32U))), ks(-1), word);
         };
         const auto copy_cur = [&](llvm::AllocaInst* to) {
             for (std::uint64_t index = 0U; index < thread_words; ++index) {
@@ -1267,27 +1690,32 @@ private:
 
         // Matcher::step for a multiclocked sequence, on the thread in `cur`:
         // a thread on a clock that did not tick waits, one switching clocks
-        // waits for its clock's first tick after the switch; the waiting
-        // ones are kept at once (before any thread runs) and the result is 0.
-        // A thread that goes on has its window set when it stops switching.
+        // (or a sequence started at a point) waits for its clock's first tick
+        // at or after, or strictly after, the switch time, which the time of
+        // the clock's last tick tells; the waiting ones are kept at once
+        // (before any thread runs) and the result is 0. A thread that goes on
+        // has its window set when it stops switching.
         const auto classify = [&]() -> llvm::Value* {
             auto* runnable = var("seed_runs", 1U);
             auto* clock = cur_word(1U);
-            if_else(ne0(clock_word(2U, clock)), [&] {
-                auto* flags = cur_word(2U);
-                if_then(ne0(builder_.CreateAnd(flags, k(1U))), [&] {
-                    auto* switched = cur_word(3U);
-                    auto* wait = builder_.CreateOr(builder_.CreateICmpSLT(time_now, switched),
-                        builder_.CreateAnd(builder_.CreateICmpEQ(time_now, switched),
-                            builder_.CreateICmpEQ(builder_.CreateAnd(flags, k(2U)), k(0U))));
-                    if_else(wait, [&] { set(runnable, k(0U)); }, [&] {
-                        builder_.CreateStore(builder_.CreateAnd(flags, k(2U)), element(cur, 2U));
-                        auto* ticks = clock_word(0U, clock);
-                        builder_.CreateStore(ticks, element(cur, 4U));
-                        builder_.CreateStore(ticks, element(cur, 5U));
-                    });
+            auto* flags = cur_word(2U);
+            if_else(ne0(builder_.CreateAnd(flags, k(1U))), [&] {
+                auto* switched = cur_word(3U);
+                auto* last = clock_word(1U, clock);
+                auto* wait = builder_.CreateOr(builder_.CreateICmpSLT(last, switched),
+                    builder_.CreateAnd(builder_.CreateICmpEQ(last, switched),
+                        builder_.CreateICmpEQ(builder_.CreateAnd(flags, k(2U)), k(0U))));
+                if_else(wait, [&] { set(runnable, k(0U)); }, [&] {
+                    builder_.CreateStore(builder_.CreateAnd(flags, k(2U)), element(cur, 2U));
+                    auto* ticks = clock_word(0U, clock);
+                    builder_.CreateStore(ticks, element(cur, 4U));
+                    builder_.CreateStore(ticks, element(cur, 5U));
                 });
-            }, [&] { set(runnable, k(0U)); });
+            }, [&] {
+                if_then(builder_.CreateICmpEQ(clock_word(2U, clock), k(0U)), [&] {
+                    set(runnable, k(0U));
+                });
+            });
             if_then(builder_.CreateICmpEQ(get(runnable), k(0U)), [&] { keep(cur); });
             return get(runnable);
         };
@@ -1342,7 +1770,7 @@ private:
                         auto* done = block("throughout_done");
                         builder_.CreateCondBr(before, done, open);
                         builder_.SetInsertPoint(open);
-                        auto* holds = known_one_dynamic(guard);
+                        auto* holds = condition_holds(guard, cur);
                         auto* broken = block("throughout_broken");
                         builder_.CreateCondBr(holds, done, broken);
                         builder_.SetInsertPoint(broken);
@@ -1376,29 +1804,63 @@ private:
                         return builder_.CreateLoad(i64_, element(tmp, word));
                     },
                     std::array<llvm::Value*, 5> { id, kind, k(0U), k(0U), k(1U) });
+                // An end is its tick, then the valuation of the locals
+                // (16.10; thread words 1 on in the entry).
                 for (std::uint64_t side = 0U; side < 2U; ++side) {
                     auto* ends = old_word(get(ends_at));
                     auto* end_index = var("seed_end");
                     for_count(end_index, ends, [&] {
-                        auto* tick = old_word(add(add(get(ends_at), 1U), get(end_index)));
+                        auto* first = add(add(get(ends_at), 1U),
+                            mul(get(end_index), 1U + local_count));
                         scratch_push(5U,
                             [&](const std::uint64_t word) -> llvm::Value* {
-                                return word == 0U ? tick : k(0U);
+                                return word <= local_count ? old_word(add(first, word)) : k(0U);
                             },
                             std::array<llvm::Value*, 5> { id, k(side), nullptr, nullptr,
                                 nullptr });
                     });
-                    set(ends_at, add(add(get(ends_at), ends), 1U));
+                    set(ends_at, add(add(get(ends_at), mul(ends, 1U + local_count)), 1U));
                 }
                 set(position, get(ends_at));
             });
         }, [&] {
+            if (multi) {
+                // A matcher of a multiclocked plan starts at a point: its
+                // first thread switches to the sequence's leading clock
+                // (Matcher's point constructor) and is classified as any.
+                const auto leading = sequence_clock(sequence);
+                for (std::uint64_t word = 0U; word < thread_words; ++word) {
+                    llvm::Value* value = k(0U);
+                    if (word == 1U) {
+                        value = k(leading);
+                    } else if (word == 2U) {
+                        value = builder_.CreateOr(k(1U),
+                            builder_.CreateSelect(ne0(builder_.CreateAnd(point, k(1024U))),
+                                k(2U), k(0U)));
+                    } else if (word == 3U) {
+                        value = start;
+                    } else if (word == 6U) {
+                        value = k(counters);
+                    } else if (is_local(word)) {
+                        value = start_local(word);
+                    }
+                    builder_.CreateStore(value, element(cur, word));
+                }
+                auto* runnable = classify();
+                if_then(ne0(runnable), [&] {
+                    scratch_push(0U, [&](const std::uint64_t word) { return cur_word(word); });
+                });
+                return;
+            }
             scratch_push(0U, [&](const std::uint64_t word) -> llvm::Value* {
                 if (word == 4U || word == 5U) {
                     return start;
                 }
                 if (word == 6U) {
                     return k(counters);
+                }
+                if (is_local(word)) {
+                    return start_local(word);
                 }
                 return k(0U);
             });
@@ -1541,6 +2003,136 @@ private:
             set_cur(4U, add(now, 1U));
             set_cur(5U, add(now, 1U));
         };
+        // join_end of a plan with locals (Matcher::run): the end is the tick
+        // and the thread's valuation; each pairing end of the other side
+        // gives the continuation a valuation (the composite's locals, the
+        // locals of this operand's set `b` from this end and of the other's
+        // set `c` from that end; 16.10 d), and one continuation runs per
+        // distinct valuation, in their order.
+        const auto join_end_locals = [&](const detail::SvaNativeStep& step, llvm::Value* join,
+                                         llvm::Value* id, llvm::Value* side) {
+            const auto end_word = [&](llvm::Value* entry_index, const std::uint64_t word) {
+                return rd(add(scratch_entry(entry_index), 1U + word));
+            };
+            auto* present = var("end_present");
+            auto* scan = var("end_scan");
+            for_count(scan, get(queue_tail), [&] {
+                auto* entry_at = scratch_entry(get(scan));
+                llvm::Value* same = builder_.CreateAnd(
+                    builder_.CreateAnd(builder_.CreateICmpEQ(rd(entry_at), k(5U)),
+                        builder_.CreateICmpEQ(rd(extra_at(get(scan), 0U)), id)),
+                    builder_.CreateICmpEQ(rd(extra_at(get(scan), 1U)), side));
+                same = builder_.CreateAnd(same,
+                    builder_.CreateICmpEQ(end_word(get(scan), 0U), now));
+                for (std::uint64_t word = 0U; word < local_count; ++word) {
+                    same = builder_.CreateAnd(same, builder_.CreateICmpEQ(
+                        end_word(get(scan), 1U + word), cur_word(locals_at + word)));
+                }
+                set(present, builder_.CreateOr(get(present), builder_.CreateZExt(same, i64_)));
+            });
+            if_then(builder_.CreateICmpEQ(get(present), k(0U)), [&] {
+                scratch_push(5U,
+                    [&](const std::uint64_t word) -> llvm::Value* {
+                        if (word == 0U) {
+                            return now;
+                        }
+                        return word <= local_count ? cur_word(locals_at + word - 1U) : k(0U);
+                    },
+                    std::array<llvm::Value*, 5> { id, side, nullptr, nullptr, nullptr });
+            });
+            // Where each word of a merged valuation comes from: 0 the
+            // composite's continuation, 1 this end, 2 the other end.
+            std::vector<std::uint8_t> from(local_count, 0U);
+            const auto take = [&](const std::uint32_t set, const std::uint8_t source) {
+                if (set == 0U) {
+                    return;
+                }
+                for (const auto local : plan_.local_sets[set - 1U]) {
+                    for (std::uint64_t word = 0U; word < plan_.local_size[local]; ++word) {
+                        from[plan_.local_offset[local] + word] = source;
+                    }
+                }
+            };
+            take(step.b, 1U);
+            take(step.c, 2U);
+            auto* other = builder_.CreateXor(side, k(1U));
+            auto* kind = rd(extra_at(join, 1U));
+            auto* last = array("valuation_last", local_count);
+            auto* best = array("valuation_best", local_count);
+            auto* candidate = array("valuation", local_count);
+            auto* have_last = var("have_last");
+            auto* head = block("merge_next");
+            auto* body = block("merge_pick");
+            auto* done = block("merge_done");
+            builder_.CreateBr(head);
+            builder_.SetInsertPoint(head);
+            auto* have_best = var("have_best");
+            set(have_best, k(0U));
+            auto* index = var("merge_scan");
+            for_count(index, get(queue_tail), [&] {
+                auto* entry_at = scratch_entry(get(index));
+                auto* tick = end_word(get(index), 0U);
+                auto* pairs = builder_.CreateSelect(builder_.CreateICmpEQ(kind, k(0U)),
+                    builder_.CreateICmpSLE(tick, now), builder_.CreateICmpEQ(tick, now));
+                auto* usable = builder_.CreateAnd(
+                    builder_.CreateAnd(builder_.CreateICmpEQ(rd(entry_at), k(5U)),
+                        builder_.CreateICmpEQ(rd(extra_at(get(index), 0U)), id)),
+                    builder_.CreateAnd(
+                        builder_.CreateICmpEQ(rd(extra_at(get(index), 1U)), other), pairs));
+                if_then(usable, [&] {
+                    for (std::uint64_t word = 0U; word < local_count; ++word) {
+                        llvm::Value* value = nullptr;
+                        switch (from[word]) {
+                        case 1U:
+                            value = cur_word(locals_at + word);
+                            break;
+                        case 2U:
+                            value = end_word(get(index), 1U + word);
+                            break;
+                        default:
+                            value = rd(add(add(scratch_entry(join), 1U), locals_at + word));
+                            break;
+                        }
+                        builder_.CreateStore(value, element(candidate, word));
+                    }
+                    const auto word_of = [&](llvm::AllocaInst* values) {
+                        return [&, values](const std::uint64_t word) -> llvm::Value* {
+                            return builder_.CreateLoad(i64_, element(values, word));
+                        };
+                    };
+                    auto* after = builder_.CreateOr(builder_.CreateICmpEQ(get(have_last), k(0U)),
+                        precedes(word_of(last), word_of(candidate), local_count));
+                    auto* better = builder_.CreateOr(builder_.CreateICmpEQ(get(have_best), k(0U)),
+                        precedes(word_of(candidate), word_of(best), local_count));
+                    if_then(builder_.CreateAnd(after, better), [&] {
+                        for (std::uint64_t word = 0U; word < local_count; ++word) {
+                            builder_.CreateStore(builder_.CreateLoad(i64_, element(candidate, word)),
+                                element(best, word));
+                        }
+                        set(have_best, k(1U));
+                    });
+                });
+            });
+            builder_.CreateCondBr(ne0(get(have_best)), body, done);
+            builder_.SetInsertPoint(body);
+            scratch_push(0U, [&](const std::uint64_t word) -> llvm::Value* {
+                if (word == 4U || word == 5U) {
+                    return add(now, 1U);
+                }
+                if (is_local(word)) {
+                    return builder_.CreateLoad(i64_, element(best, word - locals_at));
+                }
+                return rd(add(add(scratch_entry(join), 1U), word));
+            });
+            for (std::uint64_t word = 0U; word < local_count; ++word) {
+                builder_.CreateStore(builder_.CreateLoad(i64_, element(best, word)),
+                    element(last, word));
+            }
+            set(have_last, k(1U));
+            builder_.CreateBr(head);
+            builder_.SetInsertPoint(done);
+            builder_.CreateBr(loop);
+        };
         for (std::size_t pc = 0U; pc < code.size(); ++pc) {
             const auto& step = code[pc];
             builder_.SetInsertPoint(pcs[pc]);
@@ -1549,10 +2141,14 @@ private:
             }
             const auto pc32 = static_cast<std::uint32_t>(pc);
             switch (step.op) {
-            case semantic::sva::Op::check: {
+            case semantic::sva::Op::check:
+            case semantic::sva::Op::check_expression: {
                 // Matcher::run's check: the window against the tick, a thread
                 // whose window stays open keeps a waiting copy, then the
-                // sampled boolean.
+                // sampled boolean (or the expression over the thread's
+                // locals, 16.10, whose step reports no guard).
+                const bool expression = step.op == semantic::sva::Op::check_expression;
+                auto* checked = expression ? ks(-1) : k(step.a);
                 auto* due_lo = cur_word(4U);
                 auto* due_hi = cur_word(5U);
                 auto* open = block("window_open");
@@ -1571,15 +2167,16 @@ private:
                     builder_.CreateStore(add(now, 1U), element(tmp, 4U));
                     keep(tmp);
                 });
-                auto* sampled = known_one_guard(step.a);
+                auto* sampled = expression ? truth(k(step.a), locals_of(cur))
+                                           : known_one_guard(step.a);
                 auto* pass = block("guard_true");
                 auto* reject = block("guard_false");
                 builder_.CreateCondBr(sampled, pass, reject);
                 builder_.SetInsertPoint(reject);
-                set(fail_line, k(step.line));
-                set(fail_column, k(step.column));
+                set(fail_line, position_word(step_position(sequence, pc)));
+                set(fail_column, position_word(step_position(sequence, pc) + 1U));
                 if_then(builder_.CreateNot(lingers), [&] {
-                    note_step(env, true, sequence, pc32, pc32 + 1U, k(step.a), now);
+                    note_step(env, true, sequence, pc32, pc32 + 1U, checked, now);
                 });
                 builder_.CreateBr(loop);
                 builder_.SetInsertPoint(pass);
@@ -1607,12 +2204,12 @@ private:
                     builder_.CreateStore(now, from_at);
                     auto* guard = builder_.CreateLoad(i64_, cur_at(slot));
                     auto* broken = block("entry_broken");
-                    builder_.CreateCondBr(known_one_dynamic(guard), next_entry, broken);
+                    builder_.CreateCondBr(condition_holds(guard, cur), next_entry, broken);
                     builder_.SetInsertPoint(broken);
                     set(fail_line, builder_.CreateLoad(i64_, cur_at(add(slot, 2U))));
                     set(fail_column, builder_.CreateLoad(i64_, cur_at(add(slot, 3U))));
                     if_then(builder_.CreateNot(lingers), [&] {
-                        note_step(env, true, sequence, pc32, pc32 + 1U, guard, now);
+                        note_step(env, true, sequence, pc32, pc32 + 1U, step_guard(guard), now);
                     });
                     builder_.CreateBr(loop);
                     builder_.SetInsertPoint(next_entry);
@@ -1620,7 +2217,7 @@ private:
                     builder_.CreateBr(head);
                     builder_.SetInsertPoint(done);
                 }
-                note_step(env, false, sequence, pc32, pc32 + 1U, k(step.a), now);
+                note_step(env, false, sequence, pc32, pc32 + 1U, checked, now);
                 set_cur(4U, add(now, 1U));
                 set_cur(5U, add(now, 1U));
                 set_cur(0U, k(pc + 1U));
@@ -1716,16 +2313,81 @@ private:
             case semantic::sva::Op::match:
                 settle();
                 set(matched, k(1U));
+                if (local_count != 0U) {
+                    // A valuation not seen at this step joins the matches.
+                    auto* seen = var("match_seen");
+                    auto* index = var("match_scan");
+                    for_count(index, get(queue_tail), [&] {
+                        auto* entry_at = scratch_entry(get(index));
+                        llvm::Value* same = builder_.CreateICmpEQ(rd(entry_at), k(7U));
+                        for (std::uint64_t word = 0U; word < local_count; ++word) {
+                            same = builder_.CreateAnd(same,
+                                builder_.CreateICmpEQ(rd(add(entry_at, 1U + word)),
+                                    cur_word(locals_at + word)));
+                        }
+                        set(seen, builder_.CreateOr(get(seen), builder_.CreateZExt(same, i64_)));
+                    });
+                    if_then(builder_.CreateICmpEQ(get(seen), k(0U)), [&] {
+                        scratch_push(7U, [&](const std::uint64_t word) -> llvm::Value* {
+                            return word < local_count ? cur_word(locals_at + word) : k(0U);
+                        });
+                        set(match_count, add(get(match_count), 1U));
+                    });
+                }
                 builder_.CreateBr(loop);
+                break;
+            case semantic::sva::Op::assign: {
+                // A local variable assignment (16.10): an initialization
+                // assignment (c 1) happens at the first tick of the
+                // instance's evaluation, so its window is checked as a
+                // check's (the thread ends up due at this tick).
+                if (step.c == 1U) {
+                    auto* open = block("assign_open");
+                    builder_.CreateCondBr(builder_.CreateICmpSLT(cur_word(5U), now), loop, open);
+                    builder_.SetInsertPoint(open);
+                    auto* early = block("assign_early");
+                    auto* due = block("assign_due");
+                    builder_.CreateCondBr(builder_.CreateICmpSGT(cur_word(4U), now), early, due);
+                    builder_.SetInsertPoint(early);
+                    keep(cur);
+                    builder_.CreateBr(loop);
+                    builder_.SetInsertPoint(due);
+                    if_then(builder_.CreateICmpSGT(cur_word(5U), now), [&] {
+                        copy_cur(tmp);
+                        builder_.CreateStore(add(now, 1U), element(tmp, 4U));
+                        keep(tmp);
+                    });
+                    set_cur(4U, now);
+                    set_cur(5U, now);
+                }
+                auto* value = array("assigned", result_area());
+                evaluate(k(step.b), locals_of(cur), value);
+                const auto offset = locals_at + plan_.local_offset[step.a];
+                for (std::uint64_t word = 0U; word < plan_.local_size[step.a]; ++word) {
+                    set_cur(offset + word, builder_.CreateLoad(i64_, element(value, word)));
+                }
+                set_cur(0U, k(pc + 1U));
+                goto_pc(pc + 1U);
+                break;
+            }
+            case semantic::sva::Op::call:
+                // A subroutine call at an end point (16.11), queued with the
+                // thread's locals.
+                push_call(step.a, locals_of(cur));
+                set_cur(0U, k(pc + 1U));
+                goto_pc(pc + 1U);
                 break;
             case semantic::sva::Op::throughout_begin: {
                 // `a throughout s`: the condition joins the thread, unstarted.
                 auto* used = cur_word(off_nt);
                 auto* slot = add(mul(used, 4U), off_nt + 1U);
-                builder_.CreateStore(k(step.a), cur_at(slot));
+                builder_.CreateStore(
+                    k(step.a | (step.c == 1U ? std::uint64_t { 1 } << 32U : 0U)), cur_at(slot));
                 builder_.CreateStore(ks(-1), cur_at(add(slot, 1U)));
-                builder_.CreateStore(k(step.line), cur_at(add(slot, 2U)));
-                builder_.CreateStore(k(step.column), cur_at(add(slot, 3U)));
+                builder_.CreateStore(position_word(step_position(sequence, pc)),
+                    cur_at(add(slot, 2U)));
+                builder_.CreateStore(position_word(step_position(sequence, pc) + 1U),
+                    cur_at(add(slot, 3U)));
                 set_cur(off_nt, add(used, 1U));
                 set_cur(0U, k(pc + 1U));
                 goto_pc(pc + 1U);
@@ -1819,6 +2481,10 @@ private:
                 auto* exists = block("join_exists");
                 builder_.CreateCondBr(builder_.CreateICmpNE(join, ks(-1)), exists, loop);
                 builder_.SetInsertPoint(exists);
+                if (local_count != 0U) {
+                    join_end_locals(step, join, id, side);
+                    break;
+                }
                 if_then(builder_.CreateICmpEQ(ends_has(id, side, now), k(0U)), [&] {
                     scratch_push(5U,
                         [&](const std::uint64_t word) -> llvm::Value* {
@@ -2046,6 +2712,60 @@ private:
                     set(final_count, add(get(final_count), 1U));
                 });
             });
+            // The ends of `side` of join `id` with locals, as a std::set of
+            // [tick, valuation] (Matcher::encode): ascending, lexicographic.
+            const auto encode_ends_locals = [&](llvm::Value* id, const std::uint64_t side) {
+                const std::uint64_t width = 1U + local_count;
+                auto* count = ends_count(id, k(side));
+                reserve_alt(add(mul(count, width), 1U));
+                auto* ends_at = rd(l::h_heap_alt_used);
+                alt_put(ends_at, count);
+                auto* last = array("end_last", width);
+                auto* have_last = var("end_have_last");
+                auto* ordinal = var("end_ordinal");
+                for_count(ordinal, count, [&] {
+                    auto* best = var("end_best", ~std::uint64_t { 0 });
+                    auto* scan = var("end_scan");
+                    for_count(scan, get(queue_tail), [&] {
+                        auto* entry_at = scratch_entry(get(scan));
+                        auto* same = builder_.CreateAnd(
+                            builder_.CreateAnd(builder_.CreateICmpEQ(rd(entry_at), k(5U)),
+                                builder_.CreateICmpEQ(rd(extra_at(get(scan), 0U)), id)),
+                            builder_.CreateICmpEQ(rd(extra_at(get(scan), 1U)), k(side)));
+                        if_then(same, [&] {
+                            auto* entry = add(entry_at, 1U);
+                            const auto mine = [&](const std::uint64_t word) -> llvm::Value* {
+                                return rd(add(entry, word));
+                            };
+                            const auto previous = [&](const std::uint64_t word) -> llvm::Value* {
+                                return builder_.CreateLoad(i64_, element(last, word));
+                            };
+                            auto* after = builder_.CreateOr(
+                                builder_.CreateICmpEQ(get(have_last), k(0U)),
+                                precedes(previous, mine, width));
+                            auto* has_best = builder_.CreateICmpNE(get(best), ks(-1));
+                            auto* best_entry = add(scratch_entry(
+                                builder_.CreateSelect(has_best, get(best), k(0U))), 1U);
+                            const auto chosen = [&](const std::uint64_t word) -> llvm::Value* {
+                                return rd(add(best_entry, word));
+                            };
+                            auto* better = builder_.CreateOr(builder_.CreateNot(has_best),
+                                precedes(mine, chosen, width));
+                            if_then(builder_.CreateAnd(after, better),
+                                [&] { set(best, get(scan)); });
+                        });
+                    });
+                    auto* best_entry = add(scratch_entry(get(best)), 1U);
+                    auto* first = add(add(ends_at, 1U), mul(get(ordinal), width));
+                    for (std::uint64_t word = 0U; word < width; ++word) {
+                        auto* value = rd(add(best_entry, word));
+                        alt_put(add(first, word), value);
+                        builder_.CreateStore(value, element(last, word));
+                    }
+                    set(have_last, k(1U));
+                });
+                wr(l::h_heap_alt_used, add(add(ends_at, mul(count, width)), 1U));
+            };
             if (has_joins) {
                 // The joins that survive, in the order of their ids: id, kind,
                 // the continuation thread, then each side's end ticks in
@@ -2076,6 +2796,10 @@ private:
                         wr(l::h_heap_alt_used, add(head_at, 2U));
                         encode_thread(get(emit_index));
                         for (std::uint64_t side = 0U; side < 2U; ++side) {
+                            if (local_count != 0U) {
+                                encode_ends_locals(id, side);
+                                continue;
+                            }
                             auto* count = ends_count(id, k(side));
                             reserve_alt(add(count, 1U));
                             auto* ends_at = rd(l::h_heap_alt_used);
@@ -2123,17 +2847,42 @@ private:
             wr(l::h_heap_alt_used, add(tail, 1U));
         }
         wr(l::h_scratch_used, k(0U));
+        if (local_count != 0U) {
+            // The match valuations move to the front of the scratch region,
+            // in order, for the caller (which takes them before the region
+            // grows again; growth keeps the used words).
+            auto* moved = var("match_moved");
+            auto* index = var("match_move");
+            for_count(index, get(queue_tail), [&] {
+                auto* entry_at = scratch_entry(get(index));
+                if_then(builder_.CreateICmpEQ(rd(entry_at), k(7U)), [&] {
+                    auto* to = add(rd(l::h_scratch_off), mul(get(moved), local_count));
+                    for (std::uint64_t word = 0U; word < local_count; ++word) {
+                        wr(add(to, word), rd(add(entry_at, 1U + word)));
+                    }
+                    set(moved, add(get(moved), 1U));
+                });
+            });
+            wr(l::h_scratch_used, mul(get(match_count), local_count));
+        } else {
+            set(match_count, get(matched));
+        }
         builder_.CreateStore(get(fail_line), builder_.CreateConstInBoundsGEP1_64(i64_, env, 4U));
         builder_.CreateStore(get(fail_column), builder_.CreateConstInBoundsGEP1_64(i64_, env, 5U));
-        builder_.CreateRet(builder_.CreateOr(get(matched),
+        // bit 0 matched, bit 1 dead, bits 2 on the count of match valuations.
+        builder_.CreateRet(builder_.CreateOr(builder_.CreateOr(get(matched),
             builder_.CreateShl(builder_.CreateZExt(builder_.CreateICmpEQ(get(final_count), k(0U)), i64_),
-                k(1U))));
+                k(1U))), builder_.CreateShl(get(match_count), k(2U))));
 
         fn_ = saved_fn;
         frame_ = saved_frame;
         registers_ = saved_registers;
         slot_addr_ = saved_slot;
         failure_ = saved_failure;
+        env_ = saved_env;
+        at_ = saved_at;
+        guard_storage_ = saved_guards;
+        positions_ = saved_positions;
         builder_.restoreIP(saved_point);
         return matcher;
     }
@@ -2145,6 +2894,15 @@ private:
     // emitted node by node. An instance's record is its header, its matcher
     // when it is a sequence that has started, and its operands (position,
     // instance) in creation order; a decided instance is its header alone.
+
+    /// Where a new instance's local variables come from (16.10): its
+    /// parent's valuation (an array local), a match valuation an
+    /// implication keeps at word `heap_word` of the current heap, or none
+    /// (zeros: the root).
+    struct LocalsFrom {
+        llvm::Value* pointer;
+        llvm::Value* heap_word;
+    };
 
     struct NodeState {
         llvm::AllocaInst* decided { };
@@ -2187,6 +2945,18 @@ private:
         const auto kind_of = [&](const std::int32_t child) {
             return plan_.properties[static_cast<std::size_t>(child)].kind;
         };
+        if (locals_words() != 0U) {
+            // The instances of a plan with local variables carry their
+            // valuations, which only the property tree's code keeps; the
+            // root of `cover sequence` starts its matcher with zero locals
+            // and runs no initialization (Instance::step_every_match).
+            return root.kind == semantic::sva::PropertyKind::sequence && plan_.every_match;
+        }
+        if (multiclocked()) {
+            // Multiclocked instances start at points (16.13.3), which only
+            // the property tree's code and the matchers follow.
+            return root.kind == semantic::sva::PropertyKind::sequence;
+        }
         switch (root.kind) {
         case semantic::sva::PropertyKind::sequence:
             return true;
@@ -2214,15 +2984,51 @@ private:
         }
     }
 
-    /// The matcher call of `sequence` (see matcher_function).
+    /// The matcher call of `sequence` (see matcher_function); `point` is
+    /// the start point flags of a multiclocked instance.
     [[nodiscard]] llvm::Value* call_matcher(const std::uint32_t sequence, llvm::Value* in_off,
-        llvm::Value* matcher_start)
+        llvm::Value* matcher_start, llvm::Value* point, llvm::Value* locals = nullptr)
     {
         auto* function = matchers_.at(sequence);
         auto* result = builder_.CreateCall(function->getFunctionType(), function,
-            { frame_, registers_, slot_addr_, env_, in_off, matcher_start });
+            { frame_, registers_, slot_addr_, env_, in_off, matcher_start, point,
+                locals != nullptr ? locals : llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(ptr_)) });
         check_status();
         return result;
+    }
+
+    // ---- multiclocked plans (16.13) ----
+
+    /// The start point flags of an instance record (Instance's at_point and
+    /// point_inclusive, flag bits 9 and 10).
+    static constexpr std::uint64_t at_point = 512U;
+    static constexpr std::uint64_t point_inclusive = 1024U;
+
+    [[nodiscard]] bool multiclocked() const noexcept
+    {
+        return !plan_.clock_guards.empty();
+    }
+    /// Word `kind` (0 ticks, 1 time of the last tick, 2 ticked in this
+    /// evaluation) of clock `clock` in the block's clock words.
+    [[nodiscard]] llvm::Value* clock_state(const std::uint64_t kind, llvm::Value* clock)
+    {
+        return rd(add(add(rd(runtime::sva::layout::h_clocks_off),
+                          kind * plan_.clock_guards.size()),
+            clock));
+    }
+    /// The leading clock of `sequence`: the clock of the property whose
+    /// sequence it is (each property compiles its own).
+    [[nodiscard]] std::uint32_t sequence_clock(const std::uint32_t sequence) const
+    {
+        for (const auto& property : plan_.properties) {
+            if ((property.kind == semantic::sva::PropertyKind::sequence
+                    || property.kind == semantic::sva::PropertyKind::implication
+                    || property.kind == semantic::sva::PropertyKind::followed_by)
+                && property.sequence == sequence) {
+                return property.clock;
+            }
+        }
+        return 0U;
     }
 
     /// Appends one word to the alternate heap's record.
@@ -2245,15 +3051,15 @@ private:
         set(result, in);
         if_then(ne0(existing), [&] {
             auto* flags = old_word(add(in, 2U));
-            set(result, add(in, 10U));
+            set(result, add(in, header_words()));
             if_then(builder_.CreateICmpEQ(builder_.CreateAnd(flags, k(3U)), k(0U)), [&] {
                 auto* operands = old_word(add(in, 7U));
                 switch (property.kind) {
                 case semantic::sva::PropertyKind::sequence: {
                     auto* present = builder_.CreateAnd(builder_.CreateLShr(flags, k(7U)), k(1U));
                     if_then(ne0(present), [&] {
-                        set(result, add(add(in, 10U),
-                            matcher_record_length(present, add(in, 10U), property.sequence)));
+                        set(result, add(add(in, header_words()),
+                            matcher_record_length(present, add(in, header_words()), property.sequence)));
                     });
                     break;
                 }
@@ -2263,7 +3069,7 @@ private:
                 case semantic::sva::PropertyKind::reject:
                     if_then(ne0(operands), [&] {
                         set(result, skip_node(static_cast<std::uint32_t>(property.children[0]),
-                            add(in, 11U), k(1U)));
+                            add(in, header_words() + 1U), k(1U)));
                     });
                     break;
                 case semantic::sva::PropertyKind::conjunction:
@@ -2272,7 +3078,7 @@ private:
                 case semantic::sva::PropertyKind::implies:
                     if_then(ne0(operands), [&] {
                         auto* first = skip_node(static_cast<std::uint32_t>(property.children[0]),
-                            add(in, 11U), k(1U));
+                            add(in, header_words() + 1U), k(1U));
                         set(result, skip_node(static_cast<std::uint32_t>(property.children[1]),
                             add(first, 1U), k(1U)));
                     });
@@ -2280,7 +3086,7 @@ private:
                 case semantic::sva::PropertyKind::always:
                 case semantic::sva::PropertyKind::eventually: {
                     auto* position = var("skip_list");
-                    set(position, add(in, 10U));
+                    set(position, add(in, header_words()));
                     auto* index = var("skip_started");
                     for_count(index, old_word(add(in, 8U)), [&] {
                         set(position, skip_node(static_cast<std::uint32_t>(property.children[0]),
@@ -2294,9 +3100,9 @@ private:
                     auto* present = builder_.CreateAnd(builder_.CreateLShr(flags, k(7U)), k(1U));
                     auto* position = var("skip_list");
                     set(position, builder_.CreateSelect(ne0(present),
-                        add(add(in, 10U), matcher_record_length(present, add(in, 10U),
+                        add(add(in, header_words()), matcher_record_length(present, add(in, header_words()),
                                               property.sequence)),
-                        add(in, 10U)));
+                        add(in, header_words())));
                     auto* index = var("skip_consequent");
                     for_count(index, old_word(add(in, 8U)), [&] {
                         set(position, skip_node(static_cast<std::uint32_t>(property.children[0]),
@@ -2307,7 +3113,7 @@ private:
                 }
                 case semantic::sva::PropertyKind::until: {
                     auto* position = var("skip_list");
-                    set(position, add(in, 10U));
+                    set(position, add(in, header_words()));
                     auto* index = var("skip_until");
                     for_count(index, old_word(add(in, 9U)), [&] {
                         auto* right = skip_node(static_cast<std::uint32_t>(property.children[0]),
@@ -2320,12 +3126,15 @@ private:
                 }
                 case semantic::sva::PropertyKind::conditional:
                     if_then(ne0(operands), [&] {
-                        auto* chosen = old_word(add(in, 3U));
+                        // The operand's position word: the chosen branch, or
+                        // the else branch of a multiclocked `if` that runs
+                        // before its condition is sampled.
+                        auto* chosen = old_word(add(in, header_words()));
                         for (std::size_t branch = 0U; branch < property.children.size(); ++branch) {
                             if_then(builder_.CreateICmpEQ(chosen, k(branch)), [&] {
                                 set(result, skip_node(
                                     static_cast<std::uint32_t>(property.children[branch]),
-                                    add(in, 11U), k(1U)));
+                                    add(in, header_words() + 1U), k(1U)));
                             });
                         }
                     });
@@ -2340,10 +3149,12 @@ private:
 
     /// Instance::step of `node` at tick tick_ for the instance whose input
     /// record is at `in` (`existing` an i64 0 or 1; a new instance starts at
-    /// `start`). Its record is appended to the alternate heap (a decided one
-    /// is its header alone); the state says whether it decided, and how.
+    /// `start`, in a multiclocked plan at the point `start`, `point`). Its
+    /// record is appended to the alternate heap (a decided one is its header
+    /// alone); the state says whether it decided, and how.
     [[nodiscard]] NodeState emit_node(const std::uint32_t node, llvm::Value* in,
-        llvm::Value* existing, llvm::Value* start)
+        llvm::Value* existing, llvm::Value* start, llvm::Value* point,
+        const LocalsFrom from = LocalsFrom { nullptr, nullptr })
     {
         namespace l = runtime::sva::layout;
         const auto& property = plan_.properties[node];
@@ -2371,19 +3182,80 @@ private:
             ne0(guarded_old(existing, add(in, 7U))), i64_);
         auto* node_start = builder_.CreateSelect(ne0(existing),
             guarded_old(existing, add(in, 1U)), start);
+        // A multiclocked instance (Instance's point): every instance steps
+        // at every evaluation; one that counts ticks of its clock aligns to
+        // it, which changes its start and clears its point.
+        const bool multi = multiclocked();
+        auto* node_point = builder_.CreateSelect(ne0(existing),
+            builder_.CreateAnd(flags_in, k(at_point | point_inclusive)), point);
+        auto* start_now = var("node_start_now");
+        set(start_now, node_start);
+        auto* point_now = var("node_point_now");
+        set(point_now, node_point);
+        auto* time = builder_.CreateLoad(i64_, builder_.CreateConstInBoundsGEP1_64(i64_, env_, 1U));
+        auto* node_clock = k(property.clock);
+        auto* fresh_point = k(at_point | point_inclusive);
+        // Whether time step `at` reaches the start point.
+        const auto reached = [&](llvm::Value* at) {
+            auto* inclusive = ne0(builder_.CreateAnd(get(point_now), k(point_inclusive)));
+            return builder_.CreateOr(builder_.CreateICmpSGT(at, get(start_now)),
+                builder_.CreateAnd(builder_.CreateICmpEQ(at, get(start_now)), inclusive));
+        };
+        // Instance::clock_tick: 1 when the operator acts at this evaluation.
+        const auto clock_tick = [&]() -> llvm::Value* {
+            auto* acts = var("node_acts");
+            if_else(ne0(get(point_now)), [&] {
+                if_then(reached(clock_state(1U, node_clock)), [&] {
+                    set(start_now, clock_state(0U, node_clock));
+                    set(point_now, k(0U));
+                    set(acts, k(1U));
+                });
+            }, [&] { set(acts, clock_state(2U, node_clock)); });
+            return get(acts);
+        };
+        // The instance's valuation of the locals (Instance::locals_): the
+        // record's, or for a new instance its parent's or its match's (read
+        // before the block can grow); initialized (flag 2048) once its
+        // initialization assignments ran.
+        const std::uint64_t local_count = locals_words();
+        auto* node_locals = local_count != 0U ? array("node_locals", local_count) : nullptr;
+        auto* locals_pointer = node_locals != nullptr
+            ? builder_.CreateConstInBoundsGEP2_64(node_locals->getAllocatedType(), node_locals,
+                  0U, 0U)
+            : nullptr;
+        auto* initialized = var("node_initialized");
+        set(initialized, builder_.CreateAnd(flags_in, k(2048U)));
+        if (local_count != 0U) {
+            if_else(ne0(existing), [&] {
+                for (std::uint64_t word = 0U; word < local_count; ++word) {
+                    builder_.CreateStore(old_word(add(in, 10U + word)), element(node_locals, word));
+                }
+            }, [&] {
+                for (std::uint64_t word = 0U; word < local_count; ++word) {
+                    llvm::Value* value = k(0U);
+                    if (from.pointer != nullptr) {
+                        value = builder_.CreateLoad(i64_,
+                            builder_.CreateConstInBoundsGEP1_64(i64_, from.pointer, word));
+                    } else if (from.heap_word != nullptr) {
+                        value = old_word(add(from.heap_word, word));
+                    }
+                    builder_.CreateStore(value, element(node_locals, word));
+                }
+            });
+        }
         auto* record = var("node_record");
-        reserve_alt(10U);
+        reserve_alt(header_words());
         set(record, rd(l::h_heap_alt_used));
         auto* at = get(record);
         alt_put(at, k(node));
         alt_put(add(at, 1U), node_start);
-        for (std::uint64_t word = 2U; word < 10U; ++word) {
+        for (std::uint64_t word = 2U; word < header_words(); ++word) {
             alt_put(add(at, word), k(0U));
         }
-        wr(l::h_heap_alt_used, add(at, 10U));
+        wr(l::h_heap_alt_used, add(at, header_words()));
         auto* verdict = builder_.CreateAnd(flags_in, k(3U));
-        auto* own_line = k(property.line);
-        auto* own_column = k(property.column);
+        auto* own_line = position_word(property_position(node));
+        auto* own_column = position_word(property_position(node) + 1U);
         const auto resolve = [&](llvm::Value* holds, llvm::Value* vacuous) {
             set(state.decided, k(1U));
             set(state.holds, holds);
@@ -2399,17 +3271,41 @@ private:
         };
         // One operand: its position word, then its instance.
         const auto operand = [&](const std::uint32_t index, llvm::Value* child_in,
-                                 llvm::Value* child_existing, llvm::Value* child_start) {
+                                 llvm::Value* child_existing, llvm::Value* child_start,
+                                 llvm::Value* child_point) {
             put_word(k(index));
             return emit_node(static_cast<std::uint32_t>(property.children[index]), child_in,
-                child_existing, child_start);
+                child_existing, child_start, child_point, LocalsFrom { locals_pointer, nullptr });
+        };
+        // An if/else condition: a sampled guard, or an expression over the
+        // instance's locals (Instance::holds_condition).
+        const auto condition = [&]() -> llvm::Value* {
+            return property.guard_expression ? truth(k(property.guard), locals_pointer)
+                                             : known_one_guard(property.guard);
         };
         const auto step = [&] {
+            // A new instance's initialization assignments, in declaration
+            // order, when its evaluation begins (Instance::step, 16.10).
+            if (!property.initializers.empty()) {
+                if_then(builder_.CreateICmpEQ(get(initialized), k(0U)), [&] {
+                    set(initialized, k(2048U));
+                    for (const auto initializer : property.initializers) {
+                        const auto local = plan_.expression_target[initializer] - 1U;
+                        auto* value = array("initial", result_area());
+                        evaluate(k(initializer), locals_pointer, value);
+                        for (std::uint64_t word = 0U; word < plan_.local_size[local]; ++word) {
+                            builder_.CreateStore(builder_.CreateLoad(i64_, element(value, word)),
+                                element(node_locals, plan_.local_offset[local] + word));
+                        }
+                    }
+                });
+            }
             switch (property.kind) {
             case semantic::sva::PropertyKind::sequence: {
                 auto* present = builder_.CreateAnd(builder_.CreateLShr(flags_in, k(7U)), k(1U));
-                auto* in_off = builder_.CreateSelect(ne0(present), add(in, 10U), ks(-1));
-                auto* result = call_matcher(property.sequence, in_off, node_start);
+                auto* in_off = builder_.CreateSelect(ne0(present), add(in, header_words()), ks(-1));
+                auto* result = call_matcher(property.sequence, in_off, node_start, node_point,
+                    locals_pointer);
                 set(has_matcher, k(1U));
                 auto* matched = builder_.CreateAnd(result, k(1U));
                 auto* dead = builder_.CreateAnd(builder_.CreateLShr(result, k(1U)), k(1U));
@@ -2433,6 +3329,8 @@ private:
             case semantic::sva::PropertyKind::negation:
             case semantic::sva::PropertyKind::nexttime: {
                 llvm::Value* child_start = node_start;
+                llvm::Value* child_point = node_point;
+                llvm::Value* present = k(1U);
                 if (property.kind == semantic::sva::PropertyKind::nexttime) {
                     // child(0, add(start_, lo)): the operand starts lo ticks on.
                     llvm::Value* offset = ks(property.lo);
@@ -2442,31 +3340,60 @@ private:
                             static_cast<std::uint64_t>(property.lo));
                     }
                     child_start = add(node_start, offset);
-                }
-                set(operands, k(1U));
-                const auto child = operand(0U, add(in, 11U), operands_existing, child_start);
-                if_then(ne0(get(child.decided)), [&] {
-                    if (property.kind == semantic::sva::PropertyKind::negation) {
-                        // `not p` fails because p held: the property itself
-                        // is the failed node.
-                        fail_at(own_line, own_column);
-                        resolve(builder_.CreateXor(get(child.holds), k(1U)),
-                            get(child.vacuous));
-                    } else {
-                        child_state(child);
+                    if (multi) {
+                        // The operand starts at the lo-th tick of the clock
+                        // after the one that aligned the operator.
+                        auto* acts = clock_tick();
+                        auto* due = builder_.CreateAnd(ne0(acts),
+                            builder_.CreateICmpSGE(clock_state(0U, node_clock),
+                                add(get(start_now), offset)));
+                        present = builder_.CreateZExt(
+                            builder_.CreateAnd(builder_.CreateICmpEQ(get(point_now), k(0U)),
+                                builder_.CreateOr(ne0(operands_existing), due)),
+                            i64_);
+                        child_start = time;
+                        child_point = fresh_point;
                     }
+                }
+                if_then(ne0(present), [&] {
+                    set(operands, k(1U));
+                    const auto child = operand(0U, add(in, header_words() + 1U), operands_existing, child_start,
+                        child_point);
+                    if_then(ne0(get(child.decided)), [&] {
+                        if (property.kind == semantic::sva::PropertyKind::negation) {
+                            // `not p` fails because p held: the property
+                            // itself is the failed node.
+                            fail_at(own_line, own_column);
+                            resolve(builder_.CreateXor(get(child.holds), k(1U)),
+                                get(child.vacuous));
+                        } else {
+                            child_state(child);
+                        }
+                    });
                 });
                 break;
             }
             case semantic::sva::PropertyKind::accept:
             case semantic::sva::PropertyKind::reject: {
                 const bool accept = property.kind == semantic::sva::PropertyKind::accept;
-                if_else(known_one_guard(property.guard), [&] {
+                llvm::Value* aborts = known_one_guard(property.guard);
+                if (multi) {
+                    // The abort condition from the start point on; a
+                    // synchronous one only at the ticks of its clock.
+                    llvm::Value* sampled = reached(time);
+                    if (property.synchronous) {
+                        sampled = builder_.CreateAnd(sampled,
+                            builder_.CreateICmpEQ(clock_state(1U, node_clock), time));
+                    }
+                    aborts = builder_.CreateAnd(sampled, aborts);
+                }
+                if_else(aborts, [&] {
                     fail_at(own_line, own_column);
                     resolve(k(accept ? 1U : 0U), k(accept ? 1U : 0U));
                 }, [&] {
                     set(operands, k(1U));
-                    const auto child = operand(0U, add(in, 11U), operands_existing, node_start);
+                    const auto child = operand(0U, add(in, header_words() + 1U), operands_existing, node_start,
+                        node_point);
                     if_then(ne0(get(child.decided)), [&] { child_state(child); });
                 });
                 break;
@@ -2476,11 +3403,12 @@ private:
             case semantic::sva::PropertyKind::equivalence:
             case semantic::sva::PropertyKind::implies: {
                 set(operands, k(2U));
-                const auto left = operand(0U, add(in, 11U), operands_existing, node_start);
+                const auto left = operand(0U, add(in, header_words() + 1U), operands_existing, node_start,
+                    node_point);
                 auto* second = add(skip_node(static_cast<std::uint32_t>(property.children[0]),
-                                       add(in, 11U), operands_existing),
+                                       add(in, header_words() + 1U), operands_existing),
                     1U);
-                const auto right = operand(1U, second, operands_existing, node_start);
+                const auto right = operand(1U, second, operands_existing, node_start, node_point);
                 auto* left_decided = ne0(get(left.decided));
                 auto* right_decided = ne0(get(right.decided));
                 auto* left_holds = ne0(get(left.holds));
@@ -2570,16 +3498,35 @@ private:
                 };
                 const bool open_end = property.hi_slot < 0
                     && property.hi == std::numeric_limits<std::int64_t>::max();
-                auto* first = add(node_start, bound(property.lo_slot, property.lo));
+                // A multiclocked window counts ticks of the operator's clock
+                // from the one that aligned it; an operand starts at the
+                // point of each tick of the window.
+                llvm::Value* window_now = now;
+                llvm::Value* window_start = node_start;
+                llvm::Value* acts = k(1U);
+                llvm::Value* aligned = llvm::ConstantInt::getTrue(context_);
+                llvm::Value* child_start = now;
+                llvm::Value* child_point = k(0U);
+                if (multi) {
+                    acts = clock_tick();
+                    aligned = builder_.CreateICmpEQ(get(point_now), k(0U));
+                    window_now = clock_state(0U, node_clock);
+                    window_start = get(start_now);
+                    child_start = time;
+                    child_point = fresh_point;
+                }
+                auto* first = add(window_start, bound(property.lo_slot, property.lo));
                 llvm::Value* last = open_end ? ks(std::numeric_limits<std::int64_t>::max())
-                                             : add(node_start, bound(property.hi_slot, property.hi));
-                auto* in_window = builder_.CreateAnd(builder_.CreateICmpSGE(now, first),
-                    builder_.CreateICmpSLE(now, last));
+                                             : add(window_start, bound(property.hi_slot, property.hi));
+                auto* in_window = builder_.CreateAnd(
+                    builder_.CreateAnd(aligned, ne0(acts)),
+                    builder_.CreateAnd(builder_.CreateICmpSGE(window_now, first),
+                        builder_.CreateICmpSLE(window_now, last)));
                 auto* count_in = guarded_old(existing, add(in, 8U));
                 auto* total = add(count_in, builder_.CreateZExt(in_window, i64_));
                 auto* finished = var("window_done");
                 auto* position = var("window_position");
-                set(position, add(in, 10U));
+                set(position, add(in, header_words()));
                 auto* entry = var("window_entry");
                 const auto child_node = static_cast<std::uint32_t>(property.children[0]);
                 for_count(entry, total, [&] {
@@ -2588,7 +3535,8 @@ private:
                             builder_.CreateICmpULT(get(entry), count_in), i64_);
                         auto* child_in = get(position);
                         auto* child_record = rd(l::h_heap_alt_used);
-                        const auto child = emit_node(child_node, child_in, existing_child, now);
+                        const auto child = emit_node(child_node, child_in, existing_child,
+                            child_start, child_point, LocalsFrom { locals_pointer, nullptr });
                         if_then(ne0(existing_child), [&] {
                             set(position, skip_node(child_node, child_in, k(1U)));
                         });
@@ -2614,7 +3562,8 @@ private:
                     });
                 });
                 if (!open_end) {
-                    auto* expired = builder_.CreateAnd(builder_.CreateICmpSGE(now, last),
+                    auto* expired = builder_.CreateAnd(
+                        builder_.CreateAnd(aligned, builder_.CreateICmpSGE(window_now, last)),
                         builder_.CreateICmpEQ(get(listed), k(0U)));
                     if_then(builder_.CreateAnd(builder_.CreateICmpEQ(get(finished), k(0U)), expired),
                         [&] {
@@ -2634,11 +3583,24 @@ private:
                 auto* stopped_in = builder_.CreateAnd(builder_.CreateLShr(flags_in, k(6U)), k(1U));
                 set(until_bit, builder_.CreateShl(stopped_in, k(6U)));
                 auto* count_in = guarded_old(existing, add(in, 9U));
-                auto* fresh_pair = builder_.CreateXor(stopped_in, k(1U));
+                llvm::Value* fresh_pair = builder_.CreateXor(stopped_in, k(1U));
+                // A multiclocked `until` starts a pair at each tick of its
+                // clock from the one that aligned it.
+                llvm::Value* pair_start = now;
+                llvm::Value* pair_point = k(0U);
+                if (multi) {
+                    auto* acts = clock_tick();
+                    auto* aligned = builder_.CreateZExt(
+                        builder_.CreateICmpEQ(get(point_now), k(0U)), i64_);
+                    fresh_pair = builder_.CreateAnd(fresh_pair,
+                        builder_.CreateAnd(aligned, acts));
+                    pair_start = time;
+                    pair_point = fresh_point;
+                }
                 auto* total = add(count_in, fresh_pair);
-                auto* list_start = add(get(record), 10U);
+                auto* list_start = add(get(record), header_words());
                 auto* position = var("until_position");
-                set(position, add(in, 10U));
+                set(position, add(in, header_words()));
                 auto* earlier = var("until_earlier", 1U);
                 auto* right_pending = var("until_pending");
                 auto* judged = var("until_judged");
@@ -2653,8 +3615,10 @@ private:
                         builder_.CreateICmpULT(get(entry), count_in), i64_);
                     auto* left_in = get(position);
                     auto* right_in = skip_node(left_node, left_in, existing_pair);
-                    const auto left = emit_node(left_node, left_in, existing_pair, now);
-                    const auto right = emit_node(right_node, right_in, existing_pair, now);
+                    const auto left = emit_node(left_node, left_in, existing_pair, pair_start,
+                        pair_point, LocalsFrom { locals_pointer, nullptr });
+                    const auto right = emit_node(right_node, right_in, existing_pair, pair_start,
+                        pair_point, LocalsFrom { locals_pointer, nullptr });
                     if_then(ne0(existing_pair), [&] {
                         set(position, skip_node(right_node, right_in, k(1U)));
                     });
@@ -2732,13 +3696,35 @@ private:
                 auto* antecedent_done = var("impl_done");
                 auto* matched = var("impl_matched");
                 auto* satisfied = var("impl_satisfied");
+                // The antecedent's match valuations (Matcher::matches), kept
+                // at word match_base of the current heap while the new
+                // consequents start: one per valuation, with it (16.10).
+                auto* match_base = var("impl_match_base");
                 set(antecedent_done, done_input);
                 set(satisfied, satisfied_input);
                 if_then(builder_.CreateICmpEQ(get(antecedent_done), k(0U)), [&] {
                     auto* matcher_start = rd(l::h_heap_alt_used);
-                    auto* in_off = builder_.CreateSelect(ne0(matcher_input), add(in, 10U), ks(-1));
-                    auto* result = call_matcher(property.sequence, in_off, node_start);
-                    set(matched, builder_.CreateAnd(result, k(1U)));
+                    auto* in_off = builder_.CreateSelect(ne0(matcher_input), add(in, header_words()), ks(-1));
+                    auto* result = call_matcher(property.sequence, in_off, node_start, node_point,
+                        locals_pointer);
+                    if (local_count != 0U) {
+                        set(matched, builder_.CreateLShr(result, k(2U)));
+                        auto* words = mul(get(matched), local_count);
+                        auto* needed = add(rd(l::h_heap_used), words);
+                        if_then(builder_.CreateICmpUGT(needed, rd(l::h_heap_cap)), [&] {
+                            grow(5U, needed);
+                        });
+                        set(match_base, rd(l::h_heap_used));
+                        auto* word = var("impl_match_word");
+                        for_count(word, words, [&] {
+                            wr(add(add(rd(l::h_heap_off), get(match_base)), get(word)),
+                                rd(add(rd(l::h_scratch_off), get(word))));
+                        });
+                        wr(l::h_heap_used, add(get(match_base), words));
+                        wr(l::h_scratch_used, k(0U));
+                    } else {
+                        set(matched, builder_.CreateAnd(result, k(1U)));
+                    }
                     if_else(ne0(builder_.CreateAnd(builder_.CreateLShr(result, k(1U)), k(1U))), [&] {
                         wr(l::h_heap_alt_used, matcher_start);
                         set(antecedent_done, k(1U));
@@ -2748,13 +3734,21 @@ private:
                 });
                 auto* position = var("impl_position");
                 set(position, builder_.CreateSelect(ne0(matcher_input),
-                    add(add(in, 10U), matcher_record_length(matcher_input, add(in, 10U),
+                    add(add(in, header_words()), matcher_record_length(matcher_input, add(in, header_words()),
                                           property.sequence)),
-                    add(in, 10U)));
+                    add(in, header_words())));
                 auto* consequents = add(consequents_input, get(matched));
                 set(consequent_count, consequents);
                 auto* total = add(count_in, get(matched));
                 llvm::Value* new_start = property.overlapped ? now : add(now, 1U);
+                llvm::Value* new_point = k(0U);
+                if (multi) {
+                    // A multiclocked consequent starts at the point of the
+                    // match: the nearest tick of its clock (`|->`) or the
+                    // nearest one strictly after it (`|=>`, 16.13.2).
+                    new_start = time;
+                    new_point = k(at_point | (property.overlapped ? point_inclusive : 0U));
+                }
                 auto* nonvacuous = var("impl_nonvacuous");
                 auto* finished = var("impl_finished");
                 auto* entry = var("impl_entry");
@@ -2764,7 +3758,13 @@ private:
                             builder_.CreateICmpULT(get(entry), count_in), i64_);
                         auto* child_in = get(position);
                         auto* child_record = rd(l::h_heap_alt_used);
-                        const auto child = emit_node(child_node, child_in, existing_child, new_start);
+                        LocalsFrom match { nullptr, nullptr };
+                        if (local_count != 0U) {
+                            match.heap_word = add(get(match_base),
+                                mul(sub(get(entry), count_in), local_count));
+                        }
+                        const auto child = emit_node(child_node, child_in, existing_child, new_start,
+                            new_point, match);
                         if_then(ne0(existing_child), [&] {
                             set(position, skip_node(child_node, child_in, k(1U)));
                         });
@@ -2791,6 +3791,9 @@ private:
                         });
                     });
                 });
+                if (local_count != 0U) {
+                    wr(l::h_heap_used, sub(rd(l::h_heap_used), mul(get(matched), local_count)));
+                }
                 if_then(builder_.CreateICmpEQ(get(finished), k(0U)), [&] {
                     set(satisfied, builder_.CreateOr(get(satisfied), get(nonvacuous)));
                     auto* ended = builder_.CreateAnd(ne0(get(antecedent_done)),
@@ -2817,9 +3820,59 @@ private:
                 auto* chosen_input = guarded_old(existing, add(in, 3U));
                 set(chosen_index, chosen_input);
                 set(chosen_bit, builder_.CreateShl(chosen_before, k(8U)));
+                if (multi) {
+                    // Instance::step_condition (F.3.4.3.4): the else branch
+                    // runs from the start point while the condition waits for
+                    // the first tick of the operator's clock; the then branch
+                    // starts at that tick, and a true condition drops the
+                    // else branch.
+                    const bool otherwise = property.children.size() > 1U;
+                    if_else(ne0(chosen_before), [&] {
+                        for (std::size_t branch = 0U; branch < property.children.size(); ++branch) {
+                            if_then(builder_.CreateICmpEQ(get(chosen_index), k(branch)), [&] {
+                                set(operands, k(1U));
+                                const auto child = operand(static_cast<std::uint32_t>(branch),
+                                    add(in, header_words() + 1U), existing, node_start, node_point);
+                                if_then(ne0(get(child.decided)), [&] { child_state(child); });
+                            });
+                        }
+                    }, [&] {
+                        auto* other_record = var("else_record");
+                        std::optional<NodeState> other;
+                        if (otherwise) {
+                            set(other_record, rd(l::h_heap_alt_used));
+                            set(operands, k(1U));
+                            other = operand(1U, add(in, header_words() + 1U), operands_existing, node_start,
+                                node_point);
+                        }
+                        auto* acts = clock_tick();
+                        if_then(ne0(acts), [&] {
+                            if_else(condition(), [&] {
+                                if (otherwise) {
+                                    wr(l::h_heap_alt_used, get(other_record));
+                                }
+                                set(chosen_index, k(0U));
+                                set(chosen_bit, k(256U));
+                                set(operands, k(1U));
+                                const auto child = operand(0U, add(in, header_words() + 1U), k(0U), time,
+                                    fresh_point);
+                                if_then(ne0(get(child.decided)), [&] { child_state(child); });
+                            }, [&] {
+                                if (!otherwise) {
+                                    resolve(k(1U), k(1U));
+                                    return;
+                                }
+                                set(chosen_index, k(1U));
+                                set(chosen_bit, k(256U));
+                                if_then(ne0(get(other->decided)), [&] { child_state(*other); });
+                            });
+                        });
+                    });
+                    break;
+                }
                 if_then(builder_.CreateICmpEQ(chosen_before, k(0U)), [&] {
-                    auto* condition = known_one_guard(property.guard);
-                    auto* branch = builder_.CreateSelect(condition, k(0U), k(1U));
+                    auto* holds = condition();
+                    auto* branch = builder_.CreateSelect(holds, k(0U), k(1U));
                     set(chosen_index, branch);
                     if (property.children.size() < 2U) {
                         // No else: the property holds vacuously.
@@ -2838,8 +3891,8 @@ private:
                         builder_.CreateICmpEQ(get(state.decided), k(0U)));
                     if_then(here, [&] {
                         set(operands, k(1U));
-                        const auto child = operand(static_cast<std::uint32_t>(branch), add(in, 11U),
-                            builder_.CreateAnd(existing, chosen_before), node_start);
+                        const auto child = operand(static_cast<std::uint32_t>(branch), add(in, header_words() + 1U),
+                            builder_.CreateAnd(existing, chosen_before), node_start, node_point);
                         if_then(ne0(get(child.decided)), [&] { child_state(child); });
                     });
                 }
@@ -2864,19 +3917,29 @@ private:
             set(aux_flags, builder_.CreateAnd(flags_in, k(48U)));
             set(consequent_count, guarded_old(existing, add(in, 4U)));
         }, [&] {
+            if (multi) {
+                step();
+                return;
+            }
             if_then(builder_.CreateICmpSGE(now, node_start), step);
         });
         // The record: a decided instance drops its operands and matcher.
         auto* is_decided = ne0(get(state.decided));
         auto* header = get(record);
+        // The start and point after an alignment (Instance::clock_tick).
+        alt_put(add(header, 1U), get(start_now));
+        // The valuation follows the ten header words, decided or not.
+        for (std::uint64_t word = 0U; word < local_count; ++word) {
+            alt_put(add(header, 10U + word), builder_.CreateLoad(i64_, element(node_locals, word)));
+        }
         if_else(is_decided, [&] {
-            wr(l::h_heap_alt_used, add(header, 10U));
+            wr(l::h_heap_alt_used, add(header, header_words()));
             alt_put(add(header, 2U),
-                builder_.CreateOr(builder_.CreateOr(
+                builder_.CreateOr(builder_.CreateOr(builder_.CreateOr(builder_.CreateOr(
                     builder_.CreateSelect(ne0(get(state.holds)), k(1U), k(2U)),
                     builder_.CreateShl(get(state.vacuous), k(2U))),
                     builder_.CreateOr(builder_.CreateOr(get(chosen_bit), get(until_bit)),
-                        get(aux_flags))));
+                        get(aux_flags))), get(point_now)), get(initialized)));
             alt_put(add(header, 4U), get(consequent_count));
             alt_put(add(header, 3U), get(chosen_index));
             alt_put(add(header, 5U), get(state.line));
@@ -2885,7 +3948,8 @@ private:
             alt_put(add(header, 2U),
                 builder_.CreateOr(builder_.CreateOr(builder_.CreateOr(get(chosen_bit), get(until_bit)),
                                       get(aux_flags)),
-                    builder_.CreateShl(get(has_matcher), k(7U))));
+                    builder_.CreateOr(builder_.CreateOr(builder_.CreateShl(get(has_matcher), k(7U)),
+                        get(point_now)), get(initialized))));
             alt_put(add(header, 4U), get(consequent_count));
             alt_put(add(header, 3U), get(chosen_index));
             alt_put(add(header, 7U), get(operands));
@@ -2948,22 +4012,28 @@ private:
         });
     }
 
-    [[nodiscard]] llvm::Function* build_tick(const KInst& inst, const std::uint32_t guard_storage)
+    [[nodiscard]] llvm::Function* build_tick(const std::string& name)
     {
         namespace l = runtime::sva::layout;
-        guard_storage_ = guard_storage;
-        const auto start_register = inst.y + static_cast<std::uint32_t>(inst.imm_a >> 32U);
-        const auto disabled_register = inst.y + static_cast<std::uint32_t>(inst.imm_b & 0xffff'ffffU);
         const auto& root = plan_.properties[plan_.root];
         const bool implication = root.kind == semantic::sva::PropertyKind::implication;
-        const auto type = llvm::FunctionType::get(llvm::Type::getVoidTy(context_),
-            { ptr_, ptr_ }, false);
-        fn_ = llvm::Function::Create(type, llvm::Function::InternalLinkage,
-            "fsim_sk_sva_tick_" + std::to_string(next_function_id()), module_);
-        fn_->addFnAttr(llvm::Attribute::NoInline);
+        fn_ = llvm::Function::Create(automaton_type(context_), llvm::Function::ExternalLinkage,
+            name, module_);
         fn_->addFnAttr(llvm::Attribute::NoUnwind);
+        fn_->addParamAttr(0, llvm::Attribute::NoAlias);
+        fn_->addParamAttr(1, llvm::Attribute::NoAlias);
+#if defined(_WIN32)
+        fn_->setUWTableKind(llvm::UWTableKind::Async);
+#endif
         frame_ = fn_->getArg(0);
         registers_ = fn_->getArg(1);
+        at_ = fn_->getArg(2);
+        auto* aux = fn_->getArg(3);
+        guard_storage_ = fn_->getArg(4);
+        auto* start_register = fn_->getArg(5);
+        auto* disabled_register = fn_->getArg(6);
+        auto* result_register = fn_->getArg(7);
+        positions_ = fn_->getArg(8);
         auto* entry = block("entry");
         failure_ = block("failure");
         builder_.SetInsertPoint(failure_);
@@ -2979,7 +4049,7 @@ private:
             builder_.CreateConstInBoundsGEP1_64(i8_, frame_, 32U));
         auto* first = builder_.CreateLoad(i32_, builder_.CreateInBoundsGEP(i32_, member_base, member));
         slot_addr_ = builder_.CreateInBoundsGEP(ptr_, blocks,
-            add(builder_.CreateZExt(first, i64_), inst.aux));
+            add(builder_.CreateZExt(first, i64_), aux));
         {
             // The monitor is created and bound at the first tick (and again
             // after a restore).
@@ -2988,17 +4058,96 @@ private:
                 auto* ensure_type = llvm::FunctionType::get(ptr_, { ptr_, ptr_, i32_ }, false);
                 auto ensure = module_.getOrInsertFunction("fsim_sk_sva_ensure", ensure_type);
                 builder_.CreateCall(ensure_type, ensure.getCallee(),
-                    { frame_, registers_, k32(at_) });
+                    { frame_, registers_, at_ });
                 check_status();
             });
         }
         if (check_) {
             call_check(0U);
         }
-        auto* env = array("env", 6U);
+        // A plan with local variables (Monitor::tick): the calls of the tick
+        // before ran after it (16.11); the memo keeps the answered values
+        // only; and the block's state words are copied to the free end of
+        // the current heap, so that a tick that misses a value restores them
+        // (snapshot_at; snapshot_live while the copy holds heap words).
+        const bool locals_plan = has_expressions();
+        const bool calls_plan = std::ranges::any_of(plan_.sequences, [](const auto& sequence) {
+            return std::ranges::any_of(sequence.code, [](const auto& step) {
+                return step.op == semantic::sva::Op::call;
+            });
+        });
+        const std::uint64_t clock_words = 3U * plan_.clock_guards.size();
+        if (locals_plan || calls_plan) {
+            wr(l::h_calls_used, k(0U));
+            wr(l::h_calls_taken, k(0U));
+        }
+        auto* snapshot_at = var("snapshot_at");
+        auto* snapshot_live = var("snapshot_live");
+        if (locals_plan) {
+            const std::uint64_t stride = plan_.memo_stride;
+            auto* kept_entries = var("memo_kept");
+            auto* entry_index = var("memo_compact");
+            for_count(entry_index, builder_.CreateUDiv(rd(l::h_memo_used), k(stride)), [&] {
+                auto* from = add(rd(l::h_memo_off), mul(get(entry_index), stride));
+                if_then(ne0(rd(add(from, l::memo_e_answered))), [&] {
+                    auto* to = add(rd(l::h_memo_off), mul(get(kept_entries), stride));
+                    for (std::uint64_t word = 0U; word < stride; ++word) {
+                        wr(add(to, word), rd(add(from, word)));
+                    }
+                    set(kept_entries, add(get(kept_entries), 1U));
+                });
+            });
+            wr(l::h_memo_used, mul(get(kept_entries), stride));
+            wr(l::h_memo_pending, k(0U));
+            auto* size = add(add(mul(rd(l::h_attempts_count), l::attempt_stride),
+                                 mul(rd(l::h_requests_count), l::request_stride)),
+                l::header_words + clock_words);
+            auto* needed = add(rd(l::h_heap_used), size);
+            if_then(builder_.CreateICmpUGT(needed, rd(l::h_heap_cap)), [&] { grow(5U, needed); });
+            set(snapshot_at, rd(l::h_heap_used));
+            auto* to = add(rd(l::h_heap_off), get(snapshot_at));
+            for (std::uint64_t word = 0U; word < l::header_words; ++word) {
+                wr(add(to, word), rd(k(word)));
+            }
+            for (std::uint64_t word = 0U; word < clock_words; ++word) {
+                wr(add(to, l::header_words + word), rd(add(rd(l::h_clocks_off), word)));
+            }
+            auto* rows = add(to, l::header_words + clock_words);
+            auto* row_word = var("snapshot_row");
+            for_count(row_word, mul(rd(l::h_attempts_count), l::attempt_stride), [&] {
+                wr(add(rows, get(row_word)), rd(add(rd(l::h_attempts_off), get(row_word))));
+            });
+            auto* requests = add(rows, mul(rd(l::h_attempts_count), l::attempt_stride));
+            auto* request_word = var("snapshot_request");
+            for_count(request_word, mul(rd(l::h_requests_count), l::request_stride), [&] {
+                wr(add(requests, get(request_word)),
+                    rd(add(rd(l::h_requests_off), get(request_word))));
+            });
+            wr(l::h_heap_used, add(get(snapshot_at), size));
+            set(snapshot_live, k(1U));
+        }
+        auto* env = array("env", 11U);
         const auto env_cell = [&](const std::uint64_t index) {
             return builder_.CreateConstInBoundsGEP2_64(env->getAllocatedType(), env, 0U, index);
         };
+        // env[6]: a local-variable expression's value was missing (16.10).
+        builder_.CreateStore(k(0U), env_cell(6U));
+        // env[8] to env[10]: the site's arguments the matchers and the memo
+        // read (load_site).
+        builder_.CreateStore(builder_.CreateZExt(at_, i64_), env_cell(8U));
+        builder_.CreateStore(guard_storage_, env_cell(9U));
+        builder_.CreateStore(builder_.CreatePtrToInt(positions_, i64_), env_cell(10U));
+        env_ = env;
+        // The valuation a root `cover sequence` matcher starts with: zeros.
+        llvm::Value* zero_locals = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(ptr_));
+        if (locals_words() != 0U) {
+            auto* zeros = array("zero_locals", locals_words());
+            for (std::uint64_t word = 0U; word < locals_words(); ++word) {
+                builder_.CreateStore(k(0U), element(zeros, word));
+            }
+            zero_locals = builder_.CreateConstInBoundsGEP2_64(zeros->getAllocatedType(), zeros,
+                0U, 0U);
+        }
         auto* time = builder_.CreateLoad(i64_,
             builder_.CreateLoad(ptr_, builder_.CreateConstInBoundsGEP1_64(i8_, table, 40U)));
         auto* start = var("start");
@@ -3008,7 +4157,7 @@ private:
         if_then(builder_.CreateAnd(ne0(get(start)), builder_.CreateICmpNE(filtered, k32(0U))), [&] {
             auto* filter_type = llvm::FunctionType::get(i32_, { ptr_, i32_ }, false);
             auto filter = module_.getOrInsertFunction("fsim_sk_sva_filter", filter_type);
-            auto* allowed = builder_.CreateCall(filter_type, filter.getCallee(), { frame_, k32(at_) });
+            auto* allowed = builder_.CreateCall(filter_type, filter.getCallee(), { frame_, at_ });
             check_status();
             set(start, builder_.CreateZExt(builder_.CreateICmpNE(allowed, k32(0U)), i64_));
         });
@@ -3041,8 +4190,19 @@ private:
                     set(any, k(1U));
                 });
             }
+            // Without a tick only the disable condition and the
+            // asynchronous aborts apply (16.12, 16.12.14).
+            const bool async_abort = std::ranges::any_of(plan_.properties,
+                [](const auto& property) {
+                    return (property.kind == semantic::sva::PropertyKind::accept
+                               || property.kind == semantic::sva::PropertyKind::reject)
+                        && !property.synchronous;
+                });
             auto* go = block("clocked");
-            builder_.CreateCondBr(builder_.CreateOr(ne0(get(any)), disabled), go, after);
+            builder_.CreateCondBr(async_abort
+                    ? static_cast<llvm::Value*>(builder_.getTrue())
+                    : builder_.CreateOr(ne0(get(any)), disabled),
+                go, after);
             builder_.SetInsertPoint(go);
             tick = rd(rd(l::h_clocks_off));
             wr(l::h_tick, tick);
@@ -3074,6 +4234,7 @@ private:
             wr(l::h_heap_used, k(0U));
             wr(l::h_heap_alt_used, k(0U));
             wr(l::h_steps_active, rd(l::h_requests_count));
+            set(snapshot_live, k(0U));
             builder_.CreateBr(after);
         }
 
@@ -3121,17 +4282,23 @@ private:
             env_ = env;
             tick_ = tick;
             auto* existing_flag = builder_.CreateZExt(is_existing, i64_);
+            // A multiclocked attempt starts at the point of its time step,
+            // inclusive (Monitor::tick); a singly clocked one at its tick.
+            const bool multi = multiclocked();
+            const std::uint64_t root_point = multi ? at_point | point_inclusive : 0U;
             auto* start_tick = builder_.CreateSelect(is_existing,
-                guarded_old(existing_flag, add(blob, 1U)), tick);
+                guarded_old(existing_flag, add(blob, 1U)), multi ? time : tick);
             auto* record_start = rd(l::h_heap_alt_used);
             auto* row_next = block("row_next");
             auto* row_keep = block("row_keep");
 
             const auto call_matcher = [&](const std::uint32_t sequence, llvm::Value* in_off,
-                                          llvm::Value* matcher_start) {
+                                          llvm::Value* matcher_start,
+                                          const std::uint64_t point = 0U) {
                 auto* result = builder_.CreateCall(matchers_.at(sequence)->getFunctionType(),
                     matchers_.at(sequence),
-                    { frame_, registers_, slot_addr_, env, in_off, matcher_start });
+                    { frame_, registers_, slot_addr_, env, in_off, matcher_start, k(point),
+                        zero_locals });
                 check_status();
                 return result;
             };
@@ -3157,7 +4324,8 @@ private:
             if (tree_root) {
                 // The root is a property tree: Instance::step over its nodes,
                 // then the attempt's outcome.
-                const auto result = emit_node(plan_.root, blob, existing_flag, start_tick);
+                const auto result = emit_node(plan_.root, blob, existing_flag, start_tick,
+                    k(root_point));
                 auto* ending = block("tree_decided");
                 builder_.CreateCondBr(ne0(get(result.decided)), ending, row_keep);
                 builder_.SetInsertPoint(ending);
@@ -3171,11 +4339,16 @@ private:
                 builder_.CreateBr(row_next);
             } else switch (root.kind) {
             case semantic::sva::PropertyKind::sequence: {
-                reserve_alt(10U);
-                put_header(record_start, plan_.root, start_tick, 128U, 0U);
-                wr(l::h_heap_alt_used, add(record_start, 10U));
-                auto* in_off = builder_.CreateSelect(is_existing, add(blob, 10U), ks(-1));
-                auto* result = call_matcher(root.sequence, in_off, start_tick);
+                // The header, then the root's (zero) locals.
+                const std::uint64_t header = header_words();
+                reserve_alt(header);
+                put_header(record_start, plan_.root, start_tick, 128U | root_point, 0U);
+                for (std::uint64_t word = 10U; word < header; ++word) {
+                    alt_put(add(record_start, word), k(0U));
+                }
+                wr(l::h_heap_alt_used, add(record_start, header));
+                auto* in_off = builder_.CreateSelect(is_existing, add(blob, header), ks(-1));
+                auto* result = call_matcher(root.sequence, in_off, start_tick, root_point);
                 auto* matched = builder_.CreateAnd(result, k(1U));
                 auto* dead = builder_.CreateAnd(builder_.CreateLShr(result, k(1U)), k(1U));
                 auto* env_line = builder_.CreateLoad(i64_, env_cell(4U));
@@ -3204,7 +4377,7 @@ private:
                         push_outcome(k(1U), started, k(0U), k(0U));
                     });
                     alt_put(add(record_start, 2U),
-                        builder_.CreateOr(k(128U), builder_.CreateShl(once, k(3U))));
+                        builder_.CreateOr(k(128U | root_point), builder_.CreateShl(once, k(3U))));
                     auto* ended = block("ended");
                     builder_.CreateCondBr(ne0(dead), ended, row_keep);
                     builder_.SetInsertPoint(ended);
@@ -3233,7 +4406,8 @@ private:
                 auto* not_match = block("operand_pending");
                 builder_.CreateCondBr(ne0(matched), done_match, not_match);
                 builder_.SetInsertPoint(done_match);
-                push_outcome(k(2U), started, k(root.line), k(root.column));
+                push_outcome(k(2U), started, position_word(property_position(plan_.root)),
+                    position_word(property_position(plan_.root) + 1U));
                 rewind(record_start);
                 builder_.CreateBr(row_next);
                 builder_.SetInsertPoint(not_match);
@@ -3389,7 +4563,8 @@ private:
                     push_outcome(builder_.CreateSelect(vacuous_end, k(3U), k(1U)), started, k(0U),
                         k(0U));
                 } else {
-                    push_outcome(k(2U), started, k(root.line), k(root.column));
+                    push_outcome(k(2U), started, position_word(property_position(plan_.root)),
+                    position_word(property_position(plan_.root) + 1U));
                 }
                 rewind(record_start);
                 builder_.CreateBr(row_next);
@@ -3419,17 +4594,68 @@ private:
             builder_.CreateBr(row_next);
             builder_.SetInsertPoint(row_next);
         });
-        // end_pass: the alternate heap becomes the current one.
-        wr(l::h_attempts_count, get(kept));
-        auto* current = rd(l::h_heap_off);
-        wr(l::h_heap_off, rd(l::h_heap_alt_off));
-        wr(l::h_heap_alt_off, current);
-        wr(l::h_heap_used, rd(l::h_heap_alt_used));
-        wr(l::h_heap_alt_used, k(0U));
-        wr(l::h_steps_active, add(rd(l::h_requests_count), get(stepping_kept)));
+        const auto end_pass = [&] {
+            // end_pass: the alternate heap becomes the current one.
+            wr(l::h_attempts_count, get(kept));
+            auto* current = rd(l::h_heap_off);
+            wr(l::h_heap_off, rd(l::h_heap_alt_off));
+            wr(l::h_heap_alt_off, current);
+            wr(l::h_heap_used, rd(l::h_heap_alt_used));
+            wr(l::h_heap_alt_used, k(0U));
+            wr(l::h_steps_active, add(rd(l::h_requests_count), get(stepping_kept)));
+        };
+        if (!locals_plan) {
+            end_pass();
+        } else {
+            // A tick that missed a value did not happen (Monitor::tick): the
+            // state words return from the snapshot (a region that grew keeps
+            // its new place and capacity, and a ring its head: growth moved
+            // its entries oldest first to slot 0), the requests stay in the
+            // memo, and the calls it queued are dropped.
+            if_else(ne0(builder_.CreateLoad(i64_, env_cell(6U))), [&] {
+                auto* from = add(rd(l::h_heap_off), get(snapshot_at));
+                for (const auto field : { l::h_tick, l::h_last_start, l::h_flags,
+                         l::h_steps_active, l::h_next_serial, l::h_time, l::h_attempts_count,
+                         l::h_outcomes_count, l::h_started_count, l::h_events_count,
+                         l::h_requests_count, l::h_heap_used, l::h_last_fail_line,
+                         l::h_last_fail_column, l::h_pop_serial }) {
+                    wr(field, rd(add(from, static_cast<std::uint64_t>(field))));
+                }
+                for (std::uint64_t word = 0U; word < clock_words; ++word) {
+                    wr(add(rd(l::h_clocks_off), word), rd(add(from, l::header_words + word)));
+                }
+                auto* rows = add(from, l::header_words + clock_words);
+                auto* row_word = var("restore_row");
+                for_count(row_word, mul(rd(l::h_attempts_count), l::attempt_stride), [&] {
+                    wr(add(rd(l::h_attempts_off), get(row_word)), rd(add(rows, get(row_word))));
+                });
+                auto* requests = add(rows, mul(rd(l::h_attempts_count), l::attempt_stride));
+                auto* request_word = var("restore_request");
+                for_count(request_word, mul(rd(l::h_requests_count), l::request_stride), [&] {
+                    wr(add(rd(l::h_requests_off), get(request_word)),
+                        rd(add(requests, get(request_word))));
+                });
+                wr(l::h_heap_alt_used, k(0U));
+                wr(l::h_calls_used, k(0U));
+                wr(l::h_calls_taken, k(0U));
+            }, end_pass);
+            set(snapshot_live, k(0U));
+        }
         builder_.CreateBr(after);
 
         builder_.SetInsertPoint(after);
+        llvm::Value* missed = nullptr;
+        if (locals_plan) {
+            // A multiclocked evaluation without a tick leaves the snapshot's
+            // words; a tick that found every value empties the memo.
+            if_then(ne0(get(snapshot_live)), [&] { wr(l::h_heap_used, get(snapshot_at)); });
+            missed = ne0(builder_.CreateLoad(i64_, env_cell(6U)));
+            if_then(builder_.CreateNot(missed), [&] {
+                wr(l::h_memo_used, k(0U));
+                wr(l::h_memo_pending, k(0U));
+            });
+            missed = ne0(builder_.CreateLoad(i64_, env_cell(6U)));
+        }
         if (check_) {
             call_check(1U);
         }
@@ -3443,20 +4669,27 @@ private:
                 auto* post_type = llvm::FunctionType::get(llvm::Type::getVoidTy(context_),
                     { ptr_, i32_ }, false);
                 auto post = module_.getOrInsertFunction("fsim_sk_sva_post", post_type);
-                builder_.CreateCall(post_type, post.getCallee(), { frame_, k32(at_) });
+                builder_.CreateCall(post_type, post.getCallee(), { frame_, at_ });
                 check_status();
             });
         }
-        builder_.CreateStore(rd(l::h_outcomes_count),
-            builder_.CreateInBoundsGEP(i64_, registers_, k(static_cast<std::uint64_t>(inst.d) * 2U)));
+        // The pending outcomes, or minus the requests of a tick that missed
+        // values (the assertion process answers them and ticks again).
+        llvm::Value* tick_result = rd(l::h_outcomes_count);
+        if (missed != nullptr) {
+            tick_result = builder_.CreateSelect(ne0(builder_.CreateLoad(i64_, env_cell(6U))),
+                sub(k(0U), rd(l::h_memo_pending)), tick_result);
+        }
+        builder_.CreateStore(tick_result,
+            builder_.CreateInBoundsGEP(i64_, registers_, mul(result_register, 2U)));
         builder_.CreateStore(k(0U),
-            builder_.CreateInBoundsGEP(i64_, registers_, k(static_cast<std::uint64_t>(inst.d) * 2U + 1U)));
+            builder_.CreateInBoundsGEP(i64_, registers_, add(mul(result_register, 2U), 1U)));
         if (sva_verify_enabled()) {
             auto verify_type = llvm::FunctionType::get(llvm::Type::getVoidTy(context_),
                 { ptr_, ptr_, i32_ }, false);
             auto verify = module_.getOrInsertFunction("fsim_sk_sva_verify", verify_type);
             builder_.CreateCall(verify_type, verify.getCallee(),
-                { frame_, registers_, k32(at_) });
+                { frame_, registers_, at_ });
             check_status();
         }
         builder_.CreateRetVoid();
@@ -3469,7 +4702,7 @@ private:
             { ptr_, ptr_, i32_, i32_ }, false);
         auto check = module_.getOrInsertFunction("fsim_sk_sva_check", check_type);
         builder_.CreateCall(check_type, check.getCallee(),
-            { frame_, registers_, k32(at_), k32(phase) });
+            { frame_, registers_, at_, k32(phase) });
         check_status();
     }
 };
@@ -7870,6 +9103,228 @@ private:
     /// or Logic9 signal into a narrow register (the narrow forms of
     /// run_sampled_read: $sampled and $past of a Logic9 signal of at most 64
     /// bits, and $rose, $fell, $stable and $changed of any width).
+    /// KOp::sva_tick sub 1 to 4 with the plan's local constants (z): the
+    /// requests of the directive's last tick and its queued subroutine calls
+    /// (IEEE 1800-2023 16.10, 16.11) read and written in the attempt block's
+    /// memo and calls regions, as sva::Monitor's request_expression,
+    /// request_local, answer and take_call do. A malformed request (no
+    /// block, a request number out of range) is the host's error report.
+    void emit_sva_request(const KInst& inst, const std::uint32_t at)
+    {
+        using namespace runtime::sva::layout;
+        const auto& plan = body_.sva_plans.at(inst.z - 1U);
+        const auto request_reg = inst.y + static_cast<std::uint32_t>(inst.imm_a & 0xffff'ffffU);
+        const auto value_reg = inst.y + static_cast<std::uint32_t>(inst.imm_a >> 32U);
+        const auto selector = static_cast<std::uint32_t>(inst.imm_b);
+        auto* table = builder_.CreateLoad(ptr_, frame_field(120U));
+        auto* blocks = builder_.CreateLoad(ptr_, table);
+        auto* member_base = builder_.CreateLoad(ptr_,
+            builder_.CreateConstInBoundsGEP1_64(i8_, table, 8U));
+        auto* member = builder_.CreateLoad(i32_, frame_field(32U));
+        auto* base = builder_.CreateLoad(i32_,
+            builder_.CreateInBoundsGEP(i32_, member_base, member));
+        auto* index = builder_.CreateAdd(base, llvm::ConstantInt::get(i32_, inst.aux));
+        auto* entry = builder_.CreateInBoundsGEP(ptr_, blocks, index);
+        auto* loaded = builder_.CreateLoad(ptr_, entry);
+        auto* null = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(ptr_));
+        auto* bind = llvm::BasicBlock::Create(context_, "sva_req_bind", &function_);
+        auto* test = llvm::BasicBlock::Create(context_, "sva_req_test", &function_);
+        auto* from_load = builder_.GetInsertBlock();
+        builder_.CreateCondBr(builder_.CreateICmpEQ(loaded, null), bind, test);
+        builder_.SetInsertPoint(bind);
+        auto* bind_type = llvm::FunctionType::get(ptr_, { ptr_, i32_ }, false);
+        auto* bound = builder_.CreateCall(bind_type, helper_symbol("fsim_sk_sva_bind", bind_type),
+            { frame_, llvm::ConstantInt::get(i32_, at) });
+        auto* from_bind = builder_.GetInsertBlock();
+        builder_.CreateBr(test);
+        builder_.SetInsertPoint(test);
+        auto* block = builder_.CreatePHI(ptr_, 2U);
+        block->addIncoming(loaded, from_load);
+        block->addIncoming(bound, from_bind);
+        auto* has_block = builder_.CreateICmpNE(block, null);
+        const auto address = [&](llvm::Value* word) {
+            return builder_.CreateInBoundsGEP(i64_, block, word);
+        };
+        const auto read = [&](llvm::Value* word) { return builder_.CreateLoad(i64_, address(word)); };
+        const auto field = [&](const Header header) { return read(constant(header)); };
+        const auto write = [&](llvm::Value* word, llvm::Value* value) {
+            builder_.CreateStore(value, address(word));
+        };
+        auto* done = llvm::BasicBlock::Create(context_, "sva_req_done", &function_);
+        const std::uint64_t call_stride = 1U + plan.locals_words;
+        if (inst.sub == 4U) {
+            // take_call: the call after the h_calls_taken words, or 0 (and
+            // the queue emptied) when none is left; no block, no call.
+            auto* work = llvm::BasicBlock::Create(context_, "sva_req_work", &function_);
+            auto* none = llvm::BasicBlock::Create(context_, "sva_call_none", &function_);
+            builder_.CreateCondBr(has_block, work, none);
+            builder_.SetInsertPoint(none);
+            store_register(inst.d, { constant(0U), constant(0U) });
+            builder_.CreateBr(done);
+            builder_.SetInsertPoint(work);
+            auto* used = field(h_calls_used);
+            auto* taken = field(h_calls_taken);
+            auto* left = builder_.CreateICmpULE(builder_.CreateAdd(taken, constant(call_stride)),
+                used);
+            auto* take = llvm::BasicBlock::Create(context_, "sva_call_take", &function_);
+            auto* empty = llvm::BasicBlock::Create(context_, "sva_call_empty", &function_);
+            builder_.CreateCondBr(left, take, empty);
+            builder_.SetInsertPoint(empty);
+            write(constant(h_calls_used), constant(0U));
+            write(constant(h_calls_taken), constant(0U));
+            store_register(inst.d, { constant(0U), constant(0U) });
+            builder_.CreateBr(done);
+            builder_.SetInsertPoint(take);
+            auto* call = read(builder_.CreateAdd(field(h_calls_off), taken));
+            write(constant(h_calls_taken), builder_.CreateAdd(taken, constant(call_stride)));
+            store_register(inst.d, { builder_.CreateAdd(call, constant(1U)), constant(0U) });
+            builder_.CreateBr(done);
+        } else {
+            // The request's memo entry: the last h_memo_pending entries are
+            // the requests, in order.
+            auto* fault = llvm::BasicBlock::Create(context_, "sva_req_fault", &function_);
+            const auto request = load_register(request_reg);
+            auto* in_range = builder_.CreateAnd(has_block,
+                builder_.CreateICmpEQ(request.b, constant(0U)));
+            const bool call_local = inst.sub == 2U;
+            auto* memo = llvm::BasicBlock::Create(context_, "sva_req_memo", &function_);
+            auto* check = llvm::BasicBlock::Create(context_, "sva_req_check", &function_);
+            builder_.CreateCondBr(in_range, check, fault);
+            builder_.SetInsertPoint(check);
+            // The words the request names: its memo entry's locals (or, for
+            // a local of the subroutine call taken last, that call's).
+            llvm::Value* source = nullptr;
+            llvm::Value* valid = nullptr;
+            llvm::Value* entry_word = nullptr;
+            {
+                auto* pending = field(h_memo_pending);
+                auto* stride = constant(plan.memo_stride == 0U ? 1U : plan.memo_stride);
+                auto* count = builder_.CreateUDiv(field(h_memo_used), stride);
+                auto* number = builder_.CreateAnd(request.a, constant(0xffff'ffffU));
+                auto* entry_index = builder_.CreateAdd(builder_.CreateSub(count, pending), number);
+                entry_word = builder_.CreateAdd(field(h_memo_off),
+                    builder_.CreateMul(entry_index, stride));
+                valid = builder_.CreateAnd(builder_.CreateICmpULT(number, pending),
+                    builder_.getInt1(plan.memo_stride != 0U));
+                if (call_local && selector < plan.local_offset.size()) {
+                    // sub 2 always reads through `source`.
+                    auto* is_call = builder_.CreateICmpEQ(number, constant(0xffff'ffffU));
+                    auto* taken = field(h_calls_taken);
+                    auto* call_source = builder_.CreateAdd(
+                        builder_.CreateSub(builder_.CreateAdd(field(h_calls_off), taken),
+                            constant(call_stride)),
+                        constant(1U + plan.local_offset[selector]));
+                    auto* memo_source = builder_.CreateAdd(entry_word,
+                        constant(memo_e_locals + plan.local_offset[selector]));
+                    source = builder_.CreateSelect(is_call, call_source, memo_source);
+                    valid = builder_.CreateSelect(is_call,
+                        builder_.CreateICmpUGE(taken, constant(call_stride)), valid);
+                }
+            }
+            if (call_local && selector >= plan.local_offset.size()) {
+                valid = builder_.getFalse();
+            }
+            builder_.CreateCondBr(valid, memo, fault);
+            builder_.SetInsertPoint(memo);
+            switch (inst.sub) {
+            case 1U:
+                store_register(inst.d, { read(entry_word), constant(0U) });
+                break;
+            case 2U: {
+                if (selector >= plan.local_offset.size()) {
+                    break;
+                }
+                // The local's words: its value chunks, then its unknown ones.
+                const auto width = plan.local_width[selector];
+                const auto chunks = plan.local_size[selector] / 2U;
+                const bool narrow = body_.register_widths[inst.d] <= 64U;
+                const auto storage = narrow ? inst.d : body_.wide_base[inst.d] & ~detail::wide_unknown_flag;
+                for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
+                    auto mask = ~std::uint64_t { 0 };
+                    if (chunk + 1U == chunks && width % 64U != 0U) {
+                        mask = (std::uint64_t { 1 } << (width % 64U)) - 1U;
+                    }
+                    auto* a = builder_.CreateAnd(read(builder_.CreateAdd(source, constant(chunk))),
+                        constant(mask));
+                    auto* b = builder_.CreateAnd(
+                        read(builder_.CreateAdd(source, constant(chunks + chunk))), constant(mask));
+                    if (narrow) {
+                        store_register(inst.d, { a, b });
+                    } else {
+                        builder_.CreateStore(a, chunk_address(storage + chunk, 0U));
+                        builder_.CreateStore(b, chunk_address(storage + chunk, 1U));
+                    }
+                }
+                break;
+            }
+            default: {
+                // answer: the result words of the entry's expression (one for
+                // a check, the local's for an assignment) from the value's
+                // words (value chunks, then unknown chunks), the rest zero.
+                const auto width = std::max<std::uint32_t>(selector, 1U);
+                const auto chunks = (width + 63U) / 64U;
+                const bool narrow = body_.register_widths[value_reg] <= 64U;
+                const auto storage = narrow ? value_reg
+                                            : body_.wide_base[value_reg] & ~detail::wide_unknown_flag;
+                std::vector<llvm::Value*> value(2U * chunks);
+                if (narrow) {
+                    const auto loaded_value = load_register(value_reg);
+                    value[0] = loaded_value.a;
+                    value[1] = loaded_value.b;
+                } else {
+                    for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
+                        value[chunk] = builder_.CreateLoad(i64_, chunk_address(storage + chunk, 0U));
+                        value[chunks + chunk]
+                            = builder_.CreateLoad(i64_, chunk_address(storage + chunk, 1U));
+                    }
+                }
+                auto* expression = read(entry_word);
+                llvm::Value* words = constant(1U);
+                for (std::size_t item = 0U; item < plan.expression_target.size(); ++item) {
+                    const auto target = plan.expression_target[item];
+                    if (target != 0U) {
+                        words = builder_.CreateSelect(
+                            builder_.CreateICmpEQ(expression, constant(item)),
+                            constant(plan.local_size[target - 1U]), words);
+                    }
+                }
+                const std::uint64_t result_area = plan.memo_stride == 0U
+                    ? 0U
+                    : plan.memo_stride - memo_e_locals - plan.locals_words;
+                auto* result = builder_.CreateAdd(entry_word, constant(memo_e_locals + plan.locals_words));
+                for (std::uint64_t word = 0U; word < result_area; ++word) {
+                    auto* inside = builder_.CreateICmpULT(constant(word), words);
+                    auto* at_word = builder_.CreateAdd(result, constant(word));
+                    auto* old = read(at_word);
+                    auto* fresh = word < value.size() ? value[word] : constant(0U);
+                    write(at_word, builder_.CreateSelect(inside, fresh, old));
+                }
+                write(builder_.CreateAdd(entry_word, constant(memo_e_answered)), constant(1U));
+                store_register(inst.d, { constant(0U), constant(0U) });
+                break;
+            }
+            }
+            builder_.CreateBr(done);
+            builder_.SetInsertPoint(fault);
+            note_helper_site(KOp::sva_tick, 2U);
+            auto* type = llvm::FunctionType::get(llvm::Type::getVoidTy(context_),
+                { ptr_, ptr_, i32_ }, false);
+            builder_.CreateCall(type, helper_symbol("fsim_sk_sva_tick", type),
+                { frame_, registers_, llvm::ConstantInt::get(i32_, at) });
+            builder_.CreateBr(done);
+        }
+        builder_.SetInsertPoint(done);
+        cache_.clear();
+        check_status();
+        if (sva_verify_enabled()) {
+            auto verify_type = llvm::FunctionType::get(llvm::Type::getVoidTy(context_),
+                { ptr_, ptr_, i32_ }, false);
+            builder_.CreateCall(verify_type, helper_symbol("fsim_sk_sva_verify", verify_type),
+                { frame_, registers_, llvm::ConstantInt::get(i32_, at) });
+            check_status();
+        }
+    }
+
     void emit_sampled_general(const KInst& inst)
     {
         const auto view = sampled_ring_view(inst);
@@ -7896,14 +9351,49 @@ private:
                                        builder_.CreateAnd(value.b, m) });
             return;
         }
-        auto* have_previous = builder_.CreateICmpUGE(view.count, constant(2U));
-        auto* previous_index = builder_.CreateSub(view.count, constant(2U));
+        // A value change function compares the sampled value of this time
+        // step with the sample of the most recent strictly prior tick
+        // (16.9.3): at a tick the ring's last two samples, in any other time
+        // step the Preponed value (y - 1 in the sampled words, Logic4) and
+        // the ring's last sample. A SystemVerilog reader compares the values
+        // it reads: a Logic9 entry through the Logic4 mapping (21.2.1.3;
+        // strength is not part of the value).
+        llvm::Value* tick = nullptr;
+        llvm::Value* preponed = nullptr;
+        llvm::Value* back = constant(2U);
+        if (inst.y != 0U) {
+            tick = builder_.CreateICmpNE(sampled_now_count(view), constant(0U));
+            preponed = builder_.CreateConstInBoundsGEP1_64(i64_,
+                builder_.CreateLoad(ptr_,
+                    builder_.CreateConstInBoundsGEP1_64(i8_, view.table, 32U)),
+                inst.y - 1U);
+            back = builder_.CreateSelect(tick, constant(2U), constant(1U));
+        }
+        auto* have_previous = builder_.CreateICmpUGE(view.count, back);
+        auto* previous_index = builder_.CreateSub(view.count, back);
+        const auto current_value = [&](llvm::Value* chunk, const std::uint32_t bits) {
+            auto stored = sampled_entry_value(view, have_current, current_index,
+                chunk, bits);
+            if (tick == nullptr) {
+                return stored;
+            }
+            auto* bits_mask = constant(mask_of(bits));
+            const auto plane = [&](const std::uint64_t first) {
+                return builder_.CreateAnd(
+                    builder_.CreateLoad(i64_, builder_.CreateInBoundsGEP(i64_, preponed,
+                        builder_.CreateAdd(constant(first), chunk))),
+                    bits_mask);
+            };
+            return Pair { builder_.CreateSelect(tick, stored.a, plane(0U)),
+                builder_.CreateSelect(tick, stored.b, plane(view.chunks)) };
+        };
+        const auto previous_value = [&](llvm::Value* chunk, const std::uint32_t bits) {
+            return sampled_entry_value(view, have_previous, previous_index, chunk, bits);
+        };
         llvm::Value* result = nullptr;
         if (kind == SignalReadKind::rose || kind == SignalReadKind::fell) {
-            const auto current = sampled_entry_value(view, have_current,
-                current_index, zero_chunk, first_bits);
-            const auto previous = sampled_entry_value(view, have_previous,
-                previous_index, zero_chunk, first_bits);
+            const auto current = current_value(zero_chunk, first_bits);
+            const auto previous = previous_value(zero_chunk, first_bits);
             const auto bit = [&](llvm::Value* plane) {
                 return builder_.CreateTrunc(plane, llvm::Type::getInt1Ty(context_));
             };
@@ -7915,21 +9405,14 @@ private:
             result = builder_.CreateAnd(level(current),
                 builder_.CreateNot(level(previous)));
         } else {
-            // Every plane of every chunk (PackedLogic4 equality).
+            // Every chunk of the values read (PackedLogic4 equality).
             const auto differing = fold_chunks(signal_width, Carried { constant(0U) },
                 [&](llvm::Value* chunk, const std::uint32_t bits, const Carried& carried) {
-                    llvm::Value* accumulated = carried[0];
-                    auto* chunk_mask = constant(mask_of(bits));
-                    for (std::uint64_t plane = 0U; plane < view.planes; ++plane) {
-                        auto* difference = builder_.CreateXor(
-                            sampled_entry_word(view, have_current, current_index,
-                                plane, chunk),
-                            sampled_entry_word(view, have_previous, previous_index,
-                                plane, chunk));
-                        accumulated = builder_.CreateOr(accumulated,
-                            builder_.CreateAnd(difference, chunk_mask));
-                    }
-                    return Carried { accumulated };
+                    const auto current = current_value(chunk, bits);
+                    const auto previous = previous_value(chunk, bits);
+                    return Carried { builder_.CreateOr(carried[0],
+                        builder_.CreateOr(builder_.CreateXor(current.a, previous.a),
+                            builder_.CreateXor(current.b, previous.b))) };
                 });
             auto* equal = builder_.CreateICmpEQ(differing[0], constant(0U));
             result = kind == SignalReadKind::stable ? equal : builder_.CreateNot(equal);
@@ -12202,6 +13685,10 @@ private:
             break;
         }
         case KOp::sva_tick: {
+            if (inst.sub != 0U && inst.z != 0U) {
+                emit_sva_request(inst, at);
+                break;
+            }
             if (inst.z != 0U) {
                 // The directive's plan is constant: its attempt automaton is
                 // generated code (SvaAutomatonEmitter); growth of the block
@@ -12211,10 +13698,28 @@ private:
                 const auto storage = guards < body_.wide_base.size() && body_.wide_base[guards] != 0U
                     ? body_.wide_base[guards] & ~detail::wide_unknown_flag
                     : guards;
-                SvaAutomatonEmitter automaton(module_, plan, sva_check_enabled());
-                auto* tick = automaton.tick_function(inst, at, storage);
+                // One automaton per distinct plan for the whole design
+                // (LlvmStaticKernelCodegen::ensure_sva), called with this
+                // site's arguments and position table.
+                auto* type = SvaAutomatonEmitter::automaton_type(context_);
+                auto tick = module_.getOrInsertFunction(sva_automaton_symbol(plan), type);
+                const auto words = SvaAutomatonEmitter::position_words(plan);
+                auto* positions = new llvm::GlobalVariable(module_,
+                    llvm::ArrayType::get(i64_, words.size()), true,
+                    llvm::GlobalValue::PrivateLinkage,
+                    llvm::ConstantDataArray::get(context_, llvm::ArrayRef<std::uint64_t>(words)),
+                    "sva_positions");
+                const auto start_register = inst.y + static_cast<std::uint32_t>(inst.imm_a >> 32U);
+                const auto disabled_register
+                    = inst.y + static_cast<std::uint32_t>(inst.imm_b & 0xffff'ffffU);
                 note_helper_site(KOp::sva_tick, 1U);
-                builder_.CreateCall(tick, { frame_, registers_ });
+                builder_.CreateCall(type, tick.getCallee(),
+                    { frame_, registers_, llvm::ConstantInt::get(i32_, at),
+                        llvm::ConstantInt::get(i64_, inst.aux),
+                        llvm::ConstantInt::get(i64_, storage),
+                        llvm::ConstantInt::get(i64_, start_register),
+                        llvm::ConstantInt::get(i64_, disabled_register),
+                        llvm::ConstantInt::get(i64_, inst.d), positions });
                 cache_.clear();
                 check_status();
                 break;
@@ -12237,7 +13742,9 @@ private:
             // (sva::AttemptStorage::pop_outcome, layout in sva_storage.hpp):
             // the block base comes from the kernel's table at entry
             // member_base[member] + aux; a null entry binds through the
-            // helper (a restored monitor), and no monitor gives 0.
+            // helper (a restored monitor), and no monitor gives 0. The code
+            // carries outcome_action_off when the action controls skip the
+            // outcome's action block (h_flags, 20.11).
             using namespace runtime::sva::layout;
             auto* table = builder_.CreateLoad(ptr_, frame_field(120U));
             auto* blocks = builder_.CreateLoad(ptr_, table);
@@ -12249,7 +13756,7 @@ private:
             auto* index = builder_.CreateAdd(base, llvm::ConstantInt::get(i32_, inst.aux));
             auto* entry = builder_.CreateInBoundsGEP(ptr_, blocks, index);
             auto* loaded = builder_.CreateLoad(ptr_, entry);
-            auto* null = llvm::ConstantPointerNull::get(ptr_);
+            auto* null = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(ptr_));
             auto* bind = llvm::BasicBlock::Create(context_, "sva_bind", &function_);
             auto* test = llvm::BasicBlock::Create(context_, "sva_test", &function_);
             auto* pop = llvm::BasicBlock::Create(context_, "sva_pop", &function_);
@@ -12292,7 +13799,15 @@ private:
                 return builder_.CreateInBoundsGEP(i64_, block,
                     builder_.CreateAdd(row, constant(field)));
             };
-            auto* code = builder_.CreateLoad(i64_, row_word(0U));
+            auto* outcome = builder_.CreateLoad(i64_, row_word(0U));
+            auto* off = builder_.CreateAnd(
+                builder_.CreateLShr(builder_.CreateLoad(i64_, word(h_flags)),
+                    builder_.CreateAdd(outcome,
+                        constant(static_cast<std::uint64_t>(action_off_shift)))),
+                constant(1U));
+            auto* code = builder_.CreateAdd(outcome,
+                builder_.CreateMul(off,
+                    constant(static_cast<std::uint64_t>(outcome_action_off))));
             builder_.CreateStore(builder_.CreateLoad(i64_, row_word(1U)),
                 word(h_last_start));
             builder_.CreateStore(builder_.CreateLoad(i64_, row_word(2U)),
@@ -12344,6 +13859,25 @@ private:
             // replace branches.
             auto* table = builder_.CreateLoad(ptr_, frame_field(120U));
             auto* m = constant(mask_of(inst.width));
+            if (inst.aux == 8U) {
+                // An assertion control read (IEEE 1800-2023 20.11): the
+                // word of site x of the member's process, controls[
+                // control_base[member] + x]. The host sets the words while
+                // a control task runs (a host call), so it is a plain load.
+                auto* control_base = builder_.CreateLoad(ptr_,
+                    builder_.CreateConstInBoundsGEP1_64(i8_, table, 48U));
+                auto* member = builder_.CreateLoad(i32_, frame_field(32U));
+                auto* base = builder_.CreateLoad(i32_,
+                    builder_.CreateInBoundsGEP(i32_, control_base, member));
+                auto* index = builder_.CreateAdd(builder_.CreateZExt(base, i64_),
+                    constant(inst.x));
+                auto* controls = builder_.CreateLoad(ptr_,
+                    builder_.CreateConstInBoundsGEP1_64(i8_, table, 56U));
+                auto* word = builder_.CreateLoad(i64_,
+                    builder_.CreateInBoundsGEP(i64_, controls, index));
+                store_register(inst.d, { builder_.CreateAnd(word, m), constant(0U) });
+                break;
+            }
             if (inst.aux == 4U) {
                 // $time or $stime (20.3): the time step in the unit's ticks,
                 // rounded half up as systemverilog_time_function does, with
@@ -12408,28 +13942,71 @@ private:
                 store_register(inst.d, current);
                 break;
             }
-            if (kind == SignalReadKind::past) {
-                // The sample of this time step is not a past one (16.9.3).
+            // Whether the clock's sample of this time step is in the ring:
+            // the time step is a tick (16.9.3).
+            const auto sampled_now = [&] {
                 auto* now = builder_.CreateLoad(i64_,
                     builder_.CreateLoad(ptr_,
                         builder_.CreateConstInBoundsGEP1_64(i8_, table, 40U)));
-                auto* sampled_now = builder_.CreateAnd(
+                return builder_.CreateAnd(
                     builder_.CreateAnd(nonzero(ring_word(6U)),
                         builder_.CreateICmpEQ(ring_word(7U), now)),
                     builder_.CreateICmpEQ(ring_word(8U),
                         constant(static_cast<std::uint64_t>(
                             ProcessSchedulingDomain::systemverilog))));
+            };
+            if (kind == SignalReadKind::past) {
+                // The sample of this time step is not a past one (16.9.3).
                 auto* prior = builder_.CreateSub(count,
-                    builder_.CreateZExt(sampled_now, i64_));
+                    builder_.CreateZExt(sampled_now(), i64_));
                 auto* depth = constant(inst.z);
                 store_register(inst.d,
                     select(builder_.CreateICmpUGE(prior, depth),
                         value(builder_.CreateSub(prior, depth)), fallback));
                 break;
             }
-            const auto previous = select(
-                builder_.CreateICmpUGE(count, constant(2U)),
-                value(builder_.CreateSub(count, constant(2U))), fallback);
+            // A value change function compares the sampled value of this
+            // time step with the sample of the most recent strictly prior
+            // tick (16.9.3): at a tick the ring's last two samples, in any
+            // other time step the Preponed value (y - 1 in the sampled
+            // words) and the ring's last sample. The value loads keep the
+            // signal's bits (offset), all of which $stable and $changed
+            // compare.
+            auto* signal_mask = constant(mask_of(inst.offset));
+            const auto entry = [&](llvm::Value* index) {
+                auto* slot = builder_.CreateURem(builder_.CreateAdd(first, index),
+                    capacity);
+                auto* at_word = builder_.CreateAdd(constant(12U),
+                    builder_.CreateMul(slot, value_words));
+                auto* a = builder_.CreateLoad(i64_,
+                    builder_.CreateInBoundsGEP(i64_, ring, at_word));
+                auto* b = builder_.CreateLoad(i64_,
+                    builder_.CreateInBoundsGEP(i64_, ring,
+                        builder_.CreateAdd(at_word, constant(1U))));
+                return Pair { builder_.CreateAnd(a, signal_mask),
+                    builder_.CreateAnd(b, signal_mask) };
+            };
+            const Pair signal_fallback { constant(inst.imm_a & mask_of(inst.offset)),
+                constant(inst.imm_b & mask_of(inst.offset)) };
+            const auto last = select(builder_.CreateICmpUGE(count, constant(1U)),
+                entry(builder_.CreateSub(count, constant(1U))), signal_fallback);
+            auto previous = select(builder_.CreateICmpUGE(count, constant(2U)),
+                entry(builder_.CreateSub(count, constant(2U))), signal_fallback);
+            auto now_value = last;
+            if (inst.y != 0U) {
+                auto* sampled = builder_.CreateLoad(ptr_,
+                    builder_.CreateConstInBoundsGEP1_64(i8_, table, 32U));
+                const Pair preponed {
+                    builder_.CreateAnd(builder_.CreateLoad(i64_,
+                        builder_.CreateConstInBoundsGEP1_64(i64_, sampled, inst.y - 1U)),
+                        signal_mask),
+                    builder_.CreateAnd(builder_.CreateLoad(i64_,
+                        builder_.CreateConstInBoundsGEP1_64(i64_, sampled, inst.y)),
+                        signal_mask) };
+                auto* tick = sampled_now();
+                now_value = select(tick, last, preponed);
+                previous = select(tick, previous, last);
+            }
             const auto bit = [&](llvm::Value* plane) {
                 return builder_.CreateTrunc(plane, llvm::Type::getInt1Ty(context_));
             };
@@ -12443,15 +14020,15 @@ private:
             llvm::Value* result = nullptr;
             switch (kind) {
             case SignalReadKind::rose:
-                result = builder_.CreateAnd(one(current), builder_.CreateNot(one(previous)));
+                result = builder_.CreateAnd(one(now_value), builder_.CreateNot(one(previous)));
                 break;
             case SignalReadKind::fell:
-                result = builder_.CreateAnd(zero(current), builder_.CreateNot(zero(previous)));
+                result = builder_.CreateAnd(zero(now_value), builder_.CreateNot(zero(previous)));
                 break;
             default: {
                 auto* equal = builder_.CreateAnd(
-                    builder_.CreateICmpEQ(current.a, previous.a),
-                    builder_.CreateICmpEQ(current.b, previous.b));
+                    builder_.CreateICmpEQ(now_value.a, previous.a),
+                    builder_.CreateICmpEQ(now_value.b, previous.b));
                 result = kind == SignalReadKind::stable ? equal
                                                         : builder_.CreateNot(equal);
                 break;
@@ -13379,7 +14956,9 @@ private:
     /// word pair (the identity) go on the body's growable frame stack, whose
     /// depth word x counts pairs. A full stack grows first (the one helper
     /// call a push makes, only at a capacity boundary). Every register is in
-    /// the register file here (frame bodies keep no local registers).
+    /// the register file here (frame bodies keep no local registers). With
+    /// sub 1 the runtime then saves the frame's strings, containers and
+    /// private arrays (operation y).
     void emit_frame_push(const KInst& inst, const std::uint32_t at)
     {
         const auto& save = body_.frame_saves[inst.aux];
@@ -13421,11 +15000,19 @@ private:
             }
         }
         store_register(inst.x, Pair { after, constant(0U) });
+        if (inst.sub != 0U) {
+            // The frame's strings, containers and private arrays are the
+            // runtime library's values: the runtime saves them (z 2).
+            call_effect(at, zero_pair(), zero_pair(),
+                Pair { constant(2U), constant(0U) }, 4U);
+        }
     }
 
     /// KOp::frame_pop: the frame's registers return (those the call's
     /// results keep are not in the list) and the depth drops; a stack that
-    /// holds no such frame is the reference's mismatch error.
+    /// holds no such frame is the reference's mismatch error. With sub 1
+    /// the runtime then restores the frame's strings, containers and
+    /// private arrays.
     void emit_frame_pop(const KInst& inst, const std::uint32_t at)
     {
         const auto& save = body_.frame_saves[inst.aux];
@@ -13462,6 +15049,10 @@ private:
             forget_registers(entry.index, entry.count);
         }
         store_register(inst.x, Pair { top, constant(0U) });
+        if (inst.sub != 0U) {
+            call_effect(at, zero_pair(), zero_pair(),
+                Pair { constant(2U), constant(0U) }, 4U);
+        }
     }
 
     /// A call on the body's growable stack (flag_linear): the return target
@@ -14730,16 +16321,25 @@ public:
             return entries;
         }
         define_helpers(*jit_, helpers);
+        // The templates' objects link against the plans' automata.
+        ensure_sva(templates, helpers);
         std::vector<std::string> keys;
         keys.reserve(templates.size());
         for (const auto& code : templates) {
             keys.push_back(template_key(code));
         }
         load_index(index_key(keys));
+        std::size_t restored = 0U;
         for (std::size_t index = 0U; index < templates.size(); ++index) {
             entries[index] = find(keys[index], templates[index]);
+            restored += entries[index] != nullptr ? 1U : 0U;
         }
         write_perf_map(templates, entries);
+        if (std::getenv("FSIM_PROFILE_PHASES") != nullptr) {
+            // The templates whose code was built ahead of time.
+            std::cerr << "fsim-profile: static-kernel-codegen restored=" << restored
+                      << " of=" << templates.size() << '\n';
+        }
         return entries;
     }
 
@@ -14752,6 +16352,7 @@ public:
         std::vector<std::string> keys;
         keys.reserve(templates.size());
         define_helpers(*jit_, helpers);
+        ensure_sva(templates, helpers);
         for (std::size_t index = 0U; index < templates.size(); ++index) {
             keys.push_back(template_key(templates[index]));
             entries[index] = find(keys.back(), templates[index]);
@@ -14833,6 +16434,185 @@ public:
     }
 
 private:
+    /// The attempt automata of the directives' plans that the templates'
+    /// tick sites call (SvaAutomatonEmitter, sva_automaton_symbol): one
+    /// function per distinct plan for the whole design, whatever template
+    /// and site uses it, compiled once with the hot tier's backend (it runs
+    /// at every tick of every directive of the plan) or loaded from the
+    /// ahead-of-time cache, and defined in every JIT before a template's
+    /// code links against it.
+    void ensure_sva(std::span<const StaticKernelTemplate> templates,
+        const StaticKernelNativeHelpers& helpers)
+    {
+        std::vector<std::pair<std::string, const detail::SvaNativePlan*>> missing;
+        std::unordered_set<std::string> seen;
+        for (const auto& code : templates) {
+            for (const auto& inst : code.body->code) {
+                if (inst.op != detail::KOp::sva_tick || inst.sub != 0U || inst.z == 0U) {
+                    continue;
+                }
+                const auto& plan = code.body->sva_plans.at(inst.z - 1U);
+                auto symbol = sva_automaton_symbol(plan);
+                if (!sva_known_.contains(symbol) && seen.insert(symbol).second) {
+                    missing.emplace_back(std::move(symbol), &plan);
+                }
+            }
+        }
+        if (missing.empty()) {
+            return;
+        }
+        const auto started = std::chrono::steady_clock::now();
+        auto& jit = *hot_jit_;
+        define_helpers(jit, helpers);
+        const auto object_key = [&](const std::string& symbol) {
+            CacheKeyBuilder key;
+            key.add("codegen", identity_);
+            key.add("sva-automaton", symbol);
+            return key.finish();
+        };
+        std::vector<std::size_t> build;
+        std::size_t loaded = 0U;
+        for (std::size_t index = 0U; index < missing.size(); ++index) {
+            if (cache_ && !ahead_of_time_) {
+                std::error_code error;
+                const auto key = object_key(missing[index].first);
+                if (const auto object = cache_->load(key, error)) {
+                    auto buffer = llvm::MemoryBuffer::getMemBufferCopy(
+                        llvm::StringRef { reinterpret_cast<const char*>(object->data()),
+                            object->size() },
+                        "fsim-static-kernel-" + key);
+                    if (auto failure = jit.addObjectFile(std::move(buffer))) {
+                        llvm::consumeError(std::move(failure));
+                    } else {
+                        ++loaded;
+                        continue;
+                    }
+                }
+            }
+            build.push_back(index);
+        }
+        // Each automaton builds and compiles on a thread of its own, with
+        // its own context and target machine; the objects are added in plan
+        // order.
+        std::vector<std::unique_ptr<llvm::MemoryBuffer>> objects(build.size());
+        std::vector<std::exception_ptr> failures(build.size());
+        std::atomic_size_t next { 0U };
+        const auto layout = jit.getDataLayout();
+        const auto work = [&] {
+            for (auto slot = next.fetch_add(1U); slot < build.size(); slot = next.fetch_add(1U)) {
+                try {
+                    const auto& [symbol, plan] = missing[build[slot]];
+                    llvm::LLVMContext context;
+                    context.setDiscardValueNames(std::getenv("FSIM_STATIC_KERNEL_DUMP_IR") == nullptr);
+                    llvm::Module module("fsim_sva_automaton", context);
+                    module.setDataLayout(layout);
+                    SvaAutomatonEmitter emitter(module, *plan, sva_check_enabled());
+                    static_cast<void>(emitter.tick_function(symbol));
+                    if (std::getenv("FSIM_STATIC_KERNEL_VERIFY") != nullptr
+                        && llvm::verifyModule(module, &llvm::errs())) {
+                        throw std::runtime_error("static kernel automaton module is invalid");
+                    }
+                    {
+                        llvm::LoopAnalysisManager loop_analyses;
+                        llvm::FunctionAnalysisManager function_analyses;
+                        llvm::CGSCCAnalysisManager cgscc_analyses;
+                        llvm::ModuleAnalysisManager module_analyses;
+                        llvm::PassBuilder builder;
+                        builder.registerModuleAnalyses(module_analyses);
+                        builder.registerCGSCCAnalyses(cgscc_analyses);
+                        builder.registerFunctionAnalyses(function_analyses);
+                        builder.registerLoopAnalyses(loop_analyses);
+                        builder.crossRegisterProxies(loop_analyses, function_analyses,
+                            cgscc_analyses, module_analyses);
+                        llvm::ModulePassManager pipeline;
+                        if (auto error = builder.parsePassPipeline(pipeline,
+                                "function(sroa,early-cse,simplifycfg)")) {
+                            throw std::runtime_error(error_text(std::move(error)));
+                        }
+                        pipeline.run(module, module_analyses);
+                    }
+                    if (const char* dump = std::getenv("FSIM_STATIC_KERNEL_DUMP_IR")) {
+                        auto file = support::native_fs::open_ofstream(
+                            std::filesystem::path { dump } / (symbol + ".ll"));
+                        std::string text;
+                        llvm::raw_string_ostream stream(text);
+                        module.print(stream, nullptr);
+                        file << text;
+                    }
+                    auto target = target_builder(hot_machine_).createTargetMachine();
+                    if (!target) {
+                        throw std::runtime_error(error_text(target.takeError()));
+                    }
+                    llvm::orc::SimpleCompiler compiler(**target);
+                    auto object = compiler(module);
+                    if (!object) {
+                        throw std::runtime_error(error_text(object.takeError()));
+                    }
+                    objects[slot] = std::move(*object);
+                } catch (...) {
+                    failures[slot] = std::current_exception();
+                }
+            }
+        };
+        {
+            std::vector<std::jthread> workers;
+            const auto threads = std::min<std::size_t>(jobs_, build.size());
+            for (std::size_t worker = 1U; worker < threads; ++worker) {
+                workers.emplace_back(work);
+            }
+            work();
+        }
+        for (const auto& failure : failures) {
+            if (failure) {
+                std::rethrow_exception(failure);
+            }
+        }
+        const bool store = ahead_of_time_ && cache_;
+        for (std::size_t slot = 0U; slot < build.size(); ++slot) {
+            if (store) {
+                const std::string bytes { objects[slot]->getBuffer() };
+                std::error_code error;
+                static_cast<void>(cache_->store(object_key(missing[build[slot]].first),
+                    std::as_bytes(std::span { bytes.data(), bytes.size() }), error));
+            }
+            if (auto error = jit.addObjectFile(std::move(objects[slot]))) {
+                throw std::runtime_error(error_text(std::move(error)));
+            }
+        }
+        // Every other JIT gets the addresses as absolute symbols.
+        std::array<llvm::orc::LLJIT*, 3> others { jit_.get(), warm_jit_.get(), opt_jit_.get() };
+        std::array<llvm::orc::SymbolMap, 3> definitions;
+        for (const auto& [symbol, plan] : missing) {
+            auto found = jit.lookup(symbol);
+            if (!found) {
+                throw std::runtime_error(error_text(found.takeError()));
+            }
+            sva_known_.emplace(symbol, found->getValue());
+            for (std::size_t other = 0U; other < others.size(); ++other) {
+                if (others[other] != nullptr) {
+                    definitions[other][others[other]->mangleAndIntern(symbol)]
+                        = llvm::orc::ExecutorSymbolDef(*found,
+                            llvm::JITSymbolFlags::Exported | llvm::JITSymbolFlags::Callable);
+                }
+            }
+        }
+        for (std::size_t other = 0U; other < others.size(); ++other) {
+            if (others[other] != nullptr) {
+                if (auto error = others[other]->getMainJITDylib().define(
+                        llvm::orc::absoluteSymbols(std::move(definitions[other])))) {
+                    throw std::runtime_error(error_text(std::move(error)));
+                }
+            }
+        }
+        if (std::getenv("FSIM_PROFILE_PHASES") != nullptr) {
+            std::cerr << "fsim-profile: static-kernel-sva-automata plans=" << missing.size()
+                      << " loaded=" << loaded << " compiled=" << build.size() << " ms="
+                      << std::chrono::duration<double, std::milli>(
+                             std::chrono::steady_clock::now() - started).count()
+                      << '\n';
+        }
+    }
+
     /// The runtime helpers generated code calls by name
     /// (FunctionEmitter::helper_symbol), defined once per JIT.
     void define_helpers(llvm::orc::LLJIT& jit,
@@ -15444,43 +17224,7 @@ private:
         // whether they are checked (FSIM_KERNEL_SVA_CHECK).
         append(body.sva_plans.size());
         for (const auto& plan : body.sva_plans) {
-            append(plan.root);
-            append(plan.every_match);
-            append_all(plan.clock_guards);
-            append(plan.sequences.size());
-            for (const auto& sequence : plan.sequences) {
-                append(sequence.counters);
-                append(sequence.state_base);
-                append(sequence.code.size());
-                for (const auto& step : sequence.code) {
-                    append(step.op);
-                    append(step.a);
-                    append(step.b);
-                    append(step.c);
-                    append(step.lo);
-                    append(step.hi);
-                    append(step.line);
-                    append(step.column);
-                    append(step.lo_slot);
-                    append(step.hi_slot);
-                }
-            }
-            append(plan.properties.size());
-            for (const auto& property : plan.properties) {
-                append(property.kind);
-                append(property.overlapped);
-                append(property.sequence);
-                append(property.child);
-                append_all(property.children);
-                append(property.guard);
-                append(property.lo);
-                append(property.lo_slot);
-                append(property.hi);
-                append(property.hi_slot);
-                append(property.line);
-                append(property.column);
-            }
-            append_all(plan.guard_positions);
+            append_sva_plan(text, plan, true);
         }
         append(sva_check_enabled());
         append(sva_verify_enabled());
@@ -15652,6 +17396,8 @@ private:
     std::string identity_;
     llvm::XXH128_hash_t identity_hash_ { };
     std::unordered_map<std::string, Known> known_;
+    /// The plans' automata compiled or loaded (ensure_sva), by symbol.
+    std::unordered_map<std::string, std::uint64_t> sva_known_;
     std::unordered_map<std::string, Record> records_;
     std::vector<IndexEntry> index_;
     std::string index_key_;

@@ -280,6 +280,27 @@ std::shared_ptr<const runtime::SystemVerilogVpiTypespec> vpi_typespec(
                 return result;
             };
             for (const auto& association : pattern->systemverilog->associations) {
+                // `default: value` is the array's default, the value a read
+                // of a key with no entry returns (7.9.11, 7.8.6).
+                if (association.choice_spelling == "default") {
+                    if (type.element_kind == ContainerElementKind::String) {
+                        const auto text
+                            = specialization.evaluate_string_expression(
+                                association.value);
+                        if (!text) {
+                            return std::nullopt;
+                        }
+                        value.associative_default_text = *text;
+                    } else {
+                        const auto element = packed_of(
+                            association.value, type.element_width);
+                        if (!element) {
+                            return std::nullopt;
+                        }
+                        value.associative_default = *element;
+                    }
+                    continue;
+                }
                 if (association.choice_spelling != "@key"
                     || association.choices.size() != 1U) {
                     return std::nullopt;
@@ -1977,7 +1998,13 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                     + declaration.name
                     + "' has an unsupported initializer"
                     + (initializer_failure.empty()
-                            ? std::string { }
+                            ? std::string {
+                                  ": only an elaboration-time constant "
+                                  "assignment pattern or unpacked array "
+                                  "concatenation initializes a container "
+                                  "here; one that reads variables is not "
+                                  "supported (IEEE 1800-2023 6.8, 7.9.11, "
+                                  "10.9, 10.10)" }
                             : ": " + initializer_failure),
                 compiled_source_span(
                     *compiled_, declaration.source));

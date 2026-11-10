@@ -1,0 +1,11 @@
+#c t=5 put top.mem[1]=7 after 0 read 7
+#c t=5 put top.mem[2]=9 after 0 read 9
+#c t=5 put top.w[1]=7 after 0 read 7
+#c t=5 put top.mem[3]=6 after 2 read 3
+#c cb top.mem[1]=7 t=5
+#c t=6 put top.w[2]=9 after 0 read 9
+#c cb top.w[2]=9 t=6
+#c cb top.mem[3]=6 t=7
+#c t=10 c=9 cw=9 mem[1]=7 w[1]=7 mem[3]=6 woken mem=5 w=5
+#c cb top.mem[3]=33 t=12
+#c t=14 mem[3]=33 w[1]=11 w[2]=9 woken w=12

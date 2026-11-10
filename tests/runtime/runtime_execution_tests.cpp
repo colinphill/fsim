@@ -1234,7 +1234,7 @@ void test_simir_postponed_process_ordering()
             const std::span<const PackedLogic4> actuals,
             const std::span<const std::uint8_t> signed_actuals,
             const std::span<const frontend::SystemVerilogScalarKind> scalar_kinds,
-            const CoverageSampleTrigger trigger) {
+            const CoverageSampleTrigger trigger, SimulationTick, std::uint64_t) {
             require(
                 identity == "work.sample@wide"
                     && actuals.size() == 1

@@ -129,7 +129,7 @@ SystemVerilogVpiStoredValueLookupResult
 SystemVerilogVpiObjectRegistry::stored_value(
     const fsim_vpi_handle_v1 handle) const
 {
-    std::scoped_lock lock { mutex_ };
+    std::unique_lock lock { mutex_ };
     if (!valid()) {
         return { std::nullopt, SystemVerilogVpiValueError::InvalidSimulation };
     }
@@ -156,7 +156,16 @@ SystemVerilogVpiObjectRegistry::stored_value(
     if (!record.type) {
         return { std::nullopt, SystemVerilogVpiValueError::NotReadable };
     }
-    auto value = visible_value(record, handle);
+    std::optional<SystemVerilogVpiStoredValue> value;
+    if (record.live_value && live_source_) {
+        // The simulation answers with the lock released: the kernel may
+        // publish changes (notify_live_value) while it does.
+        const auto source = live_source_;
+        lock.unlock();
+        value = source(handle, false);
+    } else {
+        value = visible_value(record, handle);
+    }
     if (!value) {
         return { std::nullopt, SystemVerilogVpiValueError::NotBound };
     }

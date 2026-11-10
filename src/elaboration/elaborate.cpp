@@ -95,6 +95,18 @@ void append_compiled_constant_effects(
             append_selected_generate_statements(
                 append_selected_generate_statements, generate);
         }
+        // Only the elaboration severity tasks run here (IEEE 1800-2023
+        // 20.11). A continuous assignment of the program, a written one or
+        // the hidden net of a concurrent assertion's disable condition
+        // (16.12), runs in the simulation (24.3.1).
+        std::erase_if(program_statements,
+            [&](const semantic::StatementId statement_id) {
+                const auto statement
+                    = specialized->find_statement(statement_id);
+                return !statement || statement->systemverilog == nullptr
+                    || statement->systemverilog->kind
+                    != semantic::sv::StatementKind::report;
+            });
         if (program_statements.empty()) {
             return;
         }

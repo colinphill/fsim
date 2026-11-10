@@ -13,6 +13,7 @@
 #include <numeric>
 #include <functional>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -147,6 +148,23 @@ struct GeneralPropertyActions {
   std::vector<LocalState> locals;
   support::RareVector<Sensitivity> clock;
   SourceSpan span;
+};
+
+// The names one scope of a concurrent assertion declares (its signals,
+// variables, parameters, instances and clocking blocks), and the end of its
+// sequence and property declarations among those the assertion sees. An
+// assertion in a generate block sees the module's scope and those of the
+// enclosing blocks, the module first. A name in a clocking event resolves
+// from the scope it is written in (the directive's or a declaration's, IEEE
+// 1800-2023 16.8) to the innermost scope outwards that declares it (23.9);
+// two clocking events are the same clock only when they resolve alike
+// (16.13.1, 16.16.1).
+struct SvaNameScope {
+  std::unordered_set<std::string> names;
+  std::size_t declarations_end {};
+  // The clocking events of the scope's clocking blocks, by block name
+  // (SystemVerilogClockingBlock::event_tokens).
+  std::unordered_map<std::string, std::vector<Token>> clocking_events;
 };
 
 class VerilogParser final : private detail::ParserBase {
@@ -295,6 +313,9 @@ class VerilogParser final : private detail::ParserBase {
   std::optional<Expression> event_guard_;
   // Why the last concurrent assertion directive could not be prepared.
   std::string sva_reject_reason_;
+  // The property prepared last uses local variables or sequence match
+  // items (IEEE 1800-2023 16.10), which only the monitor evaluates.
+  bool sva_uses_locals_ {};
   // Compilation-unit forward type declarations awaiting their definition.
   std::vector<Token> compilation_unit_forward_types_;
   // Reports undeclared names a compilation-unit subprogram noted since
@@ -386,22 +407,94 @@ class VerilogParser final : private detail::ParserBase {
       std::vector<Token> disable;
       // A multiclocked sequence's clocking events, the leading one first
       // (IEEE 1800-2017 16.13.1); empty when the property has one clock.
+      // A singly clocked property whose monitor also evaluates at time
+      // steps without a tick (`wakes`) has its one clock here too: its
+      // monitor tells a tick from such a time step by a hidden tick bit
+      // its clock process sets, as a multiclocked monitor does by its
+      // clocks' tick events.
       std::vector<std::vector<Token>> clocks;
+      // The conditions of the asynchronous aborts the plan checks
+      // (accept_on, reject_on; IEEE 1800-2023 16.12.14), each once.
+      std::vector<std::vector<Token>> async_aborts;
+      // The monitor also evaluates at the time steps without a tick of its
+      // clock: an asynchronous abort is checked at every time step
+      // (16.12.14), and a disable condition with a sampled value function
+      // or a sequence's triggered state changes value at the start of a
+      // time step without a change of its operands (16.9.3, 16.13.6).
+      bool wakes { };
+      // The monitor evaluates at every time step while an attempt is in
+      // progress (a disable or abort condition whose changes a hidden net
+      // does not see), not only at the one after an abort condition
+      // changed.
+      bool every_step { };
+      // The disable condition can be kept in a hidden net by a continuous
+      // assignment: it reads no sampled value function, triggered state or
+      // automatic variable.
+      bool disable_watched { };
+      // The local variables (IEEE 1800-2023 16.10), each under the unique
+      // name the property's tokens were renamed to, with its type; the
+      // tick's witness operands name them.
+      struct Local {
+          std::string name;
+          std::vector<Token> type;
+      };
+      std::vector<Local> locals;
+      // The expressions that read or assign locals, by number (the plan's
+      // expressions): a boolean whose truth a check takes (target 0), or
+      // the statement that assigns local target - 1.
+      struct LocalExpression {
+          std::vector<Token> tokens;
+          std::uint32_t target {};
+      };
+      std::vector<LocalExpression> expressions;
+      // The subroutine calls attached to sequences, by number (16.11).
+      std::vector<std::vector<Token>> calls;
   };
-  // `tick_prefix` names the events that report each clock's ticks to a
-  // multiclocked monitor; without it a multiclocked property is rejected.
+  // `tick_prefix` names the hidden bits that report each clock's ticks to
+  // a monitor with several clocks or one that `wakes`; without it a
+  // multiclocked property is rejected and a property that wakes keeps its
+  // clocking event. `expect_names`, for an expect statement (16.17), are
+  // the names its procedure declares, which no hidden net can follow: a
+  // disable or abort condition that reads one makes the monitor evaluate
+  // at every time step of the attempt; a multiclocked expect property is
+  // rejected.
   std::optional<SvaPrepared> prepare_sva_property(const DesignUnit& unit,
       const SystemVerilogConcurrentAssertion& directive, std::string& reason,
-      std::string_view tick_prefix = { });
-  // `$__fsim_sva_tick(site, plan, ...)` with the given start operand.
+      std::string_view tick_prefix = { },
+      const std::set<std::string>* expect_names = nullptr);
+  // `$__fsim_sva_tick(site, plan, ...)` with the given start operand. With
+  // `disable_signal` the disabled operand is that 1-bit signal, the disable
+  // condition's truth the directive's hidden net holds (16.12), read as it
+  // is; without it the disabled operand is the condition itself. `wake`,
+  // when not empty, follows the bounds: the monitor's wake bit, its abort
+  // net (or 1'b0), its monitor flags and its tick bit
+  // (runtime::simir::SvaOperation).
   std::vector<Token> sva_tick_call(const SvaPrepared& prepared,
       std::uint32_t site, std::span<const Token> start, const SourceSpan& span,
-      bool sampled = false);
+      bool sampled = false, std::span<const Token> disable_signal = { },
+      std::span<const Token> wake = { });
+  // The statements after `count = <tick>` that answer the tick's local-
+  // variable requests and run it again until it completes (16.10): empty
+  // for a plan without locals. `prefix` names the process's variables.
+  std::vector<Token> sva_request_loop(const SvaPrepared& prepared,
+      std::uint32_t site, std::span<const Token> tick, const std::string& prefix,
+      const SourceSpan& span);
+  // The statements that run the subroutine calls the tick queued (16.11):
+  // empty for a plan without any.
+  std::vector<Token> sva_call_loop(const SvaPrepared& prepared,
+      std::uint32_t site, const std::string& prefix, const SourceSpan& span);
+  // The declarations of the locals and the request loop's variables.
+  std::vector<Token> sva_local_declarations(const SvaPrepared& prepared,
+      const std::string& prefix, const SourceSpan& span) const;
   // Replaces each `expect` statement of a scope's processes and tasks with
-  // the statements that evaluate its property (16.17).
+  // the statements that evaluate its property (16.17). The hidden nets of
+  // their disable conditions and the continuous assignments that keep them
+  // go to `signals` and `concurrent_statements` of the scope.
   void resolve_expect_statements(const DesignUnit& scope,
       std::vector<Process>& processes,
-      std::vector<TaskDeclaration>& tasks);
+      std::vector<TaskDeclaration>& tasks,
+      std::vector<SignalDeclaration>& signals,
+      std::vector<Statement>& concurrent_statements);
   bool resolve_sva_directive(DesignUnit& unit, std::size_t index);
   // Moves the concurrent assertion statements of procedures to directives
   // enabled by those procedures (IEEE 1800-2017 16.14.6).
@@ -506,6 +599,14 @@ class VerilogParser final : private detail::ParserBase {
       SystemVerilogConcurrentAssertionKind kind,
       std::optional<Token> label = std::nullopt,
       bool expect = false);
+
+  // A sampled value function other than $sampled in a disable condition or
+  // a clock expression of an assertion, sequence or property names its
+  // clock (IEEE 1800-2023 16.9.3, 16.12): one without a clocking argument in
+  // a `disable iff (...)` or an `@(...)` of the tokens is an error, and in
+  // all of them when `whole` (the condition of a default disable iff, 16.15).
+  void check_explicitly_clocked_samples(
+      std::span<const Token> tokens, bool whole);
 
   Statement parse_immediate_assertion(const Token& start);
 
@@ -1064,9 +1165,19 @@ class VerilogParser final : private detail::ParserBase {
   std::size_t dpi_export_block_tag_ {};
   // The monitor sites of `expect` statements (16.17).
   std::uint32_t expect_sites_ {};
+  // The scopes of the generate block whose assertions are being resolved
+  // (SvaNameScope), the module first; empty for the module's own.
+  std::vector<SvaNameScope> sva_scopes_;
+  // The scopes an assertion of `unit` resolves the names of its clocking
+  // events in.
+  [[nodiscard]] std::vector<SvaNameScope> sva_name_scopes(
+      const DesignUnit& unit) const;
   // Assignments nested in expressions (IEEE 1800-2017 11.3.6) run as
   // statements ahead of the statement that contains them.
   std::size_t statement_hoist_depth_ {};
+  // The if statement parsed next heads or continues the series of
+  // conditions of a unique, unique0 or priority if (IEEE 1800-2023 12.4.2).
+  bool qualified_if_chain_ {};
   std::vector<Statement> hoisted_statements_;
 
   struct DecimalRatio {

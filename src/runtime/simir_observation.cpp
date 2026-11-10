@@ -227,6 +227,36 @@ void Interpreter::Impl::prepare_container_value_observation(
     throw std::logic_error("container slice alias chain is cyclic");
 }
 
+std::vector<SignalId> Interpreter::Impl::container_alias_signals(
+    const ContainerObjectId object) const
+{
+    std::vector<SignalId> result;
+    auto selected = object;
+    for (std::size_t depth = 0U; depth < container_objects.size(); ++depth) {
+        const auto& container = get_container_object(selected);
+        if (selected < container_signal_aliases.size()
+            && container_signal_aliases[selected]) {
+            result.push_back(container_signal_aliases[selected]->signal);
+        }
+        if (selected < container_element_signal_aliases.size()) {
+            for (const auto& alias : container_element_signal_aliases[selected]) {
+                if (alias) {
+                    result.push_back(alias->signal);
+                }
+            }
+        }
+        if (selected < container_aggregate_signal_aliases.size()
+            && container_aggregate_signal_aliases[selected]) {
+            result.push_back(container_aggregate_signal_aliases[selected]->signal);
+        }
+        if (!container.slice_alias) {
+            return result;
+        }
+        selected = container.slice_alias->object;
+    }
+    throw std::logic_error("container slice alias chain is cyclic");
+}
+
 void Interpreter::Impl::prepare_callback_observation()
 {
     if (!started) {

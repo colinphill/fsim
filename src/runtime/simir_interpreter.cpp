@@ -5147,6 +5147,7 @@ const ContainerValue& Interpreter::container_object_value(
     const ContainerObjectId object) const
 {
     impl_->expose_container_value_reference(object);
+    impl_->observe_static_kernel_container(object);
     return impl_->read_container_object_value(object);
 }
 
@@ -5154,6 +5155,7 @@ ContainerValue Interpreter::container_object_value_snapshot(
     const ContainerObjectId object) const
 {
     impl_->prepare_container_value_observation(object);
+    impl_->observe_static_kernel_container(object);
     return impl_->read_container_object_value(object);
 }
 
@@ -5165,7 +5167,21 @@ void Interpreter::deposit_container_object(
         impl_->initialize_package_static_container_object(object, value);
         return;
     }
+    // A foreign write of the signals that hold the elements, as
+    // deposit_signal's: the v4 kernel takes it into the signals' slots and
+    // wakes their readers (IEEE 1800-2023 38.34).
+    const auto signals = impl_->started
+        ? impl_->container_alias_signals(object) : std::vector<SignalId> { };
+    for (const auto signal : signals) {
+        note_external_signal_write(signal);
+    }
     impl_->write_container_object_value(object, value);
+    impl_->deposit_static_kernel_container(object);
+    if (impl_->static_kernel) {
+        for (const auto signal : signals) {
+            impl_->static_kernel->host_deposit(signal);
+        }
+    }
 }
 
 void Interpreter::deposit_container_object_element(
@@ -5206,7 +5222,13 @@ void Interpreter::deposit_container_object_element(
                 "SimIR container element is not writable through its signal alias"
             };
         }
+        if (impl_->started) {
+            note_external_signal_write(alias.signal);
+        }
         impl_->commit(alias.signal, std::move(value));
+        if (impl_->static_kernel && impl_->started) {
+            impl_->static_kernel->host_deposit(alias.signal);
+        }
         return;
     }
     if (std::ranges::any_of(
@@ -5230,9 +5252,11 @@ void Interpreter::deposit_container_object_element(
         }
         return;
     }
+    impl_->observe_static_kernel_container(object);
     auto replacement = impl_->read_container_object_value(object);
     replacement.elements[ordinal] = std::move(value);
     impl_->write_container_object_value(object, replacement);
+    impl_->deposit_static_kernel_container(object);
 }
 
 PackedLogic4 Interpreter::driver_value(
@@ -5407,6 +5431,25 @@ void Interpreter::kill_sva_monitors(
     }
 }
 
+void Interpreter::set_sva_action_filter(SvaActionFilter filter)
+{
+    impl_->sva_action_filter = std::move(filter);
+    refresh_sva_actions();
+}
+
+void Interpreter::refresh_sva_actions()
+{
+    if (!impl_->sva_action_filter) {
+        return;
+    }
+    // The map is keyed by the owning process, as for kill_sva_monitors.
+    for (auto& [key, monitor] : impl_->sva_monitors) {
+        if (monitor) {
+            monitor->set_actions_off(impl_->sva_action_filter(key.first));
+        }
+    }
+}
+
 bool Interpreter::kill_sva_attempt(
     const std::span<const ProcessId> design_processes,
     const std::int64_t start_time)
@@ -5473,6 +5516,11 @@ Interpreter::sva_outcome_fail(const ProcessId design_process) const
 void Interpreter::set_sva_attempt_hook(SvaAttemptHook hook)
 {
     impl_->sva_attempt_hook = std::move(hook);
+}
+
+void Interpreter::set_sva_disabled_hook(SvaDisabledHook hook)
+{
+    impl_->sva_disabled_hook = std::move(hook);
 }
 
 void Interpreter::bind_assertion_start_reports() noexcept
@@ -5822,6 +5870,11 @@ const Scheduler& Interpreter::scheduler() const noexcept
 void Interpreter::set_signal_change_hook(SignalChangeHook hook)
 {
     impl_->signal_change_hook = std::move(hook);
+}
+
+std::optional<ProcessId> Interpreter::signal_change_writer() const noexcept
+{
+    return impl_->signal_change_writer;
 }
 
 void Interpreter::publish_static_kernel_outputs()

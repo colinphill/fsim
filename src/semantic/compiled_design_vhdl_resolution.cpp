@@ -176,6 +176,20 @@ constexpr std::string_view ambiguous_literal { "@ambiguous-literal" };
     return { };
 }
 
+// The key this pass gives a predefined enumeration type (16.3, 16.7).
+[[nodiscard]] std::string_view intrinsic_type_name(
+    const support::VhdlIntrinsicEnumeration type)
+{
+    using Intrinsic = support::VhdlIntrinsicEnumeration;
+    switch (type) {
+    case Intrinsic::boolean: return "boolean";
+    case Intrinsic::bit: return "bit";
+    case Intrinsic::character: return "character";
+    case Intrinsic::std_ulogic: return "std_ulogic";
+    }
+    return { };
+}
+
 [[nodiscard]] bool time_unit(const std::string_view unit)
 {
     return support::vhdl_time_unit_femtoseconds(unit).has_value();
@@ -267,22 +281,74 @@ public:
         // The bounds of a range constraint on an enumeration subtype denote
         // literals of that type (IEEE 1076-2008 5.2.1, 9.3.2): '0' in
         // `subtype b is four_value range '0' to '1'` is four_value's '0'.
+        // So do the bounds of a subtype of BOOLEAN, BIT, CHARACTER or
+        // STD_ULOGIC, which this pass keys by name whether or not their
+        // declarations are retained (16.3, 16.7): 'X' in `subtype X01 is
+        // resolved std_ulogic range 'X' to '1'` is STD_ULOGIC's 'X', not
+        // CHARACTER's.
+        const auto enumeration_context = [&](const TypeKey& key) {
+            if (!key.id.valid()) {
+                return support::find_vhdl_intrinsic_enumeration(key.builtin)
+                    .has_value();
+            }
+            const auto* root = type(key.id);
+            return root != nullptr
+                && root->form == vhdl::TypeForm::enumeration;
+        };
+        const auto resolve_bounds = [&](const vhdl::RangeConstraint& range,
+                                        const TypeKey& key) {
+            for (const auto& bound :
+                { range.left_expression, range.right_expression }) {
+                if (bound) {
+                    resolve(*bound, key);
+                }
+            }
+        };
         const auto range_bounds = [&](const vhdl::SubtypeIndication& subtype,
                                       const ScopeId scope) {
             if (subtype.constraints.size() != 1U) {
                 return;
             }
             const auto key = subtype_key(subtype, scope);
-            const auto* root = key.id.valid() ? type(key.id) : nullptr;
-            if (root == nullptr || root->form != vhdl::TypeForm::enumeration) {
+            if (!enumeration_context(key)) {
                 return;
             }
-            const auto& range = subtype.constraints.front();
-            for (const auto& bound :
-                { range.left_expression, range.right_expression }) {
-                if (bound) {
-                    resolve(*bound, key);
+            resolve_bounds(subtype.constraints.front(), key);
+        };
+        // The range of an index constraint (`array (character range 'a' to
+        // 'e')`) has the type of its index subtype (5.3.2.2).
+        const auto dimension_bounds = [&](const vhdl::ArrayDimension& dimension,
+                                          const ScopeId scope) {
+            if (!dimension.constraint) {
+                return;
+            }
+            TypeKey key;
+            if (dimension.index_subtype.selected) {
+                if (const auto* declared
+                    = declaration(*dimension.index_subtype.selected);
+                    declared != nullptr && declared->declared_type) {
+                    key = type_key(*declared->declared_type);
                 }
+            }
+            // An index subtype mark not bound to a declaration denotes what
+            // the visibility rules make of it there (12.3, 12.4): a retained
+            // type, or a type whose declaration the compiler provides.
+            if (!key.known()) {
+                if (const auto* lookup = resolver(scope)) {
+                    const auto spelling = dimension.index_subtype.text();
+                    const auto identity
+                        = lookup->resolve_vhdl_type_identity(spelling, scope);
+                    if (identity.type) {
+                        key = type_key(*identity.type);
+                    } else if (const auto intrinsic
+                        = lookup->resolve_vhdl_intrinsic_enumeration(
+                            spelling, scope)) {
+                        key = builtin(intrinsic_type_name(*intrinsic));
+                    }
+                }
+            }
+            if (enumeration_context(key)) {
+                resolve_bounds(*dimension.constraint, key);
             }
         };
         for (const auto& type : design_.vhdl_hir.types()) {
@@ -291,6 +357,9 @@ public:
                 continue;
             }
             range_bounds(type.base, owner->scope);
+            for (const auto& dimension : type.array_dimensions) {
+                dimension_bounds(dimension, owner->scope);
+            }
             if (type.element_subtype) {
                 range_bounds(*type.element_subtype, owner->scope);
             }
@@ -1187,10 +1256,8 @@ private:
                 || text == "1") {
                 add(result, builtin("bit"));
             }
-            if (text.size() == 3U && text.front() == '\''
-                && text.back() == '\''
-                && std::string_view { "UX01ZWLH-" }.find(text[1])
-                    != std::string_view::npos) {
+            if (support::vhdl_intrinsic_enumeration_position(
+                    support::VhdlIntrinsicEnumeration::std_ulogic, text)) {
                 add(result, builtin("std_ulogic"));
             }
             return result;
@@ -1874,6 +1941,37 @@ private:
                 resolve(record->operands[index], context.known()
                         ? std::optional { std::move(context) }
                         : std::nullopt);
+            }
+            return;
+        }
+        case ExpressionKind::slice: {
+            // The bounds of a slice's discrete range take the index type of
+            // its one-dimensional prefix as their context (8.5, 12.5).
+            if (record->operands.size() != 3U
+                || (record->text != "to" && record->text != "downto")) {
+                break;
+            }
+            const auto* prefix = expression(record->operands.front());
+            if (prefix == nullptr
+                || (function_call(*prefix) && !functions(*prefix).empty())) {
+                break;
+            }
+            resolve(record->operands.front(), std::nullopt);
+            const auto& prefixes = candidates(record->operands.front());
+            const auto* array = prefixes.size() == 1U
+                    && prefixes.front().builtin.empty()
+                ? type(prefixes.front().id)
+                : nullptr;
+            const auto context = array != nullptr
+                    && array->form == vhdl::TypeForm::array
+                    && array->array_dimensions.size() == 1U
+                ? index_key(prefixes.front(), 0U)
+                : TypeKey { };
+            for (const auto bound :
+                { record->operands[1], record->operands[2] }) {
+                resolve(bound,
+                    context.known() ? std::optional { context }
+                                    : std::nullopt);
             }
             return;
         }

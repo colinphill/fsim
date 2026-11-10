@@ -31,6 +31,8 @@ Exclusions never count as closures.
 | `t_array_mda` | out of scope | expects a value from an out-of-bounds array read |
 | `t_array_method` | out of scope | calls the non-standard array method map() |
 | `t_array_pattern_concat` | out of scope | flattens array slices inside an assignment pattern |
+| `t_assert_cover` | out of scope | expects no $stop from `disable iff (!toggle)` with toggle updated by a nonblocking assignment on the same edge; the disable condition reads current values from the attempt's start in the Observed region, so toggle is already 1 at the cyc==8 tick, the cover matches and its $stop runs (IEEE 1800-2023 16.12, 16.6, 4.4.2) |
+| `t_assert_cover_off` | out of scope | expects no $stop from `disable iff (!toggle)` with toggle updated by a nonblocking assignment on the same edge; the disable condition reads current values from the attempt's start in the Observed region, so toggle is already 1 at the cyc==8 tick, the cover matches and its $stop runs (IEEE 1800-2023 16.12, 16.6, 4.4.2) |
 | `t_assert_disable_count` | out of scope | reads $inferred_disable in a procedural expression; it is only a formal argument default (IEEE 1800-2017 16.14.7) |
 | `t_assert_disabled` | out of scope | depends on Verilator --no-assert |
 | `t_assert_future` | out of scope | assumes two-state initial values |
@@ -44,7 +46,6 @@ Exclusions never count as closures.
 | `t_assoc_method` | out of scope | calls the non-standard array method map() |
 | `t_assoc_wildcard_method` | out of scope | calls the non-standard array method map() |
 | `t_assocsel_sideeffect` | out of scope | uses a constant index among the foreach loop variables (dict2d[0][b]), which IEEE 1800-2023 12.7.3 does not allow |
-| `t_bitsel_concat` | out of scope | selects bits of a method-call result |
 | `t_c_this` | out of scope | Verilator $c extension |
 | `t_cast_types` | out of scope | assigns associative arrays with int and bit [31:0] index types (IEEE 1800-2023 7.9.9) |
 | `t_class_enum` | out of scope | compares %p of a class handle against Verilator's member listing |
@@ -268,7 +269,6 @@ Exclusions never count as closures.
 | `t_scheduling_many_clocks` | out of scope | counts a nonblocking update of the time step that calls $finish, which IEEE 1800-2017 20.2 does not run |
 | `t_select_crazy` | out of scope | selects a hierarchical name with a parameter of another instance (bar_inst.THE_LP), not a constant expression |
 | `t_select_plus` | out of scope | expects a partly out-of-range part-select write to be ignored whole (IEEE 1800-2017 11.5.1 writes the in-range bits) |
-| `t_sequence_intersect_varlen` | out of scope | counts nonblocking increments of attempts failing in one time step with Verilator's failure timing; an attempt fails when no match remains (IEEE 1800-2017 16.9.6) |
 | `t_sequence_sexpr_throughout` | out of scope | expects Verilator's count; the case notes other simulators differ |
 | `t_sequence_within` | out of scope | expects Verilator's match counts; the case notes other simulators differ (vacuous successes run the pass action, IEEE 1800-2017 16.14.1) |
 | `t_setuphold` | out of scope | uses internal variables and nets as timing-check events; they shall be module input or inout ports (IEEE 1800-2017 A.7.5.3) |

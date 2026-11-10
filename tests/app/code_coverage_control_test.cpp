@@ -13,6 +13,8 @@
 #include <array>
 #include <cassert>
 #include <chrono>
+#include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -769,6 +771,133 @@ endmodule
     assert(waived);
 }
 
+// Sets, or with a null value unsets, a variable of this process.
+void set_environment(const char* const name, const char* const value)
+{
+#if defined(_WIN32)
+    (void)::_putenv_s(name, value == nullptr ? "" : value);
+#else
+    (void)(value == nullptr ? ::unsetenv(name) : ::setenv(name, value, 1));
+#endif
+}
+
+// The run record of a database $coverage_save wrote: (tick, delta).
+std::pair<std::uint64_t, std::uint64_t> saved_run_time(
+    const std::filesystem::path& path)
+{
+    const auto database = fsim::artifact::read_coverage_database(path);
+    assert(database.ok());
+    assert(database.contents->runs.size() == 1U);
+    const auto& run = database.contents->runs.front();
+    std::error_code ignored;
+    std::filesystem::remove(path, ignored);
+    return { run.final_tick, run.final_delta };
+}
+
+// $coverage_save saves the current state of coverage (IEEE 1800-2023
+// 40.3.2.5): the database's run record carries the time of the call, 7 after
+// the delay control (9.4.1), also when the call runs in a time step a closed
+// static kernel runs ahead of the scheduler (docs/engine-v4-semantics.md
+// S10). The library API (a kernel-owned Simulation) and the CLI, with and
+// without the kernel's own time steps (FSIM_STATIC_KERNEL_TIME_WARP=0), agree
+// with the reference interpreter.
+void test_coverage_save_time(const TemporaryDirectory& directory)
+{
+    const auto root = directory.path / "coverage-save-time";
+    std::filesystem::create_directories(root);
+    const auto source = root / "coverage_save_time.sv";
+    write_text(source, R"(module top;
+  int status;
+  initial begin
+    #7 status = $coverage_save(`SV_COV_STATEMENT, "saved.fsimcov");
+    #3 $finish;
+  end
+endmodule
+)");
+    const auto saved = root / "saved.fsimcov";
+    fsim::project::Config config;
+    config.base_directory = root;
+    config.project.name = "coverage-save-time";
+    config.project.top = "sv:work.top";
+    config.project.tops = { { "sv:work.top", "top" } };
+    config.project.time_resolution = "1ns";
+    config.build.cache_path = root / "cache";
+    config.coverage.enabled = true;
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::system_verilog;
+    sources.standard = "2005";
+    sources.files = { source };
+    config.source_sets.push_back(std::move(sources));
+    const auto library_run = [&](const fsim::app::SimulationEngine engine,
+                                 const bool warp) {
+        set_environment("FSIM_STATIC_KERNEL_TIME_WARP", warp ? nullptr : "0");
+        fsim::diagnostic::Engine diagnostics;
+        auto built = fsim::app::build_project(config, diagnostics);
+        assert(built && !diagnostics.has_error());
+        fsim::app::Simulation simulation { std::move(*built), 1000U, engine };
+        const auto result = simulation.run();
+        assert(result.time == 10U);
+        const auto status = simulation.find_signal("top.status");
+        assert(status && simulation.read_signal(*status).low_word().aval == 1U);
+        set_environment("FSIM_STATIC_KERNEL_TIME_WARP", nullptr);
+        return saved_run_time(saved);
+    };
+    const auto reference
+        = library_run(fsim::app::SimulationEngine::interpreter, true);
+    assert(reference.first == 7U);
+    for (const auto engine : { fsim::app::SimulationEngine::compiled,
+             fsim::app::SimulationEngine::debug }) {
+        for (const bool warp : { true, false }) {
+            const auto actual = library_run(engine, warp);
+            if (actual != reference) {
+                std::cerr << "coverage saved at " << actual.first << '+'
+                          << actual.second << ", not " << reference.first
+                          << '+' << reference.second << '\n';
+            }
+            assert(actual == reference);
+        }
+    }
+
+    const auto previous = std::filesystem::current_path();
+    std::filesystem::current_path(root);
+    const auto cli = [](std::vector<std::string> arguments) {
+        std::vector<const char*> raw;
+        raw.reserve(arguments.size());
+        for (const auto& argument : arguments) {
+            raw.push_back(argument.c_str());
+        }
+        std::istringstream input;
+        std::ostringstream output;
+        std::ostringstream error;
+        const auto status = fsim::cli::run(static_cast<int>(raw.size()),
+            raw.data(), fsim::app::make_cli_services(input), output, error);
+        if (status != 0) {
+            std::cerr << error.str() << output.str();
+        }
+        return status;
+    };
+    assert(cli({ "fsim", "compile", "--code-coverage", source.string() }) == 0);
+    assert(cli({ "fsim", "elaborate", "--code-coverage", "--top", "sv:work.top" })
+        == 0);
+    for (const auto* engine : { "interpreter", "v4" }) {
+        for (const bool warp : { true, false }) {
+            set_environment(
+                "FSIM_STATIC_KERNEL_TIME_WARP", warp ? nullptr : "0");
+            assert(cli({ "fsim", "simulate", "--code-coverage", "--engine",
+                       engine })
+                == 0);
+            set_environment("FSIM_STATIC_KERNEL_TIME_WARP", nullptr);
+            const auto actual = saved_run_time(saved);
+            if (actual != reference) {
+                std::cerr << "CLI " << engine << " coverage saved at "
+                          << actual.first << '+' << actual.second << '\n';
+            }
+            assert(actual == reference);
+        }
+    }
+    std::filesystem::current_path(previous);
+}
+
 int main()
 {
     TemporaryDirectory directory;
@@ -778,6 +907,7 @@ int main()
     test_cli_override(directory);
     test_disabled_build_has_no_runtime_state(directory);
     test_mapped_library_coverage(directory);
+    test_coverage_save_time(directory);
     write_text(directory.path / "coverage_control.sv", R"(
 module top;
   int start_status, stop_status, reset_status, check_status;

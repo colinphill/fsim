@@ -188,18 +188,39 @@ lossy state-domain conversions still reject explicitly.
 
 ## Time and phase lattice
 
-At each timestamp fsim performs:
+At each timestamp fsim performs, for each delta:
 
 1. ingest all due timed events;
-2. run active VHDL, SV, and SystemC processes in stable process-ID order;
-3. run SV `#0` inactive events;
-4. commit VHDL signal transactions, SystemC channel updates, and SV NBA writes
-   in one update phase;
-5. resolve changed signals/nets and enqueue their affected processes for the
+2. run the SystemVerilog regions of the delta that have work (Active,
+   Inactive `#0`, NBA, Observed, Reactive, Re-Inactive, Re-NBA; IEEE
+   1800-2023 4.4, 4.5) until none of them has work left, together with the
+   VHDL processes their changes wake (below);
+3. run the delta's generic (VHDL and SystemC) processes resumed for it, in
+   stable process-ID order; they read the signal values of the start of
+   the simulation cycle (IEEE 1076-2019 14.7.5.3). A SystemVerilog process
+   the same events resume is queued in its region by this pass and runs in
+   step 4, after the pass;
+4. run the SystemVerilog regions again until none has work left, as in
+   step 2;
+5. only then run the delta's update phase, which commits VHDL signal
+   transactions and SystemC channel updates (IEEE 1076-2019 14.7.5.3);
+6. resolve changed signals/nets and enqueue their affected processes for the
    next delta;
-6. run VHDL postponed work, `$strobe`/`$monitor`, trace callbacks, and debugger
+7. run VHDL postponed work, `$strobe`/`$monitor`, trace callbacks, and debugger
    signal breakpoints; and
-7. repeat delta cycles until quiescent, then advance time.
+8. repeat delta cycles until quiescent, then advance time.
+
+The reference scheduler implements this directly: before each generic phase
+of a delta it starts any SystemVerilog region that has work
+(`Scheduler::run`, `begin_systemverilog_batch`), so each generic phase
+starts only while the SystemVerilog regions are empty, and the generic
+Active phase runs as one batch, ahead of the SystemVerilog work the batch
+queues. Both engines follow this one rule (gate BA). The compiled
+kernel runs a VHDL round inside the generic Active phase at once when its
+activation is a task of that phase, and queues the round's update phase
+behind pending SystemVerilog work into the delta's generic Inactive phase;
+a round of an activation outside a generic queue waits for that work
+whole (engine-v4-semantics.md S16).
 
 An immediate SystemC notification re-enters the active worklist at the same
 timestamp. It never runs a callback recursively. A process awakened by the
@@ -213,7 +234,39 @@ wakes and before that region's next NBA updates. The change is an event of
 that delta, so `S'EVENT` and `rising_edge` see it. A VHDL process's signal
 assignments still wait for the update phase. A SystemVerilog flop and a VHDL
 flop on one SystemVerilog clock therefore both sample the values from before
-the edge.
+the edge. This holds for a VHDL process that reads the SystemVerilog object
+itself (a VHDL `in` port whose actual is a SystemVerilog variable or net):
+it sees each value the SystemVerilog regions give it, including one replaced
+later in the same delta.
+
+A SystemVerilog value that reaches a VHDL *signal* through a port (a
+SystemVerilog instance's output connected to a VHDL signal, with or without
+a width or type conversion) is a transaction on that signal's driver. Each
+SystemVerilog change of the delta gives the driver a new zero-delay
+transaction, which replaces the previous one (IEEE 1076-2019 10.5.2.2), and
+the signal takes the driver's value in the update phase of step 5, after all
+of the delta's SystemVerilog regions. So the VHDL signal, and every VHDL
+process sensitive to it, sees only the value the delta's SystemVerilog work
+leaves: a leaf that writes `00`, then `01` after `#0`, then `10` and `11` as
+nonblocking updates gives the VHDL signal `11` in that delta and never `01`;
+if the delta ends at the value the signal already has, the signal has no
+event. Cost: none in the reference scheduler; in the compiled kernel the
+VHDL round, or its update phase, runs as one host task of the delta either
+way, only in a later queue of it (engine-v4-semantics.md S16). Witness:
+`tests/fixtures/systemverilog/scheduling/mixed_region_port.sv` on both
+engines (`fsim.application.systemverilog-scheduling-witnesses` and its
+`.v4` twin).
+
+The same holds for an unresolved VHDL signal that a SystemVerilog port drives
+directly (`std_ulogic_vector` actual of a SystemVerilog `output reg`): a
+SystemVerilog flop and a VHDL flop on one VHDL clock both sample the values
+from before the edge. The VHDL flop that reads the SystemVerilog flop's
+output runs in step 3 and reads the value from before the SystemVerilog
+flop's nonblocking update in step 4, and the SystemVerilog flop that reads
+a VHDL flop's output reads it before that flop's update phase (step 5):
+each second stage runs one cycle behind its first. Witness:
+`tests/fixtures/systemverilog/scheduling/mixed_clocked_port.sv` (VHDL top
+`mixed_clocked_port.vhd`), same tests.
 
 No standard orders zero-delay events across languages, and vendors document
 none. Beyond the rules above, the order in which the two languages' processes

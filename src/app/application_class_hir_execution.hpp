@@ -4,9 +4,11 @@
 #include "application_internal.hpp"
 
 #include <algorithm>
+#include <functional>
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace fsim::app::application_detail {
@@ -37,13 +39,16 @@ public:
         std::span<const std::uint8_t>,
         bool,
         ActualReferences)>;
+    // The last argument is the specialization the static method runs in
+    // (IEEE 1800-2023 8.25.1).
     using StaticFunctionInvoker = std::function<runtime::PackedLogic4(
         std::string_view,
         std::vector<runtime::PackedLogic4>&,
         std::vector<std::string>&,
         std::span<const std::string>,
         std::span<const std::uint8_t>,
-        ActualReferences)>;
+        ActualReferences,
+        std::string_view)>;
     using PropertyRead = std::function<runtime::PackedLogic4(
         runtime::SystemVerilogClassHandle, std::string_view)>;
     using PropertyWrite = std::function<void(
@@ -51,18 +56,52 @@ public:
         std::string_view,
         const runtime::PackedLogic4&)>;
     // The handle is the object whose method reads or writes the static
-    // property; it selects the specialization of a parameterized class.
+    // property; it selects the specialization of a parameterized class. The
+    // specialization, when not empty, is the one the executor selected for
+    // the access: the static method's own or the one a selection names
+    // (IEEE 1800-2023 8.25.1); it takes precedence over the handle.
     using StaticPropertyRead = std::function<runtime::PackedLogic4(
-        std::string_view, runtime::SystemVerilogClassHandle)>;
+        std::string_view, runtime::SystemVerilogClassHandle,
+        std::string_view)>;
     using StaticPropertyWrite = std::function<void(
         std::string_view, const runtime::PackedLogic4&,
-        runtime::SystemVerilogClassHandle)>;
+        runtime::SystemVerilogClassHandle, std::string_view)>;
     using StaticPropertyValueRead = std::function<std::optional<
-        runtime::SystemVerilogClassPropertyValue>(std::string_view)>;
+        runtime::SystemVerilogClassPropertyValue>(
+            std::string_view, std::string_view)>;
     void set_static_property_value_read_service(
         StaticPropertyValueRead read)
     {
         read_static_property_value_ = std::move(read);
+    }
+    // Replaces the value of a static value-container property (an array,
+    // queue or associative array of values) in a specialization (empty: the
+    // declaration's storage); false when the property has no such storage.
+    using StaticPropertyContainerWrite = std::function<bool(
+        std::string_view, std::string_view, runtime::simir::ContainerValue)>;
+    void set_static_property_container_write_service(
+        StaticPropertyContainerWrite write)
+    {
+        write_static_property_container_ = std::move(write);
+    }
+    // Writes a static string property in a specialization (empty: the
+    // declaration's storage); false when the property is not a string.
+    using StaticStringPropertyWrite = std::function<bool(
+        std::string_view, std::string_view, std::string_view)>;
+    void set_static_string_property_write_service(
+        StaticStringPropertyWrite write)
+    {
+        write_static_string_property_ = std::move(write);
+    }
+    // The specialization identity a class type names, its parameter actuals
+    // evaluated in the given running specialization (IEEE 1800-2023 8.25);
+    // nullopt when it names none.
+    using ClassTypeSpecialization = std::function<std::optional<std::string>(
+        const semantic::sv::TypeReference&, std::string_view)>;
+    void set_class_type_specialization_service(
+        ClassTypeSpecialization specialize)
+    {
+        class_type_specialization_ = std::move(specialize);
     }
 
     // Exact declaration-backed package storage. These callbacks are used
@@ -105,10 +144,14 @@ public:
         std::size_t,
         runtime::SystemVerilogClassHandle)>;
 
+    // `semantics` owns the scopes and types of `hir`; with it, a type
+    // another unit declares, which compiled HIR keeps by name only, is
+    // looked up where the variable is declared.
     SystemVerilogClassHirExecution(
         std::span<const semantic::sv::ClassSpecialization> specializations,
         const semantic::sv::Hir& hir,
-        const runtime::SystemVerilogClassHeap& heap);
+        const runtime::SystemVerilogClassHeap& heap,
+        const semantic::Model* semantics = nullptr);
 
     // Text written by $display and $write in a class method, and the
     // current simulation time for %t.
@@ -127,6 +170,21 @@ public:
     void set_report_service(ReportWriter report)
     {
         report_ = std::move(report);
+    }
+    // The assertion control word (IEEE 1800-2023 20.11, sva::control_*)
+    // of an immediate assertion statement, and the execution points of
+    // its attempt, success and failure for the foreign interfaces (39.4.1,
+    // simulate --foreign-probes).
+    using AssertionControlRead
+        = std::function<std::int64_t(semantic::StatementId)>;
+    using ExecutionProbe = std::function<void(
+        std::optional<runtime::simir::ProcessId>,
+        runtime::simir::ExecutionPointKind, semantic::SourceSpanId)>;
+    void set_assertion_services(
+        AssertionControlRead control, ExecutionProbe probe)
+    {
+        assertion_control_ = std::move(control);
+        execution_probe_ = std::move(probe);
     }
     // The class of a generated scope or design element instance, made when
     // a loaded design first names it (IEEE 1800-2023 6.22, 27.4).
@@ -178,6 +236,23 @@ public:
     {
         write_class_handle_fixed_array_ = std::move(write);
     }
+    // Changes a class-handle container property in place: the object's
+    // when the owner is a live handle, else the static one of the
+    // specialization (IEEE 1800-2023 7.8, 7.10, 8.9). The change gets the
+    // container and the heap its handles belong to.
+    using ClassHandleContainerChange = std::function<void(
+        runtime::SystemVerilogClassHandleContainer&,
+        runtime::SystemVerilogClassHeap&)>;
+    using ClassHandleContainerUpdate = std::function<void(
+        runtime::SystemVerilogClassHandle,
+        std::string_view,
+        std::string_view,
+        const ClassHandleContainerChange&)>;
+    void set_class_handle_container_update_service(
+        ClassHandleContainerUpdate update)
+    {
+        update_class_handle_container_ = std::move(update);
+    }
 
     // `new` in a class method: allocates and constructs an object of the
     // named class with packed and string actuals in parallel.
@@ -201,9 +276,12 @@ public:
         std::optional<::fsim::semantic::UnitId> owner_unit;
         std::string owner_path;
     };
+    // The class parameter binding is read from the handle's object, or,
+    // without one, from the specialization a static method runs in.
     using OwnerParameterRead = std::function<OwnerParameterBinding(
         runtime::SystemVerilogClassHandle,
-        ::fsim::semantic::DeclarationId)>;
+        ::fsim::semantic::DeclarationId,
+        std::string_view)>;
     void set_owner_parameter_service(OwnerParameterRead read)
     {
         read_owner_parameter_ = std::move(read);
@@ -241,6 +319,8 @@ public:
     [[nodiscard]] const semantic::sv::SpecializedClassMethod* static_method(
         std::string_view canonical_identity) const;
 
+    // `specialization` is the one a static method runs in (IEEE 1800-2023
+    // 8.25.1); a method of an object runs in the object's.
     [[nodiscard]] runtime::PackedLogic4 invoke_function(
         const semantic::sv::SpecializedClassMethod& method,
         runtime::SystemVerilogClassHandle handle,
@@ -250,10 +330,16 @@ public:
         std::span<const std::uint8_t> actual_directions,
         ActualReferences actual_references = {},
         std::optional<runtime::simir::ProcessId> report_process
-            = std::nullopt);
+            = std::nullopt,
+        std::string_view specialization = { });
     void invoke_task(const semantic::sv::SpecializedClassMethod& method,
         runtime::SystemVerilogClassHandle handle,
         std::vector<runtime::PackedLogic4>& actuals);
+    // The method `canonical_identity` as specialization `identity` sees it:
+    // the entry of the specialization in its base chain that declares it.
+    [[nodiscard]] const semantic::sv::SpecializedClassMethod*
+    specialization_method(std::string_view identity,
+        std::string_view canonical_identity) const;
     [[nodiscard]] bool invoke_constructor(
         std::string_view specialization_identity,
         runtime::SystemVerilogClassHandle handle,
@@ -311,6 +397,154 @@ private:
 
     [[nodiscard]] const semantic::sv::ClassSpecialization* specialization(
         std::string_view identity) const noexcept;
+    // The specialization a method of `handle` runs in: the object's, or
+    // without a live object the static method's (IEEE 1800-2023 8.25.1).
+    [[nodiscard]] std::string running_specialization(
+        runtime::SystemVerilogClassHandle handle) const;
+    // The specialization in `identity`'s base chain (itself included)
+    // whose class is `declaration_identity`; empty when none is.
+    [[nodiscard]] std::string ancestor_specialization(
+        std::string_view identity,
+        std::string_view declaration_identity) const;
+    // The specialization whose static member (declared by class
+    // `member_owner`) `selection` names: the class scope it is selected
+    // through (`C#(4)::m`, a typedef of one, `C#(T)::m` seen in the running
+    // specialization), else the running specialization's (IEEE 1800-2023
+    // 8.25.1). Empty when no specialization is known, which leaves the
+    // choice to the handle.
+    [[nodiscard]] std::string static_member_specialization(
+        const semantic::sv::Expression& selection,
+        std::string_view member_owner,
+        runtime::SystemVerilogClassHandle handle) const;
+    // The static property `selection` names as the specialization it
+    // selects declares it, with that specialization (IEEE 1800-2023
+    // 8.25.1). The property is null when no specialization declares it.
+    struct StaticPropertySelection {
+        const semantic::sv::SpecializedClassProperty* property { };
+        std::string specialization;
+    };
+    [[nodiscard]] StaticPropertySelection static_property_selection(
+        const semantic::sv::Expression& selection,
+        std::string_view marker,
+        runtime::SystemVerilogClassHandle handle) const;
+    // The specialization a class type names, its parameter actuals read in
+    // the specialization `context` (IEEE 1800-2023 8.25); empty when the
+    // type names no class.
+    [[nodiscard]] std::string type_specialization(
+        const semantic::sv::TypeReference& type,
+        std::string_view context) const;
+    // Whether a variable of `type` holds 4-state values (IEEE 1800-2023
+    // 6.11): a named type's own, a class type parameter's what the
+    // specialization `context` (or the base declaring it) binds it to (8.25).
+    // `scope` is where the variable is declared (see named_type_target).
+    [[nodiscard]] bool four_state_type(
+        const semantic::sv::TypeReference& type,
+        std::string_view context,
+        semantic::ScopeId scope = { }) const;
+    // The bit width of a variable of `type`: its own, or that of the type a
+    // name or class type parameter selects in `context` (IEEE 1800-2023
+    // 6.18, 8.25); `width(type)` when neither gives one.
+    [[nodiscard]] std::size_t variable_width(
+        const semantic::sv::TypeReference& type,
+        std::string_view context,
+        semantic::ScopeId scope = { }) const;
+    // The typedef a name declared in another unit (a package, `$unit`)
+    // selects from `scope` through its lexical and import visibility
+    // (IEEE 1800-2023 3.12.1, 26.3); compiled HIR keeps such a name's
+    // spelling only. Invalid when there is none or no semantic model.
+    [[nodiscard]] semantic::TypeId named_type_target(
+        const semantic::sv::TypeReference& type,
+        semantic::ScopeId scope) const;
+    // The left and right bounds of the one packed dimension of single bits a
+    // bit-select or part-select of a variable of `type` addresses (IEEE
+    // 1800-2023 7.4.1, 11.5.1): its declared range, `[W-1:0]` for an
+    // integer atom or an enumeration based on one, `[0:0]` for a 1-bit
+    // scalar. Absent for unpacked, multidimensional packed and aggregate
+    // types.
+    [[nodiscard]] std::optional<std::pair<std::int64_t, std::int64_t>>
+    packed_select_bounds(
+        const semantic::sv::TypeReference& type,
+        std::string_view context,
+        semantic::ScopeId scope = { }) const;
+    // The specialization of the class type of an assignment target: a
+    // local, an argument, a property of the running object or a static
+    // property (IEEE 1800-2023 8.7). Empty when it is not a class type.
+    [[nodiscard]] std::string target_class_specialization(
+        semantic::ExpressionId target,
+        runtime::SystemVerilogClassHandle handle,
+        const PackedEnvironment& environment) const;
+    // `$cast(dest, source)` of class handles (IEEE 1800-2023 8.16): 1 and
+    // the destination written when the source object is of the
+    // destination's class or one derived from it, or the source is null.
+    [[nodiscard]] std::optional<runtime::PackedLogic4> evaluate_class_cast(
+        const semantic::sv::Expression& cast,
+        runtime::SystemVerilogClassHandle handle,
+        PackedEnvironment& environment);
+    // A class-handle container property a container method or element
+    // write names: the owner (zero for a static property), the property
+    // and the specialization of a static one.
+    struct HandleContainerTarget {
+        runtime::SystemVerilogClassHandle owner { };
+        const semantic::sv::SpecializedClassProperty* property { };
+        std::string specialization;
+    };
+    // A static property that holds a container of values, in the
+    // specialization the selection names (IEEE 1800-2023 7.4, 7.8, 7.10,
+    // 8.9, 8.25.1).
+    struct StaticValueContainer {
+        const semantic::sv::SpecializedClassProperty* property { };
+        std::string specialization;
+        runtime::simir::ContainerValue value;
+    };
+    [[nodiscard]] std::optional<StaticValueContainer> static_value_container(
+        semantic::ExpressionId selection,
+        runtime::SystemVerilogClassHandle handle) const;
+    void store_static_value_container(const StaticValueContainer& container,
+        runtime::simir::ContainerValue value) const;
+    // `S::c[i] = v;` and the methods that change such a container (7.8.2,
+    // 7.10.2); false when the target or receiver is no static container of
+    // values.
+    bool assign_static_container_element(const semantic::sv::Statement& item,
+        const semantic::sv::Expression& target,
+        runtime::SystemVerilogClassHandle handle,
+        PackedEnvironment& environment, StringEnvironment& strings);
+    // `S::c[i]` of integral elements, and whether they are signed; a key
+    // or position that names no element reads the element type's default
+    // (7.4.6, 7.8.6, 7.10.1).
+    std::optional<std::pair<runtime::PackedLogic4, bool>>
+    static_container_element(const semantic::sv::Expression& index,
+        runtime::SystemVerilogClassHandle handle,
+        PackedEnvironment& environment);
+    std::optional<runtime::PackedLogic4> static_container_method(
+        const semantic::sv::Expression& call, std::string_view method_name,
+        runtime::SystemVerilogClassHandle handle,
+        PackedEnvironment& environment);
+    [[nodiscard]] std::optional<HandleContainerTarget> handle_container_target(
+        const semantic::sv::Expression& container,
+        runtime::SystemVerilogClassHandle handle,
+        PackedEnvironment& environment);
+    // The key text an associative class-handle container keeps an element
+    // under (IEEE 1800-2023 7.8): the decimal value of an integral or
+    // class-handle index cast to the index type, or the string. nullopt
+    // for an integral index with X or Z bits, which selects no element
+    // (7.8.6).
+    [[nodiscard]] std::optional<std::string> handle_container_key(
+        const semantic::sv::TypeReference& container_type,
+        semantic::ExpressionId index,
+        runtime::SystemVerilogClassHandle handle,
+        PackedEnvironment& environment);
+    // A method of a class-handle container property (IEEE 1800-2023 7.5.1,
+    // 7.9, 7.10.2): size, num, exists, delete, push_back, push_front,
+    // pop_front, pop_back. nullopt when the call names none.
+    [[nodiscard]] std::optional<runtime::PackedLogic4>
+    evaluate_handle_container_method(
+        const semantic::sv::Expression& call,
+        std::string_view method_name,
+        runtime::SystemVerilogClassHandle handle,
+        PackedEnvironment& environment);
+    [[nodiscard]] OwnerParameterBinding owner_parameter(
+        runtime::SystemVerilogClassHandle handle,
+        semantic::DeclarationId declaration) const;
     [[nodiscard]] const semantic::sv::Declaration* declaration(
         semantic::DeclarationId id) const noexcept;
     [[nodiscard]] const semantic::sv::Expression* expression(
@@ -381,6 +615,26 @@ private:
         PackedEnvironment& environment,
         std::optional<std::size_t> context_width = std::nullopt,
         std::optional<bool> context_signed = std::nullopt);
+    // The self-determined width and signedness of an expression, and its
+    // data type, as evaluate_packed finds them; absent when unknown.
+    using ExpressionShapeQuery = std::function<
+        std::optional<std::pair<std::size_t, bool>>(semantic::ExpressionId)>;
+    using ExpressionTypeQuery = std::function<
+        std::optional<semantic::sv::TypeReference>(semantic::ExpressionId)>;
+    // Pure integral expressions evaluate_packed delegates: the conditional
+    // operator (IEEE 1800-2023 11.4.11), concatenation and replication
+    // (11.4.12), inside (11.4.13), bit-selects and part-selects of packed
+    // values (11.5.1), $signed/$unsigned (11.7), $bits (20.6.2), $clog2
+    // (20.8.1) and the bit vector functions (20.9). Absent for every other
+    // expression and for one of these it cannot evaluate.
+    [[nodiscard]] std::optional<runtime::PackedLogic4> evaluate_pure_packed(
+        const semantic::sv::Expression& value,
+        runtime::SystemVerilogClassHandle handle,
+        PackedEnvironment& environment,
+        std::optional<std::size_t> context_width,
+        std::optional<bool> context_signed,
+        const ExpressionShapeQuery& shape,
+        const ExpressionTypeQuery& type);
     [[nodiscard]] std::optional<CallValue> evaluate_typed_actual(
         semantic::ExpressionId id,
         const semantic::sv::TypeReference& expected_type,
@@ -552,6 +806,7 @@ private:
     std::span<const semantic::sv::ClassSpecialization> specializations_;
     GeneratedSpecialization generated_specialization_;
     const semantic::sv::Hir& hir_;
+    const semantic::Model* semantics_ { };
     mutable std::optional<HirLookupIndex> hir_index_;
     const runtime::SystemVerilogClassHeap& heap_;
     FunctionInvoker invoke_function_;
@@ -561,6 +816,17 @@ private:
     StaticPropertyRead read_static_property_;
     StaticPropertyWrite write_static_property_;
     StaticPropertyValueRead read_static_property_value_;
+    StaticStringPropertyWrite write_static_string_property_;
+    StaticPropertyContainerWrite write_static_property_container_;
+    ClassTypeSpecialization class_type_specialization_;
+    // The specialization the running static method belongs to; empty
+    // outside one (IEEE 1800-2023 8.25.1).
+    std::string static_specialization_;
+    // The specialization of the class type of the assignment target being
+    // evaluated: a bare `new` constructs an object of it (IEEE 1800-2023
+    // 8.7, 8.25). Empty outside an assignment to a class handle.
+    std::string allocation_specialization_;
+    ClassHandleContainerUpdate update_class_handle_container_;
     PackagePackedRead read_package_packed_;
     PackagePackedWrite write_package_packed_;
     PackageStringRead read_package_string_;
@@ -569,6 +835,8 @@ private:
     PackageContainerWrite write_package_container_;
     OutputWriter output_;
     ReportWriter report_;
+    AssertionControlRead assertion_control_;
+    ExecutionProbe execution_probe_;
     StringPropertyRead read_string_property_;
     StringPropertyWrite write_string_property_;
     ClassPropertyContainerRead read_class_property_container_;

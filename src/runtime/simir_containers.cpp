@@ -2960,7 +2960,8 @@ void Interpreter::Impl::execute_container(
 
 void Interpreter::Impl::write_object(const WriteContainerObject& operation,
     const ProcessSchedulingDomain process_domain, const ProcessId driver,
-    const InstructionIndex instruction, const ContainerValue& source)
+    const InstructionIndex instruction, const ContainerValue& source,
+    const NonblockingSink& nonblocking_sink)
 {
     const auto update_domain
         = process_domain == ProcessSchedulingDomain::systemverilog
@@ -2983,7 +2984,10 @@ void Interpreter::Impl::write_object(const WriteContainerObject& operation,
                 container_error(driver, instruction, error.what());
             }
         };
-        if (process_domain == ProcessSchedulingDomain::systemverilog) {
+        if (process_domain == ProcessSchedulingDomain::systemverilog
+            && nonblocking_sink) {
+            nonblocking_sink(publish);
+        } else if (process_domain == ProcessSchedulingDomain::systemverilog) {
             scheduler.schedule_systemverilog(origin.phase, driver, publish);
         } else {
             scheduler.schedule(SchedulerPhase::update, driver, publish);
@@ -3087,7 +3091,8 @@ void Interpreter::Impl::write_object_element(
     const ProcessSchedulingDomain process_domain, const ProcessId driver,
     const InstructionIndex instruction, const PackedLogic4& index,
     const PackedLogic4& value, const std::optional<PackedLogic4>& base,
-    std::vector<PackedLogic4> level_indices)
+    std::vector<PackedLogic4> level_indices,
+    const NonblockingSink& nonblocking_sink)
 {
     const auto update_domain
         = process_domain == ProcessSchedulingDomain::systemverilog
@@ -3119,6 +3124,9 @@ void Interpreter::Impl::write_object_element(
             };
         if (!operation.nonblocking) {
             write(scheduler);
+        } else if (process_domain == ProcessSchedulingDomain::systemverilog
+            && nonblocking_sink) {
+            nonblocking_sink(std::move(write));
         } else if (process_domain == ProcessSchedulingDomain::systemverilog) {
             scheduler.schedule_systemverilog(
                 origin.phase, driver, std::move(write));
@@ -3154,7 +3162,10 @@ void Interpreter::Impl::write_object_element(
                         driver, instruction, origin);
                 }
             };
-        if (process_domain == ProcessSchedulingDomain::systemverilog) {
+        if (process_domain == ProcessSchedulingDomain::systemverilog
+            && nonblocking_sink) {
+            nonblocking_sink(publish);
+        } else if (process_domain == ProcessSchedulingDomain::systemverilog) {
             scheduler.schedule_systemverilog(origin.phase, driver, publish);
         } else {
             scheduler.schedule(SchedulerPhase::update, driver, publish);

@@ -220,6 +220,8 @@ void Interpreter::Impl::read_memory_file(const ProcessId process,
     const bool hexadecimal, const std::optional<std::int32_t> start,
     const std::optional<std::int32_t> finish)
 {
+    // Its reports carry the time of the loading process (current_time, a
+    // closed static kernel's own time step too).
     const auto handle = open_file(process, path, "r");
     // A file that cannot be opened loads nothing; say so rather than
     // reporting an empty file's word count (IEEE 1800-2023 21.4).
@@ -230,7 +232,7 @@ void Interpreter::Impl::read_memory_file(const ProcessId process,
             container_error(process, pc, message);
         } else {
             report_hook(process, message, AssertionSeverity::error,
-                SourceLocation { }, scheduler.now(), scheduler.delta());
+                SourceLocation { }, current_time(), current_delta());
         }
         return;
     }
@@ -265,7 +267,7 @@ void Interpreter::Impl::read_memory_file(const ProcessId process,
                 "read-memory file word count differs from the selected range",
                 AssertionSeverity::warning,
                 SourceLocation { },
-                scheduler.now(), scheduler.delta());
+                current_time(), current_delta());
         }
     } catch (const std::exception& error) {
         // A malformed file or an address outside the range ends the load
@@ -276,7 +278,7 @@ void Interpreter::Impl::read_memory_file(const ProcessId process,
                 process, pc, error.what());
         } else {
             report_hook(process, error.what(), AssertionSeverity::error,
-                SourceLocation { }, scheduler.now(), scheduler.delta());
+                SourceLocation { }, current_time(), current_delta());
         }
     }
 }

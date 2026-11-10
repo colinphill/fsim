@@ -1029,8 +1029,16 @@ static std::optional<CompilationWorkspace> check_project_impl(
   validate_vhdl_package_body_subprograms(checked.parsed.units, diagnostics);
   validate_vhdl_package_declarations(checked.parsed.units, diagnostics,
       allow_external_vhdl_architecture_primary);
-  if (imported && !prepare_compiled_systemverilog_environment(
-          checked.parsed, *imported, diagnostics)) {
+  // Sources compiled without a library bind their names as they do against
+  // an empty one, so every flow gives a declaration the same type: a
+  // typedef of a class names that class wherever it is used, and
+  // `this_type q[$]` is a queue of class handles (IEEE 1800-2023 6.18,
+  // 7.10, 8.25).
+  const semantic::CompiledDesign no_compiled_environment;
+  const auto& environment
+      = imported != nullptr ? *imported : no_compiled_environment;
+  if (!prepare_compiled_systemverilog_environment(checked.parsed,
+          environment, diagnostics)) {
     return std::nullopt;
   }
   std::vector<frontend::Diagnostic> class_diagnostics;

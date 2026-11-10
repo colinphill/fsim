@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+inl p1 pass t=43
+inl p2 fail t=47
+inl p3 fail t=50
+inl p4 pass t=63

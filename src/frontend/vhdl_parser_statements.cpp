@@ -390,10 +390,12 @@ std::optional<Statement> VhdlParser::parse_sequential_statement(
     statement.loop_variable = vhdl_name(variable.text);
     expect_keyword("in", true, "FSIM-VHDL-PARSE-100");
     statement.loop_initial = parse_expression();
+    std::optional<Expression> range_type_mark;
     if (statement.loop_initial.kind == ExpressionKind::Identifier
         && keyword("range", 0, true)) {
       // `T range L to R`: the constraint supplies the iteration bounds.
       advance();
+      range_type_mark = std::move(statement.loop_initial);
       statement.loop_initial = parse_expression();
     } else if (statement.loop_initial.kind == ExpressionKind::Identifier
                && keyword("loop", 0, true)) {
@@ -427,6 +429,26 @@ std::optional<Statement> VhdlParser::parse_sequential_statement(
           "FSIM-VHDL-PARSE-101",
           "expected 'to' or 'downto' in sequential for-loop range");
       statement.loop_limit = parse_expression();
+    }
+    if (range_type_mark) {
+      // A character literal bound of `T range 'X' to 'Z'` is a literal of
+      // T, the loop parameter's type (IEEE 1076-2019 10.10, 9.3.2), not of
+      // whatever other type declares the same literal: keep T as T'('X').
+      for (auto* bound : {&statement.loop_initial, &statement.loop_limit}) {
+        if (bound->kind != ExpressionKind::LogicLiteral
+            || bound->text.size() != 3U || bound->text.front() != '\'') {
+          continue;
+        }
+        const auto span = bound->span;
+        Expression qualified{
+            ExpressionKind::Call,
+            "@vhdl-qualified:" + range_type_mark->text,
+            {std::move(*bound)},
+            span};
+        qualified.vhdl_selected_name_spelling =
+            range_type_mark->vhdl_selected_name_spelling;
+        *bound = std::move(qualified);
+      }
     }
     expect_keyword("loop", true, "FSIM-VHDL-PARSE-102");
     validate_opening_loop_label(

@@ -328,6 +328,7 @@ Simulation::Impl::uvm_pull_sequencer(runtime::SystemVerilogClassHandle port) con
 [[nodiscard]] runtime::PackedLogic4
 Simulation::Impl::invoke_source_static_function(
     const std::string_view canonical_identity,
+    const std::string_view static_specialization,
     std::vector<runtime::PackedLogic4>& actuals,
     std::vector<std::string>& string_actuals,
     const std::span<const std::string> actual_names,
@@ -636,16 +637,56 @@ Simulation::Impl::invoke_source_static_function(
         : canonical_identity.substr(method_separator + 2U);
     if (method_name == "get_type" && actuals.empty()
         && method_separator != std::string_view::npos) {
-        const auto wrapper = uvm_registry.unique_wrapper_by_declaration(
-            canonical_identity.substr(0, method_separator));
+        // `C#(4)::get_type()` is the type of that specialization (IEEE
+        // 1800-2023 8.25.1); a class registers each one.
+        auto wrapper = static_specialization.empty()
+            ? runtime::SystemVerilogUvmTypeHandle { }
+            : uvm_registry.wrapper_by_specialization(static_specialization);
+        if (wrapper == 0) {
+            wrapper = uvm_registry.unique_wrapper_by_declaration(
+                canonical_identity.substr(0, method_separator));
+        }
         if (wrapper != 0)
             return runtime::PackedLogic4::from_aval_bval(64, wrapper, 0);
     }
-    if (const auto* method
-        = class_hir_execution.static_method(canonical_identity)) {
+    // A static method runs in the specialization the call names, which
+    // has static properties of its own (IEEE 1800-2023 8.25.1); its entry
+    // there carries the method as that specialization sees it.
+    const auto* method = static_specialization.empty()
+        ? nullptr
+        : class_hir_execution.specialization_method(
+            static_specialization, canonical_identity);
+    if (method != nullptr && (!method->static_method || method->pure)) {
+        method = nullptr;
+    }
+    if (method == nullptr) {
+        method = class_hir_execution.static_method(canonical_identity);
+    }
+    if (method != nullptr) {
+        // The member lives in the specialization of the class declaring
+        // it, a base of the named one when inherited.
+        std::string running;
+        std::vector<std::string> followed;
+        for (std::string current { static_specialization };
+             !current.empty()
+             && std::ranges::find(followed, current) == followed.end();) {
+            const semantic::sv::ClassSpecialization* named { };
+            try {
+                named = &class_specialization(current);
+            } catch (const std::out_of_range&) {
+                break;
+            }
+            if (named->declaration_identity == method->owner_identity) {
+                running = named->specialization_identity;
+                break;
+            }
+            followed.push_back(std::move(current));
+            current = named->base ? named->base->specialization_identity
+                                  : std::string { };
+        }
         return class_hir_execution.invoke_function(
             *method, 0, actuals, string_actuals, actual_names,
-            actual_directions, actual_references, report_process);
+            actual_directions, actual_references, report_process, running);
     }
     throw std::invalid_argument {
         "compiled HIR class static method '"

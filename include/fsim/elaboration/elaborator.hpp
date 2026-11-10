@@ -790,6 +790,14 @@ struct StringObjectInfo {
     };
 };
 
+/// The name prefix of the container object that holds a class's static
+/// array, queue or associative array of values; the storage identity (the
+/// property's, or `<specialization>::<name>` for a specialization with
+/// statics of its own) follows (IEEE 1800-2023 8.9, 8.25.1).
+inline constexpr std::string_view class_static_container_prefix {
+    "$class-static:"
+};
+
 struct ContainerObjectInfo {
     runtime::simir::ContainerObjectId id { };
     std::string name;
@@ -1451,11 +1459,6 @@ struct StaticKernelAccessPlan {
     /// examines, deposits, forces and watches them at run time, as a foreign
     /// library does.
     bool debug { };
-    /// Every signal stays a host signal, for a client that must hear every
-    /// write of every signal in the reference evaluator's order (the library
-    /// API's change hooks, an embedding client): the kernel's own order of
-    /// members and its publication per activation cannot give that.
-    bool host_signals { };
     /// A VPI or PLI library is loaded: the primitive drivers' delayed writes
     /// are slotted WriteDelayed operations (bind_primitive_delay_slots), so
     /// the kernel plan differs from the default one.
@@ -1469,14 +1472,13 @@ struct StaticKernelAccessPlan {
     /// Key text for persisted plans; empty for the default plan.
     [[nodiscard]] std::string identity() const
     {
-        if (!coverage && !debug && !host_signals && !delay_slots
+        if (!coverage && !debug && !delay_slots
             && !weak_sources) {
             return { };
         }
         std::string text { "access" };
         text += coverage ? ";coverage" : "";
         text += debug ? ";debug" : "";
-        text += host_signals ? ";host-signals" : "";
         text += delay_slots ? ";delay-slots" : "";
         text += weak_sources ? ";weak-sources" : "";
         return text;

@@ -274,8 +274,20 @@ interp.impl	stochastic_queues	P	plain run state
 interp.impl	sva_monitors	P	plan, bounds and flat attempt block of each monitor (sva::Monitor::run_state_io)
 interp.impl	sva_pop_serial	P	serial of the last outcome pop; stamps the monitor that popped (h_pop_serial)
 interp.impl	sva_attempt_hook	Cfg	hook or callback installed by the embedder
+interp.impl	sva_disable_watches	P	the disable net of each monitor, registered when the monitor was created (sva_monitor_bind)
+interp.impl	sva_disable_watched	P	the disable nets flagged by signal for the commit path (record_signal_event)
+interp.impl	sva_disabled_hook	Cfg	hook or callback installed by the embedder
+interp.impl	sva_wakes	P	the wake bit of each monitor that also evaluates between its clock ticks, with its every-step and pending flags (sva_monitor_bind, wake_sva_monitors)
+interp.impl	sva_abort_watches	P	the abort net of each such monitor, registered when the monitor was created (sva_monitor_bind)
+interp.impl	sva_abort_watched	P	the abort nets flagged by signal for the commit path (record_signal_event)
+interp.impl	sva_wakes_due	P	whether a monitor is pending or woken at every time step (wake_sva_monitors)
 interp.impl	sva_step_hook	Cfg	hook or callback installed by the embedder
 interp.impl	sva_step_requests	Cfg	step requests a foreign library made; it makes them again after a restart
+interp.impl	sva_action_filter	Cfg	hook or callback installed by the embedder
+interp.impl	assertion_controls	D	the assertion control words; the host republishes them from app.assertions on restore (Interpreter::set_assertion_control)
+interp.impl	assertion_control_base	D	derived from the artifact (plan_assertion_controls)
+interp.impl	assertion_control_sites	D	derived from the artifact (plan_assertion_controls)
+interp.impl	assertion_controls_planned	D	derived from the artifact (plan_assertion_controls)
 interp.impl	module_paths	Cfg	configuration from the artifact or command line
 interp.impl	module_timing_checks	Cfg	configuration from the artifact or command line
 interp.impl	module_timing_check_states	P	timing check windows
@@ -339,6 +351,7 @@ interp.impl	pending_module_path_writes	P+ids	pending module-path bits; events in
 interp.impl	projected_drivers	P+ids	projected transactions; events interp.projected_transaction_mature (rebinds by id) and interp.projected_group_mature (consecutive ids)
 interp.impl	next_projected_transaction_id	P	next projected transaction id, restored above every saved id
 interp.impl	signal_change_hook	Cfg	hook or callback installed by the embedder
+interp.impl	signal_change_writer	W	set around a process's execution or a driver's commit and put back after it (Impl::SignalChangeWriterScope); empty between them
 interp.impl	native_signal_observation_required_hook	Cfg	hook or callback installed by the embedder
 interp.impl	native_signal_observation_any_hook	Cfg	hook or callback installed by the embedder
 interp.impl	stored_signal_change_hook	Cfg	hook or callback installed by the embedder
@@ -863,7 +876,8 @@ kernel.impl	shuffle_state_	P	kernel dynamic state (S5)
 kernel.impl	replay_edge_	W	step scratch assigned or cleared before use in the same step; stale content is dead
 kernel.impl	mt_stats_	Prof	profile counters
 kernel.impl	arena_	P	kernel dynamic state (S5)
-kernel.impl	published_	P	kernel dynamic state (S5)
+kernel.impl	published_	P	kernel dynamic state (S5): the design's outputs (the first published_design_ entries); an output a watch added publishes the restored value (resync_watched_outputs)
+kernel.impl	published_design_	D	slot structure from the artifact: the size of published_ when the kernel is built
 kernel.impl	pending_watches_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
 kernel.impl	pending_revivals_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
 kernel.impl	boundary_requested_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
@@ -877,6 +891,9 @@ kernel.impl	host_original_	D	derived from the artifact or rebuilt after restore
 kernel.impl	host_program_	D	derived from the artifact or rebuilt after restore
 kernel.impl	debug_stopped_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
 kernel.impl	debug_children_	P	kernel dynamic state (S5)
+kernel.impl	debug_writes_	S	scratch: empty at a save point (flushed at every debug point, suspension, NBA update and activation end)
+kernel.impl	debug_writes_spare_	W	allocator cache or spare buffer: holds capacity, never run state
+kernel.impl	debug_write_pending_	S	scratch: all clear whenever debug_writes_ is empty, so at every save point
 kernel.impl	next_child_process_	P	kernel dynamic state (S5)
 kernel.impl	running_thread_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
 kernel.impl	touched_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
@@ -892,6 +909,7 @@ kernel.impl	verify_thread_reason_	D	FSIM_KERNEL_VERIFY: a function of the member
 kernel.impl	verify_thread_decided_	D	FSIM_KERNEL_VERIFY: a function of the member's operations
 kernel.impl	verify_live_registers_	D	FSIM_KERNEL_VERIFY: a function of the member's operations
 kernel.impl	shadow_	W	FSIM_KERNEL_VERIFY: set before a thread activation and cleared after it (run_behavioral_compiled)
+kernel.impl	verify_mirror_ahead_	W	FSIM_KERNEL_VERIFY: mirrors ahead of the host until its next commit; a save waits for pending updates, and restore_value_section clears it
 kernel.impl	interpreted_bytecode_runs_	Prof	profile counters
 kernel.impl	interpreted_operations_	Prof	profile counters
 kernel.impl	interpreted_deopts_	Prof	profile counters
@@ -915,6 +933,7 @@ kernel.impl	containers_	P	kernel dynamic state (S5)
 kernel.impl	container_info_	D	derived from the artifact or rebuilt after restore
 kernel.impl	sva_blocks_	D	block bases the monitors publish; rebound lazily after a restore (reset_sva_blocks)
 kernel.impl	sva_member_base_	D	derived from the artifact or rebuilt after restore
+kernel.impl	sva_control_base_	D	derived from the artifact or rebuilt after restore (plan_sva_table)
 kernel.impl	sva_table_	D	pointers into the host's sampled words and the block table, refreshed per frame
 kernel.impl	sva_table_used_	D	set when the kernel's code has an SVA operation (lowering or a restored body), a function of the artifact
 kernel.impl	sva_now_	W	the time step copied for generated code at each frame bind
@@ -982,7 +1001,6 @@ kernel.impl	nonblocking_committed_	W	step scratch assigned or cleared before use
 kernel.impl	host_active_staged_	W	hint cleared at the start of every activation (StaticKernel::activate); stale content is dead
 kernel.impl	host_nba_staged_	W	hint read only with host_nba_time_ == now and cleared in commit_pending; a save point is a slot end with no pending update, so stale content is dead
 kernel.impl	host_nba_time_	W	step scratch assigned or cleared before use in the same step; stale content is dead
-kernel.impl	host_nba_wakes_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
 kernel.impl	nonblocking_after_host_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
 kernel.impl	nonblocking_deferred_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
 kernel.impl	nonblocking_region_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
@@ -1176,11 +1194,11 @@ kernel.slot	targets	D	slot structure from the artifact
 kernel.slot	edges	D	slot structure from the artifact
 kernel.slot	edge_seen	P	slot dynamic fields (S5)
 kernel.slot	trigger_pending	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
-kernel.slot	output	D	slot structure from the artifact
+kernel.slot	output	D	slot structure from the artifact, or set when the restored run's own observers watch the signal again
 kernel.slot	output_pending	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
 kernel.slot	publish_nba	D	slot structure from the artifact
 kernel.slot	vhdl_written	P	slot dynamic fields (S5)
-kernel.slot	published	P	slot dynamic fields (S5)
+kernel.slot	published	D	fixed by the build for the design's outputs; for an output a watch added, by the order of the restored run's own watches
 kernel.slot	writers	D	slot structure from the artifact
 kernel.slot	disjoint_writers	D	slot structure from the artifact
 kernel.slot	silent	D	slot structure from the artifact
@@ -1305,6 +1323,9 @@ sim.impl	uvm_singletons	P+ids	saved by the app.uvm section (#188); the object of
 sim.impl	built	D	artifact products and caches
 sim.impl	generated_class_specializations	D	artifact products and caches
 sim.impl	generated_class_index	D	artifact products and caches
+sim.impl	generated_class_index_published	D	artifact products and caches
+sim.impl	class_type_specializations	D	artifact products and caches
+sim.impl	class_specialization_recipes	P	saved by the app.class_specializations section, which makes the specializations again before the class heap and static sections are read
 sim.impl	class_instance_parameter_cache	D	artifact products and caches
 sim.impl	vpi_runtime_updates_enabled	P	lifecycle flags (SystemC refuses save)
 sim.impl	class_heap	P+ids	application run state (S6)
@@ -1315,6 +1336,7 @@ sim.impl	static_constraint_identities	D	artifact products and caches
 sim.impl	class_owner_parameter_values	P+ids	application run state (S6)
 sim.impl	chandle_registry	P+ids	application run state (S6)
 sim.impl	class_static_store	P+ids	application run state (S6)
+sim.impl	class_static_containers	D	artifact products and caches: storage identity -> container object id, read from the design at setup (the containers' values are saved with the interpreter containers)
 sim.impl	class_methods	P+ids	application run state (S6)
 sim.impl	uvm_objects	P+ids	saved by the app.uvm section (#188); handles to class objects keep their slot and generation, phase and objection handles are bound to the restoring run's services
 sim.impl	uvm_components	P+ids	saved by the app.uvm section (#188); handles to class objects keep their slot and generation, phase and objection handles are bound to the restoring run's services
@@ -1464,18 +1486,18 @@ sim.impl	assertion_step_hook	Cfg	observers and hooks installed by the embedder
 sim.impl	vpi_process_assertions	D	VPI handle tables, rebuilt on demand; not saved
 sim.impl	vhdl_psl_attempt_hook	Cfg	observers and hooks installed by the embedder
 sim.impl	concurrent_assertion_indices	P+ids	application run state (S6)
-sim.impl	concurrent_assertion_design_processes	D	unreviewed: derived (S6 reviews)
-sim.impl	disabled_vpi_assertion_processes	P+ids	application run state (S6)
-sim.impl	enabled_vpi_assertion_processes	P+ids	application run state (S6)
+sim.impl	concurrent_assertion_design_processes	P	the directive kind and name of each monitor's design process, from its register marker at time 0 (app.assertions); the disabled hook reads them
 sim.impl	concurrent_assertion_actions_suppressed	P+ids	application run state (S6)
 sim.impl	pending_concurrent_assertions	P+ids	application run state (S6)
 sim.impl	sva_obligations	P+ids	application run state (S6)
 sim.impl	sva_vacuous_obligations	P+ids	application run state (S6)
-sim.impl	concurrent_assertions_enabled	P+ids	application run state (S6)
-sim.impl	concurrent_assertion_pass_actions_enabled	P+ids	application run state (S6)
-sim.impl	concurrent_assertion_vacuous_actions_enabled	P+ids	application run state (S6)
-sim.impl	concurrent_assertion_failure_actions_enabled	P+ids	application run state (S6)
-sim.impl	concurrent_assertion_action_overrides	P+ids	application run state (S6)
+sim.impl	assertion_controls	P+ids	the assertion controls of each assertion (IEEE 1800-2023 20.11, 39.5.2), saved packed in app.assertions in the order the artifact gives; restore republishes the control words
+sim.impl	concurrent_assertion_controls	D	derived from the artifact (build_assertion_controls)
+sim.impl	executor_assertion_controls	D	derived from the artifact (build_assertion_controls)
+sim.impl	assertion_control_scopes	D	derived from the artifact (build_assertion_controls)
+sim.impl	assertion_control_instances	D	derived from the artifact (build_assertion_controls)
+sim.impl	assertion_control_arguments	S	exact test in the app.control audit (FSIM-SAVE-0011): the arg| payloads are sent in the same statement as the request that consumes them
+sim.impl	assertion_control_sources	S	exact test in the app.control audit (FSIM-SAVE-0011): the src| payload is sent in the same statement as the request that consumes it
 sim.impl	class_property_change_hook	Cfg	observers and hooks installed by the embedder
 sim.impl	class_heap_change_signal	P+ids	application run state (S6)
 sim.impl	source_function_dispatch_depth	P	lifecycle flags (SystemC refuses save)

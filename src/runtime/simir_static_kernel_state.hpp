@@ -29,6 +29,7 @@
 #include <queue>
 #include <span>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -417,12 +418,18 @@ public:
 
     /// Run-state image sections (simir_static_kernel_image.cpp). The
     /// "kernel.values" section holds the slot values (the arena and the
-    /// published outputs); threads, waiters, timers and the rest are the
-    /// "kernel.state" section (run_state_io). restore_value_section is
-    /// false, with the kernel unchanged, when the bytes do not fit this
-    /// kernel's slots.
+    /// published values of the design's outputs); threads, waiters, timers
+    /// and the rest are the "kernel.state" section (run_state_io).
+    /// restore_value_section is false, with the kernel unchanged, when the
+    /// bytes do not fit this kernel's slots.
     void record_value_section(std::string& out) const;
     [[nodiscard]] bool restore_value_section(std::string_view bytes);
+    /// After a restore: the outputs this run's own watches added (an
+    /// observer that registered, or a value reference a client took, before
+    /// the restore) publish the restored values. Their published values
+    /// are not in the file, since the watches an observer asks for are not
+    /// run state (the restored run's observers ask again).
+    void resync_watched_outputs();
 
     /// Returns true when the kernel staged updates to its own inputs and
     /// must run again in the next delta.
@@ -600,6 +607,13 @@ public:
     {
         return process == host_process_;
     }
+    /// The time step a closed kernel runs ahead of the scheduler while it
+    /// runs it (activate's time warp); empty otherwise. Host services its
+    /// members call stamp this time (Impl::current_time).
+    [[nodiscard]] std::optional<SimulationTick> warped_now() const noexcept
+    {
+        return activating_ ? warp_time_ : std::nullopt;
+    }
     /// A SystemVerilog kernel's first member that starts a delta late
     /// (Member::start_late): Interpreter::start queues the late activation
     /// (queue_late_start) at that process's place among the late starters.
@@ -661,6 +675,15 @@ public:
     /// string, IEEE 1800-2023 37.43 with vpi_put_value, 38.34).
     void debug_write_string_register(
         ProcessId process, StringRegisterId reg, std::string_view value);
+    /// A design container object the kernel holds in its own element
+    /// storage (a protected type's variable of a shared variable, an array
+    /// no signal aliases) is current only there: a host read copies its
+    /// elements into `value`, and a host deposit writes them (S19). False
+    /// when the kernel does not hold the object so.
+    [[nodiscard]] bool read_owned_container_object(
+        ContainerObjectId object, ContainerValue& value) const;
+    bool write_owned_container_object(
+        ContainerObjectId object, const ContainerValue& value);
     /// The thread member a debugger process id names: the member itself, or
     /// the member whose fork created the child with that id (children get the
     /// ids the reference evaluator would give them, in a debugger plan).
@@ -833,6 +856,13 @@ private:
             std::vector<SharedContainerValue> dynamic;
             std::size_t bytes { };
         };
+        /// A compiled body whose recursive callables keep real frames
+        /// (CompiledBody::frame_stack_base) holds their registers on its
+        /// frame stack; the frames here are then the runtime's part of the
+        /// frames that list strings or containers (frame_storage), without
+        /// registers, one per such compiled frame in the same order, merged
+        /// into the reference's frames when the member leaves compiled code
+        /// (export_compiled_frames).
         std::vector<Frame> frames;
         std::size_t frame_bytes { };
         /// Contents of private arrays an automatic frame lists, saved at
@@ -1013,6 +1043,9 @@ private:
         bool publish_nba { };
         /// Written by VHDL members: published in the generic domain.
         bool vhdl_written { };
+        /// The offset of the slot's published value in published_: fixed by
+        /// the build for the design's outputs, by the order of the watches
+        /// for an output a watch added.
         std::uint32_t published { static_kernel_detail::no_slot };
         std::vector<WriterRegion> writers;
         bool disjoint_writers { true };
@@ -1122,7 +1155,24 @@ private:
         slice,
         element,
         element_part,
+        /// A host signal's NBA update from an Active member (queue_host_update):
+        /// `target` is the signal, `offset` the slice's (host_slice).
+        host,
+        host_slice,
+        /// An Active member's other NBA-region event the host performs
+        /// (queue_host_task): a `->>` trigger of an event object (IEEE
+        /// 1800-2023 15.5.1), a string variable's update or a host-kept
+        /// array's or array element's update (10.4.2). `task`
+        /// performs it, `target` is the stable order and `offset` the
+        /// scheduler phase it would take as the host's own event.
+        host_task,
     };
+    /// A host entry: committed by commit_host_update, in its queue place.
+    [[nodiscard]] static constexpr bool host_pending(const PendingKind kind) noexcept
+    {
+        return kind == PendingKind::host || kind == PendingKind::host_slice
+            || kind == PendingKind::host_task;
+    }
 
     struct Pending {
         PendingKind kind { };
@@ -1136,6 +1186,11 @@ private:
         bool signed_index { };
         bool linear_index { };
         DynamicPartIndex part;
+        /// The event a host_task entry performs.
+        Scheduler::Task task;
+        /// The host_task writes a host object the kernel's inputs may read:
+        /// they are scanned again once it has (host_object_written).
+        bool host_object { };
     };
 
     /// One deferred nonblocking write, in program order. Narrow slot and
@@ -1187,9 +1242,21 @@ private:
     /// A write reached a slot whose signal a foreign library forced or
     /// assigned (override_changed): puts the overridden bits back, which the
     /// write hid (IEEE 1800-2023 10.6.2, 10.6.1), and returns `changed_mask`
-    /// without them.
+    /// without them. `before` is slot_changed's: a change of the whole slot
+    /// when not null.
     [[nodiscard]] std::uint64_t restore_override(std::uint32_t slot,
+        std::uint64_t changed_mask, std::uint32_t field_offset,
+        const std::uint64_t* before);
+    /// restore_override for one 64-bit field of a wide slot (a wide write
+    /// notifies its fields one at a time): hands the field to the host's
+    /// stored layer as a slice of the writer's and puts back only the
+    /// field's overridden bits.
+    [[nodiscard]] std::uint64_t restore_override_field(std::uint32_t slot,
         std::uint64_t changed_mask, std::uint32_t field_offset);
+    /// The bits [offset, offset + width) of an output slot as slices of its
+    /// writers' values (publish_slot's commit or staging, for a field).
+    void publish_slot_field(std::uint32_t slot, std::uint32_t offset,
+        std::uint32_t width);
     /// Builds the slot's chunk index of its ranged readers.
     static void index_ranged_readers(Slot& slot);
     [[nodiscard]] Logic4 slot_edge_bit(std::uint32_t slot) const noexcept;
@@ -1305,8 +1372,23 @@ private:
     std::uint32_t run_generic_from(std::uint32_t member, std::uint32_t pc,
         std::uint32_t until = static_kernel_detail::no_slot);
     void verify_run(std::uint32_t member);
-    using VerifyWrites
-        = std::vector<std::tuple<std::uint32_t, std::uint32_t, std::string>>;
+    /// An element write of a kernel memory as its commit applies it
+    /// (resolve_element_write): the element, the bits it sets (offset and
+    /// Logic9 image; none for a part-select outside the element), or the
+    /// error the commit reports.
+    struct VerifyElementWrite {
+        std::uint32_t container { };
+        std::size_t element { };
+        std::uint32_t offset { };
+        std::string value;
+        std::string error;
+    };
+    /// Writes appended by a run: slot writes as (slot, offset, Logic9-exact
+    /// value), and element writes of kernel memories, in order.
+    struct VerifyWrites {
+        std::vector<std::tuple<std::uint32_t, std::uint32_t, std::string>> slots;
+        std::vector<VerifyElementWrite> elements;
+    };
     [[nodiscard]] VerifyWrites verify_writes(std::size_t first);
     [[nodiscard]] std::vector<std::pair<std::uint32_t, std::vector<std::uint64_t>>>
     verify_net_image();
@@ -1346,6 +1428,21 @@ private:
     /// Arena storage for an elements-storage container, holding `initial`.
     void place_elements(Container& container, const ContainerValue& initial);
     void write_element(const Pending& pending);
+    /// Where an element write lands when it commits: the element, its value
+    /// with the write applied, and the bits the write sets (`width` 0: a
+    /// part-select wholly outside the element). None when it writes nothing
+    /// (an unknown or out-of-range fixed-size index, IEEE 1800-2023 7.4.6); a
+    /// malformed write fails.
+    struct ElementWrite {
+        std::size_t element { };
+        PackedLogic4 value;
+        std::uint32_t offset { };
+        std::uint32_t width { };
+    };
+    [[nodiscard]] std::optional<ElementWrite> resolve_element_write(
+        const Pending& pending);
+    /// The reference form of a queued element write (write_element_entry).
+    [[nodiscard]] static Pending element_pending(const NbaEntry& entry);
     /// Narrow element write; false when the reference path must report an
     /// error or handle an unsupported shape.
     [[nodiscard]] bool write_element_narrow(const NbaEntry& entry);
@@ -1366,6 +1463,35 @@ private:
     void write_host(std::uint32_t member, SignalId signal, PackedLogic4 value,
         std::optional<std::uint32_t> offset, bool blocking,
         SignalUpdateDomain domain);
+    /// write_host's commit or staged update (no verify shadow); true when
+    /// the kernel mirrors a sole writer's update at once (its input's
+    /// mirror takes the value the host will commit).
+    bool deliver_host_write(std::uint32_t member, SignalId signal,
+        PackedLogic4 value, std::optional<std::uint32_t> offset, bool blocking,
+        SignalUpdateDomain domain);
+    /// An Active member's NBA update of a host signal: queued with the
+    /// kernel's own NBA updates, so that it lands in execution order among
+    /// them (IEEE 1800-2023 4.6 b)); commit_host_update applies it.
+    void queue_host_update(std::uint32_t member, SignalId signal,
+        PackedLogic4 value, std::optional<std::uint32_t> offset);
+    /// An NBA-region event the host performs (a `->>` trigger of an event
+    /// object, a string variable's update, a host-kept array's update): an
+    /// Active member's joins the kernel's queue in execution order with its
+    /// updates (IEEE 1800-2023 4.6 b)); another member's is scheduled in the
+    /// host's region. `host_object`: the event writes a host object.
+    void queue_host_task(std::uint32_t member, ProcessId order,
+        Scheduler::Task task, bool host_object = false);
+    /// A delayed update of a host signal (WriteAfter): a zero-delay NBA
+    /// update of an Active member is the NBA region's update in its
+    /// execution place (queue_host_update); the host schedules the others.
+    void schedule_host_after(std::uint32_t member, SignalId signal,
+        PackedLogic4 value, std::optional<std::uint32_t> offset,
+        SignalUpdateDomain domain, SimulationTick delay);
+    /// Applies a queued host update in its place in the NBA commit: the
+    /// outputs the batch's earlier updates changed reach the host first.
+    void commit_host_update(Pending& entry);
+    /// Whether the queued NBA updates include a host entry.
+    [[nodiscard]] bool host_updates_queued() const noexcept;
     /// A VHDL signal assignment to a host signal: the member's driver of it
     /// is the host's projected driver (IEEE 1076-2019 10.5.2.2, 14.7.2).
     void write_host_projected(std::uint32_t member, SignalId signal,
@@ -1485,6 +1611,12 @@ private:
     /// (its SvaOperation at inst.x), guards, start and disabled read from the
     /// caller's register file; writes the pending outcome count to d.
     void execute_sva_tick(const static_kernel_detail::CompiledBody& body,
+        Word* registers, const static_kernel_detail::KInst& inst,
+        std::uint32_t member);
+    /// KOp::sva_tick with sub 1, 2 or 3: a local-variable request of the
+    /// directive's last tick (IEEE 1800-2023 16.10): the expression it asks
+    /// for, a local of the request's valuation, or the answer.
+    void execute_sva_memo(const static_kernel_detail::CompiledBody& body,
         Word* registers, const static_kernel_detail::KInst& inst,
         std::uint32_t member);
     /// The block base of the directive of instruction `inst` of `member`:
@@ -1917,11 +2049,25 @@ private:
     /// One output slot of publish: hands its value to the host unless the
     /// host already holds it (or `ending`).
     void publish_slot(std::uint32_t slot_index, bool immediate, bool ending);
+    /// Debugger plan: a write of an activation changed an output slot. The
+    /// value reaches the host when the write is complete (flush_debug_writes):
+    /// a wide write lands as several field stores, each notifying its own
+    /// bits, and the observers hear one change of the whole value.
+    void note_debug_write(std::uint32_t slot_index);
+    /// Hand the outputs that completed writes changed to the host, in the
+    /// order of their first write since the last flush. The flush points are
+    /// the boundaries of a write: the next debug point of the thread (every
+    /// statement has one), its suspension, each NBA update, and the end of
+    /// the activation.
+    void flush_debug_writes();
     void initialize();
     [[nodiscard]] bool scan_inputs(bool all = true);
     /// Take one input's committed host value into its mirror and wake its
-    /// readers; false when it is unchanged.
+    /// readers; false when it is unchanged. Under FSIM_KERNEL_VERIFY the
+    /// mirror is then checked against the host's value.
     bool refresh_input(Input& input);
+    /// refresh_input without the check.
+    bool refresh_input_from_host(Input& input);
     /// Take a new value into an input's mirror and wake its readers.
     void apply_input(Input& input, PackedLogic4 value, bool event = false);
     [[noreturn]] void fail(std::uint32_t member, InstructionIndex instruction,
@@ -2023,6 +2169,7 @@ private:
     {
         sva_table_.rings = impl_.sampled_ring_words.data();
         sva_table_.sampled = impl_.sampled_value_words.data();
+        sva_table_.controls = impl_.assertion_controls.data();
         sva_now_ = static_cast<std::int64_t>(kernel_now());
     }
     /// Gives generated code the write marks where its writes go to writes_
@@ -2060,6 +2207,22 @@ private:
     {
         if (slot < write_marks_.size()) {
             write_marks_[slot] = write_round_;
+        }
+    }
+    /// A queued element write of memory `container` (its index resolved at
+    /// the commit) marks the slots of a memory held as kernel signals.
+    void mark_element_write(const std::uint32_t container) noexcept
+    {
+        if (write_marks_.empty() || container >= containers_.size()) {
+            return;
+        }
+        const auto& memory = containers_[container];
+        if (memory.storage == StaticKernelContainerStorage::packed_signal) {
+            mark_write(memory.packed_slot);
+        } else if (memory.storage == StaticKernelContainerStorage::element_signals) {
+            for (const auto slot : memory.element_slots) {
+                mark_write(slot);
+            }
         }
     }
 
@@ -2435,10 +2598,21 @@ private:
     {
         return warp_time_ ? *warp_time_ : impl_.scheduler.now();
     }
+    /// The delta of kernel_now: a warped time step is the first delta of its
+    /// time slot.
+    [[nodiscard]] std::uint64_t kernel_delta() const noexcept
+    {
+        return warp_time_ ? 0U : impl_.scheduler.delta();
+    }
     void activate_step();
     /// Whether the pending NBA commit must wait for the host's NBA region;
-    /// arms the task that performs it.
+    /// arms the tasks that perform it: the commit at the batch's
+    /// execution-order key (IEEE 1800-2023 4.6 b)) and the settling after
+    /// every update of the region.
     [[nodiscard]] bool defer_nonblocking();
+    /// The deferred batch's updates at their execution-order key, without
+    /// settling (defer_nonblocking).
+    void commit_nonblocking_at_key();
 
     [[nodiscard]] std::optional<SimulationTick> next_timer();
     void schedule_stop_at(SimulationTick time);
@@ -2710,6 +2884,11 @@ private:
         std::vector<std::uint32_t> marks;
         std::size_t writes { };
         std::size_t generic { };
+        /// Queued memory element writes (nba_).
+        std::size_t elements { };
+        /// The private arrays the thread's open private frames saved.
+        std::vector<Member::SavedArray> saved_arrays;
+        std::vector<Member::ArrayMark> saved_array_marks;
     };
     /// The reason a member's activations are not replayed (named under
     /// FSIM_PROFILE_KERNEL), or null when they are.
@@ -2749,10 +2928,14 @@ private:
         /// index in containers_ and its elements afterwards.
         std::uint32_t container { static_kernel_detail::no_container };
         std::vector<PackedLogic4> elements;
-        /// Immediate writes of kernel-owned signals the operation made (a
-        /// $fscanf into a variable); the replay makes them too, so later
-        /// operations read them.
+        /// Immediate writes of signals the operation made (a $fscanf or
+        /// $value$plusargs into a variable, commit_file_target); the replay
+        /// makes them too (a host signal's as a recorded host write), so
+        /// later operations read them.
         std::vector<std::pair<SignalId, PackedLogic4>> commits;
+        /// Host entries the operation queued (queue_host_update,
+        /// queue_host_task); the replay queues them too.
+        std::vector<Pending> host_updates;
     };
     /// A concurrent assertion's monitor tick of the compiled run (IEEE
     /// 1800-2023 16.14): the operation, the operand registers it read and the
@@ -2772,6 +2955,10 @@ private:
         /// before it runs: it may write a register it reads).
         std::vector<std::string> pending_reads;
         std::vector<std::pair<SignalId, PackedLogic4>> pending_commits;
+        std::vector<Pending> pending_host_updates;
+        /// The compiled run is inside a generic operation (between
+        /// shadow_note_reads and shadow_record_generic).
+        bool in_generic { };
         std::vector<VerifySvaTick> sva;
         std::size_t sva_consumed { };
         /// The result of each inline outcome pop of the compiled run, in
@@ -2781,6 +2968,13 @@ private:
         std::size_t sva_outcomes_consumed { };
         std::vector<VerifyHostWrite> compiled_host;
         std::vector<VerifyHostWrite> reference_host;
+        /// Per compiled host write: the words the signal's mirror slot
+        /// holds after it, when the write changed them; empty otherwise.
+        /// They are the host's value (a blocking write's commit), or the
+        /// update the host will commit (a sole writer's, mirrored at once),
+        /// encoded from the host's store, and the compiled mirror was
+        /// checked against them (verify_host_write_mirror).
+        std::vector<std::vector<std::uint64_t>> host_mirrors;
         /// Host signals' values as the replay sees them: before the
         /// compiled run's blocking writes, then the replay's own.
         std::map<SignalId, PackedLogic4> host_values;
@@ -2790,16 +2984,74 @@ private:
     /// Records a host write; true when the reference replay must not make it.
     [[nodiscard]] bool shadow_host_write(VerifyHostWrite record, bool blocking,
         const PackedLogic4* value);
+    /// FSIM_KERNEL_VERIFY: the mirrors of host signals checked against the
+    /// host's store, which computes their values (resolution and all)
+    /// without the kernel's mirror code. A mirrored signal's host write
+    /// (write_host) makes it, and returns the words the mirror must hold
+    /// after it (for the reference replay: VerifyShadow::host_mirrors).
+    [[nodiscard]] std::vector<std::uint64_t> verify_host_write_mirror(
+        std::uint32_t member, SignalId signal, PackedLogic4 value,
+        std::optional<std::uint32_t> offset, bool blocking,
+        SignalUpdateDomain domain);
+    /// At the end of a verified activation, before its replay: the mirror
+    /// of each host signal the activation wrote.
+    void verify_activation_mirrors(const std::vector<VerifyHostWrite>& writes);
+    /// The words `value` takes in a mirror slot (write_mirror's layout:
+    /// aval and bval, or the four Logic9 code planes, of `slot.words` words
+    /// each).
+    [[nodiscard]] std::vector<std::uint64_t> mirror_image(const Slot& slot,
+        const PackedLogic4& value) const;
+    /// Whether the host holds a staged SystemVerilog update of `signal` it
+    /// has not committed yet.
+    [[nodiscard]] bool host_update_pending(SignalId signal) const;
+    /// Fails the run (an fsim-kernel-verify report) unless the mirror of
+    /// `input` holds `expected`, the host's value (or the update the host
+    /// will commit) at `when`.
+    void verify_mirror(const Input& input, const PackedLogic4& expected,
+        std::string_view when) const;
+    /// Per input whose mirror holds a sole writer's update the host has not
+    /// committed yet: that update's value, as the host will commit it, or
+    /// none when a later write the kernel does not mirror at once follows
+    /// it. The host's commit (refresh_input) checks the mirror against the
+    /// committed value and ends the entry.
+    std::map<std::uint32_t, std::optional<PackedLogic4>> verify_mirror_ahead_;
     void shadow_note_reads(std::uint32_t member, const std::vector<RegisterId>& reads);
+    /// A file operation's immediate write of a signal target (commit_driver
+    /// for a host signal), as the member's blocking writes make it.
+    void commit_file_target(std::uint32_t member, std::uint32_t pc, SignalId signal,
+        PackedLogic4 value);
     void shadow_record_generic(std::uint32_t member, std::uint32_t pc,
         const std::vector<static_kernel_detail::WrittenRegister>& writes);
     void sync_behavioral_registers(std::uint32_t member, std::uint32_t keep);
     /// The registers of compiled behavioral members to and from the reference
     /// registers the run-state image holds.
+    /// `out` holds the frames compiled code keeps without registers (the
+    /// runtime's part, Member::frames); they are merged into the exported
+    /// frames of their identities.
     void export_compiled_frames(std::uint32_t member_index,
         const CompiledBody& body, const std::vector<Word>& image,
         const std::uint64_t* words, std::uint64_t pairs,
         std::vector<Member::Frame>& out) const;
+    /// Automatic callable frames (CallableFramePush, CallableFramePop): the
+    /// private arrays' contents, the strings and container registers of a
+    /// frame, the push and pop of Member::frames and the values the call's
+    /// results keep; the reference's frame operations and the runtime's
+    /// part of a compiled recursive callable's frame (frame_storage, at
+    /// operation `pc`) share them.
+    struct FrameResults {
+        std::vector<std::string> strings;
+        std::vector<std::uint32_t> containers;
+        std::vector<SharedContainerValue> dynamic;
+    };
+    void save_frame_storage(std::uint32_t member_index, std::uint32_t pc,
+        const CallableFramePush& op, Member::Frame& frame);
+    void push_frame(std::uint32_t member_index, std::uint32_t pc,
+        Member::Frame frame);
+    Member::Frame pop_frame(std::uint32_t member_index, std::uint32_t pc,
+        const CallableFramePop& op, FrameResults& kept);
+    void keep_frame_results(std::uint32_t member_index, std::uint32_t pc,
+        const CallableFramePop& op, FrameResults& kept);
+    void frame_storage(std::uint32_t member_index, std::uint32_t pc, bool push);
     [[nodiscard]] std::uint32_t compiled_frame_count(const CompiledBody& body,
         const std::uint64_t* words, std::uint64_t pairs) const;
     [[nodiscard]] std::optional<PackedLogic4> exact_register(
@@ -2840,6 +3092,13 @@ private:
     void unwind_thread_calls(std::uint32_t thread, std::uint32_t depth);
     /// The running thread's call-stack depth.
     [[nodiscard]] std::uint32_t running_call_depth(const Member& member) const;
+    /// A private frame's arrays (an automatic callable's unpacked arrays
+    /// belong to its call, IEEE 1800-2023 6.21): the push saves the caller's
+    /// words, the pop restores those it does not keep. The frame operations
+    /// run this arena bookkeeping, and so does a verify replay of them.
+    void save_private_arrays(Member& member, const CallableFramePush& op);
+    void restore_private_arrays(std::uint32_t member, std::uint32_t pc,
+        const CallableFramePop& op);
     /// disable of a block or task named by hierarchical name (IEEE 1800-2023
     /// 9.6.2), as Interpreter::Impl::disable_named_scope: the first name
     /// that a member's program declares ends that interval in each of the
@@ -2969,6 +3228,9 @@ private:
     /// it is visible to the kernel's readers at once (IEEE 1800-2023
     /// 10.4.1).
     void host_object_written();
+    /// Where a member's nonblocking write of a host-kept array goes: the
+    /// kernel's NBA queue (queue_host_task) for a SystemVerilog member.
+    [[nodiscard]] Impl::NonblockingSink host_object_sink(std::uint32_t member);
     void exit_program(std::uint32_t owner);
     /// The non-final members of each program, in process order.
     std::map<std::uint32_t, std::vector<std::uint32_t>> program_members_;
@@ -3282,6 +3544,9 @@ private:
     /// Outputs' last published values (Slot::published offsets): apart from
     /// the arena, so watch can add outputs during the run.
     std::vector<std::uint64_t> published_;
+    /// The size of published_ when the kernel was built: the design's
+    /// outputs. A watch during the run adds its outputs after it.
+    std::size_t published_design_ { };
     /// Signals watch was asked for inside an activation.
     std::vector<SignalId> pending_watches_;
     /// Slots whose dead writers come alive (note_external_write), and an
@@ -3512,6 +3777,9 @@ private:
     /// block bases into *sva_blocks_ while it lives (sva::BlockSlot).
     std::shared_ptr<std::vector<std::int64_t*>> sva_blocks_;
     std::vector<std::uint32_t> sva_member_base_;
+    /// Per member, the first control site of its process
+    /// (StaticKernelSvaTable::control_base; 0 for a process without one).
+    std::vector<std::uint32_t> sva_control_base_;
     StaticKernelSvaTable sva_table_;
     /// Whether compiled code reads sva_table_ (frame.sva): set when
     /// compile_members emits KOp::sva_tick, sva_outcome or sva_sampled_load.
@@ -3532,6 +3800,12 @@ private:
     std::vector<Pending> pending_generic_spare_;
     std::vector<std::uint32_t> output_queue_spare_;
     std::vector<std::uint32_t> triggered_spare_;
+    /// Debugger plan: the output slots written since the last
+    /// flush_debug_writes, in first-write order, and a flag per slot (sized
+    /// on use: a live graft adds slots).
+    std::vector<std::uint32_t> debug_writes_;
+    std::vector<std::uint32_t> debug_writes_spare_;
+    std::vector<std::uint8_t> debug_write_pending_;
     /// Sequential SystemVerilog members with one edge-sensitivity set and no
     /// other wake-up (build_dispatch_groups). An edge schedules the group
     /// once, and the group runs its members in index order, as the sorted
@@ -3831,25 +4105,29 @@ private:
     void shuffle_items(std::uint32_t count);
     void resume_domain(std::uint32_t domain, std::size_t limit);
     bool initialized_ { };
-    /// Mixed kernels with a host boundary: a round's VHDL work waits in the
-    /// delta's generic Active queue for its SystemVerilog Active work
-    /// (defer_vhdl_round); the activation that runs it.
+    /// Mixed kernels with a host boundary: a round's VHDL work, or only
+    /// its update phase when the round ran in a task of a generic queue,
+    /// waits for the delta's SystemVerilog work in its generic Active
+    /// queue, or in its generic Inactive queue when the Active one is
+    /// executing (defer_vhdl_round); until it runs, no other activation
+    /// runs or commits a round. vhdl_round_task_: the activation that runs
+    /// it.
     bool vhdl_round_deferred_ { };
     bool vhdl_round_task_ { };
     [[nodiscard]] bool vhdl_round_waits_for_host() const;
+    [[nodiscard]] bool vhdl_update_waits_for_host() const;
     void defer_vhdl_round();
     bool nonblocking_committed_ { };
     /// This activation staged an Active update to a host signal: #0
     /// threads (Inactive region) resume only after the host applies it.
     bool host_active_staged_ { };
-    /// A member staged an NBA-region update to a host signal at this time:
-    /// the kernel's NBA commit joins the host's NBA region, after it, so
-    /// what both wake runs after every update (IEEE 1800-2023 4.5).
+    /// A member staged an NBA-region event to the host at this time (a
+    /// Reactive or region-moved member's `->>` trigger or string update, or
+    /// a host entry staged by commit_host_update outside the host's NBA
+    /// region): the kernel's NBA commit joins the host's NBA region, after
+    /// it, so what both wake runs after every update (IEEE 1800-2023 4.5).
     bool host_nba_staged_ { };
     SimulationTick host_nba_time_ { };
-    /// Kernel members read a host signal with such an update: they run
-    /// again in that region, not in the next delta.
-    bool host_nba_wakes_ { };
     /// The deferred NBA commit runs after the host's updates: it commits
     /// before the activation settles.
     bool nonblocking_after_host_ { };

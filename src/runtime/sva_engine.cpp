@@ -50,13 +50,22 @@ struct Step {
 
 struct CompiledSequence {
     std::vector<Step> code;
+    // The repetition counters, then the words of the local variables
+    // (16.10): a thread's valuation follows its counters.
     std::uint32_t counters { };
+    std::uint32_t locals_base { };
 };
 
 struct CompiledProperty {
     PropertyKind kind { PropertyKind::sequence };
     bool strong { };
     bool overlapped { };
+    // The abort operators: sync_accept_on, sync_reject_on.
+    bool synchronous { };
+    // A multiclocked plan (16.13.3): the clock that flows into the property
+    // (for a sequence and an implication, the semantic leading clock of its
+    // sequence, 16.16.1).
+    std::uint32_t clock { };
     std::uint32_t sequence { };
     std::uint32_t guard { };
     std::vector<std::uint32_t> children;
@@ -65,7 +74,22 @@ struct CompiledProperty {
     // The position of the property's leftmost boolean expression.
     std::uint32_t line { };
     std::uint32_t column { };
+    // The condition is an expression that reads local variables (16.10).
+    bool guard_expression { };
+    // The initialization assignments of the property's local variables.
+    std::vector<std::uint32_t> initializers;
 };
+
+// The start of an instance of a multiclocked plan (16.13): a point of the
+// trace, the time step held in the instance's start and whether the point is
+// that time step itself (inclusive) or the first one after it (F.5.1: a
+// clocked property waits for the nearest tick of its clock, possibly
+// overlapping the point). An operator that counts ticks of its clock (if,
+// nexttime, always, eventually, until) aligns at the first tick of its clock
+// that reaches the point: its start becomes that tick's count and the point
+// is cleared. The flags share the instance record's flag word.
+constexpr std::int64_t at_point = 512;
+constexpr std::int64_t point_inclusive = 1024;
 
 // Where an attempt was rejected: the boolean expression that failed
 // (IEEE 1800-2023 39.4.2 failExpr); line 0 when none is known.
@@ -123,6 +147,10 @@ struct CompiledPlan {
     std::vector<std::int64_t> clock_times;
     std::vector<bool> ticked;
     std::int64_t time { };
+    // The plan checks an asynchronous abort (accept_on, reject_on; IEEE
+    // 1800-2023 16.12.14), at every evaluation, a tick of its clocks or
+    // not: an evaluation in which no clock ticked still applies it.
+    bool async_abort { };
     // Step events (39.4.2): produced only while `stepping` is set for the
     // attempt being advanced (39.5.2). `state_base[i]` numbers sequence i's
     // program counters as state ids; `guard_positions[g]` is the source
@@ -132,6 +160,35 @@ struct CompiledPlan {
     mutable bool stepping { };
     mutable std::int64_t attempt_start { };
     mutable std::vector<StepEvent> events;
+    // Local variables (IEEE 1800-2023 16.10): the word offset and size of
+    // each local in a valuation, the valuation's words, each expression's
+    // target (0 a check, else local target - 1) and the local sets of the
+    // join ends. An expression's value for a valuation comes from the memo
+    // of the attempt block (`storage`); a value the memo lacks becomes a
+    // request for the assertion process, the tick is discarded (`missed`)
+    // and runs again once the process answered.
+    std::vector<std::size_t> local_offset;
+    std::vector<std::size_t> local_size;
+    std::size_t locals_words { };
+    std::vector<std::uint32_t> expression_target;
+    std::vector<std::vector<std::uint32_t>> local_sets;
+    AttemptStorage* storage { };
+    mutable bool missed { };
+
+    [[nodiscard]] std::size_t result_words(const std::uint32_t expression) const
+    {
+        const auto target = expression_target[expression];
+        return target == 0U ? 1U : local_size[target - 1U];
+    }
+    // The value of `expression` for the valuation `locals`: the result words
+    // (zero while unknown).
+    [[nodiscard]] std::vector<std::int64_t> evaluate(
+        std::uint32_t expression, std::span<const std::int64_t> locals) const;
+    [[nodiscard]] bool truth(const std::uint32_t expression,
+        const std::span<const std::int64_t> locals) const
+    {
+        return evaluate(expression, locals).front() != 0;
+    }
 
     [[nodiscard]] bool guard(const std::uint32_t index) const
     {
@@ -172,6 +229,36 @@ struct CompiledPlan {
         return 2 + static_cast<std::int64_t>(state_base[sequence]) + pc;
     }
 };
+
+std::vector<std::int64_t> CompiledPlan::evaluate(const std::uint32_t expression,
+    const std::span<const std::int64_t> locals) const
+{
+    const auto words = result_words(expression);
+    auto& block = *storage;
+    const auto count = block.memo_count();
+    for (std::size_t index = 0; index < count; ++index) {
+        const auto entry = std::as_const(block).memo_entry(index);
+        if (entry[layout::memo_e_expression]
+                != static_cast<std::int64_t>(expression)
+            || !std::equal(locals.begin(), locals.end(),
+                entry.begin() + layout::memo_e_locals)) {
+            continue;
+        }
+        if (entry[layout::memo_e_answered] == 0) {
+            missed = true;
+            return std::vector<std::int64_t>(words, 0);
+        }
+        const auto result = entry.subspan(layout::memo_e_locals + locals_words, words);
+        return { result.begin(), result.end() };
+    }
+    std::vector<std::int64_t> entry(block.memo_stride(), 0);
+    entry[layout::memo_e_expression] = expression;
+    std::ranges::copy(locals, entry.begin() + layout::memo_e_locals);
+    block.push_memo(entry);
+    block.set(layout::h_memo_pending, block.get(layout::h_memo_pending) + 1);
+    missed = true;
+    return std::vector<std::int64_t>(words, 0);
+}
 
 namespace {
 
@@ -226,7 +313,9 @@ private:
 
 
 struct Throughout {
+    // A guard, or an expression (16.10) when `expression`.
     std::uint32_t guard { };
+    bool expression { };
     // The first tick of the operand; -1 until its first check.
     std::int64_t from { -1 };
     // The position of the condition, for a failure report.
@@ -238,6 +327,14 @@ struct JoinReference {
     std::uint32_t join { };
     std::uint32_t side { };
 };
+
+// A throughout entry's condition word: the guard, plus 2^32 for an
+// expression.
+[[nodiscard]] std::int64_t throughout_word(const Throughout& entry)
+{
+    return static_cast<std::int64_t>(entry.guard)
+        | (entry.expression ? std::int64_t { 1 } << 32U : 0);
+}
 
 struct Thread {
     std::uint32_t pc { };
@@ -270,7 +367,7 @@ struct Thread {
         result.insert(result.end(), counters.begin(), counters.end());
         result.push_back(static_cast<std::int64_t>(throughout.size()));
         for (const auto& entry : throughout) {
-            result.push_back(entry.guard);
+            result.push_back(throughout_word(entry));
             result.push_back(entry.from);
         }
         result.push_back(static_cast<std::int64_t>(groups.size()));
@@ -299,7 +396,7 @@ void encode_thread(const Thread& thread, std::vector<std::int64_t>& out)
     out.insert(out.end(), thread.counters.begin(), thread.counters.end());
     out.push_back(static_cast<std::int64_t>(thread.throughout.size()));
     for (const auto& entry : thread.throughout) {
-        out.push_back(entry.guard);
+        out.push_back(throughout_word(entry));
         out.push_back(entry.from);
         out.push_back(entry.line);
         out.push_back(entry.column);
@@ -337,11 +434,18 @@ void encode_thread(const Thread& thread, std::vector<std::int64_t>& out)
     const auto throughout = in.count();
     thread.throughout.reserve(throughout);
     for (std::size_t index = 0; index < throughout; ++index) {
-        const auto guard = in.index(std::numeric_limits<std::uint32_t>::max());
+        const auto word = in.next();
+        if (word < 0 || (word >> 32U) > 1) {
+            throw std::runtime_error {
+                "concurrent property attempt record is corrupt"
+            };
+        }
+        const auto guard = static_cast<std::uint32_t>(word & 0xffffffff);
         const auto from = in.next();
         const auto line = in.index(std::numeric_limits<std::uint32_t>::max());
         const auto column = in.index(std::numeric_limits<std::uint32_t>::max());
-        thread.throughout.push_back({ guard, from, line, column });
+        thread.throughout.push_back(
+            { guard, (word >> 32U) != 0, from, line, column });
     }
     const auto groups = in.count();
     thread.groups.reserve(groups);
@@ -361,8 +465,10 @@ void encode_thread(const Thread& thread, std::vector<std::int64_t>& out)
 // The matches of one sequence started at one tick.
 class Matcher {
 public:
+    // `locals` is the valuation of the local variables the sequence starts
+    // with (16.10; empty for a plan without locals).
     Matcher(const CompiledPlan& plan, const CompiledSequence& sequence,
-        const std::int64_t start)
+        const std::int64_t start, const std::span<const std::int64_t> locals)
         : plan_(plan)
         , sequence_(sequence)
     {
@@ -370,6 +476,27 @@ public:
         initial.due_lo = start;
         initial.due_hi = start;
         initial.counters.assign(sequence.counters, 0);
+        std::ranges::copy(locals, initial.counters.begin() + sequence.locals_base);
+        threads_.push_back(std::move(initial));
+    }
+
+    // A matcher of a multiclocked plan started at a point of the trace
+    // (16.13): its first thread waits on `clock` for the first tick at or
+    // after (`inclusive`) or strictly after time step `time`, as a thread
+    // switching clocks does.
+    Matcher(const CompiledPlan& plan, const CompiledSequence& sequence,
+        const std::uint32_t clock, const std::int64_t time,
+        const bool inclusive, const std::span<const std::int64_t> locals)
+        : plan_(plan)
+        , sequence_(sequence)
+    {
+        Thread initial;
+        initial.clock = clock;
+        initial.switching = true;
+        initial.switch_inclusive = inclusive;
+        initial.switch_time = time;
+        initial.counters.assign(sequence.counters, 0);
+        std::ranges::copy(locals, initial.counters.begin() + sequence.locals_base);
         threads_.push_back(std::move(initial));
     }
 
@@ -383,8 +510,9 @@ public:
     // The matcher as record words: the join and group counters, the position
     // of the last check that killed a thread (failExpr, 39.4.2), the counted
     // threads, then the counted joins (id, kind, continuation thread and the
-    // two counted sets of end ticks). The per-tick scratch sets are not
-    // state.
+    // two counted sets of ends: the end tick, then the valuation of the
+    // local variables the operand's thread ended with, 16.10). The per-tick
+    // scratch sets are not state.
     void encode(std::vector<std::int64_t>& out) const
     {
         out.push_back(next_join_);
@@ -402,7 +530,9 @@ public:
             encode_thread(join.continuation, out);
             for (const auto& ends : join.ends) {
                 out.push_back(static_cast<std::int64_t>(ends.size()));
-                out.insert(out.end(), ends.begin(), ends.end());
+                for (const auto& end : ends) {
+                    out.insert(out.end(), end.begin(), end.end());
+                }
             }
         }
     }
@@ -429,7 +559,11 @@ public:
             for (auto& ends : join.ends) {
                 const auto size = in.count();
                 for (std::size_t end = 0; end < size; ++end) {
-                    ends.insert(in.next());
+                    std::vector<std::int64_t> entry(1U + plan_.locals_words);
+                    for (auto& word : entry) {
+                        word = in.next();
+                    }
+                    ends.insert(std::move(entry));
                 }
             }
             if (!joins_.emplace(id, std::move(join)).second) {
@@ -445,6 +579,7 @@ public:
     {
         now_ = now;
         matched_ = false;
+        matches_.clear();
         matched_groups_.clear();
         visited_.clear();
         kept_.clear();
@@ -452,15 +587,16 @@ public:
         std::vector<Thread> waiting;
         for (auto& thread : threads_) {
             // In a multiclocked sequence only the threads on a clock that
-            // ticked advance.
+            // ticked advance. A thread switching clocks (or a sequence that
+            // starts at a point) goes on at the first tick of its clock at or
+            // after, or strictly after, its switch time (16.13.1): the time
+            // step of the clock's last tick tells, so a tick earlier in the
+            // same time step counts for an inclusive switch.
             if (plan_.multiclocked()) {
-                if (!plan_.ticked[thread.clock]) {
-                    waiting.push_back(std::move(thread));
-                    continue;
-                }
                 if (thread.switching) {
-                    if (plan_.time < thread.switch_time
-                        || (plan_.time == thread.switch_time
+                    const auto last = plan_.clock_times[thread.clock];
+                    if (last < thread.switch_time
+                        || (last == thread.switch_time
                             && !thread.switch_inclusive)) {
                         waiting.push_back(std::move(thread));
                         continue;
@@ -468,6 +604,9 @@ public:
                     thread.switching = false;
                     thread.due_lo = plan_.clock_ticks[thread.clock];
                     thread.due_hi = thread.due_lo;
+                } else if (!plan_.ticked[thread.clock]) {
+                    waiting.push_back(std::move(thread));
+                    continue;
                 }
             }
             const auto tick = thread_now(thread);
@@ -476,7 +615,7 @@ public:
             const bool holds = std::ranges::all_of(thread.throughout,
                 [&](const Throughout& entry) {
                     const bool kept = entry.from < 0 || entry.from > tick
-                        || plan_.guard(entry.guard);
+                        || condition(entry, thread);
                     if (!kept) {
                         failed_ = { entry.line, entry.column };
                     }
@@ -517,6 +656,13 @@ public:
     {
         return failed_;
     }
+    // The distinct valuations of the local variables the sequence matched
+    // with at the last step (one empty valuation for a plan without
+    // locals): each match continues separately (16.10 c).
+    [[nodiscard]] const std::vector<std::vector<std::int64_t>>& matches() const
+    {
+        return matches_;
+    }
 
 private:
     // One step event of the attempt being advanced, when stepping is on for
@@ -539,6 +685,19 @@ private:
             guard, sequence, now_, position.first, position.second });
     }
 
+    // The valuation of the thread's local variables.
+    [[nodiscard]] std::span<const std::int64_t> locals_of(const Thread& thread) const
+    {
+        return std::span<const std::int64_t> { thread.counters }.subspan(
+            sequence_.locals_base);
+    }
+    // A throughout condition at the current tick.
+    [[nodiscard]] bool condition(const Throughout& entry, const Thread& thread) const
+    {
+        return entry.expression ? plan_.truth(entry.guard, locals_of(thread))
+                                : plan_.guard(entry.guard);
+    }
+
     // The current tick of the thread's clock.
     [[nodiscard]] std::int64_t thread_now(const Thread& thread) const
     {
@@ -549,7 +708,7 @@ private:
     struct Join {
         std::uint32_t kind { };
         Thread continuation;
-        std::set<std::int64_t> ends[2];
+        std::set<std::vector<std::int64_t>> ends[2];
     };
 
     void keep(Thread thread)
@@ -590,7 +749,8 @@ private:
         while (thread.pc < code.size()) {
             const auto& step = code[thread.pc];
             switch (step.op) {
-            case Op::check: {
+            case Op::check:
+            case Op::check_expression: {
                 if (thread.due_hi < now_) {
                     return;
                 }
@@ -606,27 +766,33 @@ private:
                     waiting.due_lo = now_ + 1;
                     keep(std::move(waiting));
                 }
-                if (!plan_.guard(step.a)) {
+                // A check of an expression that reads local variables has no
+                // sampled guard; its step reports no guard (-1).
+                const bool expression = step.op == Op::check_expression;
+                const auto checked = expression ? std::int64_t { -1 }
+                                                : std::int64_t { step.a };
+                if (!(expression ? plan_.truth(step.a, locals_of(thread))
+                                 : plan_.guard(step.a))) {
                     failed_ = { step.line, step.column };
                     if (!lingers) {
-                        note_step(true, thread.pc, thread.pc + 1U, step.a);
+                        note_step(true, thread.pc, thread.pc + 1U, checked);
                     }
                     return;
                 }
                 for (auto& entry : thread.throughout) {
                     if (entry.from < 0) {
                         entry.from = now_;
-                        if (!plan_.guard(entry.guard)) {
+                        if (!condition(entry, thread)) {
                             failed_ = { entry.line, entry.column };
                             if (!lingers) {
                                 note_step(true, thread.pc, thread.pc + 1U,
-                                    entry.guard);
+                                    entry.expression ? -1 : entry.guard);
                             }
                             return;
                         }
                     }
                 }
-                note_step(false, thread.pc, thread.pc + 1U, step.a);
+                note_step(false, thread.pc, thread.pc + 1U, checked);
                 thread.due_lo = now_ + 1;
                 thread.due_hi = now_ + 1;
                 ++thread.pc;
@@ -687,9 +853,48 @@ private:
             }
             case Op::throughout_begin:
                 thread.throughout.push_back(
-                    { step.a, -1, step.line, step.column });
+                    { step.a, step.c == 1U, -1, step.line, step.column });
                 ++thread.pc;
                 break;
+            case Op::assign: {
+                // The initialization assignment of a named sequence
+                // instance's local variable happens at the first tick of
+                // the instance's evaluation (16.10): a thread whose window
+                // opens later waits, and one whose window stays open keeps
+                // a copy for the later ticks, as at a check.
+                if (step.c == 1U) {
+                    if (thread.due_hi < now_) {
+                        return;
+                    }
+                    if (thread.due_lo > now_) {
+                        keep(std::move(thread));
+                        return;
+                    }
+                    if (thread.due_hi > now_) {
+                        auto waiting = thread;
+                        waiting.due_lo = now_ + 1;
+                        keep(std::move(waiting));
+                    }
+                    thread.due_lo = now_;
+                    thread.due_hi = now_;
+                }
+                const auto value = plan_.evaluate(step.b, locals_of(thread));
+                std::ranges::copy(value,
+                    thread.counters.begin() + sequence_.locals_base
+                        + static_cast<std::ptrdiff_t>(plan_.local_offset[step.a]));
+                ++thread.pc;
+                break;
+            }
+            case Op::call: {
+                // A subroutine call at an end point of the subsequence it is
+                // attached to (16.11): queued with the thread's locals.
+                std::vector<std::int64_t> entry { step.a };
+                const auto locals = locals_of(thread);
+                entry.insert(entry.end(), locals.begin(), locals.end());
+                plan_.storage->push_call(entry);
+                ++thread.pc;
+                break;
+            }
             case Op::throughout_end:
                 if (!settle(thread)) {
                     return;
@@ -738,15 +943,49 @@ private:
                     return;
                 }
                 auto& join = found->second;
-                join.ends[reference.side].insert(now_);
+                std::vector<std::int64_t> end { now_ };
+                const auto locals = locals_of(thread);
+                end.insert(end.end(), locals.begin(), locals.end());
+                join.ends[reference.side].insert(end);
+                // The operands' threads merge into one per pair of ends
+                // (16.9.5, 16.9.6): a local variable the operand assigned
+                // and that flows out takes the operand's value, the others
+                // keep the value they had when the composite began (16.10
+                // d; F.5.4). `b` names this operand's local set and `c` the
+                // other's. Without locals there is one continuation.
                 const auto& other = join.ends[1U - reference.side];
-                const bool paired = join.kind == 0U
-                    ? !other.empty() && *other.begin() <= now_
-                    : other.contains(now_);
-                if (paired) {
+                std::set<std::vector<std::int64_t>> merged;
+                for (const auto& entry : other) {
+                    if (join.kind == 0U ? entry.front() > now_
+                                        : entry.front() != now_) {
+                        continue;
+                    }
+                    auto valuation = std::vector<std::int64_t>(
+                        join.continuation.counters.begin() + sequence_.locals_base,
+                        join.continuation.counters.end());
+                    const auto take = [&](const std::uint32_t set,
+                                          const std::vector<std::int64_t>& from) {
+                        if (set == 0U) {
+                            return;
+                        }
+                        for (const auto local : plan_.local_sets[set - 1U]) {
+                            const auto at = plan_.local_offset[local];
+                            std::copy_n(from.begin() + 1
+                                    + static_cast<std::ptrdiff_t>(at),
+                                plan_.local_size[local],
+                                valuation.begin() + static_cast<std::ptrdiff_t>(at));
+                        }
+                    };
+                    take(step.b, end);
+                    take(step.c, entry);
+                    merged.insert(std::move(valuation));
+                }
+                for (const auto& valuation : merged) {
                     auto continuation = join.continuation;
                     continuation.due_lo = now_ + 1;
                     continuation.due_hi = now_ + 1;
+                    std::ranges::copy(valuation,
+                        continuation.counters.begin() + sequence_.locals_base);
                     queue.push_back(std::move(continuation));
                 }
                 return;
@@ -754,6 +993,12 @@ private:
             case Op::match:
                 if (settle(thread)) {
                     matched_ = true;
+                    const auto locals = locals_of(thread);
+                    if (std::ranges::none_of(matches_, [&](const auto& match) {
+                            return std::ranges::equal(match, locals);
+                        })) {
+                        matches_.emplace_back(locals.begin(), locals.end());
+                    }
                 }
                 return;
             case Op::clock: {
@@ -849,6 +1094,7 @@ private:
     std::uint32_t next_group_ { 1 };
     std::int64_t now_ { };
     bool matched_ { };
+    std::vector<std::vector<std::int64_t>> matches_;
     FailPosition failed_;
 };
 
@@ -858,12 +1104,21 @@ enum class Verdict : std::uint8_t { pending, holds, fails };
 
 class Instance {
 public:
+    // `point` is 0 for a singly clocked plan, whose `start` is a tick;
+    // otherwise `start` is a time step and `point` says how the instance
+    // starts there (at_point, point_inclusive).
+    // `locals` is the valuation of the local variables the instance starts
+    // with (16.10): its parent's, or the match of an antecedent.
     Instance(const CompiledPlan& plan, const std::uint32_t node,
-        const std::int64_t start)
+        const std::int64_t start, const std::int64_t point = 0,
+        std::vector<std::int64_t> locals = { })
         : plan_(plan)
         , node_(node)
         , start_(start)
+        , point_(point)
+        , locals_(std::move(locals))
     {
+        locals_.resize(plan.locals_words, 0);
     }
 
     [[nodiscard]] bool decided() const
@@ -890,10 +1145,13 @@ public:
 
     // The instance tree as record words, preorder: property node, start,
     // flags (verdict 0-1, vacuous 2, matched_once 3, antecedent_done 4,
-    // satisfied 5, until_stopped 6, has matcher 7, has chosen 8), chosen
+    // satisfied 5, until_stopped 6, has matcher 7, has chosen 8, at_point 9,
+    // point_inclusive 10, initialized 11), chosen
     // branch, consequent count, the failed node's position (line, column),
     // then the counts of operands, started
-    // children and until entries, the matcher (if any), the operands
+    // children and until entries, the valuation of the local variables
+    // (16.10; the plan's local words, none without locals), the matcher (if
+    // any), the operands
     // (position, instance), the started instances and the until
     // (left, right) pairs.
     void encode(std::vector<std::int64_t>& out) const
@@ -904,7 +1162,7 @@ public:
             | (vacuous_ ? 4 : 0) | (matched_once_ ? 8 : 0)
             | (antecedent_done_ ? 16 : 0) | (satisfied_ ? 32 : 0)
             | (until_stopped_ ? 64 : 0) | (matcher_ ? 128 : 0)
-            | (chosen_ ? 256 : 0));
+            | (chosen_ ? 256 : 0) | (initialized_ ? 2048 : 0) | point_);
         out.push_back(chosen_ ? static_cast<std::int64_t>(*chosen_) : 0);
         out.push_back(static_cast<std::int64_t>(consequents_));
         out.push_back(fail_.line);
@@ -912,6 +1170,7 @@ public:
         out.push_back(static_cast<std::int64_t>(operands_.size()));
         out.push_back(static_cast<std::int64_t>(started_.size()));
         out.push_back(static_cast<std::int64_t>(until_.size()));
+        out.insert(out.end(), locals_.begin(), locals_.end());
         if (matcher_) {
             matcher_->encode(out);
         }
@@ -947,15 +1206,19 @@ public:
         auto instance = std::make_unique<Instance>(plan, node, start);
         const auto& property = plan.properties[node];
         const auto flags = in.next();
-        if ((flags & 3) > 2 || flags < 0 || flags >= 512) {
+        if ((flags & 3) > 2 || flags < 0 || flags >= 4096
+            || ((flags & point_inclusive) != 0 && (flags & at_point) == 0)
+            || ((flags & at_point) != 0 && !plan.multiclocked())) {
             throw corrupt();
         }
+        instance->point_ = flags & (at_point | point_inclusive);
         instance->verdict_ = static_cast<Verdict>(flags & 3);
         instance->vacuous_ = (flags & 4) != 0;
         instance->matched_once_ = (flags & 8) != 0;
         instance->antecedent_done_ = (flags & 16) != 0;
         instance->satisfied_ = (flags & 32) != 0;
         instance->until_stopped_ = (flags & 64) != 0;
+        instance->initialized_ = (flags & 2048) != 0;
         const auto chosen = in.next();
         if ((flags & 256) != 0) {
             if (chosen < 0
@@ -976,6 +1239,9 @@ public:
         const auto operands = in.count();
         const auto started = in.count();
         const auto until = in.count();
+        for (auto& word : instance->locals_) {
+            word = in.next();
+        }
         if ((flags & 128) != 0) {
             if (property.sequence >= plan.sequences.size()) {
                 throw corrupt();
@@ -1006,8 +1272,7 @@ public:
     {
         const auto& property = plan_.properties[node_];
         if (!matcher_) {
-            matcher_ = std::make_unique<Matcher>(
-                plan_, plan_.sequences[property.sequence], start_);
+            matcher_ = new_matcher(property.sequence);
         }
         const bool matched = matcher_->step(now);
         matched_once_ = matched_once_ || matched;
@@ -1025,15 +1290,32 @@ public:
 
     void step(const std::int64_t now)
     {
-        if (decided() || now < start_) {
+        // A singly clocked instance waits for its start tick; an instance of
+        // a multiclocked plan steps at every evaluation and waits for its
+        // clock itself (16.13).
+        const bool multi = plan_.multiclocked();
+        if (decided() || (!multi && now < start_)) {
             return;
         }
         const auto& property = plan_.properties[node_];
+        // A new copy of the property's local variables gets its
+        // initialization assignments when the instance's evaluation begins,
+        // in declaration order, with the sampled values of that time step
+        // (16.10).
+        if (!initialized_ && !property.initializers.empty()) {
+            initialized_ = true;
+            for (const auto initializer : property.initializers) {
+                const auto local = plan_.expression_target[initializer] - 1U;
+                const auto value = plan_.evaluate(initializer, locals_);
+                std::ranges::copy(value,
+                    locals_.begin()
+                        + static_cast<std::ptrdiff_t>(plan_.local_offset[local]));
+            }
+        }
         switch (property.kind) {
         case PropertyKind::sequence: {
             if (!matcher_) {
-                matcher_ = std::make_unique<Matcher>(
-                    plan_, plan_.sequences[property.sequence], start_);
+                matcher_ = new_matcher(property.sequence);
             }
             if (matcher_->step(now)) {
                 resolve(true, false);
@@ -1044,7 +1326,7 @@ public:
             break;
         }
         case PropertyKind::negation: {
-            auto& operand = child(0, start_);
+            auto& operand = child(0, start_, point_);
             operand.step(now);
             if (operand.decided()) {
                 // `not p` fails because p held: the property itself is the
@@ -1058,8 +1340,8 @@ public:
         case PropertyKind::disjunction:
         case PropertyKind::implies:
         case PropertyKind::equivalence: {
-            auto& left = child(0, start_);
-            auto& right = child(1, start_);
+            auto& left = child(0, start_, point_);
+            auto& right = child(1, start_, point_);
             left.step(now);
             right.step(now);
             combine(property.kind, left, right);
@@ -1070,8 +1352,12 @@ public:
             step_consequents(property, now);
             break;
         case PropertyKind::conditional: {
+            if (multi && !chosen_) {
+                step_condition(property, now);
+                break;
+            }
             if (!chosen_) {
-                const bool condition = plan_.guard(property.guard);
+                const bool condition = holds_condition(property);
                 const auto branch = condition ? 0U : 1U;
                 if (branch >= property.children.size()) {
                     resolve(true, true);
@@ -1079,7 +1365,7 @@ public:
                 }
                 chosen_ = branch;
             }
-            auto& operand = child(*chosen_, start_);
+            auto& operand = child(*chosen_, start_, point_);
             operand.step(now);
             if (operand.decided()) {
                 fail_ = operand.fail_;
@@ -1088,7 +1374,19 @@ public:
             break;
         }
         case PropertyKind::nexttime: {
-            auto& operand = child(0, add(start_, property.lo));
+            if (multi) {
+                // nexttime[n] p (F.5.1.2): p starts at the n-th tick of the
+                // clock after the first one that reaches the start point.
+                const bool ticks = clock_tick();
+                if (point_ != 0
+                    || (!has_operand(0U)
+                        && (!ticks || clock_now() < add(start_, property.lo)))) {
+                    break;
+                }
+            }
+            auto& operand = multi
+                ? child(0, plan_.time, at_point | point_inclusive)
+                : child(0, add(start_, property.lo), 0);
             operand.step(now);
             if (operand.decided()) {
                 fail_ = operand.fail_;
@@ -1105,13 +1403,21 @@ public:
             break;
         case PropertyKind::accept:
         case PropertyKind::reject: {
-            if (plan_.guard(property.guard)) {
+            // A multiclocked plan samples an asynchronous abort condition at
+            // every evaluation from the start point on, and a synchronous
+            // one only at the ticks of the operator's clock (F.5.1.2:
+            // sync_accept_on (b) is accept_on (b && c)).
+            const bool sampled = !multi
+                || (reached_time(plan_.time)
+                    && (!property.synchronous
+                        || plan_.clock_times[property.clock] == plan_.time));
+            if (sampled && plan_.guard(property.guard)) {
                 const bool accept = property.kind == PropertyKind::accept;
                 fail_ = own_position();
                 resolve(accept, accept);
                 break;
             }
-            auto& operand = child(0, start_);
+            auto& operand = child(0, start_, point_);
             operand.step(now);
             if (operand.decided()) {
                 fail_ = operand.fail_;
@@ -1133,9 +1439,15 @@ public:
             return holds();
         }
         const auto& property = plan_.properties[node_];
-        if (now < start_) {
+        // A multiclocked instance whose clock never reached its start point
+        // saw an empty trace; the operators that count ticks compare the
+        // tick count of their own clock.
+        const bool multi = plan_.multiclocked();
+        if (multi ? point_ != 0 && counts_ticks(property.kind)
+                  : now < start_) {
             return empty_trace(node_);
         }
+        const auto at = multi && point_ == 0 ? clock_now() : now;
         const auto child_finish = [&](const std::size_t index,
                                       const std::int64_t start) {
             const auto found = std::ranges::find_if(
@@ -1175,20 +1487,20 @@ public:
         case PropertyKind::nexttime:
             // The clock tick the operand needs never came: s_nexttime
             // fails and nexttime holds (16.12.10).
-            if (now < add(start_, property.lo)) {
+            if (at < add(start_, property.lo)) {
                 return !property.strong;
             }
             return child_finish(0, add(start_, property.lo));
         case PropertyKind::always: {
             const bool complete = property.hi != unbounded
-                && now >= add(start_, property.hi);
+                && at >= add(start_, property.hi);
             return std::ranges::all_of(started_, [&](const auto& item) {
                 return item->finish(now);
             }) && (complete || !property.strong);
         }
         case PropertyKind::eventually: {
             const bool complete = property.hi != unbounded
-                && now >= add(start_, property.hi);
+                && at >= add(start_, property.hi);
             return std::ranges::any_of(started_, [&](const auto& item) {
                 return item->finish(now);
             }) || (!complete && !property.strong);
@@ -1227,10 +1539,126 @@ private:
         std::unique_ptr<Instance> right;
     };
 
+    // A conditional's condition: a sampled guard, or an expression that
+    // reads the instance's local variables (16.10).
+    [[nodiscard]] bool holds_condition(const CompiledProperty& property) const
+    {
+        return property.guard_expression
+            ? plan_.truth(property.guard, locals_)
+            : plan_.guard(property.guard);
+    }
+
     [[nodiscard]] FailPosition own_position() const
     {
         const auto& property = plan_.properties[node_];
         return { property.line, property.column };
+    }
+
+    // ---- multiclocked plans (16.13) ----
+
+    // The operators that count ticks of their clock and align to it.
+    [[nodiscard]] static bool counts_ticks(const PropertyKind kind)
+    {
+        switch (kind) {
+        case PropertyKind::conditional:
+        case PropertyKind::nexttime:
+        case PropertyKind::always:
+        case PropertyKind::eventually:
+        case PropertyKind::until:
+            return true;
+        default:
+            return false;
+        }
+    }
+    [[nodiscard]] std::uint32_t clock() const
+    {
+        return plan_.properties[node_].clock;
+    }
+    // The tick count of the node's clock.
+    [[nodiscard]] std::int64_t clock_now() const
+    {
+        return plan_.clock_ticks[clock()];
+    }
+    // Whether time step `time` is at or after the start point.
+    [[nodiscard]] bool reached_time(const std::int64_t time) const
+    {
+        return time > start_
+            || (time == start_ && (point_ & point_inclusive) != 0);
+    }
+    // An operator that counts ticks aligns at the first tick of its clock
+    // that reaches its start point (the nearest tick, 16.13.1): its start
+    // becomes that tick's count. The result is whether the operator acts at
+    // this evaluation: at the tick that aligned it (which may have come
+    // earlier in the same time step) and at each later tick of its clock.
+    [[nodiscard]] bool clock_tick()
+    {
+        if (point_ != 0) {
+            if (!reached_time(plan_.clock_times[clock()])) {
+                return false;
+            }
+            start_ = clock_now();
+            point_ = 0;
+            return true;
+        }
+        return plan_.ticked[clock()];
+    }
+    [[nodiscard]] bool has_operand(const std::size_t index) const
+    {
+        return std::ranges::any_of(operands_, [&](const auto& item) {
+            return item.first == index;
+        });
+    }
+    // The matcher of a sequence that starts with this instance: at its start
+    // tick, or for a multiclocked plan at its start point on the node's
+    // clock.
+    [[nodiscard]] std::unique_ptr<Matcher> new_matcher(
+        const std::uint32_t sequence) const
+    {
+        const auto& compiled = plan_.sequences[sequence];
+        if (point_ != 0) {
+            return std::make_unique<Matcher>(plan_, compiled, clock(), start_,
+                (point_ & point_inclusive) != 0, locals_);
+        }
+        return std::make_unique<Matcher>(plan_, compiled, start_, locals_);
+    }
+
+    // `if (b) p else q` of a multiclocked plan before b is known (16.13.2;
+    // F.3.4.3.4: (b |-> p) and (weak(b) or q)). b is sampled at the first
+    // tick of the operator's clock that reaches its start point, and p
+    // starts at that tick; q starts at the start point itself, so it runs
+    // while b waits and is dropped when b holds.
+    void step_condition(const CompiledProperty& property,
+        const std::int64_t now)
+    {
+        const bool otherwise = property.children.size() > 1U;
+        Instance* other = otherwise ? &child(1U, start_, point_) : nullptr;
+        if (other != nullptr) {
+            other->step(now);
+        }
+        if (!clock_tick()) {
+            return;
+        }
+        if (holds_condition(property)) {
+            std::erase_if(operands_,
+                [](const auto& item) { return item.first == 1U; });
+            chosen_ = 0U;
+            auto& operand = child(0U, plan_.time, at_point | point_inclusive);
+            operand.step(now);
+            if (operand.decided()) {
+                fail_ = operand.fail_;
+                resolve(operand.holds(), operand.vacuous());
+            }
+            return;
+        }
+        if (other == nullptr) {
+            resolve(true, true);
+            return;
+        }
+        chosen_ = 1U;
+        if (other->decided()) {
+            fail_ = other->fail_;
+            resolve(other->holds(), other->vacuous());
+        }
     }
 
     // The value of a property over an empty remaining trace.
@@ -1281,7 +1709,8 @@ private:
         matcher_.reset();
     }
 
-    Instance& child(const std::size_t index, const std::int64_t start)
+    Instance& child(const std::size_t index, const std::int64_t start,
+        const std::int64_t point)
     {
         for (auto& [position, instance] : operands_) {
             if (position == index) {
@@ -1291,7 +1720,7 @@ private:
         const auto& property = plan_.properties[node_];
         operands_.emplace_back(index,
             std::make_unique<Instance>(
-                plan_, property.children[index], start));
+                plan_, property.children[index], start, point, locals_));
         return *operands_.back().second;
     }
 
@@ -1348,15 +1777,29 @@ private:
         const std::int64_t now)
     {
         if (!matcher_ && !antecedent_done_) {
-            matcher_ = std::make_unique<Matcher>(
-                plan_, plan_.sequences[property.sequence], start_);
+            matcher_ = new_matcher(property.sequence);
         }
         if (matcher_) {
             if (matcher_->step(now)) {
-                const auto start = property.overlapped ? now : now + 1;
-                started_.push_back(std::make_unique<Instance>(
-                    plan_, property.children[0], start));
-                ++consequents_;
+                // A multiclocked consequent starts at the end of the match:
+                // at the nearest tick of its clock (`|->`), or the nearest
+                // one strictly after it (`|=>`, 16.13.2). Each match with
+                // its own valuation of the local variables starts its own
+                // consequent with that valuation (16.10).
+                for (const auto& match : matcher_->matches()) {
+                    if (plan_.multiclocked()) {
+                        started_.push_back(std::make_unique<Instance>(plan_,
+                            property.children[0], plan_.time,
+                            at_point
+                                | (property.overlapped ? point_inclusive : 0),
+                            match));
+                    } else {
+                        const auto start = property.overlapped ? now : now + 1;
+                        started_.push_back(std::make_unique<Instance>(
+                            plan_, property.children[0], start, 0, match));
+                    }
+                    ++consequents_;
+                }
             }
             if (matcher_->dead()) {
                 matcher_.reset();
@@ -1398,11 +1841,23 @@ private:
     // always / eventually over a window of start ticks.
     void step_window(const CompiledProperty& property, const std::int64_t now)
     {
+        // A multiclocked window counts ticks of the operator's clock from
+        // the one that reaches its start point; an operand starts at each
+        // tick of the window (F.3.4.3.8: always p is p until 0).
+        const bool multi = plan_.multiclocked();
+        const bool ticks = !multi || clock_tick();
+        if (multi && point_ != 0) {
+            return;
+        }
+        const auto at = multi ? clock_now() : now;
         const auto first = add(start_, property.lo);
         const auto last = add(start_, property.hi);
-        if (now >= first && now <= last) {
-            started_.push_back(std::make_unique<Instance>(
-                plan_, property.children[0], now));
+        if (ticks && at >= first && at <= last) {
+            started_.push_back(multi
+                    ? std::make_unique<Instance>(plan_, property.children[0],
+                          plan_.time, at_point | point_inclusive, locals_)
+                    : std::make_unique<Instance>(
+                          plan_, property.children[0], now, 0, locals_));
         }
         const bool always = property.kind == PropertyKind::always;
         for (auto& operand : started_) {
@@ -1423,7 +1878,7 @@ private:
         std::erase_if(started_, [](const auto& operand) {
             return operand->decided();
         });
-        if (last != unbounded && now >= last && started_.empty()) {
+        if (last != unbounded && at >= last && started_.empty()) {
             fail_ = own_position();
             resolve(always, false);
         }
@@ -1434,10 +1889,21 @@ private:
     void step_until(const std::int64_t now)
     {
         const auto& property = plan_.properties[node_];
-        if (!until_stopped_) {
+        // A multiclocked `until` starts a pair at each tick of its clock from
+        // the one that reaches its start point (F.5.1.2).
+        const bool multi = plan_.multiclocked();
+        const bool ticks = !multi || clock_tick();
+        if (multi && point_ != 0) {
+            return;
+        }
+        if (!until_stopped_ && ticks) {
+            const auto start = multi ? plan_.time : now;
+            const auto point = multi ? at_point | point_inclusive : 0;
             until_.push_back({
-                std::make_unique<Instance>(plan_, property.children[0], now),
-                std::make_unique<Instance>(plan_, property.children[1], now),
+                std::make_unique<Instance>(
+                    plan_, property.children[0], start, point, locals_),
+                std::make_unique<Instance>(
+                    plan_, property.children[1], start, point, locals_),
             });
         }
         for (auto& entry : until_) {
@@ -1480,6 +1946,9 @@ private:
     const CompiledPlan& plan_;
     std::uint32_t node_ { };
     std::int64_t start_ { };
+    // The start point of a multiclocked instance (at_point,
+    // point_inclusive); 0 once aligned or for a singly clocked plan.
+    std::int64_t point_ { };
     Verdict verdict_ { Verdict::pending };
     bool vacuous_ { };
     bool matched_once_ { };
@@ -1490,6 +1959,8 @@ private:
     std::size_t consequents_ { };
     std::optional<std::size_t> chosen_;
     bool until_stopped_ { };
+    bool initialized_ { };
+    std::vector<std::int64_t> locals_;
     std::vector<std::pair<std::size_t, std::unique_ptr<Instance>>> operands_;
     std::vector<std::unique_ptr<Instance>> started_;
     std::vector<UntilEntry> until_;
@@ -1508,7 +1979,7 @@ Monitor::~Monitor() = default;
 
 std::size_t Monitor::clock_count(const semantic::sva::Plan& plan)
 {
-    return plan.clock_guards.size() > 1U ? plan.clock_guards.size() : 0U;
+    return plan.clock_guards.size();
 }
 
 void Monitor::build(const std::vector<std::int64_t>& bounds)
@@ -1522,10 +1993,27 @@ void Monitor::build(const std::vector<std::int64_t>& bounds)
         throw std::runtime_error { "concurrent property plan has no root" };
     }
     plan_ = std::make_unique<CompiledPlan>();
+    // The local variables (16.10): a valuation holds each local's words in
+    // declaration order; a thread keeps it after its repetition counters.
+    for (const auto& local : plan.locals) {
+        plan_->local_offset.push_back(plan_->locals_words);
+        plan_->local_size.push_back(semantic::sva::local_words(local.width));
+        plan_->locals_words += plan_->local_size.back();
+    }
+    std::size_t result_words = 0U;
+    for (const auto& expression : plan.expressions) {
+        plan_->expression_target.push_back(expression.target);
+        result_words = std::max(result_words,
+            expression.target == 0U ? std::size_t { 1 }
+                                    : plan_->local_size[expression.target - 1U]);
+    }
+    plan_->local_sets = plan.local_sets;
     std::uint32_t base = 0;
     for (const auto& sequence : plan.sequences) {
         CompiledSequence compiled;
-        compiled.counters = sequence.counters;
+        compiled.locals_base = sequence.counters;
+        compiled.counters = sequence.counters
+            + static_cast<std::uint32_t>(plan_->locals_words);
         for (const auto& instruction : sequence.code) {
             compiled.code.push_back({ instruction.op, instruction.a,
                 instruction.b, instruction.c,
@@ -1539,29 +2027,39 @@ void Monitor::build(const std::vector<std::int64_t>& bounds)
     }
     for (const auto& property : plan.properties) {
         plan_->properties.push_back({ property.kind, property.strong,
-            property.overlapped, property.sequence, property.guard,
-            property.children, resolve(property.lo, bounds),
-            resolve(property.hi, bounds), property.line, property.column });
+            property.overlapped, property.synchronous, property.clock,
+            property.sequence, property.guard, property.children,
+            resolve(property.lo, bounds), resolve(property.hi, bounds),
+            property.line, property.column, property.guard_expression,
+            property.initializers });
     }
     plan_->root = plan.root;
     plan_->guards = plan.guards;
     for (const auto& span : plan.guard_spans) {
         plan_->guard_positions.emplace_back(span.line, span.column);
     }
-    if (plan.clock_guards.size() > 1U) {
-        if (plan.properties[plan.root].kind != PropertyKind::sequence) {
-            throw std::runtime_error {
-                "a multiclocked concurrent property must be a sequence"
-            };
-        }
+    // A plan with clock tick guards: a multiclocked one, or a singly
+    // clocked one whose monitor also evaluates at time steps without a tick
+    // of its clock (runtime::simir::SvaOperation::wake_signal).
+    if (!plan.clock_guards.empty()) {
         plan_->clock_guards = plan.clock_guards;
         plan_->clock_ticks.assign(plan.clock_guards.size(), -1);
         plan_->clock_times.assign(plan.clock_guards.size(),
             std::numeric_limits<std::int64_t>::min());
         plan_->ticked.assign(plan.clock_guards.size(), false);
     }
+    local_widths_.clear();
+    for (const auto& local : plan.locals) {
+        local_widths_.push_back(local.width);
+    }
     plan_->every_match = plan.every_match
         && plan.properties[plan.root].kind == PropertyKind::sequence;
+    plan_->async_abort = std::ranges::any_of(plan.properties,
+        [](const auto& property) {
+            return (property.kind == PropertyKind::accept
+                       || property.kind == PropertyKind::reject)
+                && !property.synchronous;
+        });
     storage_ = AttemptStorage(clock_count(plan));
     storage_.set(layout::h_tick, -1);
     storage_.set(layout::h_flags,
@@ -1570,6 +2068,11 @@ void Monitor::build(const std::vector<std::int64_t>& bounds)
     if (!bounds.empty()) {
         storage_.set_bounds(bounds);
     }
+    if (!plan.expressions.empty()) {
+        storage_.set_memo_stride(
+            layout::memo_e_locals + plan_->locals_words + result_words);
+    }
+    plan_->storage = &storage_;
 }
 
 void Monitor::run_state_io(RunStateArchive& archive)
@@ -1592,7 +2095,8 @@ void Monitor::run_state_io(RunStateArchive& archive)
     }
     auto adopted = AttemptStorage::adopt(std::move(words));
     if (!adopted || adopted->clocks() != storage_.clocks()
-        || adopted->get(layout::h_flags) != storage_.get(layout::h_flags)) {
+        || (adopted->get(layout::h_flags) & layout::flag_plan)
+            != (storage_.get(layout::h_flags) & layout::flag_plan)) {
         archive.fail("assertion attempt block does not fit its plan");
         return;
     }
@@ -1626,6 +2130,155 @@ bool Monitor::load_block(std::vector<std::int64_t> words)
 void Monitor::tick(const std::vector<bool>& guards, const bool start,
     const bool disabled, const std::int64_t time)
 {
+    // The block of this monitor (a moved monitor keeps its plan).
+    plan_->storage = &storage_;
+    // The calls of the tick before ran after it (16.11).
+    storage_.clear_calls();
+    // A plan without local variables needs no value from the assertion
+    // process.
+    if (plan_->expression_target.empty()) {
+        advance(guards, start, disabled, time);
+        return;
+    }
+    // A plan with local variables evaluates its local expressions through
+    // the memo (16.10). A tick that needed a value the memo lacks did not
+    // happen: the block is restored as it was, the requests stay in the
+    // memo for the assertion process to answer, and the process runs the
+    // tick again in the same time step with the same operands. Only the
+    // tick that finds every value counts, so the attempt state, the outcome
+    // queue, the attempt-start and step reports see one tick.
+    // The memo keeps the answered values; a request left unanswered is
+    // asked again if the tick still needs it.
+    {
+        const auto stride = storage_.memo_stride();
+        std::vector<std::int64_t> answered;
+        for (std::size_t index = 0; index < storage_.memo_count(); ++index) {
+            const auto entry = std::as_const(storage_).memo_entry(index);
+            if (entry[layout::memo_e_answered] != 0) {
+                answered.insert(answered.end(), entry.begin(), entry.end());
+            }
+        }
+        storage_.clear_memo();
+        for (std::size_t at = 0; at < answered.size(); at += stride) {
+            storage_.push_memo(
+                std::span<const std::int64_t> { answered }.subspan(at, stride));
+        }
+    }
+    auto before = storage_.words();
+    plan_->missed = false;
+    advance(guards, start, disabled, time);
+    if (!plan_->missed) {
+        storage_.clear_memo();
+        return;
+    }
+    const auto stride = storage_.memo_stride();
+    const auto used = static_cast<std::size_t>(storage_.get(layout::h_memo_used));
+    const auto pending = static_cast<std::size_t>(storage_.get(layout::h_memo_pending));
+    const auto first = used - pending * stride;
+    const auto memo = storage_.memo_entry(0U).data();
+    std::vector<std::int64_t> requests(memo + first, memo + used);
+    const std::vector<std::int64_t> earlier(memo, memo + first);
+    storage_.restore(std::move(before));
+    storage_.clear_memo();
+    for (std::size_t at = 0; at < earlier.size(); at += stride) {
+        storage_.push_memo(std::span<const std::int64_t> { earlier }.subspan(at, stride));
+    }
+    for (std::size_t at = 0; at < requests.size(); at += stride) {
+        storage_.push_memo(std::span<const std::int64_t> { requests }.subspan(at, stride));
+    }
+    storage_.set(layout::h_memo_pending, static_cast<std::int64_t>(pending));
+    plan_->missed = false;
+}
+
+std::size_t Monitor::pending_requests() const noexcept
+{
+    return static_cast<std::size_t>(storage_.get(layout::h_memo_pending));
+}
+
+std::uint32_t Monitor::take_call()
+{
+    // The calls taken so far are the first h_calls_taken words; the last
+    // one taken ends there (its locals are request_local's call_request).
+    const auto calls = storage_.calls();
+    const auto stride = 1U + plan_->locals_words;
+    const auto cursor = static_cast<std::size_t>(storage_.get(layout::h_calls_taken));
+    if (cursor + stride > calls.size()) {
+        storage_.clear_calls();
+        return 0U;
+    }
+    const auto call = static_cast<std::uint32_t>(calls[cursor]);
+    storage_.set(layout::h_calls_taken, static_cast<std::int64_t>(cursor + stride));
+    return call + 1U;
+}
+
+std::size_t Monitor::request_entry(const std::size_t request) const
+{
+    const auto pending = pending_requests();
+    if (request >= pending) {
+        throw std::runtime_error {
+            "concurrent property local-variable request is out of range"
+        };
+    }
+    return storage_.memo_count() - pending + request;
+}
+
+std::uint32_t Monitor::request_expression(const std::size_t request) const
+{
+    return static_cast<std::uint32_t>(
+        storage_.memo_entry(request_entry(request))[layout::memo_e_expression]);
+}
+
+std::vector<std::int64_t> Monitor::request_local(
+    const std::size_t request, const std::uint32_t local) const
+{
+    if (local >= plan_->local_offset.size()) {
+        throw std::runtime_error {
+            "concurrent property local variable is out of range"
+        };
+    }
+    if (request == call_request) {
+        const auto taken = static_cast<std::size_t>(storage_.get(layout::h_calls_taken));
+        const auto stride = 1U + plan_->locals_words;
+        if (taken < stride) {
+            throw std::runtime_error {
+                "concurrent property subroutine call local is read before a call"
+            };
+        }
+        const auto words = storage_.calls().subspan(
+            taken - stride + 1U + plan_->local_offset[local], plan_->local_size[local]);
+        return { words.begin(), words.end() };
+    }
+    const auto entry = storage_.memo_entry(request_entry(request));
+    const auto words = entry.subspan(
+        layout::memo_e_locals + plan_->local_offset[local],
+        plan_->local_size[local]);
+    return { words.begin(), words.end() };
+}
+
+std::uint32_t Monitor::local_width(const std::uint32_t local) const
+{
+    return local < plan_->local_size.size()
+        ? local_widths_[local]
+        : 0U;
+}
+
+void Monitor::answer(
+    const std::size_t request, const std::span<const std::int64_t> value)
+{
+    const auto index = request_entry(request);
+    auto entry = storage_.memo_entry(index);
+    const auto expression
+        = static_cast<std::uint32_t>(entry[layout::memo_e_expression]);
+    const auto words = plan_->result_words(expression);
+    auto result = entry.subspan(layout::memo_e_locals + plan_->locals_words, words);
+    std::ranges::fill(result, 0);
+    std::copy_n(value.begin(), std::min(words, value.size()), result.begin());
+    entry[layout::memo_e_answered] = 1;
+}
+
+void Monitor::advance(const std::vector<bool>& guards, const bool start,
+    const bool disabled, const std::int64_t time)
+{
     using namespace layout;
     plan_->values = &guards;
     plan_->time = time;
@@ -1651,7 +2304,10 @@ void Monitor::tick(const std::vector<bool>& guards, const bool start,
             plan_->clock_times[clock] = storage_.clock_time(clock);
         }
         leading = plan_->ticked[0];
-        if (!any && !disabled) {
+        // Without a tick only the disable condition and the asynchronous
+        // aborts, sampled from each attempt's start on, apply (16.12,
+        // 16.12.14).
+        if (!any && !disabled && !plan_->async_abort) {
             return;
         }
         // The property counts ticks of the leading clock.
@@ -1710,7 +2366,12 @@ void Monitor::tick(const std::vector<bool>& guards, const bool start,
             if (storage_.erase_requests(row.started)) {
                 row.flags |= attempt_stepping;
             }
-            instance = std::make_unique<Instance>(*plan_, plan_->root, tick);
+            // A multiclocked attempt starts at this time step, at the tick
+            // of the leading clock (16.16).
+            instance = plan_->multiclocked()
+                ? std::make_unique<Instance>(*plan_, plan_->root, time,
+                      at_point | point_inclusive)
+                : std::make_unique<Instance>(*plan_, plan_->root, tick);
         }
         plan_->stepping = (row.flags & attempt_stepping) != 0;
         plan_->attempt_start = row.started;
@@ -1778,6 +2439,23 @@ Outcome Monitor::next_outcome(const std::int64_t serial)
     return static_cast<Outcome>(resolved->outcome);
 }
 
+std::int64_t Monitor::reported_code(const Outcome outcome) const noexcept
+{
+    return outcome == Outcome::none
+        ? 0
+        : layout::outcome_code(static_cast<std::int64_t>(outcome),
+              storage_.get(layout::h_flags));
+}
+
+void Monitor::set_actions_off(const std::uint32_t outcomes) noexcept
+{
+    using namespace layout;
+    storage_.set(h_flags,
+        (storage_.get(h_flags) & ~flag_actions_off)
+            | ((static_cast<std::int64_t>(outcomes) << action_off_shift)
+                & flag_actions_off));
+}
+
 Monitor::FailPoint Monitor::last_outcome_fail() const noexcept
 {
     return { static_cast<std::uint32_t>(storage_.get(layout::h_last_fail_line)),
@@ -1827,6 +2505,22 @@ void Monitor::kill()
     storage_.clear_attempts();
     storage_.clear_outcomes();
     storage_.refresh_steps_active();
+}
+
+std::vector<std::int64_t> Monitor::disable_running(const bool outcomes)
+{
+    std::vector<std::int64_t> starts;
+    starts.reserve(storage_.attempt_count());
+    for (std::size_t index = 0; index < storage_.attempt_count(); ++index) {
+        starts.push_back(storage_.attempt(index).started);
+        if (outcomes) {
+            storage_.push_outcome({ static_cast<std::int64_t>(Outcome::disabled),
+                storage_.attempt(index).started });
+        }
+    }
+    storage_.clear_attempts();
+    storage_.refresh_steps_active();
+    return starts;
 }
 
 std::size_t Monitor::kill_attempt(const std::int64_t start_time)

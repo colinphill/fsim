@@ -1269,15 +1269,11 @@ std::optional<Type> Resolver::packed_member_type(
     type.spelling = "virtual interface " + std::string{name};
     return type;
   }
-  if (spelling == "int" || spelling == "integer") {
-    return Type{
-        ValueDomain::Integer, std::string{spelling},
-        PackedRange{31, 0, true}, true};
-  }
-  if (spelling == "bit" || spelling == "logic") {
-    return Type{
-        spelling == "bit" ? ValueDomain::Bit2 : ValueDomain::Logic4,
-        std::string{spelling}, PackedRange{0, 0, true}, false};
+  // A built-in integer type keyword is the type a declaration spelled
+  // the same way has, so `C#(int)` and `typedef int T; C#(T)` name one
+  // specialization (IEEE 1800-2023 6.11, 6.22.1, 8.25).
+  if (Type keyword; apply_systemverilog_integral_type(keyword, spelling)) {
+    return keyword;
   }
   const auto classes = resolve_class_name(spelling, scope);
   if (classes.size() == 1U) return class_type(*classes.front());
@@ -1420,11 +1416,13 @@ void Resolver::resolve_class_scope_constants(
             }
             return;
           }
+          const bool specialized
+              = selects_specialization(name.substr(0U, at), *selection);
           expression.kind = ExpressionKind::Call;
           expression.text = "@sv-static-property:"
               + declaring->canonical_identity + "::" + member;
           expression.operands.clear();
-          if (!selection->type.systemverilog_class_parameter_actuals.empty()) {
+          if (specialized) {
             expression.systemverilog_class_owner =
                 std::make_shared<const Type>(selection->type);
             resolve_class_owner_constants(expression, scope, depth);
@@ -2047,6 +2045,19 @@ std::optional<Expression> Resolver::class_specialization_parameter_value(
     actuals.push_back(std::move(named));
   }
   return selection;
+}
+bool Resolver::selects_specialization(
+    const std::string_view spelling, const ClassSelection& selection) {
+  if (!selection.type.systemverilog_class_parameter_actuals.empty()
+      || spelling.find('#') != std::string_view::npos) {
+    return true;
+  }
+  // `typedef C T; T::m` names the default specialization (8.25.1).
+  const auto separator = spelling.rfind("::");
+  const auto name = separator == std::string_view::npos
+      ? spelling : spelling.substr(separator + 2U);
+  return selection.declaration == nullptr
+      || name != selection.declaration->name;
 }
 [[nodiscard]] std::optional<ClassSelection>
 Resolver::resolve_own_class_selection(
@@ -2693,7 +2704,9 @@ void Resolver::anchor_alias_actuals(
       return "class:"
           + actual.type_actual->systemverilog_class_declaration;
     }
-    if (actual.type_actual->domain == ValueDomain::Integer
+    if ((actual.type_actual->domain == ValueDomain::Integer
+            || actual.type_actual->spelling == "int"
+            || actual.type_actual->spelling == "integer")
         && actual.type_actual->width() == 32U) {
       return "packed:int:32";
     }
@@ -3696,8 +3709,7 @@ void Resolver::retain_result_type(
                  ? "@sv-static-container-property:"
                  : "@sv-static-property:")
             + match.owner->canonical_identity + "::" + member;
-        if (selection
-            && !selection->type.systemverilog_class_parameter_actuals.empty()) {
+        if (selection && selects_specialization(owner_name, *selection)) {
           expression.systemverilog_class_owner =
               std::make_shared<const Type>(selection->type);
         }

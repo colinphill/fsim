@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+inl t=10 rose=0 fell=0 stable=1 changed=0 bus=1 wchg=0 wrose=0 past=0
+inl t=22 rose=0 fell=0 stable=1 changed=0 bus=0 wchg=0 wrose=0 past=0
+inl t=23 rose=1 fell=0 stable=0 changed=1 bus=0 wchg=0 wrose=0 past=0
+inl t=25 rose=1 fell=0 stable=0 changed=1 bus=0 wchg=0 wrose=0 past=0
+inl t=26 rose=0 fell=0 stable=1 changed=0 bus=0 wchg=0 wrose=0 past=1
+inl t=29 rose=0 fell=0 stable=1 changed=0 bus=1 wchg=0 wrose=0 past=1
+inl t=31 rose=0 fell=0 stable=1 changed=0 bus=1 wchg=1 wrose=1 past=1
+inl t=33 rose=0 fell=1 stable=0 changed=1 bus=1 wchg=1 wrose=1 past=1
+inl t=36 rose=0 fell=0 stable=1 changed=0 bus=0 wchg=0 wrose=0 past=0
+inl t=48 rose=1 fell=0 stable=0 changed=1 bus=0 wchg=0 wrose=0 past=0
+inl t=55 rose=1 fell=0 stable=0 changed=1 bus=0 wchg=0 wrose=0 past=0
+inl t=56 rose=0 fell=0 stable=1 changed=0 bus=0 wchg=0 wrose=0 past=1
+inl clk2 rose=23 fell=33 bus=33 wstable=66 wrose=33

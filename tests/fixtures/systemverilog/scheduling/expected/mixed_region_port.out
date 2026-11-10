@@ -1,0 +1,5 @@
+MIX vhdl region=UUUU at 0 fs
+MIX vhdl region=0011 at 0 fs
+MIX sv strobe result=11
+MIX sv strobe result=11
+MIX vhdl region=0010 at 2000 fs

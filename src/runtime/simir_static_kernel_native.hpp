@@ -106,6 +106,12 @@ struct StaticKernelSvaTable {
     const std::uint64_t* sampled { };
     /// The current time step, for the $past sample test.
     const std::int64_t* now { };
+    /// Per member, the first of its process's assertion control sites
+    /// (Impl::assertion_control_base).
+    const std::uint32_t* control_base { };
+    /// Impl::assertion_controls: the control words (IEEE 1800-2023 20.11)
+    /// an assertion control read loads (KOp::sva_sampled_load, aux 8).
+    const std::int64_t* controls { };
 };
 
 /// Generated code's view of one unit activation. Field offsets are part of

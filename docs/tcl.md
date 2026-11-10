@@ -91,6 +91,12 @@ fsim::debug restart ?SNAPSHOT?
 fsim::debug provenance ?PATH?
 ```
 
+A simulation a Tcl session starts runs on the engine `--engine` names, else
+the `simulate.engine` key's, else the compiled one. `fsim::debug` runs the
+session on the debug engine. Under an `--engine` that names another engine,
+or once another command has started the session in another engine,
+`fsim::debug` is refused: the command line is never overridden.
+
 ## Configuration
 
 Every fsim command first runs the per-user `fsim.tcl`, then the workspace's
@@ -286,7 +292,13 @@ puts [dict get $value value]
 `parent`, `type`, `width`, and `dimensions`; language, library, and source
 provenance are included when available. `fsim::object read` returns a typed
 dictionary. `fsim::object write` validates the value and the simulation control
-state before applying a supported mutation.
+state before applying a supported mutation. A container takes a Tcl list in the
+form `fsim::object read` returns: its elements in index order (binary digits or a
+decimal integer for a packed element, the text of a string element), as many as a
+fixed-size array has, or the new size of a dynamic array or queue (IEEE
+1800-2023 7.5, 7.10); an associative array takes `{key element}` pairs and then
+holds exactly those entries (7.8), keeping its default value (7.9.11). Nested and
+aggregate elements are not written.
 
 The debugger also returns structured dictionaries for status, breakpoints,
 watches, scopes, frames, and inspected objects.

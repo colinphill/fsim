@@ -55,7 +55,7 @@ using namespace static_kernel_compiled_detail;
 
 namespace {
 
-constexpr std::string_view image_magic { "fsim-static-kernel-image-v10" };
+constexpr std::string_view image_magic { "fsim-static-kernel-image-v11" };
 
 template <typename T>
 struct is_vector : std::false_type { };
@@ -406,10 +406,17 @@ std::uint64_t Interpreter::Impl::StaticKernel::image_spec_digest(
 
 void Interpreter::Impl::StaticKernel::record_value_section(std::string& out) const
 {
+    // The published values of the design's outputs. An output a watch added
+    // during the run (a foreign value-change callback, a value reference an
+    // embedding client took) publishes what the host holds; the watches are
+    // the observers' and not run state, and the restored run's observers ask
+    // for their own (resync_watched_outputs).
     RunStateWriter writer { out };
     writer.u64(slots_.size());
     writer.words(arena_);
-    writer.words(published_);
+    const std::vector<std::uint64_t> published(published_.begin(),
+        published_.begin() + static_cast<std::ptrdiff_t>(published_design_));
+    writer.words(published);
 }
 
 bool Interpreter::Impl::StaticKernel::restore_value_section(
@@ -421,12 +428,15 @@ bool Interpreter::Impl::StaticKernel::restore_value_section(
     std::vector<std::uint64_t> published;
     if (!reader.u64(slot_count) || !reader.words(arena) || !reader.words(published)
         || !reader.done() || slot_count != slots_.size()
-        || arena.size() != arena_.size() || published.size() != published_.size()) {
+        || arena.size() != arena_.size() || published.size() != published_design_) {
         return false;
     }
     // In place: the native code holds the arrays' addresses.
     std::ranges::copy(arena, arena_.begin());
     std::ranges::copy(published, published_.begin());
+    // A save waits for the host's pending updates: no mirror is ahead of the
+    // host (FSIM_KERNEL_VERIFY).
+    verify_mirror_ahead_.clear();
     return true;
 }
 

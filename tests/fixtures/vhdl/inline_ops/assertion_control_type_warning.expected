@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+warning[FSIM-HDL-REPORT]: $assertcontrol control_type 100 is not one of the values 1 to 11 of IEEE 1800-2023 Table 20-5, so the call has no effect
+warning[FSIM-HDL-REPORT]: unique case has no matching item
+warning[FSIM-HDL-REPORT]: $assertcontrol control_type 260 is not one of the values 1 to 11 of IEEE 1800-2023 Table 20-5, so the call has no effect
+warning[FSIM-HDL-REPORT]: unique case has no matching item
+warning[FSIM-HDL-REPORT]: $assertcontrol control_type 0 is not one of the values 1 to 11 of IEEE 1800-2023 Table 20-5, so the call has no effect
+warning[FSIM-HDL-REPORT]: $assertcontrol control_type -4 is not one of the values 1 to 11 of IEEE 1800-2023 Table 20-5, so the call has no effect
+warning[FSIM-HDL-REPORT]: unique case has no matching item
+warning[FSIM-HDL-REPORT]: $assertcontrol control_type 12 is not one of the values 1 to 11 of IEEE 1800-2023 Table 20-5, so the call has no effect
+warning[FSIM-HDL-REPORT]: $assertcontrol levels -1 is negative, and IEEE 1800-2023 20.11 and 21.7.1.2 count only levels of 0 or more, so the call has no effect
+warning[FSIM-HDL-REPORT]: unique case has no matching item
+warning[FSIM-HDL-REPORT]: $assertcontrol levels -2 is negative, and IEEE 1800-2023 20.11 and 21.7.1.2 count only levels of 0 or more, so the call has no effect
+warning[FSIM-HDL-REPORT]: unique case has no matching item
+warning[FSIM-HDL-REPORT]: $asserton levels -3 is negative, and IEEE 1800-2023 20.11 and 21.7.1.2 count only levels of 0 or more, so the call has no effect
+warning[FSIM-HDL-REPORT]: unique case has no matching item

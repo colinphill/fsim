@@ -291,7 +291,11 @@ foreach(FSIM_TOKEN IN ITEMS
     "compiled warm.fst"
     "debug debug.vcd"
     "TIMEOUT \"\${FSIM_STAGE_TIMEOUT_SECONDS}\""
-    "file(REMOVE \"\${FSIM_WORK_DIR}/cache/static-kernel.sqlite3\")")
+    "file(REMOVE \"\${FSIM_WORK_DIR}/\${optimization}/cache/static-kernel.sqlite3\")"
+    "run_stage(elaborate \${common} \${optimization} --aot)"
+    "if(NOT EXISTS \"\${kernel_cache}\")"
+    "FSIM_STAGE_ENVIRONMENT FSIM_PROFILE_PHASES=1"
+    "fsim-profile: static-kernel-codegen restored=([0-9]+) of=([0-9]+)")
   fsim_require_token(
     cmake/RunUvmPhaseTlmExample.cmake "${FSIM_TOKEN}"
     "direct/artifact/engine/cache runner coverage")

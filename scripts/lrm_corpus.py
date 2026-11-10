@@ -1026,9 +1026,6 @@ VERILATOR_NONSTANDARD = {
     "t_link_default_type_param": "uses the Verilator $c extension",
     "t_timing_initial_always": "uses the Verilator $c extension",
     "t_sys_stacktrace": "uses the Verilator $stacktrace task",
-    # A select applies to a name, not a method-call result
-    # (IEEE 1800-2017 11.5.1).
-    "t_bitsel_concat": "selects bits of a method-call result",
     # Calling a method through a null handle is an error (IEEE 1800-2017
     # 8.4).
     "t_randomize_null_object": "expects randomize() through a null handle "
@@ -1219,6 +1216,12 @@ VERILATOR_NONSTANDARD = {
     "t_union_unpacked": "reads an unpacked-union member other than the last "
         "written (implementation-defined)",
     "t_sys_fread": "reads a file the Verilator driver generates",
+    **{name: "expects no $stop from `disable iff (!toggle)` with toggle "
+        "updated by a nonblocking assignment on the same edge; the disable "
+        "condition reads current values from the attempt's start in the "
+        "Observed region, so toggle is already 1 at the cyc==8 tick, the "
+        "cover matches and its $stop runs (IEEE 1800-2023 16.12, 16.6, "
+        "4.4.2)" for name in ("t_assert_cover", "t_assert_cover_off")},
     "t_assert_nonconsec_rep": "expects Verilator's count; the case notes "
         "other simulators differ",
     "t_property_range_ring": "expects a consequent failure at the tick after "
@@ -1226,9 +1229,6 @@ VERILATOR_NONSTANDARD = {
         "1800-2017 16.12.6)",
     "t_property_until_implication": "counts failures once per cycle; each "
         "attempt fails separately (IEEE 1800-2017 16.14.1)",
-    "t_sequence_intersect_varlen": "counts nonblocking increments of attempts "
-        "failing in one time step with Verilator's failure timing; an attempt "
-        "fails when no match remains (IEEE 1800-2017 16.9.6)",
     "t_cover_sequence": "expects Verilator's extra end-of-match count; the "
         "case notes other simulators count 95",
     "t_assert_disable_count": "reads $inferred_disable in a procedural "

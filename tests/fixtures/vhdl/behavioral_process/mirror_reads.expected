@@ -1,0 +1,5 @@
+t1 bus=a50123456789abcdef high=z00
+t1 solo=z000zzzzzzzzzzzzzz
+t3 bus=a5XX23456789abcdef high=zc3
+t3 solo=zc3czzzzzzzzzzzzzz
+t4 bus=z5a3zzzzzzzzzzzzzz

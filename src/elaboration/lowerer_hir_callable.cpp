@@ -403,6 +403,26 @@ namespace {
     template <typename Container>
     PopBackGuard(Container&) -> PopBackGuard<Container>;
 
+    // Puts a value back when the scope ends.
+    template <typename Value>
+    class RestoreGuard final {
+    public:
+        RestoreGuard(Value& target, Value saved)
+            : target_ { target }
+            , saved_ { std::move(saved) }
+        {
+        }
+
+        RestoreGuard(const RestoreGuard&) = delete;
+        RestoreGuard& operator=(const RestoreGuard&) = delete;
+
+        ~RestoreGuard() { target_ = std::move(saved_); }
+
+    private:
+        Value& target_;
+        Value saved_;
+    };
+
     PackedLogic4 callable_default_value(
         const std::size_t width,
         const frontend::ValueDomain domain)
@@ -5290,12 +5310,15 @@ Lowerer::hir_class_task_profile(
         }
         result.receiver = *receiver.actual;
     }
-    // The task runs in the specialization of its receiver or caller, and
-    // its formals take that specialization's types (IEEE 1800-2017 8.25).
+    // The task runs in the specialization of its receiver or caller, or
+    // the one a static call selects (`C#(4)::t();`, which the statement
+    // keeps as its value), and its formals take that specialization's
+    // types (IEEE 1800-2023 8.25, 8.25.1).
     if (class_call && selected != nullptr && !native_uvm) {
         result.specialization = hir_class_member_specialization(
-            semantic::ExpressionId { }, selected->declaration,
-            result.receiver);
+            static_call && call.value ? *call.value
+                                      : semantic::ExpressionId { },
+            selected->declaration, result.receiver);
     }
     const SizeRestoreGuard specialization_frames {
         hir_generic_binding_frames_
@@ -5528,7 +5551,10 @@ Lowerer::bind_hir_class_actuals(
             return std::nullopt;
         }
         actual.width = *width;
-        actual.domain = formal_record.type->four_state
+        // A formal of a named or type-parameter type is 4-state when the
+        // type it selects is (IEEE 1800-2023 6.18, 8.25); an output formal
+        // starts at that type's default (13.5, 6.8 Table 6-7).
+        actual.domain = hir_systemverilog_type_four_state(*formal_record.type)
             ? frontend::ValueDomain::Logic4
             : frontend::ValueDomain::Bit2;
         actual.signed_value = formal_record.type->signed_value;
@@ -5746,6 +5772,37 @@ bool Lowerer::hir_uvm_library_identity(const std::string_view identity) const
             });
     }
     return *hir_uvm_library_declared_;
+}
+
+std::string Lowerer::hir_static_call_specialization(
+    const std::string_view identity,
+    const std::optional<std::uint32_t> specialization) const
+{
+    // A runtime service (`@uvm-...`) is no method of a class.
+    if (!specialization || identity.empty() || identity.starts_with('@')) {
+        return { };
+    }
+    return class_specializations().at(*specialization).specialization_identity;
+}
+
+std::string Lowerer::hir_cast_target_identity(
+    const semantic::ExpressionId target, std::string declared) const
+{
+    const auto declaration = hir_target_declaration(target);
+    const auto selected = declaration
+        ? hir_declaration_class_specialization(*declaration)
+        : std::nullopt;
+    if (!selected) {
+        return declared;
+    }
+    const auto& specialization = class_specializations().at(*selected);
+    // Each specialization of a parameterized class is a distinct type: an
+    // object of C#(4) does not convert to C#(7) (8.25).
+    if (specialization.declaration_identity == declared
+        && semantic::sv::has_own_static_storage(specialization)) {
+        return specialization.specialization_identity;
+    }
+    return declared;
 }
 
 bool Lowerer::hir_class_derives_from_uvm(
@@ -6751,7 +6808,8 @@ Lowerer::hir_class_static_container_binding(
             type = found->type;
         }
     }
-    const auto name = "$class-static:" + identity;
+    const auto name
+        = std::string { class_static_container_prefix } + identity;
     const auto existing = design_.container_by_name_.find(name);
     if (existing != design_.container_by_name_.end()) {
         const auto info = std::ranges::find(design_.container_object_info_,
@@ -7532,7 +7590,7 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
     // The method sees, and may change, this object's container properties.
     flush_hir_class_container_caches();
     if (profile->static_method) {
-        process_.operations.emplace_back(ClassStaticMethodCall {
+        ClassStaticMethodCall operation {
             destination,
             profile->identity,
             actuals,
@@ -7540,7 +7598,10 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
             actual_directions,
             static_cast<std::uint32_t>(profile->result_width),
             actual_kinds,
-        });
+        };
+        operation.class_specialization = hir_static_call_specialization(
+            profile->identity, profile->specialization);
+        process_.operations.emplace_back(std::move(operation));
     } else {
         ClassMethodCall operation {
             destination,
@@ -8652,7 +8713,7 @@ bool Lowerer::lower_hir_class_task_call(
         const auto destination = allocate_register(
             1U, frontend::ValueDomain::Bit2);
         if (profile->static_method) {
-            process_.operations.emplace_back(ClassStaticMethodCall {
+            ClassStaticMethodCall operation {
                 destination,
                 profile->identity,
                 actuals,
@@ -8660,7 +8721,10 @@ bool Lowerer::lower_hir_class_task_call(
                 actual_directions,
                 1U,
                 actual_kinds,
-            });
+            };
+            operation.class_specialization = hir_static_call_specialization(
+                profile->identity, profile->specialization);
+            process_.operations.emplace_back(std::move(operation));
         } else {
             // A runtime method sees, and may change, this object's container
             // properties.
@@ -11690,7 +11754,7 @@ std::optional<Lowerer::HirCallableType> Lowerer::hir_callable_type(
             return std::nullopt;
         }
         result.width = *width;
-        result.domain = source.type->four_state
+        result.domain = hir_systemverilog_type_four_state(*source.type)
             ? frontend::ValueDomain::Logic4
             : frontend::ValueDomain::Bit2;
         result.signed_value = source.type->signed_value;
@@ -19352,6 +19416,19 @@ Lowerer::lower_hir_function_call_value(
     // statement may invoke it.
     const bool discarded = discarding_call_result_;
     discarding_call_result_ = false;
+    // A deferred assertion's action is one subroutine call (IEEE 1800-2023
+    // 16.4): a void function called as that statement hands off to the
+    // action's region after its by-value actuals are evaluated, below. A
+    // function called for a value -- inside those actuals, say -- runs when
+    // the assertion is evaluated, so the handoff waits for the call itself.
+    const RestoreGuard deferred_phase { deferred_assertion_action_phase_,
+        discarded ? std::optional<runtime::SchedulerPhase> { }
+                  : deferred_assertion_action_phase_ };
+    const bool deferred_action_call
+        = discarded && deferred_assertion_action_phase_.has_value();
+    if (!discarded) {
+        deferred_assertion_action_phase_.reset();
+    }
     if (!discarded && callable && expression
         && expression->systemverilog != nullptr) {
         const auto record = specialized_hir_unit_->find_declaration(*callable);
@@ -20404,6 +20481,9 @@ Lowerer::lower_hir_function_call_value(
         ? call_expression->systemverilog->source
         : call_expression->vhdl->source;
     emit_debug_point(DebugPointKind::call, hir_source_span(call_source));
+    if (deferred_action_call) {
+        emit_deferred_assertion_action_handoff();
+    }
     auto& frame = hir_callable_frames_[frame_index];
     if (frame.type.automatic) {
         const auto push_site = static_cast<InstructionIndex>(

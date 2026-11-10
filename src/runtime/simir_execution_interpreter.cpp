@@ -383,6 +383,8 @@ void Interpreter::Impl::note_interpreted_execute(const ProcessId id)
 
 void Interpreter::Impl::execute(ProcessId id)
 {
+    // The changes the process's statements make are its writes.
+    const SignalChangeWriterScope writer_scope { *this, id };
     if (auto* const compact = processes.compact_constant(id)) {
         ++constant_driver_executes;
         execute_compact_constant(*compact);
@@ -2138,7 +2140,7 @@ bool Interpreter::Impl::execute_operation(ProcessState& process,
             coverage_sample_hook(
                 op.instance_identity, actuals, op.signed_actuals,
                 op.scalar_kinds,
-                op.trigger);
+                op.trigger, scheduler.now(), scheduler.delta());
             ++process.pc;
         } else if constexpr (std::is_same_v<OperationType, CoverageQuery>) {
             if (op.kind > CoverageQueryKind::covergroup_instance
