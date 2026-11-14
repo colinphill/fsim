@@ -3838,6 +3838,12 @@ bool Lowerer::lower_hir_sensitivity_wait(
             return true;
         }
         if (dependencies.size() == dependency_start) {
+            // An event of an instance elaborated later (an event array
+            // element named hierarchically, 23.6): the second pass.
+            if (hierarchical_reference_retry_
+                && hierarchical_reference_missed_) {
+                return false;
+            }
             report(
                 "FSIM-ELAB-SVEVENT-001",
                 "packed event expression has no readable signal "
@@ -7788,6 +7794,13 @@ bool Lowerer::lower_hir_statement_unsuspended(
         const auto unresolved_static_array_call
             = !value_static_type
             && hir_static_array_function_call(*value);
+        // An interface instance array (or a slice of one) assigned to an
+        // unpacked array of virtual interfaces (IEEE 1800-2023 7.6, 25.9);
+        // lower_hir_static_container_actual checks the target.
+        const auto interface_array_value = !value_static_type
+            && !unresolved_static_array_call
+            && !hir_container_object_binding(*value)
+            && hir_systemverilog_interface_array_handles(*value).has_value();
         const auto unpacked_slice_candidate
             = [&](const semantic::ExpressionId id) {
             const auto expression = specialized_hir_unit_->find_expression(id);
@@ -8011,7 +8024,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 || unresolved_static_array_call
                 || unpacked_slice_candidate(*value)
                 || hir_container_object_binding(*value)
-                || fixed_concatenation_value)
+                || fixed_concatenation_value
+                || interface_array_value)
             && (!hir_container_object_binding(*target)
                 || fixed_concatenation_value)) {
             const auto& input = *statement->systemverilog;
@@ -8056,6 +8070,39 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     std::nullopt, origin);
                 if (!lower_hir_container_copy_out(
                         *target, fixed, nonblocking_copy)) {
+                    return assignment_rejected(__LINE__);
+                }
+                return true;
+            }
+            if (interface_array_value) {
+                if (!target_static_type) {
+                    return assignment_rejected(__LINE__);
+                }
+                const auto root_expression = unpacked_slice_candidate(*target)
+                    ? target_expression->systemverilog->operands.front()
+                    : *target;
+                // The target's declaration: a class property's (`h.vifs`,
+                // 8.5) or the variable's.
+                auto root = hir_referenced_declaration(root_expression);
+                if (const auto place
+                    = hir_class_container_place(root_expression)) {
+                    const auto* const property = hir_resolver()
+                        .resolve_systemverilog_class_property(
+                            place->identity, false)
+                        .unique();
+                    root = property != nullptr
+                        ? std::optional { property->declaration }
+                        : std::nullopt;
+                }
+                const auto handles = lower_hir_static_container_actual(
+                    *value, *target_static_type,
+                    root.value_or(semantic::DeclarationId { }));
+                if (!handles) {
+                    return diagnostics_.size() != diagnostics_before
+                        || assignment_rejected(__LINE__);
+                }
+                if (!lower_hir_container_copy_out(
+                        *target, *handles, nonblocking_copy)) {
                     return assignment_rejected(__LINE__);
                 }
                 return true;
@@ -8144,6 +8191,38 @@ bool Lowerer::lower_hir_statement_unsuspended(
             const bool typed_container_value
                 = value_static_type.has_value()
                 || unresolved_static_array_call;
+            if (interface_array_value) {
+                // A whole virtual interface array target, such as a class
+                // property (7.6, 25.9).
+                const auto& input_kind = input.assignment_kind;
+                if (signal_assignment || nonblocking
+                    || input_kind != semantic::sv::AssignmentKind::blocking
+                    || input.assignment_control
+                        != semantic::sv::AssignmentControl::none
+                    || input.delay || container->type == nullptr) {
+                    return assignment_rejected(__LINE__);
+                }
+                if (container->read_only) {
+                    report("FSIM-ELAB-SVPORT-009",
+                        "an input container port is read-only", span);
+                    return true;
+                }
+                const auto diagnostics_before = diagnostics_.size();
+                const auto handles = lower_hir_static_container_actual(
+                    *value, *container->type, container->declaration);
+                if (!handles) {
+                    return diagnostics_.size() != diagnostics_before
+                        || assignment_rejected(__LINE__);
+                }
+                if (container->local) {
+                    process_.operations.emplace_back(CopyContainerRegister {
+                        *container->local, *handles });
+                } else {
+                    process_.operations.emplace_back(WriteContainerObject {
+                        container->object, *handles, std::nullopt });
+                }
+                return true;
+            }
             if (constructor_call || plain_constructor || source_container
                 || static_slice || typed_container_value) {
                 // A time-free continuous assignment of a whole unpacked
@@ -25632,8 +25711,17 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         hir_source_span(sensitivity.source));
                     return true;
                 }
-                const auto found = signals_.find(sensitivity.signal);
-                if (found == signals_.end()) {
+                // A hierarchical identifier (15.5.4), resolved as any
+                // hierarchical name (23.8).
+                const auto found = hir_named_signal(sensitivity.signal,
+                    hir_process_scope_, sensitivity.source_order);
+                if (!found) {
+                    if (hierarchical_reference_retry_
+                        && hierarchical_last_separator(sensitivity.signal)
+                            != std::string_view::npos) {
+                        hierarchical_reference_missed_ = true;
+                        return false;
+                    }
                     report(
                         "FSIM-ELAB-SVEVENT-006",
                         "unknown wait_order event '" + sensitivity.signal
@@ -25641,8 +25729,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         hir_source_span(sensitivity.source));
                     return true;
                 }
-                if (design_.signal_info_.at(found->second).type_name
-                    != "event") {
+                if (*found >= design_.signals_.size()
+                    || !design_.signals_[*found].event_variable) {
                     report(
                         "FSIM-ELAB-SVEVENT-007",
                         "wait_order operand '" + sensitivity.signal
@@ -25650,7 +25738,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         hir_source_span(sensitivity.source));
                     return true;
                 }
-                events.push_back(found->second);
+                events.push_back(*found);
             }
             const auto result = allocate_register(
                 1U, frontend::ValueDomain::Bit2);

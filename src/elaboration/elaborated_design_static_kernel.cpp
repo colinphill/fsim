@@ -3329,7 +3329,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     // it in the update phase that changes a source, as the host's update
     // commit does, so the formal updates in the same simulation cycle. It
     // needs its sources and its formal kernel-owned; otherwise it reverts
-    // to a host program below.
+    // to a host program below. A mixed kernel commits SystemVerilog writes
+    // in the same round (commit_round), so it runs them there too.
     struct Conversion {
         SignalId target { };
         ProcessId program { };
@@ -3338,7 +3339,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     };
     std::vector<Conversion> conversions;
     std::vector<std::int32_t> conversion_of_target(signal_count, -1);
-    for (SignalId target = 0U; vhdl_mode && !mixed && target < signal_count;
+    for (SignalId target = 0U; vhdl_mode && target < signal_count;
          ++target) {
         const auto& resolver = signals_[target].vhdl_resolver;
         if (!resolver || resolver->sources.empty() || !resolver->drivers.empty()

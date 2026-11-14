@@ -1,0 +1,10 @@
+#c start of initialization
+#c start of simulation
+#c change p at 0 fs: 1
+#c transaction p at 0 fs: 1
+#c p: init event=0 value=0 wakes=1 wake event=1 active=1
+#c d: init event=0 value=0 wakes=0
+#c ps: init value=0 wakes=0
+#c ds: init value=0 wakes=0
+#c first cycle: p event=1 active=1 d event=0 active=0 value=1
+#c at 5 ns: q event=0 active=0 value=1 wakes=0

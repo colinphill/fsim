@@ -405,6 +405,12 @@ public:
     /// before the time-zero cycle begins, so work it schedules runs in that
     /// cycle. Not called by start_for_restore().
     void set_start_of_simulation_hook(std::function<void()> hook);
+    /// Called once start() has given every signal its initialized value
+    /// (IEEE 1076-2019 14.7.5.2: resolved, converted and implicit GUARD
+    /// signals) and before the first simulation cycle. Those values are not
+    /// events; an observer of values (a trace) records them as time zero's.
+    /// Not called by start_for_restore().
+    void set_initialized_hook(std::function<void()> hook);
     /// Installs the factory reset_run_state() takes the time-zero state from:
     /// it returns a fresh interpreter of the same design, configured exactly
     /// as this one was before start (hooks excluded). Without one the run
@@ -512,6 +518,13 @@ public:
     /// (IEEE 1800-2023 38.34).
     void deposit_signal(SignalId signal, PackedLogic4 value,
         ProcessSchedulingDomain origin_domain = ProcessSchedulingDomain::generic);
+    /// A VHPI vhpiDeposit into a VHDL signal (IEEE 1076-2019 22.5.2): the
+    /// variable holding its current value takes the value at once, which is
+    /// neither a transaction nor an event; no process resumes and
+    /// 'LAST_VALUE keeps the value before the last event. A forced signal
+    /// keeps its forced value. Before initialization, step c) of 14.7.5.2
+    /// gives the signal its drivers' value again.
+    void deposit_current_value(SignalId signal, PackedLogic4 value);
 
     /// A foreign program's driver (VHPI 22.5.4, 22.6, 23.34): the driver
     /// `process` has for `signal`, the process being the placeholder of a

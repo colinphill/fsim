@@ -566,6 +566,7 @@ include/fsim/semantic/systemverilog_hir.hpp
 include/fsim/semantic/systemverilog_structure_image.hpp
 include/fsim/semantic/systemverilog_type_descriptor.hpp
 include/fsim/semantic/systemverilog_type_state.hpp
+include/fsim/semantic/vhdl_block_guard.hpp
 include/fsim/semantic/vhdl_hir.hpp
 include/fsim/semantic/vhdl_intrinsic_signatures.hpp
 include/fsim/semantic/vhdl_standard_catalog.hpp
@@ -2553,6 +2554,9 @@ tests/fixtures/foreign/foreign_vhpi_standard_catalog_87.expected
 tests/fixtures/foreign/foreign_vhpi_standard_catalog_87.expected.license
 tests/fixtures/foreign/foreign_vhpi_standard_catalog_93.expected
 tests/fixtures/foreign/foreign_vhpi_standard_catalog_93.expected.license
+tests/fixtures/foreign/foreign_vhpi_start_deposit_event.expected
+tests/fixtures/foreign/foreign_vhpi_start_deposit_event.expected.license
+tests/fixtures/foreign/foreign_vhpi_start_deposit_event.vhd
 tests/fixtures/foreign/foreign_vhpi_statements.expected
 tests/fixtures/foreign/foreign_vhpi_statements.expected.license
 tests/fixtures/foreign/foreign_vhpi_statements.vhd
@@ -4272,6 +4276,7 @@ tests/runtime/foreign_vhpi_shared_variable_live_plugin.c
 tests/runtime/foreign_vhpi_shared_variable_plugin.c
 tests/runtime/foreign_vhpi_stable_mixed_plugin.c
 tests/runtime/foreign_vhpi_standard_catalog_plugin.c
+tests/runtime/foreign_vhpi_start_deposit_event_plugin.c
 tests/runtime/foreign_vhpi_statements_plugin.c
 tests/runtime/foreign_vhpi_stmt_pack_plugin.c
 tests/runtime/foreign_vhpi_stmt_plugin.c

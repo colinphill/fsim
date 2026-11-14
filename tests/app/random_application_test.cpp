@@ -335,7 +335,8 @@ void test_random(
             == fsim::runtime::simir::AssertionSeverity::warning);
         assert(report.source.path == source.generic_string());
         assert(report.source.line > 0U && report.source.column > 0U);
-        assert(report.time == 0U && report.delta == 0U);
+        // The first simulation cycle at time zero is delta 1 (owner decision 11-14).
+        assert(report.time == 0U && report.delta == 1U);
     }
     assert(reference.compiled_processes == 0);
 #if defined(FSIM_HAS_LLVM)

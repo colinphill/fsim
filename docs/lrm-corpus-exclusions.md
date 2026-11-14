@@ -11,7 +11,7 @@ Exclusions never count as closures.
 | suite | not run | out of scope |
 |---|---:|---:|
 | sv-tests | 0 | 2 |
-| verilator | 63 | 298 |
+| verilator | 63 | 296 |
 | ivtest | 7 | 305 |
 | vests | 2 | 0 |
 | nvc | 225 | 0 |
@@ -179,8 +179,6 @@ Exclusions never count as closures.
 | `t_hier_block_struct_nohier` | out of scope | connects an unpacked-array concatenation to an output port; it may only be the source of an assignment-like context (IEEE 1800-2017 10.10) |
 | `t_infinite_recursion` | not run | lint-only test |
 | `t_interface_ar3` | out of scope | connects a reversed slice to an instance array and expects index-matched elements; elements match left index to left index (IEEE 1800-2017 23.3.3.5) |
-| `t_interface_array_class_new` | out of scope | assigns an array of interface instances to a virtual-interface array (IEEE 1800-2023 25.9) |
-| `t_interface_array_virtual` | out of scope | assigns an array of interface instances to a virtual-interface array (IEEE 1800-2023 25.9) |
 | `t_interface_dearray` | out of scope | assigns an array of interface instances to a virtual-interface array (IEEE 1800-2023 25.9) |
 | `t_interface_gen5` | out of scope | declares a bare begin-end block in a generate region |
 | `t_interface_gen5_noinl` | out of scope | declares a bare begin-end block in a generate region |

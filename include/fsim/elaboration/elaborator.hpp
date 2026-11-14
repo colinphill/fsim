@@ -2002,6 +2002,18 @@ private:
     std::unordered_map<std::string,
         std::vector<std::pair<std::int32_t, runtime::simir::SignalId>>>
         event_array_by_name_;
+    // Construction draft: the elements of an interface instance array by
+    // the array's full path, outermost index first and each dimension from
+    // its left bound, so the array named as a whole (`bus_array`) or sliced
+    // finds its elements (IEEE 1800-2023 7.6, 25.9).
+    struct InterfaceArrayElement {
+        std::vector<std::int64_t> indices;
+        std::uint64_t handle { };
+        // The element instance's path, as its handle was reserved.
+        std::string path;
+    };
+    std::unordered_map<std::string, std::vector<InterfaceArrayElement>>
+        interface_array_elements_;
     // Construction draft: the unpacked dimensions of a fixed-size unpacked
     // array signal, outermost first; its elements are equally wide and the
     // rightmost element of the last dimension is at bit 0, so a select

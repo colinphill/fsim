@@ -1806,7 +1806,7 @@ scheduler.
 | `FSIM-ELAB-SVIFACE-009` | error | A modport export has no matching callable implementation in the connected module. |
 | `FSIM-ELAB-SVIFACE-010` | error | A parameterized virtual-interface view does not match the connected interface specialization identity. |
 | `FSIM-ELAB-SVIFACE-011` | error | A restricted modport actual is widened to a generic interface port or rebound to a different modport. |
-| `FSIM-ELAB-SVIFACE-012` | error | A virtual-interface assignment has a different interface specialization, widens a selected modport, rebinds it to another modport, or has a non-interface source. |
+| `FSIM-ELAB-SVIFACE-012` | error | A virtual-interface assignment has a different interface specialization, widens a selected modport, rebinds it to another modport, or has a non-interface source; or an interface instance array (or a slice of one) is assigned to anything but an unpacked array of virtual interfaces of the same interface, specialization and shape. |
 | `FSIM-SV-SEM-031` | error | A SystemVerilog `break` or `continue` statement appears outside a procedural loop. |
 | `FSIM-SV-SEM-032` | error | A SystemVerilog `final` procedure contains a timing control or wait (`$finish` and `$stop` are allowed and end the simulation at once). |
 | `FSIM-SV-SEM-033` | error | A SystemVerilog `final` procedure contains a nonblocking assignment. |

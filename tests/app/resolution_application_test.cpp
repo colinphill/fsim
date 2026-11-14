@@ -1863,35 +1863,36 @@ end architecture;
     // Each nonblocking update is its own update event (IEEE 1800-2023
     // 10.4.2). Delta placement across the SV/VHDL boundary is fsim's own;
     // the SV leaf's port value reaches the VHDL signal in the same delta.
-    // $strobe output carries the time slot's last delta.
+    // $strobe output carries the time slot's last delta. The first
+    // simulation cycle at time zero is delta 1 (owner decision 11-14).
     assert((observed_with_delta(names[8])
         == std::vector<std::tuple<
             std::string, fsim::runtime::SimulationTick, std::uint64_t>> {
-            { "00", 0, 0 }, { "01", 0, 0 }, { "10", 0, 0 },
-            { "11", 0, 0 } }));
+            { "00", 0, 1 }, { "01", 0, 1 }, { "10", 0, 1 },
+            { "11", 0, 1 } }));
     assert((observed_with_delta(names[7])
         == std::vector<std::tuple<
             std::string, fsim::runtime::SimulationTick, std::uint64_t>> {
-            { "0011", 0, 0 } }));
+            { "0011", 0, 1 } }));
     assert((observed_with_delta(names[5])
         == std::vector<std::tuple<
             std::string, fsim::runtime::SimulationTick, std::uint64_t>> {
-            { "0000XXXX", 0, 0 }, { "00000011", 0, 1 } }));
+            { "0000XXXX", 0, 1 }, { "00000011", 0, 2 } }));
     assert((observed_with_delta(names[6])
         == std::vector<std::tuple<
             std::string, fsim::runtime::SimulationTick, std::uint64_t>> {
-            { "0000XXXX", 0, 0 }, { "00000011", 0, 2 } }));
+            { "0000XXXX", 0, 1 }, { "00000011", 0, 3 } }));
     assert((observed_with_delta(names[9])
         == std::vector<std::tuple<
             std::string, fsim::runtime::SimulationTick, std::uint64_t>> {
-            { "00000000", 0, 1 }, { "00000001", 0, 4 },
-            { "00000010", 0, 7 }, { "00000011", 0, 10 } }));
+            { "00000000", 0, 2 }, { "00000001", 0, 5 },
+            { "00000010", 0, 8 }, { "00000011", 0, 11 } }));
     assert((observed_with_delta(names[10])
         == std::vector<std::tuple<
             std::string, fsim::runtime::SimulationTick, std::uint64_t>> {
-            { "0000XXXX", 0, 0 }, { "00000000", 0, 3 },
-            { "00000001", 0, 6 }, { "00000010", 0, 9 },
-            { "00000011", 0, 12 } }));
+            { "0000XXXX", 0, 1 }, { "00000000", 0, 4 },
+            { "00000001", 0, 7 }, { "00000010", 0, 10 },
+            { "00000011", 0, 13 } }));
     assert(reference.paused.status == fsim::runtime::RunStatus::stopped);
     assert(reference.paused.time == 1);
     assert(reference.result.status == fsim::runtime::RunStatus::stopped);
@@ -1912,7 +1913,7 @@ end architecture;
         != std::string::npos);
     assert(reference.vcd.find("$timescale 1ps $end")
         != std::string::npos);
-    assert((reference.outputs == std::vector<std::tuple<std::string, fsim::runtime::SimulationTick, std::uint64_t>> { { "region=11", 0, 13 } }));
+    assert((reference.outputs == std::vector<std::tuple<std::string, fsim::runtime::SimulationTick, std::uint64_t>> { { "region=11", 0, 14 } }));
     assert(reference.final_values[9] == "00000011");
     assert(reference.final_values[10] == "00000011");
     for (const auto* actual : { &cold, &warm }) {

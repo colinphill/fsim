@@ -1049,6 +1049,16 @@ void Interpreter::Impl::ensure_update_commit_callback()
             }
             unresolved_update_signals.clear();
             for (const auto signal : resolved_update_signals) {
+                if (get_signal(signal).resolution
+                    == ResolutionKind::user_function) {
+                    // As commit_driver: the drivers changed, and the
+                    // resolution function computes the net's value when
+                    // the update matures (drain_vhdl_resolutions); the
+                    // built-in resolution is not its value.
+                    resolved_update_marked[signal] = false;
+                    queue_vhdl_conversion(signal);
+                    continue;
+                }
                 const auto queued_family = std::ranges::find(
                     queued_container_alias_drivers,
                     signal,
@@ -1254,9 +1264,13 @@ SignalChangeOrigin Interpreter::Impl::capture_signal_change_origin(
     const auto process_domain = process_origin.process_domain;
     // A process that moved to a later region, such as an assertion action
     // block resumed in the Reactive region, writes from that region.
-    const auto phase = process_origin.phase == SchedulerPhase::observed
-        ? scheduler.current_phase().value_or(process_origin.phase)
-        : process_origin.phase;
+    // Branches, not value_or: a disengaged optional's payload is never read
+    // (a select over it reads uninitialized bytes).
+    const auto executing = scheduler.current_phase();
+    auto phase = process_origin.phase;
+    if (process_origin.phase == SchedulerPhase::observed && executing) {
+        phase = *executing;
+    }
     if (update_domain != SignalUpdateDomain::generic
         && process_domain != ProcessSchedulingDomain::systemverilog) {
         throw std::logic_error {
@@ -1288,8 +1302,10 @@ SignalChangeOrigin Interpreter::Impl::capture_signal_change_origin(
             "are not supported"
         };
     }
-    return { process_domain,
-        scheduler.current_phase().value_or(phase) };
+    if (executing) {
+        return { process_domain, *executing };
+    }
+    return { process_domain, phase };
 }
 
 void Interpreter::Impl::schedule_systemverilog_update(

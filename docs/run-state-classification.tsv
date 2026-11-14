@@ -122,6 +122,7 @@ sched.work_queue	reserved_insertions_capacity	W	allocator cache or spare buffer:
 interp.impl	scheduler	Cfg	the scheduler (own rows under sched.*)
 interp.impl	scheduler_discard_hook	Cfg	hook or callback installed by the embedder
 interp.impl	start_of_simulation_hook	Cfg	hook or callback installed by the embedder
+interp.impl	initialized_hook	Cfg	hook or callback installed by the embedder
 interp.impl	start_restoring	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
 interp.impl	update_commit_callback	D	built on first dispatch of the interp.update_commit event
 interp.impl	systemverilog_update_slots	P	SV update slot pool (large payloads use the pool pattern)
@@ -229,6 +230,7 @@ interp.impl	running_vhdl_resolvers	S	empty or false at every save point: the sav
 interp.impl	vhdl_resolver_read_systemverilog_change	W	assigned false before each resolver pass (simir_scheduling_commit.cpp)
 interp.impl	vhdl_next_cycle_resolutions	P	signal values, driver contributions, forces and history
 interp.impl	vhdl_deposited_before_start	P	signal values, driver contributions, forces and history
+interp.impl	vhdl_values_before_initialization	S	empty at every save point (initialize_vhdl_resolutions empties it at step c) of 14.7.5.2): the save audit refuses with FSIM-SAVE-0011 when it is not
 interp.impl	driver_values	P	signal values, driver contributions, forces and history
 interp.impl	forced_driver_values	P	signal values, driver contributions, forces and history
 interp.impl	forced_driver_masks	P	signal values, driver contributions, forces and history
@@ -839,6 +841,8 @@ kernel.impl	slot_history_end_	D	derived from the members' attribute operations (
 kernel.impl	history_slots_	D	derived from the members' attribute operations (build_histories) after restore
 kernel.impl	history_words_	P	kernel dynamic state: the update cycles that have begun and the time and cycle of each history's latest event and transaction (IEEE 1076-2019 16.2.4)
 kernel.impl	history_current_	P	kernel dynamic state: the value of each history slot its histories last saw (IEEE 1076-2019 16.2.4); the hidden last-value slots are saved with the slots
+kernel.impl	history_update_key_	W	the scheduler delta whose update began the kernel's cycle (begin_update_cycle); compared with the running delta only, so a value from before a cycle-end save point never matches
+kernel.impl	history_import_key_	W	the scheduler delta in which an imported host write began the cycle (begin_import_cycle); compared with the running delta only, so a value from before a cycle-end save point never matches
 kernel.impl	redirect_pc_	W	step scratch assigned or cleared before use in the same step; stale content is dead
 kernel.impl	behavioral_entry_	Cfg	kernel mode from the artifact or command line
 kernel.impl	behavioral_suspended_	P	kernel dynamic state (S5)
@@ -923,7 +927,6 @@ kernel.impl	profile_generic_runs_	Prof	profile counters
 kernel.impl	verified_thread_runs_	Prof	FSIM_KERNEL_VERIFY counter
 kernel.impl	verified_member_runs_	Prof	FSIM_KERNEL_VERIFY counter
 kernel.impl	verify_skipped_members_	Prof	FSIM_KERNEL_VERIFY profile rows
-kernel.impl	verify_hooked_runs_	Prof	FSIM_KERNEL_VERIFY counter of activations not replayed (variable hooks)
 kernel.impl	verify_thread_reason_	D	FSIM_KERNEL_VERIFY: a function of the member's operations
 kernel.impl	verify_thread_decided_	D	FSIM_KERNEL_VERIFY: a function of the member's operations
 kernel.impl	verify_live_registers_	D	FSIM_KERNEL_VERIFY: a function of the member's operations
@@ -1510,6 +1513,7 @@ sim.impl	vpi_container_hook_installed	D	VPI handle tables, rebuilt on demand; no
 sim.impl	next_scalar_signal_observer	Cfg	observers and hooks installed by the embedder
 sim.impl	safe_point_hook	Cfg	observers and hooks installed by the embedder
 sim.impl	safe_point_observers	Cfg	observers and hooks installed by the embedder
+sim.impl	initialization_observers	Cfg	observers and hooks installed by the embedder
 sim.impl	net_delay_split_requests	D	artifact products and caches
 sim.impl	net_delay_split_observer	Cfg	observers and hooks installed by the embedder
 sim.impl	net_delay_split_refusals	D	artifact products and caches
@@ -1517,6 +1521,7 @@ sim.impl	grafted_process_ids	D	artifact products and caches
 sim.impl	net_delay_split_refused	D	artifact products and caches
 sim.impl	sdf_net_delay_epoch	P	live SDF reannotation epoch, saved with the VPI net delay puts it guards (net_put_epoch_)
 sim.impl	next_safe_point_observer	Cfg	observers and hooks installed by the embedder
+sim.impl	next_initialization_observer	Cfg	observers and hooks installed by the embedder
 sim.impl	force_statement_observers	Cfg	observers and hooks installed by the embedder
 sim.impl	execution_point_primary	Cfg	observers and hooks installed by the embedder
 sim.impl	execution_point_observers	Cfg	observers and hooks installed by the embedder
@@ -1803,6 +1808,7 @@ foreign.vhpi_live	active_call_	S	exact test in LiveService::audit_rest_state (FS
 foreign.vhpi_live	frames_	D	probe state rebuilt from execution points as they occur (deliver_point: process_entry, call, suspend); reset_cycle_state clears it at a restore
 foreign.vhpi_live	call_process_	S	exact test in LiveService::audit_rest_state (FSIM-SAVE-0011): set and cleared inside one routine, callback delivery or safe-point drain; restore_run_state clears them (reset_cycle_state)
 foreign.vhpi_live	safe_point_token_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	initialization_token_	D	VHPI object tables and caches, rebuilt on demand; not saved
 foreign.vhpi_live	change_token_	D	VHPI object tables and caches, rebuilt on demand; not saved
 foreign.vhpi_live	next_order_	D	VHPI object tables and caches, rebuilt on demand; not saved
 foreign.vhpi_live	phase_	W	assigned by every phase event (phase_event) before it is read; the restart sets the simulation phase (20.8)
@@ -1828,6 +1834,8 @@ foreign.vhpi_live	end_of_time_step_pending_	D	position in the VHPI cycle bookkee
 foreign.vhpi_live	in_pli_error_	S	exact test in LiveService::audit_rest_state (FSIM-SAVE-0011): set and cleared inside one routine, callback delivery or safe-point drain; restore_run_state clears them (reset_cycle_state)
 foreign.vhpi_live	interrupt_trap_	D	VHPI object tables and caches, rebuilt on demand; not saved
 foreign.vhpi_live	cycle_started_	D	position in the VHPI cycle bookkeeping (14.7.5.3): follows the scheduler events a restore drops, so reset_cycle_state starts it afresh
+foreign.vhpi_live	processes_pending_	D	position in the VHPI initialization phase (14.7.5.2 e): set at its start, cleared at step e); a restore skips the phase and a reset starts it afresh (restart_initialization)
+foreign.vhpi_live	closed_cycle_	D	the delta and cycle numbers of a cycle while its end of processes is reported (21.3.6.5); empty outside that dispatch
 foreign.vhpi_live	awaiting_update_	D	position in the VHPI cycle bookkeeping (14.7.5.3): follows the scheduler events a restore drops, so reset_cycle_state starts it afresh
 foreign.vhpi_live	due_timeouts_	D	position in the VHPI cycle bookkeeping (14.7.5.3): follows the scheduler events a restore drops, so reset_cycle_state starts it afresh
 foreign.vhpi_live	stepped_at_	D	position in the VHPI cycle bookkeeping (14.7.5.3): follows the scheduler events a restore drops, so reset_cycle_state starts it afresh

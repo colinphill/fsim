@@ -18826,6 +18826,7 @@ void HierarchyBuilder::reserve_compiled_systemverilog_interface_occurrences(
             if (inserted) {
                 handle->second = next_systemverilog_interface_handle_++;
             }
+            const auto reserved = handle->second;
             systemverilog_interface_types_.insert_or_assign(child_path,
                 SystemVerilogInterfaceInstanceType {
                     occurrence->linked_target->systemverilog->name,
@@ -18836,6 +18837,7 @@ void HierarchyBuilder::reserve_compiled_systemverilog_interface_occurrences(
                     std::shared_ptr<const semantic::SpecializedHirUnit>(
                         callee, &**callee));
             }
+            return reserved;
         };
         const auto array_indices
             = compiled_instance_array_indices(record, owner);
@@ -18843,6 +18845,9 @@ void HierarchyBuilder::reserve_compiled_systemverilog_interface_occurrences(
             reserve(occurrence_path);
             return;
         }
+        // The array's elements in order, for the array named as a whole.
+        auto& elements = design_.interface_array_elements_[occurrence_path];
+        elements.clear();
         for (const auto& outer :
             compiled_instance_outer_indices(record, owner)) {
             auto prefix = occurrence_path;
@@ -18850,7 +18855,13 @@ void HierarchyBuilder::reserve_compiled_systemverilog_interface_occurrences(
                 prefix += "[" + std::to_string(index) + "]";
             }
             for (const auto index : array_indices) {
-                reserve(prefix + "[" + std::to_string(index) + "]");
+                auto indices = outer;
+                indices.push_back(index);
+                auto element_path
+                    = prefix + "[" + std::to_string(index) + "]";
+                const auto handle = reserve(element_path);
+                elements.push_back({ std::move(indices), handle,
+                    std::move(element_path) });
             }
         }
     };
@@ -26784,8 +26795,35 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
         || !executable_width
         || !compiled_vhdl_scalar_domain(domain)
         || (!declaration.subtype && alias_info == nullptr);
+    // A scalar integer subtype whose range does not fold, such as one a
+    // function computes from a generic, has its bounds evaluated when its
+    // declaration is elaborated (IEEE 1076-2019 14.4.2.1, 14.4.2.4); the
+    // object starts at its left bound (6.4.2.3).
+    const auto residual_scalar_bound
+        = [](const semantic::vhdl::RangeConstraint& range) {
+              return range.kind == semantic::vhdl::RangeKind::integer
+                  && ((!range.left && range.left_expression)
+                      || (!range.right && range.right_expression));
+          };
+    const bool residual_scalar = alias_info == nullptr && declaration.subtype
+        && domain == frontend::ValueDomain::Integer
+        && (declaration.form == Form::signal || declaration.form == Form::port)
+        && [&] {
+               if (std::ranges::any_of(declaration.subtype->constraints,
+                       residual_scalar_bound)) {
+                   return true;
+               }
+               const auto effective = semantic::CompiledDesignResolver {
+                   working_specialization
+               }.effective_vhdl_subtype(*declaration.subtype,
+                   declaration.scope);
+               return effective
+                   && std::ranges::any_of(
+                       effective->constraints, residual_scalar_bound);
+           }();
     if ((unsupported_subtype
-            || (alias_info == nullptr && !subtype_executable))
+            || (alias_info == nullptr && !subtype_executable)
+            || residual_scalar)
         && (declaration.form == Form::signal || declaration.form == Form::port)
         && alias_info == nullptr && declaration.subtype) {
         // Index bounds that do not fold, such as an element of a constant
@@ -26797,11 +26835,12 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
         bool complete = true;
         // A range attribute (`G'range`) gives its prefix's bounds, in
         // their direction (IEEE 1076-2008 16.2.3).
-        const auto residual_bound = [](
+        const auto residual_bound = [&](
             const semantic::vhdl::RangeConstraint& range) {
-            return range.kind == semantic::vhdl::RangeKind::array_index
-                && ((!range.left && range.left_expression)
-                    || (!range.right && range.right_expression));
+            return (range.kind == semantic::vhdl::RangeKind::array_index
+                       && ((!range.left && range.left_expression)
+                           || (!range.right && range.right_expression)))
+                || residual_scalar_bound(range);
         };
         // Bounds that a named subtype declares are evaluated the same way
         // once the mark is replaced by the subtype it denotes. A subtype
@@ -26977,7 +27016,8 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
         }
         for (auto* const range_pointer : ranges) {
             auto& range = *range_pointer;
-            if (range.kind != semantic::vhdl::RangeKind::array_index) {
+            if (range.kind != semantic::vhdl::RangeKind::array_index
+                && !residual_scalar_bound(range)) {
                 continue;
             }
             const auto bound = [&](std::optional<std::int64_t>& value,
@@ -27113,14 +27153,54 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
             const auto formal_type = compiled_vhdl_signal_type(
                 working_specialization, *declaration.subtype,
                 declaration.scope);
-            return formal_type && formal_type->vhdl_array
+            if (formal_type && formal_type->vhdl_array
                 && !formal_type->vhdl_array->dimensions.empty()
                 && std::ranges::all_of(
                     formal_type->vhdl_array->dimensions,
                     [](const VhdlArrayDimensionMetadata& dimension) {
                         return dimension.unconstrained
                             && !dimension.range;
-                    });
+                    })) {
+                return true;
+            }
+            // An unconstrained port of a provided array type (UNSIGNED,
+            // SFIXED, FLOAT, ...), whose layout the compiler provides, takes
+            // its index range from the actual (IEEE 1076-2019 6.5.6.3).
+            if (!declaration.subtype->constraints.empty()
+                || !declaration.subtype->element_constraints.empty()) {
+                return false;
+            }
+            const semantic::CompiledDesignResolver resolver {
+                working_specialization
+            };
+            const auto& mark = declaration.subtype->type_mark;
+            const auto provided = mark.target.valid()
+                ? resolver.vhdl_provided_type_of(mark.target)
+                : resolver.resolve_vhdl_provided_type(
+                      mark.spelling, declaration.scope);
+            using Provided = semantic::CompiledVhdlProvidedType;
+            switch (provided) {
+            case Provided::string:
+            case Provided::bit_vector:
+            case Provided::boolean_vector:
+            case Provided::integer_vector:
+            case Provided::real_vector:
+            case Provided::time_vector:
+            case Provided::std_ulogic_vector:
+            case Provided::std_logic_vector:
+            case Provided::numeric_std_unsigned:
+            case Provided::numeric_std_signed:
+            case Provided::numeric_bit_unsigned:
+            case Provided::numeric_bit_signed:
+            case Provided::sfixed:
+            case Provided::ufixed:
+            case Provided::ieee_float:
+            case Provided::std_logic_arith_unsigned:
+            case Provided::std_logic_arith_signed:
+                return true;
+            default:
+                return false;
+            }
         }();
         const auto layout_mismatch = alias_info != nullptr
             && !inferred_port_subtype

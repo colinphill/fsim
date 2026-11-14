@@ -448,10 +448,12 @@ endmodule
         && word_three_events.size() == 3U
         && word_three_events[0].value == "XXXXXXXX"
         && word_three_events[0].time == 0U
-        && word_three_events[0].delta == 0U
+        // The first simulation cycle at time zero is delta 1 (owner
+        // decision 11-14).
+        && word_three_events[0].delta == 1U
         && word_three_events[1].value == "00011010"
         && word_three_events[1].time == 0U
-        && word_three_events[1].delta == 0U
+        && word_three_events[1].delta == 1U
         && word_three_events[2].value == "00101011"
         && word_three_events[2].time == 5U
         && word_three_events[2].delta == 0U;
@@ -520,10 +522,10 @@ endmodule
         && word_three_events.size() == 3U
         && word_three_events[0].value == "XXXXXXXX"
         && word_three_events[0].time == 0U
-        && word_three_events[0].delta == 0U
+        && word_three_events[0].delta == 1U
         && word_three_events[1].value == "00011010"
         && word_three_events[1].time == 0U
-        && word_three_events[1].delta == 0U
+        && word_three_events[1].delta == 1U
         && word_three_events[2].value == "00101011"
         && word_three_events[2].time == 5U
         && word_three_events[2].delta == 0U;
@@ -1572,7 +1574,8 @@ void test_systemverilog_metadata(
     // A package's scope is `pkg::` (IEEE 1800-2023 3.13, 37.10).
     const auto package = registry.find("vpi_metadata_pkg::");
     const auto packet = registry.find("vpi_metadata_pkg::packet");
-    const auto payload = registry.find("vpi_metadata_pkg::packet.payload");
+    // A class defn member's full name joins with `::` (37.10 detail 5).
+    const auto payload = registry.find("vpi_metadata_pkg::packet::payload");
     assert(root && interface_instance && program_instance && package && packet
         && payload);
     const auto has_2005_profile = [&](const fsim_vpi_handle_v1 handle) {

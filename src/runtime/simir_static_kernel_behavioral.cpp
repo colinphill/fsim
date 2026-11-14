@@ -5804,8 +5804,7 @@ std::optional<std::uint32_t> Interpreter::Impl::StaticKernel::run_behavioral_com
         ~ShadowReset() { pointer = saved; }
     } const shadow_reset { shadow_, shadow_ };
     if (verify_ && !member.generic_mode
-        && verify_thread_skip_reason(member_index) == nullptr
-        && !verify_variable_hooked(member_index)) {
+        && verify_thread_skip_reason(member_index) == nullptr) {
         verify_before.emplace();
         verify_before->registers = body.registers;
         if (body.call_stack_base != 0U) {
@@ -5953,23 +5952,6 @@ const char* Interpreter::Impl::StaticKernel::verify_thread_skip_reason(
         ++verify_skipped_members_[reason];
     }
     return reason;
-}
-
-bool Interpreter::Impl::StaticKernel::verify_variable_hooked(
-    const std::uint32_t member_index)
-{
-    // A member whose variables a foreign or debug interface watches or
-    // forces (debug_local_hooks_changed) reports its stores to that interface
-    // while it runs (note_variable_store): the interface's callbacks run
-    // once, inside the activation, and may deposit, force, register or
-    // print, which a replay can neither repeat nor leave out. Hooks come and
-    // go while the run goes on, so this is decided per activation.
-    if (!variable_hooks_active_ || member_index >= variable_hook_members_.size()
-        || variable_hook_members_[member_index] == 0U) {
-        return false;
-    }
-    ++verify_hooked_runs_;
-    return true;
 }
 
 bool Interpreter::Impl::StaticKernel::shadow_host_write(VerifyHostWrite record,
@@ -7110,7 +7092,7 @@ void Interpreter::Impl::StaticKernel::vhdl_timer_due(const SimulationTick time)
     vhdl_timers_released_ = true;
     // The update phase of a new time begins a cycle: events and transactions
     // of the cycles before it are past (IEEE 1076-2019 16.2.4).
-    history_new_cycle();
+    begin_update_cycle();
     impl_.queue_next_delta(host_process_);
     // The projected transactions that reach their time are this update phase's
     // (IEEE 1076-2019 14.7.5.3): the drivers' new values are written, and

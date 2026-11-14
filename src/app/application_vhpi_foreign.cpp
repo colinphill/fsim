@@ -26,6 +26,7 @@
 #include "fsim/runtime/vpi_time.hpp"
 #include "fsim/semantic/design_ir.hpp"
 #include "fsim/semantic/model.hpp"
+#include "fsim/semantic/vhdl_block_guard.hpp"
 #include "fsim/semantic/vhdl_hir.hpp"
 
 #include <algorithm>
@@ -1016,6 +1017,9 @@ public:
         if (safe_point_token_ != 0U) {
             simulation_.remove_safe_point_hook(safe_point_token_);
         }
+        if (initialization_token_ != 0U) {
+            simulation_.remove_initialization_hook(initialization_token_);
+        }
         if (change_token_ != 0U) {
             simulation_.remove_signal_change_hook(change_token_);
         }
@@ -1318,6 +1322,10 @@ public:
                 const runtime::SchedulerPhase phase) {
                 safe_point(scheduler, phase);
             });
+        // Steps a) to d) of the initialization phase are done: the
+        // processes start (IEEE 1076-2019 14.7.5.2 e).
+        initialization_token_ = simulation_.add_initialization_hook(
+            [this] { start_of_processes(); });
         simulation_.add_lifecycle_hook(
             [this](const Simulation::LifecycleEvent event,
                 const std::string_view location) {
@@ -2744,12 +2752,16 @@ private:
         awaiting_update_ = false;
         due_timeouts_.clear();
         stepped_at_.reset();
+        // The reset restored the initial values (steps a) to d) of
+        // 14.7.5.2): the processes start at once.
         start_of_simulation();
+        start_of_processes();
     }
 
-    // The initialization phase begins before any process runs
-    // (IEEE 1076-2019 14.7.5.2 a, b); it completes at the first safe point
-    // after the processes have run.
+    // The initialization phase begins before its steps a) to d) give the
+    // signals their initial values (IEEE 1076-2019 14.7.5.2, 21.3.7.5);
+    // step e) follows them (start_of_processes), and the phase completes at
+    // the first safe point after the processes have run.
     void start_of_simulation()
     {
         // A fresh-process restart restores the model past the elaboration and
@@ -2761,12 +2773,39 @@ private:
         }
         elaborate_foreign_architectures();
         phase_ = vhpiInitializationPhase;
+        processes_pending_ = true;
         dispatch(vhpiCbStartOfInitialization);
-        dispatch(vhpiCbStartOfNextCycle);
-        dispatch(vhpiCbStartOfProcesses);
         // The safe point after the processes' first run completes the
         // initialization, also in a design with no process.
         simulation_.schedule_active_task([] { });
+    }
+
+    // Step e) of the initialization phase (IEEE 1076-2019 14.7.5.2,
+    // 21.3.6.4): after the resolved, converted and GUARD signals have their
+    // initial values, before the first process runs.
+    void start_of_processes()
+    {
+        if (!processes_pending_) {
+            return;
+        }
+        processes_pending_ = false;
+        // Step c) gave every signal its driving and current value: a force
+        // or deposit a vhpiCbStartOfInitialization callback scheduled
+        // (vhpiForcePropagate, vhpiDepositPropagate) is no longer scheduled
+        // (14.7.5.2 c), owner decision 11-14), and its force callbacks do
+        // not fire. The update tasks find no pending update.
+        pending_updates_.clear();
+        forces_.clear();
+        // Initialization is no event (14.7.5.2): a value-change callback
+        // registered before step c) takes the initial values as seen.
+        for (auto* const callback : callbacks_) {
+            if (callback->data.reason == vhpiCbValueChange
+                && callback->object != nullptr && callback->object->signal) {
+                callback->last = element_bits(*callback->object);
+            }
+        }
+        dispatch(vhpiCbStartOfNextCycle);
+        dispatch(vhpiCbStartOfProcesses);
     }
 
     // Steps h) and m) of the initialization phase, then the start of the
@@ -2929,7 +2968,9 @@ private:
         if (awaiting_update_) {
             return;
         }
-        end_of_cycle(scheduler);
+        // The scheduler has begun the next delta: the cycle that ends here
+        // is the one before it.
+        end_of_cycle(scheduler, true);
     }
 
     void run_timeouts()
@@ -2948,12 +2989,25 @@ private:
     }
 
     // Steps f 4) to h) of a simulation cycle (IEEE 1076-2019 14.7.5.3).
-    void end_of_cycle(runtime::Scheduler& scheduler)
+    // `next_begun`: the scheduler is already in the next delta, so the
+    // ending cycle's numbers are one less than the current ones (23.18).
+    void end_of_cycle(runtime::Scheduler& scheduler, const bool next_begun = false)
     {
         cycled_ = true;
         cycle_started_ = false;
         // The processes of a simulation cycle have run.
-        dispatch(vhpiCbEndOfProcesses);
+        if (next_begun && simulation_.delta() != 0U
+            && simulation_.cycles() != 0U) {
+            closed_cycle_.emplace(
+                simulation_.delta() - 1U, simulation_.cycles() - 1U);
+        }
+        try {
+            dispatch(vhpiCbEndOfProcesses);
+        } catch (...) {
+            closed_cycle_.reset();
+            throw;
+        }
+        closed_cycle_.reset();
         if (pending_now(scheduler)) {
             cycle_started_ = true;
             if (has_callbacks(vhpiCbStartOfNextCycle)) {
@@ -4692,7 +4746,11 @@ private:
             // cycle that advanced to Tc is not one (IEEE 1076-2019 14.7.5.1).
             // Without one: every simulation cycle of the simulation phase
             // (IEEE 1076-2019 23.18).
+            // The end of the processes of a cycle the scheduler has already
+            // moved past reports that cycle.
             const auto count = phase_ != vhpiSimulationPhase ? 0U
+                : closed_cycle_ ? (time != nullptr ? closed_cycle_->first
+                                                   : closed_cycle_->second)
                 : time != nullptr ? simulation_.delta()
                                   : simulation_.cycles();
             *cycles = static_cast<long>(count);
@@ -5742,8 +5800,14 @@ private:
             || !statement.target) {
             return false;
         }
+        // Its target is the block's implicit GUARD declaration.
         const auto* const target = hir_expression(*statement.target);
-        return target != nullptr && same_name(target->text, "guard");
+        const auto guard = vhdl::block_guard_declaration(*region.generate,
+            [&](const semantic::DeclarationId id) {
+                return hir_.find_declaration(id);
+            });
+        return target != nullptr && guard && target->referenced_name
+            && target->referenced_name->selected == *guard;
     }
 
     // The processes and the concurrent statements equivalent to processes
@@ -18271,7 +18335,9 @@ private:
             }
             break;
         default:
-            simulation_.deposit_signal(*object->signal, std::move(whole));
+            // The current value at once: no transaction, no event
+            // (22.5.2), no vhpiCbValueChange trigger (21.3.2.2).
+            simulation_.deposit_current_value(*object->signal, std::move(whole));
             absorb_change(*object->signal);
             break;
         }
@@ -19640,6 +19706,10 @@ private:
     // object looks for its frame first.
     std::optional<runtime::simir::ProcessId> call_process_;
     std::uint64_t safe_point_token_ { };
+    std::uint64_t initialization_token_ { };
+    // start_of_simulation ran; step e) of the initialization phase has not
+    // (start_of_processes).
+    bool processes_pending_ { };
     std::uint64_t change_token_ { };
     std::uint64_t next_order_ { };
     vhpiPhaseT phase_ { vhpiRegistrationPhase };
@@ -19687,6 +19757,9 @@ private:
     // The initialization phase has completed.
     bool initialized_ { };
     bool cycled_ { };
+    // The (delta, total) numbers of the cycle whose end of processes is
+    // being reported after the scheduler moved to the next delta.
+    std::optional<std::pair<std::uint64_t, std::uint64_t>> closed_cycle_;
     ForeignCompanion companion_;
 };
 

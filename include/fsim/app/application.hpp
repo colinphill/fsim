@@ -1074,6 +1074,12 @@ public:
     void deposit_signal(
         runtime::simir::SignalId signal,
         runtime::PackedLogic4 value);
+    /// A VHPI vhpiDeposit into a VHDL signal: its current value at once,
+    /// neither a transaction nor an event (IEEE 1076-2019 22.5.2;
+    /// Interpreter::deposit_current_value).
+    void deposit_current_value(
+        runtime::simir::SignalId signal,
+        runtime::PackedLogic4 value);
     void deposit_scalar_signal(
         runtime::simir::SignalId signal,
         runtime::SystemVerilogScalarValue value);
@@ -1371,6 +1377,11 @@ public:
         ScalarSignalChangeHook hook);
     void remove_scalar_signal_change_hook(std::uint64_t token) noexcept;
     void set_safe_point_hook(SafePointHook hook);
+    /// Observe the end of initialization: every signal holds its initialized
+    /// value (IEEE 1076-2019 14.7.5.2) and the first cycle has not begun.
+    [[nodiscard]] std::uint64_t add_initialization_hook(
+        std::function<void()> hook);
+    void remove_initialization_hook(std::uint64_t token) noexcept;
     /// Add an independent scheduler safe-point observer without replacing the
     /// debugger, interrupt, or API control hook.
     [[nodiscard]] std::uint64_t add_safe_point_hook(SafePointHook hook);

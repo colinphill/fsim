@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "fsim/semantic/vhdl_block_guard.hpp"
 
 #include <cstdint>
 #include <string>
@@ -961,22 +962,20 @@ class VhdlExecutableBuilder final {
       driver.span = input.condition.span;
       const auto driver_id = statement(driver, output.scope, output.origin);
       output.concurrent_statements.push_back(driver_id);
-      const auto guard = std::ranges::find_if(output.declarations,
-          [&](const semantic::DeclarationId id) {
+      // The block's implicit GUARD, by its place among the declarations.
+      const auto guard = vh::block_guard_declaration(output,
+          [&](const semantic::DeclarationId id) -> const vh::Declaration* {
             const auto found = std::ranges::find_if(hir_.declarations(),
                 [&](const vh::Declaration& declaration) {
                   return declaration.id == id;
                 });
-            return found != hir_.declarations().end()
-                && found->form == vh::DeclarationForm::signal
-                && support::canonical_vhdl_spelling(found->name) == "guard";
+            return found != hir_.declarations().end() ? &*found : nullptr;
           });
       const auto record = std::ranges::find_if(hir_.statements(),
           [&](const vh::Statement& candidate) {
             return candidate.id == driver_id;
           });
-      if (guard != output.declarations.end()
-          && record != hir_.statements().end() && record->target) {
+      if (guard && record != hir_.statements().end() && record->target) {
         implicit_guard_targets_.emplace_back(*record->target, *guard);
       }
     }

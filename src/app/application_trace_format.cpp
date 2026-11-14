@@ -68,6 +68,11 @@ namespace {
                 state.signal_change_observer);
             state.signal_change_observer = 0U;
         }
+        if (state.simulation && state.initialization_observer != 0U) {
+            state.simulation->remove_initialization_hook(
+                state.initialization_observer);
+            state.initialization_observer = 0U;
+        }
         if (state.simulation && state.uvm_activity_observer != 0U) {
             state.simulation->remove_uvm_activity_hook(
                 state.uvm_activity_observer);

@@ -1376,6 +1376,8 @@ struct Simulation::Impl {
     SafePointHook safe_point_hook;
 
     std::map<std::uint64_t, SafePointHook> safe_point_observers;
+    std::map<std::uint64_t, std::function<void()>> initialization_observers;
+    std::uint64_t next_initialization_observer { 1 };
 
     /// Splits of load ports asked for by a foreign module input port delay
     /// put (Simulation::request_net_delay_split), the safe-point observer

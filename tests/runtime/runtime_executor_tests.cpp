@@ -952,19 +952,19 @@ void test_simir_display_output()
             && events[0].text == "first"
             && events[0].newline
             && events[0].time == 0
-            && events[0].delta == 0
+            && events[0].delta == 1
             && events[0].phase == SchedulerPhase::active
             && events[1].process == process_id
             && events[1].text == "postponed"
             && events[1].newline
             && events[1].time == 0
-            && events[1].delta == 0
+            && events[1].delta == 1
             && events[1].phase == SchedulerPhase::postponed
             && events[2].process == second_process_id
             && events[2].text == "second-postponed"
             && events[2].newline
             && events[2].time == 0
-            && events[2].delta == 0
+            && events[2].delta == 1
             && events[2].phase == SchedulerPhase::postponed
             && events[3].process == process_id
             && events[3].text == "tail"
@@ -1133,7 +1133,7 @@ void test_simir_display_output()
             && reports[0].severity == AssertionSeverity::warning
             && reports[0].source.line == 9
             && reports[0].time == 0
-            && reports[0].delta == 0
+            && reports[0].delta == 1
             && reports[1].severity == AssertionSeverity::error
             && formatted_output
                 == std::vector<std::string> {

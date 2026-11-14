@@ -504,6 +504,11 @@ public:
     /// time step. Not called for the kernel's own publication or
     /// materialization (Impl::import_static_kernel_write filters those).
     void import_host_write(SignalId signal, SignalChangeOrigin origin);
+    /// The host changed a signal's current value without a transaction or
+    /// an event (Interpreter::deposit_current_value, IEEE 1076-2019 22.5.2):
+    /// an owned slot or an input takes the value as a settling change, and
+    /// no reader wakes.
+    void settle_host_write(SignalId signal);
     /// Interpreter::publish_static_kernel_outputs: the Active-region outputs
     /// commit as before a hosted process runs; NBA-region values stay
     /// staged.
@@ -1394,6 +1399,14 @@ private:
     /// The conversions' initial values (14.7.5.2), with the wires', before
     /// any activation: no events; the host's copies of the formals follow.
     void settle_conversions();
+public:
+    /// Give the host's copies of the signals the kernel initialized at its
+    /// build (resolved, split, converted and GUARD signals, IEEE 1076-2019
+    /// 14.7.5.2) their initialized values, as the host's own initialization
+    /// leaves its signals: what the host, a trace and the foreign interfaces
+    /// read before the first cycle. Not an event.
+    void publish_initialized_values();
+private:
     /// Each slot's conversion members, in the host's dependents order.
     std::vector<std::vector<std::uint32_t>> slot_conversions_;
     std::vector<std::uint32_t> conversion_members_;
@@ -2397,6 +2410,22 @@ private:
             ++history_words_[0];
         }
     }
+    /// The scheduler delta (time, delta) whose update phase the kernel's own
+    /// update (commit_round, vhdl_timer_due) last began a cycle in, and the
+    /// one a host write imported in an update phase began it in ahead of
+    /// that update (import_host_write). Both are compared with the running
+    /// delta only, so a value of an earlier delta never matches.
+    std::optional<std::pair<SimulationTick, std::uint64_t>> history_update_key_;
+    std::optional<std::pair<SimulationTick, std::uint64_t>> history_import_key_;
+    /// The kernel's update of the running scheduler delta begins its cycle
+    /// (IEEE 1076-2019 14.7.5.3 c), d)), unless a host write the update
+    /// phase applied first began it (begin_import_cycle): that update and
+    /// this one are the same cycle's.
+    void begin_update_cycle() noexcept;
+    /// A host write imported in a scheduler update phase, outside an
+    /// activation (a VHPI propagating deposit, 22.5.2), is an update of that
+    /// phase's cycle: it begins the cycle if the kernel's update has not.
+    void begin_import_cycle() noexcept;
     /// A change of a history slot (slot_changed); `before` is the slot's
     /// planes of words before the change, when the caller has them.
     void history_event(std::uint32_t slot, const std::uint64_t* before);
@@ -3127,10 +3156,6 @@ private:
     /// The reason a member's activations are not replayed (named under
     /// FSIM_PROFILE_KERNEL), or null when they are.
     [[nodiscard]] const char* verify_thread_skip_reason(std::uint32_t member);
-    /// Whether the member's variables have debug-interface hooks now (an
-    /// activation that is then not replayed, counted in verify_hooked_runs_).
-    [[nodiscard]] bool verify_variable_hooked(std::uint32_t member);
-    std::uint64_t verify_hooked_runs_ { };
     void verify_thread_activation(std::uint32_t member, std::uint32_t start,
         std::uint32_t stopped, const VerifyThreadState& before);
     /// Per member: the decided skip reason (null: replayed) and whether it
@@ -3218,6 +3243,12 @@ private:
         /// compiled run's blocking writes, then the replay's own.
         std::map<SignalId, PackedLogic4> host_values;
         std::vector<std::uint32_t> changed;
+        /// Each store of a hooked variable the compiled run reported
+        /// (note_variable_store): the register and the value the store
+        /// left, forced elements put back. The replay takes them in order
+        /// instead of running the interface's callbacks again.
+        std::vector<std::pair<RegisterId, PackedLogic4>> variable_stores;
+        std::size_t variable_stores_consumed { };
     };
     VerifyShadow* shadow_ { };
     /// Records a host write; true when the reference replay must not make it.

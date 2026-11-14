@@ -228,8 +228,9 @@ void test_scheduler_phase_order() {
       runtime.schedule_next_delta(phase, phase_index,
           [&, wave, phase, phase_index](Scheduler &scheduled) {
             // Postponed work runs once, after the slot's last delta
-            // (IEEE 1800-2023 4.4.2.9).
-            require((scheduled.delta() == wave
+            // (IEEE 1800-2023 4.4.2.9). The waves run at time zero, whose
+            // first simulation cycle is delta cycle 1 (Scheduler::delta).
+            require((scheduled.delta() == wave + 1U
                         || phase == SchedulerPhase::postponed)
                         && scheduled.current_phase() == phase,
                     "rotated region queue retains its phase and delta");
@@ -859,7 +860,8 @@ void test_scheduler_batch_contract() {
               && internal_result.callbacks_executed == 4U
               && internal_events
                   == std::vector<std::string> {
-                      "0:0:10", "0:1:20", "3:0:30" },
+                      // Time zero's first cycle is delta 1.
+                      "0:1:10", "0:2:20", "3:0:30" },
           "typed tasks retain callback ordering, deltas, and absolute time");
 }
 

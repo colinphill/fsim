@@ -3075,7 +3075,9 @@ void ApplicationTestFixture::test_class_simulation_integration()
                    .aval
             == 10);
         const std::vector<std::tuple<std::uint64_t, std::uint64_t, std::string>>
-            expected_changes { { 0, 0, "00000010" }, { 1, 0, "00000100" } };
+            // The first simulation cycle at time zero is delta 1 (owner
+            // decision 11-14); a cycle that advances time is delta 0.
+            expected_changes { { 0, 1, "00000010" }, { 1, 0, "00000100" } };
         assert(property_changes == expected_changes);
         const auto trace_values = simulation.class_packed_trace_values();
         assert(std::ranges::any_of(trace_values, [&](const auto& trace) {

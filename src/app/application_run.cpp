@@ -1598,6 +1598,46 @@ std::unique_ptr<TraceState> attach_trace(
                 }
                 write_uvm_activity_trace_event(*state, event);
             });
+        // Initialization gives resolved, converted and GUARD signals their
+        // initial values without events (IEEE 1076-2019 14.7.5.2): they are
+        // time zero's values, recorded over the attach-time snapshot (the
+        // writer drops the unchanged ones).
+        trace->initialization_observer = simulation.add_initialization_hook(
+            [observer_lifetime] {
+                auto* state = observer_lifetime->state;
+                if (!state || state->simulation == nullptr
+                    || state->terminal_status != TraceTerminalStatus::open
+                    || (state->format == project::TraceFormat::vcd
+                        ? !state->writer
+                        : !state->fst_writer)) {
+                    return;
+                }
+                auto& traced = *state->simulation;
+                for (const auto& signal : traced.runtime_adapter().signals()) {
+                    if (signal.id < state->handles.size()
+                        && !state->handles[signal.id].empty()
+                        && state->selection->selected(signal.id)) {
+                        const std::array observed { TraceObservationValue {
+                            state->signal_trace_ids[signal.id],
+                            traced.read_signal(signal.id), signal.id } };
+                        // Initialization follows what was recorded at time
+                        // zero before it (a debugger trace add, a deposit
+                        // before the run): its values come after those
+                        // records, in the last region of the delta.
+                        const auto region = state->observations->would_reorder(
+                                traced.now(), traced.delta(),
+                                runtime::TraceRegion::Snapshot)
+                            ? runtime::TraceRegion::Callback
+                            : state->selection->observation_region(
+                                  traced.now(), traced.delta(),
+                                  runtime::TraceRegion::Snapshot);
+                        static_cast<void>(state->observations->accept(
+                            TraceObservationKind::Signal, traced.now(),
+                            traced.delta(), region,
+                            "signal:" + std::to_string(signal.id), observed));
+                    }
+                }
+            });
         trace->signal_change_observer = simulation.add_signal_change_hook(
             [observer_lifetime](
                 const SignalId signal,

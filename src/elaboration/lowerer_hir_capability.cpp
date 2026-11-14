@@ -7508,24 +7508,22 @@ Lowerer::hir_virtual_interface_member(
         const auto declaration = receiver
             ? specialized_hir_unit_->find_declaration(*receiver)
             : std::nullopt;
-        if (!declaration || declaration->systemverilog == nullptr
-            || !hir_systemverilog_virtual_interface_type(
-                *declaration->systemverilog)) {
+        const auto virtual_type = declaration
+                && declaration->systemverilog != nullptr
+            ? hir_systemverilog_virtual_interface_type(
+                  *declaration->systemverilog)
+            : std::nullopt;
+        if (!virtual_type) {
             return std::nullopt;
         }
-        auto member = hir_virtual_interface_member(
-            declaration->systemverilog->name + "."
-                + source.text.substr(indexed_member.size()),
-            source.scope);
-        // Through the object, the property's declaration need not be the
-        // one its name resolves to; the name names the same handle array.
-        const bool through_object = !element || element->width != 64U;
-        if (!member || member->object || member->handle_signal
-            || (!through_object && member->receiver != *receiver)) {
-            return std::nullopt;
-        }
-        member->element = expression_id;
-        return member;
+        // The member is looked up in the element type, the array's virtual
+        // interface type; the array need not be visible by its simple name
+        // here (`obj.vifs[i].m` from another scope, 8.4).
+        HirVirtualInterfaceMember result;
+        result.receiver = *receiver;
+        result.element = expression_id;
+        return hir_virtual_interface_candidates(std::move(result),
+            *virtual_type, source.text.substr(indexed_member.size()));
     }
     constexpr std::string_view selected_member { "@sv-select:" };
     if (source.kind == semantic::sv::ExpressionKind::call
@@ -8647,7 +8645,12 @@ Lowerer::hir_systemverilog_event_array_selection(
                 return true;
             });
         if (found == nullptr || found->empty()) {
-            // Not an event array; the caller lowers it as any other select.
+            // An instance below this one elaborates after this pass: resolve
+            // in the second lowering pass. Otherwise not an event array; the
+            // caller lowers it as any other select.
+            if (hierarchical_reference_retry_) {
+                hierarchical_reference_missed_ = true;
+            }
             return std::nullopt;
         }
         hierarchical_reference_used_ = true;
@@ -8955,57 +8958,121 @@ Lowerer::hir_systemverilog_interface_handle(
     return handle;
 }
 
-std::optional<std::vector<std::uint64_t>>
+std::optional<std::vector<Lowerer::HirInterfaceArrayElement>>
 Lowerer::hir_systemverilog_interface_array_handles(
     const semantic::ExpressionId expression_id) const
 {
     // An interface instance array named without a selection (`bus_array`)
-    // denotes the handles of its elements, which an unpacked array of
-    // virtual interfaces takes element by element (IEEE 1800-2023 25.4,
-    // 25.9).
+    // denotes its elements, which an unpacked array of virtual interfaces of
+    // the elements' interface takes element by element (7.6 for the array,
+    // 25.9 for each element).
     if (specialized_hir_unit_ == nullptr
         || systemverilog_interface_handles_ == nullptr) {
         return std::nullopt;
     }
     const auto expression = specialized_hir_unit_->find_expression(
         expression_id);
-    if (!expression || expression->systemverilog == nullptr
-        || expression->systemverilog->kind
-            != semantic::sv::ExpressionKind::name
-        || expression->systemverilog->text.empty()) {
+    if (!expression || expression->systemverilog == nullptr) {
         return std::nullopt;
     }
-    const auto& name = expression->systemverilog->text;
-    // The innermost enclosing hierarchy scope that has the array.
-    std::string scope = hierarchy_;
-    for (;;) {
-        const auto prefix = (scope.empty() ? name : scope + "." + name) + "[";
-        std::vector<std::uint64_t> handles;
-        for (const auto& [path, handle] : *systemverilog_interface_handles_) {
-            if (path.size() <= prefix.size() + 1U
-                || !path.starts_with(prefix) || !path.ends_with(']')) {
-                continue;
-            }
-            const auto index = std::string_view { path }.substr(
-                prefix.size(), path.size() - prefix.size() - 1U);
-            if (std::ranges::all_of(index, [](const char digit) {
-                    return digit >= '0' && digit <= '9';
-                })) {
-                handles.push_back(handle);
-            }
-        }
-        if (!handles.empty()) {
-            // The elements are elaborated from the array's left bound.
-            std::ranges::sort(handles);
-            return handles;
-        }
-        if (scope.empty()) {
+    const auto& source = *expression->systemverilog;
+    // A slice selects the elements whose first index is in its range,
+    // keeping the array's order, which the slice's direction must match
+    // (7.4.6, 11.5.1).
+    if (source.kind == semantic::sv::ExpressionKind::slice
+        && source.operands.size() == 3U) {
+        auto elements = hir_systemverilog_interface_array_handles(
+            source.operands[0]);
+        const auto first = hir_constant_integer(source.operands[1]);
+        const auto second = hir_constant_integer(source.operands[2]);
+        if (!elements || !first || !second) {
             return std::nullopt;
         }
-        const auto dot = scope.rfind('.');
-        scope = dot == std::string::npos ? std::string { }
-                                         : scope.substr(0U, dot);
+        std::int64_t low { std::min(*first, *second) };
+        std::int64_t high { std::max(*first, *second) };
+        if (source.text == "+:" || source.text == "-:") {
+            if (*second <= 0) {
+                return std::nullopt;
+            }
+            low = source.text == "+:" ? *first : *first - *second + 1;
+            high = source.text == "+:" ? *first + *second - 1 : *first;
+        } else if (source.text != ":") {
+            return std::nullopt;
+        }
+        std::erase_if(*elements, [&](const HirInterfaceArrayElement& element) {
+            return element.indices.empty() || element.indices.front() < low
+                || element.indices.front() > high;
+        });
+        std::set<std::int64_t> selected;
+        for (const auto& element : *elements) {
+            selected.insert(element.indices.front());
+        }
+        if (selected.empty()
+            || static_cast<std::int64_t>(selected.size()) != high - low + 1) {
+            return std::nullopt;
+        }
+        return elements;
     }
+    if (source.kind != semantic::sv::ExpressionKind::name
+        || source.text.empty()) {
+        return std::nullopt;
+    }
+    const auto& name = source.text;
+    const bool hierarchical
+        = hierarchical_last_separator(name) != std::string_view::npos;
+    if (!hierarchical) {
+        // A simple name denotes an instance array of a scope enclosing the
+        // reference (23.9) when no declaration was selected for it.
+        if (source.referenced_name && source.referenced_name->selected) {
+            return std::nullopt;
+        }
+        bool denotes { };
+        for (std::optional<semantic::ScopeId> scope = source.scope;
+            scope && scope->valid();) {
+            if (const auto instance
+                = specialized_hir_unit_->find_instance(*scope, name)) {
+                const auto* const record = instance->systemverilog;
+                denotes = record != nullptr
+                    && (record->array_left || !record->array_indices.empty()
+                        || !record->outer_array_ranges.empty());
+                break;
+            }
+            const auto* const record
+                = specialized_hir_unit_->design().find_scope(*scope);
+            scope = record != nullptr ? record->parent : std::nullopt;
+        }
+        if (!denotes) {
+            return std::nullopt;
+        }
+    }
+    // The occurrence the name denotes, from the innermost enclosing scope
+    // outward (23.8); a hierarchical name (`sub.bus_array`) included.
+    const std::vector<ElaboratedDesign::InterfaceArrayElement>* found { };
+    (void)hir_resolve_hierarchical_path(name,
+        [&](const std::string& candidate) {
+            const auto array
+                = design_.interface_array_elements_.find(candidate);
+            if (array == design_.interface_array_elements_.end()
+                || array->second.empty()) {
+                return false;
+            }
+            found = &array->second;
+            return true;
+        });
+    if (found == nullptr) {
+        // An array of an instance below this one is reserved when that
+        // instance elaborates, after this pass (23.6).
+        if (hierarchical_reference_retry_ && hierarchical) {
+            hierarchical_reference_missed_ = true;
+        }
+        return std::nullopt;
+    }
+    std::vector<HirInterfaceArrayElement> elements;
+    elements.reserve(found->size());
+    for (const auto& element : *found) {
+        elements.push_back({ element.handle, element.path, element.indices });
+    }
+    return elements;
 }
 
 bool Lowerer::hir_virtual_interface_instance_matches(
@@ -30605,8 +30672,8 @@ bool Lowerer::can_lower_hir_expression(
                 supported = true;
                 break;
             }
-            // An interface instance array is the array of its elements'
-            // handles (IEEE 1800-2023 25.9).
+            // An interface instance array; its lowering checks the target
+            // (IEEE 1800-2023 7.6, 25.9).
             if (hir_systemverilog_interface_array_handles(expression_id)) {
                 supported = true;
                 break;

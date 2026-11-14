@@ -238,7 +238,8 @@ void test_assertion_actions(
             == "assertion_actions.sv");
         assert(reference.reports[index].source.line > 0);
         assert(reference.reports[index].time == 0);
-        assert(reference.reports[index].delta == 0);
+        // The first simulation cycle at time zero is delta 1 (owner decision 11-14).
+        assert(reference.reports[index].delta == 1);
     }
     assert(
         reference.failure.find("terminal")

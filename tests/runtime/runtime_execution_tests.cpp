@@ -2212,9 +2212,10 @@ void test_simir_alternate_executor_scheduled_word_writes()
         });
     const auto alternate_result = alternate.run();
 
+    // Time zero's first simulation cycle is delta 1 (Scheduler::delta).
     const std::vector<Change> expected_changes = {
-        { reference_update, 0, 0, SchedulerPhase::update, "1" },
-        { reference_zero, 0, 0, SchedulerPhase::update, "1" },
+        { reference_update, 0, 1, SchedulerPhase::update, "1" },
+        { reference_zero, 0, 1, SchedulerPhase::update, "1" },
         { reference_delayed, 3, 0, SchedulerPhase::update, "1" },
     };
     require(
@@ -2338,8 +2339,9 @@ void test_simir_alternate_executor_validated_update_word_batch()
         "validated update word batch preserves run completion state");
     require(
         reference_changes
+                // Time zero's first simulation cycle is delta 1.
                 == std::vector<std::pair<std::uint64_t, std::string>> {
-                    { 0, "10111001" } }
+                    { 1, "10111001" } }
             && alternate_changes == reference_changes
             && alternate.signal_value(alternate_output)
                 == reference.signal_value(reference_output),
@@ -2808,12 +2810,13 @@ void test_simir_alternate_executor_zero_delay_and_frame()
     };
     require(
         reference_changes == expected_changes
-            && reference_deltas == std::vector<std::uint64_t> { 0U, 1U },
+            // Time zero's first simulation cycle is delta 1.
+            && reference_deltas == std::vector<std::uint64_t> { 1U, 2U },
         "generic WaitFor{0} must resume in the next generic delta");
     require(
         reference_result.status == RunStatus::completed
             && reference_result.time == 0
-            && reference_result.delta == 0
+            && reference_result.delta == 1
             && alternate_result.status == reference_result.status
             && alternate_result.time == reference_result.time
             && alternate_result.delta == reference_result.delta
@@ -2828,8 +2831,9 @@ void test_simir_alternate_executor_zero_delay_and_frame()
             && executor_probe->phases
                 == std::vector<SchedulerPhase> {
                     SchedulerPhase::active, SchedulerPhase::active }
+            // Time zero's first simulation cycle is delta 1.
             && executor_probe->deltas
-                == std::vector<std::uint64_t> { 0U, 1U }
+                == std::vector<std::uint64_t> { 1U, 2U }
             && alternate.signal_value(alternate_inactive) == reference.signal_value(reference_inactive),
         "alternate frame state and resume PC must persist across WaitFor{0}");
 
@@ -2893,8 +2897,9 @@ void test_simir_alternate_executor_zero_delay_and_frame()
             && sv_executor_probe->phases
                 == std::vector<SchedulerPhase> {
                     SchedulerPhase::active, SchedulerPhase::inactive }
+            // Time zero's first simulation cycle is delta 1.
             && sv_executor_probe->deltas
-                == std::vector<std::uint64_t> { 0U, 0U },
+                == std::vector<std::uint64_t> { 1U, 1U },
         "SV WaitFor{0} must resume in Inactive for interpreter and external executors");
 }
 

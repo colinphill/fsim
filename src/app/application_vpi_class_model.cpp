@@ -1019,7 +1019,7 @@ std::optional<std::string> VpiClassModel::string_property(
             return method.name;
         }
         if (property == vpiFullName) {
-            return defn_full_name(entry.declaration) + "." + method.name;
+            return defn_full_name(entry.declaration) + "::" + method.name;
         }
         if (property == vpiFile) {
             const auto place = place_of(semantics_, method.source);
@@ -1033,7 +1033,7 @@ std::optional<std::string> VpiClassModel::string_property(
             return parameter.name;
         }
         if (property == vpiFullName) {
-            return defn_full_name(entry.declaration) + "." + parameter.name;
+            return defn_full_name(entry.declaration) + "::" + parameter.name;
         }
         return std::nullopt;
     }
@@ -1043,7 +1043,7 @@ std::optional<std::string> VpiClassModel::string_property(
             return parameter.name;
         }
         if (property == vpiFullName) {
-            return defn_full_name(entry.declaration) + "." + parameter.name;
+            return defn_full_name(entry.declaration) + "::" + parameter.name;
         }
         return std::nullopt;
     }
@@ -1061,7 +1061,7 @@ std::optional<std::string> VpiClassModel::string_property(
             return constraint.name;
         }
         if (property == vpiFullName) {
-            return defn_full_name(entry.declaration) + "." + constraint.name;
+            return defn_full_name(entry.declaration) + "::" + constraint.name;
         }
         if (property == vpiFile) {
             const auto place = place_of(semantics_, constraint.source);

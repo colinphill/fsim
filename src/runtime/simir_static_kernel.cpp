@@ -2748,10 +2748,6 @@ Interpreter::Impl::StaticKernel::~StaticKernel()
             std::cerr << "fsim-kernel: verify_skipped reason=" << reason
                       << " members=" << count << '\n';
         }
-        if (verify_hooked_runs_ != 0U) {
-            std::cerr << "fsim-kernel: verify_skipped reason=variable_hooks runs="
-                      << verify_hooked_runs_ << '\n';
-        }
     }
     {
         // Two-state code: units that have it, runs that took it, members
@@ -4867,6 +4863,30 @@ bool Interpreter::Impl::StaticKernel::copy_wire(const Wire& wire)
     return changed;
 }
 
+void Interpreter::Impl::StaticKernel::begin_update_cycle() noexcept
+{
+    const auto key = std::pair { impl_.scheduler.now(), impl_.scheduler.delta() };
+    if (history_import_key_ == key) {
+        history_import_key_.reset();
+    } else {
+        history_new_cycle();
+    }
+    history_update_key_ = key;
+}
+
+void Interpreter::Impl::StaticKernel::begin_import_cycle() noexcept
+{
+    if (impl_.scheduler.current_phase() != SchedulerPhase::update) {
+        return;
+    }
+    const auto key = std::pair { impl_.scheduler.now(), impl_.scheduler.delta() };
+    if (history_update_key_ == key || history_import_key_ == key) {
+        return;
+    }
+    history_new_cycle();
+    history_import_key_ = key;
+}
+
 void Interpreter::Impl::StaticKernel::commit_round()
 {
     // After time zero (whose delta order the collapsed members' readers may
@@ -4876,7 +4896,7 @@ void Interpreter::Impl::StaticKernel::commit_round()
     collapsing_ = collapse_enabled_ && kernel_now() != 0U;
     // A new update cycle: the events and transactions of the previous one
     // are past (IEEE 1076-2019 16.2.4).
-    history_new_cycle();
+    begin_update_cycle();
     if (collapsing_ && !guard_groups_.empty()) {
         ++guard_commit_;
         if (const auto now = kernel_now(); now != guard_time_) {
@@ -6073,6 +6093,39 @@ void Interpreter::Impl::StaticKernel::run_conversions()
     for (std::size_t at = 0U; at < conversion_queue_.size(); ++at) {
         run(conversion_queue_[at]);
         commit_writes();
+    }
+}
+
+void Interpreter::Impl::StaticKernel::publish_initialized_values()
+{
+    std::vector<std::uint8_t> seen(impl_.signals.size(), 0U);
+    for (const auto& slot : slots_) {
+        const auto signal = slot.signal;
+        if (signal >= seen.size() || seen[signal] != 0U) {
+            continue;
+        }
+        seen[signal] = 1U;
+        std::optional<PackedLogic4> owned;
+        if (signal < family_of_signal_.size()
+            && family_of_signal_[signal] != no_slot) {
+            owned = assemble(families_[family_of_signal_[signal]]);
+        } else if (signal < slot_of_signal_.size()
+            && slot_of_signal_[signal] != no_slot) {
+            owned = slot_value(slot_of_signal_[signal]);
+        }
+        if (!owned) {
+            continue;
+        }
+        auto value = Impl::coerce_value_kind(*owned,
+            impl_.signals[signal].value_kind);
+        if (value == impl_.logical_signal_value(signal)) {
+            continue;
+        }
+        if (signal < impl_.driven_values.size()) {
+            impl_.driven_values[signal] = value;
+        }
+        impl_.signals[signal].initial_value = std::move(value);
+        impl_.refresh_direct_signal_planes(signal);
     }
 }
 
@@ -7985,8 +8038,7 @@ void Interpreter::Impl::StaticKernel::run_member(const std::uint32_t member_inde
         // evaluator, SystemVerilog as well as VHDL; a debugger plan stops
         // SystemVerilog members at statements, outside the replay.
         if (verify_
-            && (member.vhdl || verify_thread_skip_reason(member_index) == nullptr)
-            && !verify_variable_hooked(member_index)) {
+            && (member.vhdl || verify_thread_skip_reason(member_index) == nullptr)) {
             verify_run(member_index);
             return;
         }
@@ -11192,6 +11244,27 @@ bool Interpreter::Impl::StaticKernel::note_variable_store(
     if (!value || value->width() != width) {
         return false;
     }
+    // FSIM_KERNEL_VERIFY's replay: the store leaves what it left in the
+    // compiled run, whose interface callbacks ran once and may have forced
+    // or deposited the variable; they do not run again.
+    if (shadow_ != nullptr && shadow_->reference) {
+        auto& journal = shadow_->variable_stores;
+        if (shadow_->variable_stores_consumed < journal.size()
+            && journal[shadow_->variable_stores_consumed].first == reg) {
+            const auto& stored
+                = journal[shadow_->variable_stores_consumed++].second;
+            if (body != nullptr) {
+                write_exact_register(*body, registers, reg, stored);
+                member.registers_known = false;
+            } else if (reg < member.registers.size()) {
+                member.registers[reg] = Impl::coerce_value_kind(stored,
+                    reg < member.register_kinds.size()
+                        ? member.register_kinds[reg]
+                        : ValueKind::logic4);
+            }
+        }
+        return false;
+    }
     // An assignment does not update the forced elements (22.5.2): the
     // store put back their forced values.
     if (impl_.apply_debug_local_forces(owner, reg, *value)) {
@@ -11212,15 +11285,36 @@ bool Interpreter::Impl::StaticKernel::note_variable_store(
         unknown = word && (word->unknown | word->value.b) != 0U;
     }
     impl_.report_debug_local_value(owner, reg, *value);
+    if (shadow_ != nullptr) {
+        // The value the store leaves after the interface's callbacks (they
+        // may force or deposit the variable).
+        std::optional<PackedLogic4> left;
+        if (body != nullptr) {
+            left = exact_register(*body, member_index, reg, registers);
+        } else if (reg < member.registers.size()) {
+            left = member.registers[reg];
+        }
+        shadow_->variable_stores.emplace_back(reg, left.value_or(*value));
+    }
     return unknown;
 }
 
 void Interpreter::Impl::StaticKernel::note_reference_store(
     const std::uint32_t member_index, const std::uint32_t pc)
 {
-    static_cast<void>(pc);
     if (member_index >= variable_hook_members_.size()
         || variable_hook_members_[member_index] == 0U) {
+        return;
+    }
+    // A compiled member's replay reports the stores its compiled body
+    // reports (FSIM_KERNEL_VERIFY's journal is in that order).
+    const auto& member = members_[member_index];
+    if (member.compiled && pc >= member.body_begin) {
+        const auto at = pc - member.body_begin;
+        const auto& stores = member.compiled->variable_stores;
+        if (at < stores.size() && stores[at] != no_variable_store) {
+            (void)note_variable_store(member_index, stores[at], nullptr);
+        }
         return;
     }
     // Every hooked variable of the member: the operation stored at most
@@ -12454,6 +12548,9 @@ void Interpreter::Impl::StaticKernel::note_host_transaction(const SignalId signa
     const auto slot = slot_of_signal_[signal];
     if (slot != no_slot && slot < slot_history_.size()
         && slot_history_[slot] != no_slot) {
+        if (!in_activation_) {
+            begin_import_cycle();
+        }
         history_transaction(slot, 0U, slots_[slot].width);
     }
 }
@@ -12566,6 +12663,9 @@ void Interpreter::Impl::StaticKernel::import_host_write(
                   << " import " << impl_.get_signal_cold(signal).name << " "
                   << impl_.logical_signal_value(signal).to_msb_string() << '\n';
     }
+    if (!in_activation_) {
+        begin_import_cycle();
+    }
     {
         // Its VHDL readers wake as an input's do (refresh_input_from_host):
         // a VPI put of a port nothing in the design drives (owned since it
@@ -12583,6 +12683,42 @@ void Interpreter::Impl::StaticKernel::import_host_write(
     // 4.5), so the host process that runs the kernel is queued like any
     // process a signal change wakes. It is a no-op if already queued.
     impl_.queue_next_delta(host_process_, origin);
+}
+
+void Interpreter::Impl::StaticKernel::settle_host_write(const SignalId signal)
+{
+    if (!initialized_) {
+        // The first activation takes the slots and inputs as they are.
+        return;
+    }
+    if (signal < impl_.static_kernel_owned_signal.size()
+        && impl_.static_kernel_owned_signal[signal] != 0U) {
+        const auto slot_index = import_slot(signal);
+        if (slot_index != no_slot && slot_index < slot_history_.size()
+            && slot_history_[slot_index] != no_slot) {
+            history_sync(slot_index);
+        }
+        return;
+    }
+    if (signal >= input_of_signal_.size()) {
+        return;
+    }
+    const auto index = input_of_signal_[signal];
+    if (index == no_slot) {
+        return;
+    }
+    // The input holds the value and revision a scan would read, so no scan
+    // takes the change for an event.
+    auto& input = inputs_[index];
+    const auto& current = impl_.logical_signal_value(signal);
+    input.cached = vhdl_ ? current
+                         : Impl::coerce_value_kind(current, ValueKind::logic4);
+    input.revision = impl_.signal_value_revisions[signal];
+    write_mirror(input);
+    if (input.mirror != no_slot && input.mirror < slot_history_.size()
+        && slot_history_[input.mirror] != no_slot) {
+        history_sync(input.mirror);
+    }
 }
 
 namespace {

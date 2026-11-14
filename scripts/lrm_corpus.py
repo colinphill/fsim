@@ -734,9 +734,6 @@ VERILATOR_NONSTANDARD = {
         "whose format is implementation-dependent (IEEE 1800-2017 21.2.1.7)"
        for name in ("t_class_param_pkg", "t_interface_virtual",
                     "t_interface_virtual_inl")},
-    **{name: "assigns an array of interface instances to a virtual-interface "
-        "array (IEEE 1800-2023 25.9)"
-       for name in ("t_interface_array_virtual", "t_interface_array_class_new")},
     **{name: "connects an unpacked-array concatenation to an output port; it "
         "may only be the source of an assignment-like context "
         "(IEEE 1800-2017 10.10)"

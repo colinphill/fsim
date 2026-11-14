@@ -3207,6 +3207,59 @@ void Interpreter::Impl::publish_normalized(
     publish_value_change(signal_id, notify_fanout, origin);
 }
 
+void Interpreter::Impl::publish_settled(
+    const SignalId signal_id, PackedLogic4 value)
+{
+    const std::array<SignalId, 1U> changed_signals { signal_id };
+    auto reference_refresh
+        = prepare_container_value_reference_refresh(changed_signals);
+    ActiveContainerReferenceRefresh active_refresh;
+    begin_container_value_reference_refresh(
+        active_refresh, changed_signals, reference_refresh);
+    const auto finish_refresh = [this](
+                                    ActiveContainerReferenceRefresh* frame) noexcept {
+        end_container_value_reference_refresh(*frame);
+    };
+    const std::unique_ptr<ActiveContainerReferenceRefresh,
+        decltype(finish_refresh)> refresh_scope(
+        &active_refresh, finish_refresh);
+    auto& signal = signals[signal_id];
+    if (signal.initial_value == value) {
+        synchronize_container_value_references(changed_signals, reference_refresh);
+        return;
+    }
+    // 'LAST_VALUE is the value before the last event (IEEE 1076-2019
+    // 16.2.4): signal_last_values keeps it.
+    signal.initial_value = std::move(value);
+    refresh_direct_signal_planes(signal_id);
+    synchronize_container_value_references(changed_signals, reference_refresh);
+    ++signal_value_revisions[signal_id];
+    note_signal_revision(signal_id);
+    note_aggregate_leaf_current_change(signal_id);
+    if (signal_value_revisions[signal_id] == 0U) {
+        signal_value_revisions[signal_id] = 1U;
+        std::ranges::fill(container_materialized_revisions, std::nullopt);
+    }
+    scheduler.note_signal_change(signal_id);
+    if (static_kernel && !static_kernel_materializing
+        && !static_kernel_publishing) {
+        // The kernel takes the value as a settling change: no reader wakes.
+        static_kernel->settle_host_write(signal_id);
+    }
+    auto* alias_observer = container_alias_leaf_observer(signal_id);
+    if (signal_change_hook && alias_observer) {
+        alias_observer->current_changed = true;
+        const auto object
+            = signal_container_element_aliases[signal_id]->first;
+        container_alias_write_batches[object].frames.back().changed = true;
+    } else if (signal_change_hook) {
+        signal_change_hook(signal_id, signal.initial_value, scheduler.now());
+    }
+    if (monitor_watches(signal_id)) {
+        schedule_monitor_publication();
+    }
+}
+
 void Interpreter::Impl::publish_normalized_word(
     const SignalId signal_id,
     const Logic4Word value,

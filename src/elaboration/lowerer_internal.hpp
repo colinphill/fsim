@@ -852,6 +852,21 @@ public:
     [[nodiscard]] std::optional<HirVhdlFormalConversion>
     lower_hir_vhdl_formal_conversion(semantic::StatementId statement,
         std::string_view hierarchy);
+    // The assignment the HIR gives a guarded block for its implicit signal
+    // GUARD (`guard` the block's GUARD declaration), as the program the
+    // kernel process evaluates in the update phase of each cycle in which a
+    // signal of the guard condition is active (IEEE 1076-2019 14.7.4);
+    // nothing when `statement` is another statement. A condition that
+    // reads no signal gives its constant value instead: GUARD keeps the
+    // initial value it gives (14.7.5.2).
+    struct HirVhdlBlockGuard {
+        SignalId signal { };
+        std::optional<HirVhdlConversionProgram> program;
+        std::optional<bool> constant;
+    };
+    [[nodiscard]] std::optional<HirVhdlBlockGuard>
+    lower_hir_vhdl_block_guard(semantic::StatementId statement,
+        semantic::DeclarationId guard, std::string_view hierarchy);
 
     [[nodiscard]] std::vector<Process> take_generated_processes();
     // Notes the callable a user task or function call of this instance is
@@ -2218,10 +2233,16 @@ private:
     [[nodiscard]] std::optional<std::uint64_t>
     hir_systemverilog_interface_handle(
         semantic::ExpressionId expression) const;
-    // The handles of the elements of an interface instance array an
-    // expression names (`bus_array`), in declaration order (IEEE 1800-2023
-    // 25.4, 25.9); nothing when it names no such array.
-    [[nodiscard]] std::optional<std::vector<std::uint64_t>>
+    // The elements of an interface instance array, or of a slice of one,
+    // an expression names (`bus_array`, `bus_array[1:2]`): each element's
+    // handle, instance path and indices, from the array's left bound;
+    // nothing when it names no such array.
+    struct HirInterfaceArrayElement {
+        std::uint64_t handle { };
+        std::string path;
+        std::vector<std::int64_t> indices;
+    };
+    [[nodiscard]] std::optional<std::vector<HirInterfaceArrayElement>>
     hir_systemverilog_interface_array_handles(
         semantic::ExpressionId expression) const;
     // Whether the interface instance at `instance_path` is of the

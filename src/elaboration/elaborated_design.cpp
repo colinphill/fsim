@@ -625,6 +625,7 @@ void ElaboratedDesign::freeze_hierarchy_paths()
     container_element_packed_shape_.clear();
     signal_packed_shape_.clear();
     event_array_by_name_.clear();
+    interface_array_elements_.clear();
     signal_unpacked_shape_.clear();
     signal_unpacked_element_members_.clear();
     virtual_interface_write_counts_.clear();

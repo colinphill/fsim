@@ -215,6 +215,15 @@ void Simulation::deposit_signal(
     impl_->refresh_observation_hooks();
 }
 
+void Simulation::deposit_current_value(
+    const SignalId signal,
+    PackedLogic4 value)
+{
+    impl_->validate_external_value(signal, value, "deposit");
+    impl_->interpreter->deposit_current_value(signal, std::move(value));
+    impl_->refresh_observation_hooks();
+}
+
 void Simulation::schedule_foreign_transaction(
     const runtime::simir::ProcessId process,
     const SignalId signal,

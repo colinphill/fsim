@@ -7368,14 +7368,7 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
             // SFIXED once its mark is (`subtype t is sfixed(3 downto -4)`,
             // the expansion of a generic type bound to it, 6.5.3).
             result.type_mark = *compiler_owned_mark;
-            // Only a constrained subtype takes the family's identity here:
-            // an unconstrained one (`T => sfixed`, its bounds given per
-            // object by element constraints) still sizes through the
-            // mark, which some object layouts need (nvc issue810, next
-            // gate).
-            if (!result.constraints.empty()) {
-                result.provided_type = compiler_owned_provided;
-            }
+            result.provided_type = compiler_owned_provided;
         }
         complete_predefined(result, active_frames, scope);
         return result;
@@ -9501,7 +9494,18 @@ bool CompiledDesignResolver::vhdl_denotes_provided_package_member(
     const std::string_view package, const std::string_view member,
     const ScopeId use_scope) const
 {
-    const auto parts = vhdl_name_parts(vhdl::without_builtin_prefix(spelling));
+    // The last part of the name is `member` only if the spelling ends with
+    // it after a '.' or at the start, so most rows of a provided-member
+    // table are rejected before the name is split.
+    const auto name = vhdl::without_builtin_prefix(spelling);
+    if (name.size() < member.size()
+        || !support::equal_ignoring_ascii_case(
+            name.substr(name.size() - member.size()), member)
+        || (name.size() > member.size()
+            && name[name.size() - member.size() - 1U] != '.')) {
+        return false;
+    }
+    const auto parts = vhdl_name_parts(name);
     if (design_ == nullptr || parts.empty() || parts.size() > 3U
         || !same_vhdl_identifier(parts.back(), member)) {
         return false;

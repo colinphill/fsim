@@ -1165,6 +1165,7 @@ struct TraceState {
     std::filesystem::path backup_path;
     std::uint64_t observation_writer_observer { };
     std::uint64_t signal_change_observer { };
+    std::uint64_t initialization_observer { };
     std::uint64_t uvm_activity_observer { };
     SimulationTick tick_multiplier { 1 };
     TraceTerminalStatus terminal_status { TraceTerminalStatus::open };

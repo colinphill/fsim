@@ -1706,10 +1706,16 @@ struct Interpreter::Impl : SchedulerBatchTask {
     // programs that did run again in the next cycle, queued here.
     mutable bool vhdl_resolver_read_systemverilog_change { };
     std::vector<SignalId> vhdl_next_cycle_resolutions;
-    // Signals given a value before the first cycle (a VHPI start-of-
-    // simulation deposit); initialization keeps that value, as it does for
-    // a driven signal, until a source of the signal changes.
+    // Signals deposit_signal gave a value before the first cycle (a tool
+    // command such as Tcl `deposit`, outside both LRMs; VHPI deposits take
+    // deposit_current_value): initialization keeps that value, as it does
+    // for a driven signal, until a source of the signal changes.
     std::unordered_set<SignalId> vhdl_deposited_before_start;
+    // Each VHDL signal a vhpiDeposit gave a value before initialization
+    // (deposit_current_value), with its value before the first one: step c)
+    // of 14.7.5.2 sets the signal's value from its drivers again
+    // (initialize_vhdl_resolutions), which empties it.
+    std::unordered_map<SignalId, PackedLogic4> vhdl_values_before_initialization;
     std::vector<DriverTable> driver_values;
     using ForcedDriverMap = std::map<ProcessId, PackedLogic4>;
     struct ForcedDriverMapView {
@@ -2414,6 +2420,9 @@ struct Interpreter::Impl : SchedulerBatchTask {
     /// Runs at the end of static initialization inside start(): the start of
     /// the time-zero cycle (installed by the embedder).
     std::function<void()> start_of_simulation_hook;
+    /// Runs inside start() once the signals hold their initialized values
+    /// (Interpreter::set_initialized_hook).
+    std::function<void()> initialized_hook;
     bool package_static_initialization_active { };
     ProcessId package_static_initialization_process {
         std::numeric_limits<ProcessId>::max()
@@ -3838,6 +3847,10 @@ struct Interpreter::Impl : SchedulerBatchTask {
         SignalId signal_id, Logic4Word value,
         bool notify_fanout = true,
         SignalChangeOrigin origin = { });
+    /// A change of a signal's current value that is no transaction and no
+    /// event (deposit_current_value): the value, its planes and revision and
+    /// the change observers; no stamp, last value or fanout.
+    void publish_settled(SignalId signal_id, PackedLogic4 value);
     [[nodiscard]] bool can_publish_native_word(
         SignalId signal_id, ProcessId process) noexcept;
     [[nodiscard]] bool native_word_publication_phase_eligible() noexcept;

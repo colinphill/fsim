@@ -4278,14 +4278,22 @@ private:
             return "time";
         case Provided::std_logic:
             return "std_ulogic";
+        // Each package's UNSIGNED and SIGNED are distinct types (IEEE
+        // 1076-2019 16.8.5.1; Synopsys STD_LOGIC_ARITH declares its own), so
+        // an operation mixing two packages' types is a type error (9.2);
+        // the roots are those of the retained declarations.
         case Provided::numeric_std_unsigned:
+            return "ieee.numeric_std.unsigned";
         case Provided::numeric_bit_unsigned:
+            return "ieee.numeric_bit.unsigned";
         case Provided::std_logic_arith_unsigned:
-            return "unsigned";
+            return "ieee.std_logic_arith.unsigned";
         case Provided::numeric_std_signed:
+            return "ieee.numeric_std.signed";
         case Provided::numeric_bit_signed:
+            return "ieee.numeric_bit.signed";
         case Provided::std_logic_arith_signed:
-            return "signed";
+            return "ieee.std_logic_arith.signed";
         case Provided::textio_line:
             return "line";
         case Provided::textio_text:

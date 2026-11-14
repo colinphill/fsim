@@ -1564,13 +1564,23 @@ struct Scheduler::Impl {
     void* trace_context { };
     TraceHook trace_hook { };
 
+    // The delta number every observer reports (Scheduler::delta): the
+    // time-zero slot's first delta is the first simulation cycle, a delta
+    // cycle (owner decision 11-14: delta 1); a later slot's first delta
+    // advances time and is delta 0.
+    [[nodiscard]] std::uint64_t reported_delta() const noexcept
+    {
+        const auto slot_delta = current ? current->delta : 0U;
+        return slot_delta + (now == 0 && cycles != 0U ? 1U : 0U);
+    }
+
     void trace(SchedulerTraceKind kind, const Entry* entry = nullptr,
         std::size_t count = 0, RuntimeSignalId signal = 0) const noexcept
     {
         if (!trace_hook)
             return;
         const auto phase = executing_phase();
-        trace_hook(trace_context, { kind, now, current ? current->delta : 0,
+        trace_hook(trace_context, { kind, now, reported_delta(),
             phase, entry ? entry->order : 0, entry ? entry->sequence : 0,
             count, signal, current ? current->systemverilog_round : 0,
             current && current->systemverilog_phase.has_value(),

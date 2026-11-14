@@ -38,7 +38,8 @@ void test_frozen_rounds_and_nested_inactive()
         events += 'a';
         current.schedule_systemverilog(SchedulerPhase::active, 0, [&](Scheduler& next) {
             events += 'c';
-            require(next.delta() == 0 && next.systemverilog_round() == 2,
+            // Time zero's first simulation cycle is delta 1 (Scheduler::delta).
+            require(next.delta() == 1 && next.systemverilog_round() == 2,
                 "SV rounds must not advance the generic cycle");
         });
         current.schedule_systemverilog(SchedulerPhase::inactive, 0, [&](Scheduler& next) {
@@ -96,17 +97,17 @@ void test_generic_crossings_and_end_of_slot()
         events += 'a';
         current.schedule_next_delta(SchedulerPhase::active, 0, [&](Scheduler& foreign) {
             events += 'c';
-            require(foreign.delta() == 1, "SV to foreign bridge keeps the next generic cycle");
+            require(foreign.delta() == 2, "SV to foreign bridge keeps the next generic cycle");
             foreign.schedule_next_delta(SchedulerPhase::active, 0, [&](Scheduler& bridge) {
                 bridge.schedule_systemverilog(SchedulerPhase::active, 0, [&](Scheduler& sv) {
                     events += 'e';
-                    require(sv.delta() == 2, "foreign to SV bridge keeps the next generic cycle");
+                    require(sv.delta() == 3, "foreign to SV bridge keeps the next generic cycle");
                 });
             });
         });
         current.schedule_end_of_time_slot(0, [&](Scheduler& final) {
             events += 'f';
-            require(final.delta() == 2, "end-of-slot waits for all language crossings");
+            require(final.delta() == 3, "end-of-slot waits for all language crossings");
             require(final.current_phase() == SchedulerPhase::postponed,
                 "end-of-slot callbacks expose the postponed phase");
         });
@@ -289,7 +290,7 @@ void test_limit_and_reset()
             failed = error.time() == 0 && error.limit() == 4
                 && error.pending_orders() == std::vector<fsim::runtime::StableOrder> { 9 };
         }
-        require(failed && count == 4 && scheduler.delta() == 0,
+        require(failed && count == 4 && scheduler.delta() == 1,
             "same-slot SV feedback has a separate bounded round counter");
         scheduler.reset();
         require(!scheduler.has_pending() && scheduler.systemverilog_round() == 0,

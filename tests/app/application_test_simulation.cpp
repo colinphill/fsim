@@ -293,9 +293,11 @@ void ApplicationTestFixture::test_simulation_semantics()
     assert(
         std::get<2>(scheduled_hybrid.changes.front())
         == 0);
+    // The first simulation cycle at time zero is delta 1 (owner decision
+    // 11-14).
     assert(
         std::get<3>(scheduled_hybrid.changes.front())
-        == 0);
+        == 1);
     assert(
         std::get<1>(scheduled_hybrid.changes.back())
         == "1");
@@ -383,9 +385,11 @@ void ApplicationTestFixture::test_simulation_semantics()
         == fsim::runtime::RunStatus::stopped);
     assert(sensitivity_hybrid.result.time == 3);
     // SystemVerilog Active/NBA rounds do not advance the generic/VHDL delta.
+    // The first simulation cycle at time zero is delta 1 (owner decision
+    // 11-14).
     const decltype(sensitivity_reference.changes)
         expected_sensitivity_changes = {
-            { *sensitivity_trigger, "0", 0, 0 },
+            { *sensitivity_trigger, "0", 0, 1 },
             { *sensitivity_trigger, "1", 1, 0 },
             { *sensitivity_dynamic_observed, "1", 1, 0 },
             { *sensitivity_observed, "1", 1, 0 },
@@ -454,7 +458,8 @@ void ApplicationTestFixture::test_simulation_semantics()
     assert(vhdl_wait_hybrid.process_count == 1);
     const decltype(vhdl_wait_reference.changes)
         expected_vhdl_wait_changes = {
-            { *vhdl_wait_q, "0", 0, 0 },
+            // The first simulation cycle at time zero is delta 1 (owner decision 11-14).
+            { *vhdl_wait_q, "0", 0, 1 },
             { *vhdl_wait_q, "1", 1, 1 },
             { *vhdl_wait_q, "0", 2, 1 },
             { *vhdl_wait_q, "1", 3, 1 },
@@ -516,9 +521,10 @@ void ApplicationTestFixture::test_simulation_semantics()
     // SystemVerilog event rounds stay within the current generic/VHDL delta.
     const decltype(wildcard_reference.changes)
         expected_wildcard_changes = {
-            { *wildcard_a, "0", 0, 0 },
-            { *wildcard_q, "0", 0, 0 },
-            { *wildcard_y, "1", 0, 0 },
+            // The first simulation cycle at time zero is delta 1 (owner decision 11-14).
+            { *wildcard_a, "0", 0, 1 },
+            { *wildcard_q, "0", 0, 1 },
+            { *wildcard_y, "1", 0, 1 },
             { *wildcard_a, "1", 1, 0 },
             { *wildcard_q, "1", 1, 0 },
             { *wildcard_latched, "1", 1, 0 },

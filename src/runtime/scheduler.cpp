@@ -526,7 +526,7 @@ std::uint64_t Scheduler::max_delta_cycles() const noexcept
 }
 std::uint64_t Scheduler::delta() const noexcept
 {
-    return impl_->current ? impl_->current->delta : 0;
+    return impl_->reported_delta();
 }
 
 std::uint64_t Scheduler::cycles() const noexcept { return impl_->cycles; }

@@ -887,7 +887,13 @@ SystemVerilogVpiObjectResult SystemVerilogVpiObjectRegistry::create(
                       == SystemVerilogVpiObjectKind::Array)
             && normalized_name.starts_with('[')
             && normalized_name.ends_with(']');
-        if (!indexed_child && !full_name.ends_with("::")) {
+        // A member of a class defn is named through the class with `::`
+        // (IEEE 1800-2023 37.10, 37.33 detail 25: `top.Packet::Id`).
+        const bool class_member = records_[parent_slot].kind
+            == SystemVerilogVpiObjectKind::Class;
+        if (class_member && !full_name.ends_with("::")) {
+            full_name.append("::");
+        } else if (!indexed_child && !full_name.ends_with("::")) {
             full_name.push_back('.');
         }
         if (!prefix.empty()) {
@@ -2347,11 +2353,18 @@ fsim_vpi_handle_v1 SystemVerilogVpiObjectRegistry::deferred_owner(
         return 0U;
     }
     // A deferred child's name is its parent's name with an index suffix or
-    // a `.name` segment. The elements `name[i]` of an array are not its
-    // children but its siblings, so the search goes on past an array.
-    for (auto split = candidate.find_last_of("[."); split != std::string::npos
+    // a `.name` segment, or a `::name` one under a class (37.10). The
+    // elements `name[i]` of an array are not its children but its siblings,
+    // so the search goes on past an array.
+    for (auto split = candidate.find_last_of("[.:"); split != std::string::npos
          && split != 0U;
-         split = candidate.find_last_of("[.", split - 1U)) {
+         split = candidate.find_last_of("[.:", split - 1U)) {
+        if (candidate[split] == ':') {
+            if (candidate[split - 1U] != ':' || split < 2U) {
+                continue;
+            }
+            --split;
+        }
         candidate.resize(split);
         const auto found = full_names_.find(candidate);
         if (found == full_names_.end()) {

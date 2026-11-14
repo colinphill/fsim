@@ -789,6 +789,12 @@ public:
   [[nodiscard]] SimulationTick now() const noexcept;
   /// SchedulerOptions::max_delta_cycles of this scheduler.
   [[nodiscard]] std::uint64_t max_delta_cycles() const noexcept;
+  /// The number of the current simulation cycle among the delta cycles of
+  /// the current time (IEEE 1076-2019 14.7.5.1, 23.18; owner decision
+  /// 2026-11-14, every interface and observer): a cycle that advances time
+  /// is cycle 0 and its delta cycles are 1, 2, ...; at time zero no cycle
+  /// advances time, so the first simulation cycle is delta cycle 1. Zero
+  /// before the first cycle (initialization).
   [[nodiscard]] std::uint64_t delta() const noexcept;
   /// Simulation cycles started so far: one per time slot and per delta cycle
   /// within it, plus the time steps the static kernel runs itself

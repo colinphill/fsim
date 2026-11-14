@@ -144,12 +144,14 @@ void verify(
   const auto decorated =
       std::string{selected_label} + "!";
   const std::vector<OutputEvent> expected_output{
-      {"base", true, 0, 0},
-      {"base!", false, 0, 0},
-      {std::string{selected_label}, true, 0, 0},
-      {decorated, false, 0, 0},
-      {"base!", true, 0, 0},
-      {decorated, true, 0, 0},
+      // The first simulation cycle is delta 1 at time zero (owner decision
+      // 11-14).
+      {"base", true, 0, 1},
+      {"base!", false, 0, 1},
+      {std::string{selected_label}, true, 0, 1},
+      {decorated, false, 0, 1},
+      {"base!", true, 0, 1},
+      {decorated, true, 0, 1},
   };
   if (capture.output != expected_output) {
     const auto dump = [](const std::string_view label,
@@ -167,16 +169,16 @@ void verify(
   }
   assert(capture.output == expected_output);
   const std::vector<ReportEvent> expected_reports{
-      {"base", fsim::runtime::simir::AssertionSeverity::note, 0, 0},
-      {"base!", fsim::runtime::simir::AssertionSeverity::warning, 0, 0},
+      {"base", fsim::runtime::simir::AssertionSeverity::note, 0, 1},
+      {"base!", fsim::runtime::simir::AssertionSeverity::warning, 0, 1},
       {std::string{selected_label},
        fsim::runtime::simir::AssertionSeverity::note,
        0,
-       0},
+       1},
       {decorated,
        fsim::runtime::simir::AssertionSeverity::warning,
        0,
-       0},
+       1},
   };
   assert(capture.reports == expected_reports);
 }

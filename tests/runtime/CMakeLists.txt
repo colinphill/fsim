@@ -3029,6 +3029,22 @@ fsim_add_foreign_conformance_test(
   vhpi-transaction-time-zero vhpi foreign_vhpi_transaction_time_zero.vhd
   foreign_vhpi_transaction_time_zero.expected ""
   fsim_foreign_vhpi_transaction_time_zero_plugin)
+# Deposits near the first simulation cycle: initialization drops those made
+# before it; after it a propagating one is an event of the first cycle and a
+# plain one is never an event (IEEE 1076-2019 14.7.5.2, 16.2.4, 21.3.2.2,
+# 22.5.2).
+add_library(fsim_foreign_vhpi_start_deposit_event_plugin SHARED
+  foreign_vhpi_start_deposit_event_plugin.c)
+fsim_configure_library(fsim_foreign_vhpi_start_deposit_event_plugin)
+target_link_libraries(
+  fsim_foreign_vhpi_start_deposit_event_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vhpi_start_deposit_event_plugin
+  PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vhpi-start-deposit-event vhpi foreign_vhpi_start_deposit_event.vhd
+  foreign_vhpi_start_deposit_event.expected ""
+  fsim_foreign_vhpi_start_deposit_event_plugin)
 # The frame of a call of a procedure whose body is declared apart from its
 # specification (IEEE 1076-2019 4.8, 14.6 b).
 add_library(fsim_foreign_vhpi_call_body_apart_plugin SHARED

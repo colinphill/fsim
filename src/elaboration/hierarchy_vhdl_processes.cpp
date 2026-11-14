@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "hierarchy_builder_internal.hpp"
 #include "lowerer_internal.hpp"
+#include "fsim/semantic/vhdl_block_guard.hpp"
 
 #include "fsim/support/vhdl_identifier.hpp"
 
@@ -366,6 +367,52 @@ bool HierarchyBuilder::lower_compiled_vhdl_generated_processes(
                 append_generated_vhdl_processes(
                     generated_lowerer, architecture, specialization);
                 continue;
+            }
+            // The block's implicit GUARD is updated by the kernel process
+            // in the update phase of each cycle in which a signal of the
+            // guard condition is active (IEEE 1076-2019 14.7.4): its
+            // assignment is a resolver program over those signals, which
+            // also gives its initial value (14.7.5.2), not a process.
+            if (const auto guard_declaration
+                = semantic::vhdl::block_guard_declaration(
+                    *materialization.region,
+                    [&](const semantic::DeclarationId id)
+                        -> const semantic::vhdl::Declaration* {
+                        const auto found = materialization.specialization
+                                               .find_declaration(id);
+                        return found ? found->vhdl : nullptr;
+                    })) {
+                if (auto lowered_guard = generated_lowerer.lower_hir_vhdl_block_guard(
+                        statement_id, *guard_declaration, materialization.path)) {
+                    if (lowered_guard->constant) {
+                        // A condition that reads no signal leaves GUARD at
+                        // its initial value, the condition's (14.7.4,
+                        // 14.7.5.2).
+                        design_.signals_[lowered_guard->signal].initial_value
+                            = PackedLogic4(1U, *lowered_guard->constant
+                                    ? Logic4::one
+                                    : Logic4::zero);
+                        ++concurrent_order;
+                        continue;
+                    }
+                    auto& guard_program = *lowered_guard->program;
+                    auto& guard_process = guard_program.program.process;
+                    guard_process.language_standard = architecture.standard;
+                    guard_process.compatibility_profile
+                        = architecture.compatibility_profile;
+                    canonicalize_process_operations(guard_process);
+                    const auto guard_process_id = guard_process.id;
+                    design_.append_process_record(std::move(guard_process));
+                    VhdlSignalResolver resolver { guard_process_id,
+                        guard_program.program.input, guard_program.program.output, { } };
+                    resolver.sources = std::move(guard_program.sources);
+                    design_.signals_[lowered_guard->signal].vhdl_resolver
+                        = std::move(resolver);
+                    append_generated_vhdl_processes(
+                        generated_lowerer, architecture, specialization);
+                    ++concurrent_order;
+                    continue;
+                }
             }
             auto lowered = generated_lowerer
                                .lower_hir_concurrent_statement(

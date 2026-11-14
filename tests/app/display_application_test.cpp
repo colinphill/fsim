@@ -416,8 +416,9 @@ endmodule
     const std::array<fsim::runtime::SimulationTick, 5U> expected_times {
         0U, 0U, 0U, 1000U, 1000U
     };
+    // The first simulation cycle at time zero is delta 1 (owner decision 11-14).
     const std::array<std::uint64_t, 5U> expected_deltas {
-        0U, 0U, 0U, 0U, 0U
+        1U, 1U, 1U, 0U, 0U
     };
     const std::array<bool, 5U> expected_newlines {
         true, false, true, false, true
@@ -524,26 +525,26 @@ void test_display(
     assert(reference.output[0].text == "first\t");
     assert(!reference.output[0].newline);
     assert(reference.output[0].time == 0);
-    assert(reference.output[0].delta == 0);
+    assert(reference.output[0].delta == 1); // t=0: delta 1 (owner 11-14)
     assert(reference.output[1].text == "+line\nembedded \"quote\" \\ A");
     assert(reference.output[1].newline);
     assert(reference.output[1].time == 0);
     assert(reference.output[2].text == " 42");
     assert(reference.output[2].newline);
     assert(reference.output[2].time == 0);
-    assert(reference.output[2].delta == 0);
+    assert(reference.output[2].delta == 1); // t=0: delta 1 (owner 11-14)
     assert(reference.output[3].text == "  -1");
     assert(reference.output[3].newline);
     assert(reference.output[3].time == 0);
-    assert(reference.output[3].delta == 0);
+    assert(reference.output[3].delta == 1); // t=0: delta 1 (owner 11-14)
     assert(reference.output[4].text == "q=%:10xz!");
     assert(reference.output[4].newline);
     assert(reference.output[4].time == 0);
-    assert(reference.output[4].delta == 0);
+    assert(reference.output[4].delta == 1); // t=0: delta 1 (owner 11-14)
     assert(reference.output[5].text == "[10xz]");
     assert(!reference.output[5].newline);
     assert(reference.output[5].time == 0);
-    assert(reference.output[5].delta == 0);
+    assert(reference.output[5].delta == 1); // t=0: delta 1 (owner 11-14)
     assert(reference.output[6].text == "h=X");
     assert(reference.output[6].newline);
     assert(reference.output[6].time == 0);
@@ -752,7 +753,7 @@ void test_vhdl_report(
         reference.reports[0].source.path, source));
     assert(reference.reports[0].source.line == 10);
     assert(reference.reports[0].time == 0);
-    assert(reference.reports[0].delta == 0);
+    assert(reference.reports[0].delta == 1); // t=0: delta 1 (owner 11-14)
     assert(reference.reports[1].message.empty());
     assert(
         reference.reports[1].severity

@@ -3977,6 +3977,11 @@ void Interpreter::set_start_of_simulation_hook(std::function<void()> hook)
     impl_->start_of_simulation_hook = std::move(hook);
 }
 
+void Interpreter::set_initialized_hook(std::function<void()> hook)
+{
+    impl_->initialized_hook = std::move(hook);
+}
+
 void Interpreter::start()
 {
     if (impl_->validation_only) {
@@ -4206,6 +4211,14 @@ void Interpreter::start()
     // Switch networks are solved when a member's drivers change; implicit
     // drivers such as supply nets never change, so solve every network once.
     impl_->refresh_switch_network();
+    if (!impl_->start_restoring) {
+        if (impl_->static_kernel) {
+            impl_->static_kernel->publish_initialized_values();
+        }
+        if (impl_->initialized_hook) {
+            impl_->initialized_hook();
+        }
+    }
     for (const auto& entry : impl_->startup_write_body_caches) {
         entry.second->release_registration_identity();
     }
@@ -4605,6 +4618,34 @@ void Interpreter::deposit_signal(SignalId signal, PackedLogic4 value,
     // after their delay.
     foreign_net_delay_after(
         signal, ForeignNetDelayKind::deposit, delayed_before, 0U, width);
+}
+
+void Interpreter::deposit_current_value(
+    const SignalId signal, PackedLogic4 value)
+{
+    note_external_signal_write(signal);
+    auto& impl = *impl_;
+    impl.require_writable_aggregate_signal(signal);
+    if (signal < impl.signal_container_aggregate_aliases.size()
+        && impl.signal_container_aggregate_aliases[signal]) {
+        // VHPI names VHDL objects only; a SystemVerilog aggregate has no
+        // VHDL current value.
+        throw std::logic_error {
+            "a VHDL current-value deposit names a SystemVerilog aggregate"
+        };
+    }
+    if (impl.driven_values[signal].width() != value.width()) {
+        throw std::invalid_argument(
+            "VHDL current-value deposit width mismatch (signal "
+            + std::to_string(signal) + ")");
+    }
+    value = impl.normalize_signal_value(signal, std::move(value));
+    if (!impl.started) {
+        impl.vhdl_values_before_initialization.try_emplace(
+            signal, impl.logical_signal_value(signal));
+    }
+    // An effective-value forced signal keeps its forced value (22.5.2).
+    impl.publish_settled(signal, impl.apply_force(signal, std::move(value)));
 }
 
 void Interpreter::schedule_host_driver_waveform(const ProcessId process,

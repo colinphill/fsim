@@ -62,7 +62,7 @@ RunResult Scheduler::run(std::optional<SimulationTick> until)
         }
         return RunResult { status,
             impl_->now,
-            impl_->current ? impl_->current->delta : 0,
+            delta(),
             impl_->callbacks - initial_callbacks,
             std::nullopt };
     };

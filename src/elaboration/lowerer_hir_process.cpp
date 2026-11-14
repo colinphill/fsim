@@ -4476,6 +4476,44 @@ Lowerer::lower_hir_vhdl_formal_conversion(
         *binding->signal, std::move(*conversion), effective, slice };
 }
 
+std::optional<Lowerer::HirVhdlBlockGuard>
+Lowerer::lower_hir_vhdl_block_guard(
+    const semantic::StatementId statement_id,
+    const semantic::DeclarationId guard,
+    const std::string_view hierarchy)
+{
+    const auto statement = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_statement(statement_id)
+        : std::nullopt;
+    if (!statement || statement->vhdl == nullptr
+        || statement->vhdl->kind
+            != semantic::vhdl::StatementKind::signal_assignment
+        || !statement->vhdl->target || !statement->vhdl->value
+        || hir_target_declaration(*statement->vhdl->target) != guard) {
+        return std::nullopt;
+    }
+    const auto binding = hir_runtime_binding(guard, semantic::ScopeId { }, true);
+    if (!binding || !binding->signal || binding->signal_selection) {
+        return std::nullopt;
+    }
+    if (hir_signal_dependencies(*statement->vhdl->value, semantic::ScopeId { })
+            .empty()) {
+        const auto value = hir_constant_integer(*statement->vhdl->value);
+        if (!value || (*value != 0 && *value != 1)) {
+            return std::nullopt;
+        }
+        return HirVhdlBlockGuard { *binding->signal, std::nullopt, *value != 0 };
+    }
+    auto conversion = lower_hir_vhdl_conversion_program(
+        *statement->vhdl->value, *binding->signal, hierarchy, std::nullopt,
+        std::nullopt);
+    if (!conversion) {
+        return std::nullopt;
+    }
+    return HirVhdlBlockGuard {
+        *binding->signal, std::move(*conversion), std::nullopt };
+}
+
 std::optional<Process> Lowerer::lower_hir_output_actual(
     const SignalId source,
     const semantic::ExpressionId expression,

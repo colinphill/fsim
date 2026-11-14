@@ -41,7 +41,12 @@ struct DebuggerControl::Impl {
   {
     if (trace && trace->diagnostics && simulation.finished()
         && !finish_trace(*trace, *trace->diagnostics)) {
-      throw std::runtime_error("failed to finalize debugger trace output");
+      std::string message{"failed to finalize debugger trace output"};
+      if (!trace->diagnostics->diagnostics().empty()) {
+        const auto& failure = trace->diagnostics->diagnostics().back();
+        message += ": " + failure.code + ": " + failure.message;
+      }
+      throw std::runtime_error{std::move(message)};
     }
   }
 

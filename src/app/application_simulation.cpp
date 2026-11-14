@@ -865,6 +865,25 @@ void Simulation::remove_safe_point_hook(const std::uint64_t token) noexcept
     impl_->safe_point_observers.erase(token);
 }
 
+std::uint64_t Simulation::add_initialization_hook(std::function<void()> hook)
+{
+    if (!hook) {
+        throw std::invalid_argument("initialization observer cannot be empty");
+    }
+    if (impl_->next_initialization_observer == 0) {
+        throw std::overflow_error(
+            "initialization observer token space exhausted");
+    }
+    const auto token = impl_->next_initialization_observer++;
+    impl_->initialization_observers.emplace(token, std::move(hook));
+    return token;
+}
+
+void Simulation::remove_initialization_hook(const std::uint64_t token) noexcept
+{
+    impl_->initialization_observers.erase(token);
+}
+
 std::uint64_t Simulation::add_force_statement_hook(ForceStatementHook hook)
 {
     if (!hook) {

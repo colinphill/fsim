@@ -2630,6 +2630,16 @@ void Interpreter::Impl::schedule_next_cycle_vhdl_resolutions()
 
 void Interpreter::Impl::initialize_vhdl_resolutions()
 {
+    // Step c) of 14.7.5.2 sets the driving and current value of each signal
+    // from its drivers: a vhpiDeposit made before it (a
+    // vhpiCbStartOfInitialization callback) leaves no value behind (owner
+    // decision 11-14). The resolved signals below take their resolution.
+    for (auto& [signal_id, before] : vhdl_values_before_initialization) {
+        signals[signal_id].initial_value = std::move(before);
+        refresh_direct_signal_planes(signal_id);
+        ++signal_value_revisions[signal_id];
+    }
+    vhdl_values_before_initialization.clear();
     // A resolved signal's initial value is its resolution function applied
     // to the drivers' initial values (IEEE 1076-2008 14.7.3.4); it is not an
     // event.

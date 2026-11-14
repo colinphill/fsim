@@ -4357,6 +4357,14 @@ void Simulation::Impl::start_vpi(const bool restoring)
     // initializers included, 6.21, 10.5) is complete, so what a callback
     // schedules or puts runs in that cycle.
     if (!restoring) {
+        interpreter->set_initialized_hook([this] {
+            // An observer may remove itself.
+            const auto observers = initialization_observers;
+            for (const auto& [token, hook] : observers) {
+                static_cast<void>(token);
+                hook();
+            }
+        });
         interpreter->set_start_of_simulation_hook([this] {
             const auto callback = vpi_callbacks->dispatch_lifecycle_now(
                 runtime::SystemVerilogVpiCallbackKind::StartOfSimulation);

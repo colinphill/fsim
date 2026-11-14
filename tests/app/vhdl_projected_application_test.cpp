@@ -352,7 +352,10 @@ void verify_capture(const Capture& capture) {
       == std::vector<std::tuple<
           std::string,
           fsim::runtime::SimulationTick,
-          std::uint64_t>>{{"0", 0, 2}}));
+          // The first simulation cycle at time zero is delta 1 (owner
+          // decision 11-14): delta_source updates in cycle 1, delta_middle
+          // in cycle 2, delta_output in cycle 3 (IEEE 1076-2019 14.7.5).
+          std::uint64_t>>{{"0", 0, 3}}));
   assert((
       changes_for(capture, "vhdl_projected.forced_output")
       == std::vector<TimedValue>{

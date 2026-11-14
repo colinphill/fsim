@@ -12,6 +12,7 @@
 #include "lowerer_internal.hpp"
 #include "fsim/support/uvm_api_methods.hpp"
 #include "elaborator_internal.hpp"
+#include "virtual_interface_definition.hpp"
 #include "fsim/elaboration/elaborator.hpp"
 #include "fsim/frontend/design_core.hpp"
 #include "fsim/frontend/parser.hpp"
@@ -2194,23 +2195,92 @@ Lowerer::lower_hir_static_container_actual(
                 frontend::ValueDomain::Bit2));
         return fixed;
     }
-    // An interface instance array is the array of its elements' handles: an
-    // unpacked array of virtual interfaces of the same size takes them
-    // element by element from its left bound (IEEE 1800-2023 7.6, 25.4,
-    // 25.9).
-    if (formal_type.fixed && !formal_type.associative && !formal_type.queue
-        && formal_type.element_kind == ContainerElementKind::Packed
-        && formal_type.element_width == 64U
-        && formal_type.dimensions.size() <= 1U
-        && !hir_container_object_binding(expression_id)) {
-        if (const auto handles
-            = hir_systemverilog_interface_array_handles(expression_id);
-            handles && handles->size() == hir_static_element_count(formal_type)) {
+    // An interface instance array is accepted only by an unpacked array of
+    // virtual interfaces of its elements' interface and specialization, of
+    // the same size, which takes them element by element from its left
+    // bound (7.6 for the array, 25.9 for each element: an interface
+    // instance of the same type). Any other target refuses it.
+    if (const auto handles = !hir_container_object_binding(expression_id)
+            ? hir_systemverilog_interface_array_handles(expression_id)
+            : std::nullopt) {
+        const auto span = expression && expression->systemverilog != nullptr
+            ? hir_source_span(expression->systemverilog->source)
+            : frontend::SourceSpan { };
+        const auto refuse = [&](std::string message)
+            -> std::optional<ContainerRegisterId> {
+            report("FSIM-ELAB-SVIFACE-012", std::move(message), span);
+            return std::nullopt;
+        };
+        const auto declaration = contextual_declaration.valid()
+            ? specialized_hir_unit_->find_declaration(contextual_declaration)
+            : std::nullopt;
+        const auto virtual_type = declaration
+                && declaration->systemverilog != nullptr
+            ? hir_systemverilog_virtual_interface_type(
+                  *declaration->systemverilog)
+            : std::nullopt;
+        if (!virtual_type || !formal_type.fixed || formal_type.associative
+            || formal_type.queue
+            || formal_type.element_kind != ContainerElementKind::Packed
+            || formal_type.element_width != 64U) {
+            return refuse("an interface instance array can be assigned only "
+                          "to an unpacked array of virtual interfaces of its "
+                          "interface (IEEE 1800-2023 7.6, 25.9)");
+        }
+        // Each dimension has as many elements as the target's (7.6); the
+        // elements are then taken in the same order, left bounds first.
+        const auto levels = std::max<std::size_t>(
+            formal_type.dimensions.size(), 1U);
+        bool same_shape { std::ranges::all_of(*handles,
+            [&](const HirInterfaceArrayElement& element) {
+                return element.indices.size() == levels;
+            }) };
+        for (std::size_t level { 1U };
+            same_shape && level < formal_type.dimensions.size(); ++level) {
+            std::set<std::int64_t> values;
+            for (const auto& element : *handles) {
+                values.insert(element.indices[level]);
+            }
+            const auto& [left, right] = formal_type.dimensions[level];
+            same_shape = values.size()
+                == static_cast<std::size_t>(
+                    std::abs(static_cast<std::int64_t>(left)
+                        - static_cast<std::int64_t>(right))
+                    + 1);
+        }
+        if (!same_shape
+            || handles->size() != hir_static_element_count(formal_type)) {
+            return refuse("an interface instance array of "
+                + std::to_string(handles->size())
+                + " elements is assigned to an array of virtual interfaces "
+                  "of a different shape (IEEE 1800-2023 7.6)");
+        }
+        const auto* const interface_definition = virtual_interface_definition(
+            specialized_hir_unit_->design(), specialized_hir_unit_->unit(),
+            *virtual_type);
+        for (const auto& element : *handles) {
+            const auto type = systemverilog_interface_types_ != nullptr
+                ? systemverilog_interface_types_->find(element.path)
+                : decltype(systemverilog_interface_types_->end()) { };
+            if (interface_definition == nullptr
+                || systemverilog_interface_types_ == nullptr
+                || type == systemverilog_interface_types_->end()
+                || type->second.unit != interface_definition->id
+                || !hir_virtual_interface_instance_matches(
+                    *virtual_type, element.path)) {
+                return refuse("interface instance '" + element.path
+                    + "' is not an instance of the interface specialization "
+                      "of virtual interface type '"
+                    + virtual_type->interface_type
+                    + "' (IEEE 1800-2023 25.9)");
+            }
+        }
+        {
             const auto destination = allocate_container_register(formal_type);
             for (std::size_t position { }; position < handles->size();
                 ++position) {
                 const auto value = load_constant(
-                    unsigned_value((*handles)[position], 64U),
+                    unsigned_value((*handles)[position].handle, 64U),
                     formal_type.two_state ? frontend::ValueDomain::Bit2
                                          : frontend::ValueDomain::Logic4);
                 const auto index = load_constant(

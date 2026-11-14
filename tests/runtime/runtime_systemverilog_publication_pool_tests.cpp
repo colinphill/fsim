@@ -371,9 +371,11 @@ void test_publication_stop_resume()
 void test_publication_pool_failure_sweep()
 {
     const auto baseline = run_case(std::nullopt, true);
+    // The process runs in the first simulation cycle, delta 1 at time zero
+    // (owner decision 11-14).
     const std::vector<Publication> successful_publications {
-        { 0U, 0U, "1" },
-        { 0U, 0U, "0" },
+        { 0U, 1U, "1" },
+        { 0U, 1U, "0" },
     };
     require(baseline.values == successful_publications,
         "preallocated descriptors preserve every same-process publication");
@@ -386,9 +388,9 @@ void test_publication_pool_failure_sweep()
             if (!result.allocation_failed) {
                 require(result.values
                         == std::vector<Publication> {
-                            { 0U, 0U, "X" },
-                            { 0U, 0U, "1" },
-                            { 0U, 0U, "0" },
+                            { 0U, 1U, "X" },
+                            { 0U, 1U, "1" },
+                            { 0U, 1U, "0" },
                         },
                     "the first non-failing request publishes before later values");
                 first_no_failure = index;
