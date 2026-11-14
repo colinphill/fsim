@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "plugin_compiler_internal.hpp"
 
+#include "fsim/support/path.hpp"
 
 namespace fsim::systemc::plugin_detail {
 

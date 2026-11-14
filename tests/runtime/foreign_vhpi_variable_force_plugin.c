@@ -6,6 +6,7 @@
 #include "fsim/runtime/vhpi_abi.h"
 #include "vhpi_user.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -121,7 +122,7 @@ static void release(vhpiHandleT object)
 
 static void step(const vhpiCbDataT* data)
 {
-    const int at = (int)(long)data->user_data;
+    const int at = (int)(intptr_t)data->user_data;
     printf("#c step %d\n", at);
     switch (at) {
     case 2:
@@ -169,7 +170,7 @@ static void at_time(int ns, int step_number)
     request.cb_rtn = step;
     request.reason = vhpiCbAfterDelay;
     request.time = &delay;
-    request.user_data = (void*)(long)step_number;
+    request.user_data = (void*)(intptr_t)step_number;
     vhpi_register_cb(&request, 0);
 }
 

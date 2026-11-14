@@ -3,6 +3,9 @@
 
 #include <atomic>
 #include <memory>
+#include <thread>
+#include <utility>
+#include <version>
 
 namespace fsim::support {
 

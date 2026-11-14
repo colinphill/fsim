@@ -5,12 +5,13 @@
 // the checked trace.
 #include "fsim/runtime/vhpi_abi.h"
 #include "vhpi_user.h"
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 static vhpiHandleT parameters[2];
 static void probe(const vhpiCbDataT* data)
 {
-    vhpiHandleT parameter = parameters[(long)data->user_data];
+    vhpiHandleT parameter = parameters[(intptr_t)data->user_data];
     vhpiValueT value;
     memset(&value, 0, sizeof value);
     value.format = vhpiIntVal;
@@ -48,7 +49,7 @@ static void start(const vhpiCbDataT* data)
         r.reason = vhpiCbStmt;
         r.cb_rtn = probe;
         r.obj = nth_of(loop, vhpiVarAssignStmtK, 0);
-        r.user_data = (char*)index;
+        r.user_data = (char*)(intptr_t)index;
         if (!vhpi_register_cb(&r, vhpiReturnCb)) {
             printf("#c refused %ld\n", index);
         }

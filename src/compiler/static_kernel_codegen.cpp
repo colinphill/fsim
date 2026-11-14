@@ -17,6 +17,8 @@
 #include <llvm/ExecutionEngine/ObjectCache.h>
 #include <llvm/ExecutionEngine/Orc/CompileUtils.h>
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>
+#include <llvm/ExecutionEngine/Orc/RTDyldObjectLinkingLayer.h>
+#include <llvm/ExecutionEngine/SectionMemoryManager.h>
 #include <llvm/Config/llvm-config.h>
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/TargetParser/Host.h>

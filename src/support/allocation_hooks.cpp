@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/support/allocation_hooks.hpp"
 
+// Only Windows shared builds define FSIM_ALLOCATION_HOOKS, so a Linux build
+// does not show these as used.
+#include <atomic>
 #include <cstdlib>
+#include <new>
 
 namespace fsim::support {
 
