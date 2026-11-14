@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "application_event_type.hpp"
 #include "application_internal.hpp"
 
 #include "fsim/semantic/systemverilog_structure_image.hpp"
@@ -8,7 +9,9 @@ namespace fsim::app::application_detail {
 runtime::SystemVerilogClassPropertyDescriptor class_property_descriptor(
     const semantic::sv::SpecializedClassProperty& property,
     const semantic::sv::Hir& hir,
-    const bool qualified_name) {
+    const bool qualified_name,
+    const std::unordered_map<std::string, runtime::simir::ContainerType>*
+        container_types) {
   runtime::SystemVerilogClassPropertyDescriptor result;
   result.name = qualified_name
       ? property.owner_identity + "::" + property.name
@@ -157,12 +160,27 @@ runtime::SystemVerilogClassPropertyDescriptor class_property_descriptor(
       || semantic::sv::systemverilog_boxed_aggregate(hir, property.type)) {
     result.kind = runtime::SystemVerilogClassPropertyKind::Container;
     result.width = 0;
+    // A fixed-size array holds its elements from construction (IEEE
+    // 1800-2023 7.4, 8.7), built with the type the kernel reads it as. An
+    // array beyond the dense storage budget keeps only its written
+    // elements, as the kernel's storage of it does.
+    if (container_types != nullptr) {
+      if (const auto type = container_types->find(property.canonical_identity);
+          type != container_types->end()) {
+        try {
+          result.initial_container
+              = runtime::simir::default_container_value(type->second);
+        } catch (const std::length_error&) {
+          result.initial_container.reset();
+        }
+      }
+    }
     return result;
   }
   if (property.type.value_form == semantic::sv::TypeForm::string) {
     result.kind = runtime::SystemVerilogClassPropertyKind::String;
     result.width = 0;
-  } else if (property.type.target.spelling == "event") {
+  } else if (type_is_event(hir, property.type)) {
     // An event property holds its event object's 64-bit handle (IEEE
     // 1800-2017 15.5); 0 until the object is first used.
     result.kind = runtime::SystemVerilogClassPropertyKind::Bit2;

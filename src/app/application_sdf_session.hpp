@@ -2,14 +2,25 @@
 #pragma once
 
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
 #include "fsim/app/sdf_control.hpp"
 #include "fsim/app/sdf_mapping_validation.hpp"
 #include "fsim/artifact/design.hpp"
 #include "fsim/elaboration/sdf_net_delay_split.hpp"
 #include "fsim/library/artifact.hpp"
+#include "fsim/app/sdf_value_policy.hpp"
+#include "fsim/cli/driver.hpp"
+#include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/frontend/sdf.hpp"
+#include "fsim/project/project.hpp"
 
 #include <string>
 #include <vector>
+#include <filesystem>
+#include <memory>
+#include <optional>
+#include <span>
+#include <string_view>
 
 namespace fsim::app {
 

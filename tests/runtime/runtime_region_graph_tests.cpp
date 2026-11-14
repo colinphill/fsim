@@ -1,17 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "fsim/runtime/simir_interpreter.hpp"
 #include "fsim/runtime/simir_region_graph.hpp"
 
 #include <algorithm>
-#include <array>
-#include <cstddef>
 #include <cstdint>
-#include <limits>
-#include <map>
 #include <optional>
-#include <ranges>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <utility>
 #include <vector>
 

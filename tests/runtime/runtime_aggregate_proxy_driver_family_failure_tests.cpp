@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "../../src/runtime/simir_internal.hpp"
 #include "runtime_fused_staging_failure_support.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 
 #include <algorithm>
 #include <array>
@@ -9,7 +10,6 @@
 #include <exception>
 #include <functional>
 #include <iostream>
-#include <limits>
 #include <memory>
 #include <new>
 #include <stdexcept>

@@ -15,7 +15,7 @@ namespace fsim::library {
 
 inline constexpr std::uint32_t kFormatVersion = 8;
 inline constexpr std::uint32_t kPortableSchemaVersion = 16;
-inline constexpr std::uint32_t kCompiledHirSchemaVersion = 3;
+inline constexpr std::uint32_t kCompiledHirSchemaVersion = 6;
 inline constexpr std::string_view kLibraryArtifactKind = "fsim-library";
 // The metadata record, one payload of the .fsimlib container.
 inline constexpr std::string_view kMetadataFilename = "fsim-library.toml";

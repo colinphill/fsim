@@ -3,16 +3,15 @@
 // Native units of the engine v4 static kernel: generated-code entry,
 // runtime helpers, template binding and partitions.
 #include "simir_static_kernel_compiled_internal.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 #include "fsim/support/parallel_for.hpp"
 
 #include <algorithm>
 #include <cctype>
-#include <cxxabi.h>
 #include <iostream>
 #include <limits>
 #include <map>
 #include <queue>
-#include <typeinfo>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -1307,6 +1306,8 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
     helpers.notify = &StaticKernel::native_notify;
     helpers.notify_field = &StaticKernel::native_notify_field;
     helpers.member_due = &StaticKernel::native_member_due;
+    helpers.variable_store = &StaticKernel::native_variable_store;
+    helpers.flush_writes = &StaticKernel::native_flush_writes;
     helpers.fail = &StaticKernel::native_fail;
     if (std::getenv("FSIM_STATIC_KERNEL_PERF_MAP") != nullptr) {
         std::vector<std::size_t> units_of(templates_.size(), 0U);

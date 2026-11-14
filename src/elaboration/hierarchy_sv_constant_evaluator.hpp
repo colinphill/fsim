@@ -79,6 +79,12 @@ evaluate_hir_systemverilog_value(
     semantic::ExpressionId expression,
     std::string& error);
 
+/// The value of a constant expression of real type (shortreal, real or
+/// realtime, IEEE 1800-2023 6.12), nothing for any other kind.
+[[nodiscard]] std::optional<double> evaluate_hir_systemverilog_real(
+    const semantic::SpecializedHirUnit& specialization,
+    semantic::ExpressionId expression);
+
 /// Evaluate an expression for a declared type, so a keyed assignment
 /// pattern takes the type's aggregate layout.
 [[nodiscard]] std::optional<HirSystemVerilogConstant>

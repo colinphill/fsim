@@ -1,5 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_test_support.hpp"
+#include "fsim/frontend/parser.hpp"
+#include "fsim/frontend/token.hpp"
+#include "fsim/runtime/file_operations.hpp"
+#include "fsim/runtime/simir.hpp"
+#include <algorithm>
+#include <cassert>
+#include <iostream>
 
 namespace fsim::tests::elaboration {
 
@@ -8,13 +15,12 @@ void test_vhdl_textio_lowering() {
   const auto parsed = fsim::frontend::parse_text(
       "textio.vhd",
       R"(
-entity textio_test is end entity;
+use std.textio.all; entity textio_test is end entity;
 architecture rtl of textio_test is
-  type text_file is file of string;
 begin
   worker: process
-    file input_file : text_file open read_mode is "input.txt";
-    file output_file : text_file open write_mode is "output.txt";
+    file input_file : text open read_mode is "input.txt";
+    file output_file : text open write_mode is "output.txt";
     variable input_line, output_line : line;
     variable value : integer;
     variable flag, good : boolean;
@@ -65,7 +71,7 @@ end architecture;
   const auto dynamic_field = fsim::frontend::parse_text(
       "dynamic_textio.vhd",
       R"(
-entity dynamic_textio is end entity;
+use std.textio.all; entity dynamic_textio is end entity;
 architecture rtl of dynamic_textio is
 begin
   worker: process
@@ -109,7 +115,7 @@ end architecture;
   const auto invalid = fsim::frontend::parse_text(
       "invalid_textio.vhd",
       R"(
-entity invalid_textio is end entity;
+use std.textio.all; entity invalid_textio is end entity;
 architecture rtl of invalid_textio is
   type integer_file is file of integer;
 begin
@@ -152,10 +158,36 @@ end architecture;
         return diagnostic.code == "FSIM-ELAB-VHTEXTIO-009";
       }) == 3);
 
+  // A file type declared `is file of string` is not STD.TEXTIO.TEXT, so
+  // READLINE, WRITELINE and TEE match none of their declarations
+  // (IEEE 1076-2019 16.4, 5.5.1).
+  const auto string_file = fsim::frontend::parse_text(
+      "string_file_textio.vhd",
+      R"(
+use std.textio.all; entity string_file_textio is end entity;
+architecture rtl of string_file_textio is
+  type text_file is file of string;
+begin
+  worker: process
+    file data : text_file open read_mode is "input.txt";
+    variable buffer_value : line;
+  begin
+    readline(data, buffer_value);
+    wait;
+  end process;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(string_file.ok());
+  const auto string_file_result = compile_and_elaborate(
+      string_file.design, "vhdl:work.string_file_textio(rtl)");
+  assert(!string_file_result.ok());
+  assert(has_diagnostic(string_file_result, "FSIM-ELAB-VHTEXTIO-001"));
+
   const auto negative_static_field = fsim::frontend::parse_text(
       "negative_static_textio_field.vhd",
       R"(
-entity negative_static_textio_field is end entity;
+use std.textio.all; entity negative_static_textio_field is end entity;
 architecture rtl of negative_static_textio_field is
 begin
   worker: process
@@ -190,7 +222,7 @@ end architecture;
   const auto legacy_radix_textio = fsim::frontend::parse_text(
       "textio_radix_before_2008.vhd",
       R"(
-entity TextIO_Radix_Before_2008 is end entity;
+use std.textio.all; entity TextIO_Radix_Before_2008 is end entity;
 architecture rtl of TextIO_Radix_Before_2008 is
 begin
   worker: process

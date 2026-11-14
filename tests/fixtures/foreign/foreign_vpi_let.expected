@@ -1,0 +1,42 @@
+#c decl sum type=vpiLetDecl line=18
+#c   formal top.sum.x type=vpiSeqFormalDecl dir=5 parent=sum
+#c   formal top.sum.y type=vpiSeqFormalDecl dir=5 parent=sum
+#c     default
+#c       const 1
+#c     typespec vpiLogicTypespec name=nib_t
+#c   body
+#c     op 24 x + y value=none
+#c       ref x actual=vpiSeqFormalDecl top.sum.x
+#c       ref y actual=vpiSeqFormalDecl top.sum.y
+#c decl both type=vpiLetDecl line=19
+#c   body
+#c     op 28 a & b value=1
+#c       vpiReg top.a
+#c       vpiReg top.b
+#c decl diff type=vpiLetDecl line=28
+#c   formal top.diff.x type=vpiSeqFormalDecl dir=5 parent=diff
+#c   formal top.diff.y type=vpiSeqFormalDecl dir=5 parent=diff
+#c   body
+#c     op 11 x - y value=none
+#c       ref x actual=vpiSeqFormalDecl top.diff.x
+#c       ref y actual=vpiSeqFormalDecl top.diff.y
+#c assign w1 = 8
+#c   let expr sum(a,b) decl=sum value=8
+#c     vpiReg top.a
+#c     vpiReg top.b
+#c assign w2 = 4
+#c   let expr sum(.x(a)) decl=sum value=4
+#c     vpiReg top.a
+#c     const 1
+#c assign w3 = 1
+#c   let expr both decl=both value=1
+#c assign w4 = 10
+#c   let expr sum(sum(a,4'd2),b) decl=sum value=10
+#c     let expr sum(a,4'd2) decl=sum value=5
+#c       vpiReg top.a
+#c       const 2
+#c     vpiReg top.b
+#c assign w5 = 11
+#c   let expr diff(y,x) decl=diff value=11
+#c     vpiReg top.y
+#c     vpiReg top.x

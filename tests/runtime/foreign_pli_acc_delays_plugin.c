@@ -32,6 +32,29 @@ static void flag(const char* label, PLI_INT32 result)
     vpi_printf("#c %s ok=%d error=%d\n", label, (int)result, (int)acc_error_flag);
 }
 
+// The data path of an edge-sensitive module path has one input, the data
+// source, and one output, the path's destination; a path without a data
+// source has none (IEEE 1364-2001 23.42).
+static void datapaths(void)
+{
+    handle const edge_path = acc_handle_modpath(acc_handle_object("top.pe"), "clk", "q");
+    handle const plain_path = acc_handle_modpath(acc_handle_object("top.p"), "a", "w");
+    handle const data = edge_path != NULL ? acc_handle_datapath(edge_path) : NULL;
+    handle const input = data != NULL ? acc_next_input(data, NULL) : NULL;
+    handle const output = data != NULL ? acc_next_output(data, NULL) : NULL;
+    // Both names stay valid in one call: ACC strings take the next free
+    // place in the shared string buffer (IEEE 1364-2001 22.9).
+    vpi_printf("#c datapath type=%d fulltype=%d input=%s output=%s more=%d/%d\n",
+        data != NULL ? (int)acc_fetch_type(data) : 0,
+        data != NULL ? (int)acc_fetch_fulltype(data) : 0,
+        input != NULL ? acc_fetch_fullname(acc_handle_conn(input)) : "-",
+        output != NULL ? acc_fetch_fullname(acc_handle_conn(output)) : "-",
+        input != NULL && acc_next_input(data, input) != NULL,
+        output != NULL && acc_next_output(data, output) != NULL);
+    vpi_printf("#c datapath of a plain path %s\n",
+        plain_path != NULL && acc_handle_datapath(plain_path) == NULL ? "null" : "set");
+}
+
 static PLI_INT32 get_calltf(PLI_INT32 data, PLI_INT32 reason)
 {
     handle top;
@@ -92,6 +115,7 @@ static PLI_INT32 get_calltf(PLI_INT32 data, PLI_INT32 reason)
     flag("setup fetch", acc_fetch_delays(check, &d[0]));
     show_array("setup limit", d, 1);
     flag("fetch on module", acc_fetch_delays(top, &d[0]));
+    datapaths();
     acc_close();
     return 0;
 }

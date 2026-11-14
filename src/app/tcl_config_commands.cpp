@@ -4,6 +4,9 @@
 
 #include "fsim/project/configuration.hpp"
 #include "fsim/support/path.hpp"
+#include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/project/project.hpp"
+#include "tcl.hpp"
 
 #include <algorithm>
 #include <array>
@@ -16,6 +19,9 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+#include <cstddef>
+#include <tcl.h>
+#include <tclDecls.h>
 
 namespace fsim::app::tcl_detail {
 

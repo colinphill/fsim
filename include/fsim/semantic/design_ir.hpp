@@ -178,6 +178,9 @@ struct ProcessOccurrence {
     ProcessOccurrenceId id;
     SpecializationId specialization;
     std::optional<ProcessId> source_process;
+    // The concurrent assertion statement an assertion process was lowered
+    // from (IEEE 1800-2023 37.49): the origin of its HIR statement.
+    std::optional<OriginId> assertion;
     std::string name;
     std::optional<SourceSpanId> source;
     std::uint32_t runtime_index{};

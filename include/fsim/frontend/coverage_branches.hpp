@@ -2,9 +2,11 @@
 #pragma once
 
 #include "fsim/elaboration/coverage_branches.hpp"
-#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/coverage_point_identity.hpp"
+#include "fsim/frontend/design_core.hpp"
 
 #include <span>
+#include "fsim/frontend/design.hpp"
 
 namespace fsim::frontend {
 

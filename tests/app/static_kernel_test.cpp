@@ -17,6 +17,7 @@
 // delta) as in the reference, whether every signal is a host signal or only
 // a trace selection's are.
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
 
 #include <algorithm>
 #include <chrono>

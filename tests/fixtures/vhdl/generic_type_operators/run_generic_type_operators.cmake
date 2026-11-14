@@ -10,6 +10,8 @@
 # classified generic types (classified_generic_operators.vhd) must give
 # classified_generic_operators.expected.
 
+include("${CMAKE_CURRENT_LIST_DIR}/../../../cmake/FsimTestWorkspace.cmake")
+
 if(NOT DEFINED FSIM_EXECUTABLE OR NOT EXISTS "${FSIM_EXECUTABLE}")
   message(FATAL_ERROR "FSIM_EXECUTABLE must name the built fsim command")
 endif()
@@ -53,7 +55,7 @@ endfunction()
 function(check_variant VARIANT STANDARD SOURCE EXPECTED)
   string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef workspace_id)
   set(case_dir "${CMAKE_CURRENT_BINARY_DIR}/fsim-generic-type-operators-${VARIANT}-${STANDARD}-${workspace_id}")
-  file(MAKE_DIRECTORY "${case_dir}")
+  fsim_test_workspace("${case_dir}")
   file(WRITE "${case_dir}/generic_type_operators.vhd" "${SOURCE}")
   run_fsim_step("${case_dir}" compile compile -q --standard ${STANDARD} generic_type_operators.vhd)
   run_fsim_step("${case_dir}" elaborate elaborate -q work.top --no-aot)
@@ -82,3 +84,6 @@ foreach(standard IN ITEMS 2008 2019)
   check_variant(without_use ${standard} "${without_use}" "${expected}")
 endforeach()
 check_variant(classified 2019 "${classified_text}" "${classified_expected}")
+
+# Passed: remove this run's workspaces (a failure above keeps them).
+fsim_test_workspace_cleanup()

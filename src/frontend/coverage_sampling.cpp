@@ -2,8 +2,11 @@
 #include "fsim/frontend/coverage_sampling.hpp"
 #include "fsim/frontend/coverage_cross_inventory.hpp"
 #include "fsim/frontend/coverage_limits.hpp"
+#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/diagnostic.hpp"
+#include "fsim/frontend/systemverilog_scalars.hpp"
+#include "fsim/frontend/token.hpp"
 
-#include <boost/multiprecision/cpp_int.hpp>
 
 #include <algorithm>
 #include <bit>
@@ -13,6 +16,15 @@
 #include <limits>
 #include <string>
 #include <unordered_set>
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <span>
+#include <string_view>
+#include <system_error>
+#include <utility>
+#include <vector>
+#include <boost/multiprecision/cpp_int.hpp>
 
 namespace fsim::frontend {
 

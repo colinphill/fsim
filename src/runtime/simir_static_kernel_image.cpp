@@ -19,8 +19,18 @@
 #include "simir_static_kernel_compiled_internal.hpp"
 
 #include "fsim/runtime/run_state_image.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_container_value.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include "fsim/runtime/simir_shared_vector.hpp"
+#include "simir_kernel_word_ops.hpp"
+#include "simir_process_program.hpp"
+#include "simir_static_kernel.hpp"
+#include "simir_static_kernel_state.hpp"
 
-#include <boost/pfr.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -40,6 +50,11 @@
 #include <utility>
 #include <vector>
 
+#include <cstddef>
+#include <cstdint>
+#include <iterator>
+#include <ratio>
+#include <boost/pfr.hpp>
 #if defined(_WIN32)
 #include <stdlib.h>
 #define FSIM_KERNEL_IMAGE_ENVIRON _environ
@@ -369,6 +384,12 @@ void Interpreter::Impl::StaticKernel::visit_image_fields(Self& self, Visit&& vis
     visit(self.switch_members_);
     visit(self.transaction_inputs_);
     visit(self.slot_waitable_);
+    visit(self.histories_);
+    visit(self.slot_history_);
+    visit(self.slot_history_end_);
+    visit(self.history_slots_);
+    visit(self.history_current_);
+    visit(self.history_words_);
     visit(self.behavioral_);
     visit(self.vhdl_threads_);
     visit(self.named_disable_);
@@ -603,7 +624,8 @@ bool Interpreter::Impl::StaticKernel::restore_image(
     if (!ok && failure == nullptr) {
         failure = "fields";
     }
-    const auto signal_count = impl_.signals.size();
+    // The histories' hidden signals (build_histories) follow the design's.
+    const auto signal_count = impl_.signals.size() + histories_.size();
     ok = ok && members_.size() == spec.members.size()
         && member_process_.size() == members_.size()
         && slot_of_signal_.size() == signal_count
@@ -620,6 +642,16 @@ bool Interpreter::Impl::StaticKernel::restore_image(
                     })));
     if (!ok && failure == nullptr) {
         failure = "shape";
+    }
+    for (std::size_t at = 0U; ok && at < histories_.size(); ++at) {
+        // The hidden signals the saved build made, in its order.
+        const auto& history = histories_[at];
+        ok = history.slot < slots_.size()
+            && history.last_value_slot < slots_.size()
+            && push_history_signal(history) == slots_[history.last_value_slot].signal;
+        if (!ok) {
+            failure = "histories";
+        }
     }
     // The operations, as build_fresh expands them: the program's, with a
     // conversion's resolver program rewritten, a SystemVerilog member's calls
@@ -789,6 +821,10 @@ bool Interpreter::Impl::StaticKernel::restore_image(
             impl_.static_kernel_region_host = member.process;
             impl_.static_kernel_region_host_phase = member.phase;
         }
+    }
+    // build_fresh rewrote 'LAST_VALUE as a read of the hidden signal.
+    if (!histories_.empty()) {
+        rewrite_last_value_reads();
     }
     stage("operations");
     plan_conversions_and_wires(spec);

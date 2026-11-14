@@ -3,7 +3,6 @@
 #include "fsim/app/sdf_mixed_systemverilog.hpp"
 #include "sdf_diagnostic.hpp"
 
-#include <ranges>
 #include <set>
 #include <string>
 #include <string_view>

@@ -121,6 +121,7 @@ sched.work_queue	reserved_entries_capacity	W	allocator cache or spare buffer: ho
 sched.work_queue	reserved_insertions_capacity	W	allocator cache or spare buffer: holds capacity, never run state
 interp.impl	scheduler	Cfg	the scheduler (own rows under sched.*)
 interp.impl	scheduler_discard_hook	Cfg	hook or callback installed by the embedder
+interp.impl	start_of_simulation_hook	Cfg	hook or callback installed by the embedder
 interp.impl	start_restoring	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
 interp.impl	update_commit_callback	D	built on first dispatch of the interp.update_commit event
 interp.impl	systemverilog_update_slots	P	SV update slot pool (large payloads use the pool pattern)
@@ -216,6 +217,8 @@ interp.impl	vhdl_conversion_dependents	Cfg	configuration from the artifact or co
 interp.impl	vhdl_conversion_drivers	P+ids	driver registrations made after start; replayed from the host.structure journal
 interp.impl	vhdl_scalar_widths	Cfg	configuration from the artifact or command line
 interp.impl	vhdl_disconnected_drivers	P	signal values, driver contributions, forces and history
+interp.impl	vhdl_null_elements	P	signal values, driver contributions, forces and history
+interp.impl	vhdl_null_kept	P	signal values, driver contributions, forces and history
 interp.impl	vhdl_created_drivers	P+ids	driver registrations made after start; replayed from the host.structure journal
 interp.impl	dormant_driver_regions	D	dormant placeholder driver regions of foreign architectures, from the artifact at registration; the created drivers that activate them replay with vhdl_created_drivers
 interp.impl	vhdl_resolved_values	P	signal values, driver contributions, forces and history
@@ -360,6 +363,10 @@ interp.impl	event_trigger_hook	Cfg	hook or callback installed by the embedder
 interp.impl	force_statement_hook	Cfg	hook or callback installed by the embedder
 interp.impl	signal_transaction_hook	Cfg	hook or callback installed by the embedder
 interp.impl	driver_transaction_hook	Cfg	hook or callback installed by the embedder
+interp.impl	debug_local_change_hook	Cfg	hook or callback installed by the embedder
+interp.impl	debug_local_hooks	P	forces of the debug interface on VHDL variables (VHPI 22.5.2: a force is simulation state, saved like a signal force; a restore keeps only the entries that still force bits); the value-change watches of an entry (21.3.2.2) are dropped with the callbacks at restart
+interp.impl	debug_local_hooked	D	per process, whether debug_local_hooks names it; rebuilt with debug_local_hooks
+interp.impl	staged_driver_transactions	S	driver transaction bits of the staged updates, reported and cleared by the update phase that commits them; empty at a save point
 interp.impl	container_object_change_hook	Cfg	hook or callback installed by the embedder
 interp.impl	container_element_change_hook	Cfg	hook or callback installed by the embedder
 interp.impl	scalar_signal_change_hook	Cfg	hook or callback installed by the embedder
@@ -389,6 +396,7 @@ interp.impl	pending_class_allocation_seed	P	plain run state
 interp.impl	class_property_read_hook	Cfg	hook or callback installed by the embedder
 interp.impl	class_property_write_hook	Cfg	hook or callback installed by the embedder
 interp.impl	class_property_container_hook	Cfg	hook or callback installed by the embedder
+interp.impl	class_container_watched_hook	Cfg	whether an embedder callback watches an object's array property
 interp.impl	class_method_call_context_hook	Cfg	hook or callback installed by the embedder
 interp.impl	class_static_property_read_hook	Cfg	hook or callback installed by the embedder
 interp.impl	class_static_property_write_hook	Cfg	hook or callback installed by the embedder
@@ -410,6 +418,8 @@ interp.impl	update_commit_running	S	commit scratch, empty at a save point
 interp.impl	has_bidirectional_switches	D	derived tables rebuilt from the artifact or from saved values
 interp.impl	switch_refreshing	S	commit scratch, empty at a save point
 interp.impl	started	P	plain run state
+interp.impl	hold_time_zero	W	set by start_holding_time_zero before the start, cleared by the next start(); a save point is after both
+interp.impl	held_prearmed_static_waits	W	set when a hold start returns, consumed and cleared by the next start(); dead at rest
 interp.impl	reset_source	Cfg	factory the embedder installs; rebuilt from the same command line
 interp.impl	reset_twin_class_hooks	Cfg	set by the embedder before a reset (Interpreter::set_reset_twin_class_hooks)
 interp.impl	run_state_event_host	Cfg	the embedder's scheduler-event owners and handle takers (Interpreter::set_run_state_event_host), installed by the application from the same command line
@@ -823,6 +833,12 @@ kernel.impl	held_threads_	S	empty or false at every save point: the save audit r
 kernel.impl	host_process_	Cfg	kernel mode from the artifact or command line
 kernel.impl	slot_waitable_	D	derived from the artifact or rebuilt after restore
 kernel.impl	slot_wait_seen_	P	kernel dynamic state (S5)
+kernel.impl	histories_	D	derived from the members' attribute operations (build_histories) after restore
+kernel.impl	slot_history_	D	derived from the members' attribute operations (build_histories) after restore
+kernel.impl	slot_history_end_	D	derived from the members' attribute operations (build_histories) after restore
+kernel.impl	history_slots_	D	derived from the members' attribute operations (build_histories) after restore
+kernel.impl	history_words_	P	kernel dynamic state: the update cycles that have begun and the time and cycle of each history's latest event and transaction (IEEE 1076-2019 16.2.4)
+kernel.impl	history_current_	P	kernel dynamic state: the value of each history slot its histories last saw (IEEE 1076-2019 16.2.4); the hidden last-value slots are saved with the slots
 kernel.impl	redirect_pc_	W	step scratch assigned or cleared before use in the same step; stale content is dead
 kernel.impl	behavioral_entry_	Cfg	kernel mode from the artifact or command line
 kernel.impl	behavioral_suspended_	P	kernel dynamic state (S5)
@@ -885,6 +901,7 @@ kernel.impl	boundary_opened_	D	rebuilt when the foreign libraries register their
 kernel.impl	activating_	S	scratch: empty at a save point (a non-empty queue refuses the save)
 kernel.impl	vhdl_	Cfg	kernel mode from the artifact or command line
 kernel.impl	debug_points_	Cfg	kernel mode from the artifact or command line
+kernel.impl	watch_writes_	Cfg	hook: set by an observer's watch request (watch, apply_watches), which a restored run makes again
 kernel.impl	weak_sources_	Cfg	kernel mode from the artifact or command line
 kernel.impl	time_resolution_	Cfg	the design's time resolution from the artifact
 kernel.impl	host_original_	D	derived from the artifact or rebuilt after restore
@@ -894,6 +911,7 @@ kernel.impl	debug_children_	P	kernel dynamic state (S5)
 kernel.impl	debug_writes_	S	scratch: empty at a save point (flushed at every debug point, suspension, NBA update and activation end)
 kernel.impl	debug_writes_spare_	W	allocator cache or spare buffer: holds capacity, never run state
 kernel.impl	debug_write_pending_	S	scratch: all clear whenever debug_writes_ is empty, so at every save point
+kernel.impl	debug_write_flag_	S	scratch: nonzero only while debug_writes_ holds a slot, so clear at every save point
 kernel.impl	next_child_process_	P	kernel dynamic state (S5)
 kernel.impl	running_thread_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
 kernel.impl	touched_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
@@ -905,9 +923,11 @@ kernel.impl	profile_generic_runs_	Prof	profile counters
 kernel.impl	verified_thread_runs_	Prof	FSIM_KERNEL_VERIFY counter
 kernel.impl	verified_member_runs_	Prof	FSIM_KERNEL_VERIFY counter
 kernel.impl	verify_skipped_members_	Prof	FSIM_KERNEL_VERIFY profile rows
+kernel.impl	verify_hooked_runs_	Prof	FSIM_KERNEL_VERIFY counter of activations not replayed (variable hooks)
 kernel.impl	verify_thread_reason_	D	FSIM_KERNEL_VERIFY: a function of the member's operations
 kernel.impl	verify_thread_decided_	D	FSIM_KERNEL_VERIFY: a function of the member's operations
 kernel.impl	verify_live_registers_	D	FSIM_KERNEL_VERIFY: a function of the member's operations
+kernel.impl	verify_operation_live_	D	FSIM_KERNEL_VERIFY: a function of the member's operations
 kernel.impl	shadow_	W	FSIM_KERNEL_VERIFY: set before a thread activation and cleared after it (run_behavioral_compiled)
 kernel.impl	verify_mirror_ahead_	W	FSIM_KERNEL_VERIFY: mirrors ahead of the host until its next commit; a save waits for pending updates, and restore_value_section clears it
 kernel.impl	interpreted_bytecode_runs_	Prof	profile counters
@@ -995,8 +1015,18 @@ kernel.impl	batch_pinned_body_	D	derived from the artifact or rebuilt after rest
 kernel.impl	batch_private_	W	step scratch assigned or cleared before use in the same step; stale content is dead
 kernel.impl	step_item_offset_	W	step scratch assigned or cleared before use in the same step; stale content is dead
 kernel.impl	initialized_	P	kernel dynamic state (S5)
+kernel.impl	hold_time_zero_	W	set by the interpreter's holding start, cleared by its release; a save point is after both
 kernel.impl	vhdl_round_deferred_	P	doorbell flag: its scheduler event kernel.vhdl_round is derived (not saved); rearm() re-creates it from this flag (S5)
 kernel.impl	vhdl_round_task_	P	kernel dynamic state (S5)
+kernel.impl	initialization_round_	S	set only within the first activation of a VHDL kernel (the initialization phase); false at every save point
+kernel.impl	initial_update_pending_	S	the first simulation cycle's update commit (interp.update_commit, run_initial_update) is queued; it runs at time 0, before any save point
+kernel.impl	initial_update_running_	S	set only within the first simulation cycle's update task; false at every save point
+kernel.impl	initial_commit_due_	S	set only within the first simulation cycle's update task; false at every save point
+kernel.impl	variable_hooks_active_	D	rebuilt from Impl::debug_local_hooks (debug_local_hooks_changed)
+kernel.impl	variable_hook_members_	D	rebuilt from Impl::debug_local_hooks (debug_local_hooks_changed)
+kernel.impl	member_pinned_	D	rebuilt from Impl::debug_local_hooks (debug_local_hooks_changed pins the members they name)
+kernel.impl	specialized_size_	D	fixed when the kernel specializes its members at construction
+kernel.impl	pending_pins_	D	the members whose pinning waits for the end of the running activation; empty between activations
 kernel.impl	nonblocking_committed_	W	step scratch assigned or cleared before use in the same step; stale content is dead
 kernel.impl	host_active_staged_	W	hint cleared at the start of every activation (StaticKernel::activate); stale content is dead
 kernel.impl	host_nba_staged_	W	hint read only with host_nba_time_ == now and cleared in commit_pending; a save point is a slot end with no pending update, so stale content is dead
@@ -1039,6 +1069,7 @@ kernel.impl	hosted_sequence_	P	kernel dynamic state (S5)
 kernel.impl	final_members_	D	derived from the artifact or rebuilt after restore
 kernel.impl	startup_members_	D	derived from the artifact or rebuilt after restore
 kernel.impl	resolver_members_	D	derived from the artifact or rebuilt after restore
+kernel.impl	resolver_inputs_	D	cache of the resolvers' input widths (the artifact), built when a resolver compiles
 kernel.impl	host_delayed_writes_	Cfg	kernel mode from the artifact or command line
 kernel.impl	armed_hosted_timer_	D	derived: the kernel.hosted_timer doorbell is not saved; rearm() arms it for the earliest saved hosted timer (S5)
 kernel.impl	profile_	Prof	profile counters
@@ -1093,6 +1124,18 @@ kernel.impl	range_failure_at_	W	step scratch assigned or cleared before use in t
 kernel.impl	family_generic_	W	compile_once scratch: set and read within one member compile
 kernel.impl	family_widths_	W	compile_once scratch: set and read within one member compile
 kernel.impl	family_in_place_	W	compile_once scratch: set and read within one member compile
+kernel.impl	settling_splits_	W	step scratch: true only inside settle_splits at initialization, false again before it returns
+kernel.impl	has_source_wires_	D	derived from the artifact or rebuilt after restore
+kernel.impl	has_convert_wires_	D	derived from the artifact or rebuilt after restore
+kernel.impl	has_native_splits_	D	derived from the artifact or rebuilt after restore
+kernel.impl	resolve_work_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	defer_splits_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	pending_splits_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	changed_actuals_	W	step scratch assigned or cleared before use in the same step; stale content is dead
+kernel.impl	split_programs_	D	derived from the artifact or rebuilt after restore
+kernel.impl	nettype_pending_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	nettype_queued_	S	empty or false at every save point: the save audit refuses with FSIM-SAVE-0011 when it is not
+kernel.impl	nettype_mutex_	Cfg	wiring: guards the nettype resolution queue against a parallel batch
 kernel.member	process	D	static member structure from the artifact
 kernel.member	kind	D	static member structure from the artifact
 kernel.member	vhdl	D	static member structure from the artifact
@@ -1164,6 +1207,7 @@ kernel.member	wait_sensitivity	D	static member structure from the artifact
 kernel.member	origin	D	static member structure from the artifact
 kernel.member	stripped_origin	D	static member structure from the artifact
 kernel.member	debug_pc	W	debugger scratch of the member being stepped
+kernel.member	debug_reached_pc	W	debugger scratch of the member being stepped
 kernel.member	debug_hit	D	static member structure from the artifact
 kernel.member	debug_defined	W	debugger scratch of the member being stepped
 kernel.member	debug_defined_pc	W	debugger scratch of the member being stepped
@@ -1208,7 +1252,11 @@ kernel.slot	last_writer	P	slot dynamic fields (S5)
 kernel.slot	tracks_writer	D	slot structure from the artifact
 kernel.slot	mirror	D	slot structure from the artifact
 kernel.slot	resolved	D	slot structure from the artifact
+kernel.slot	user	D	slot structure from the artifact
 kernel.slot	net_processes	D	slot structure from the artifact
+kernel.slot	driving_slot	D	slot structure from the artifact
+kernel.slot	level	D	slot structure from the artifact
+kernel.slot	split_mirror	D	slot structure from the artifact
 kernel.input	signal	D	input structure from the artifact
 kernel.input	cached	P	input state; revision pairs with the host signal_value_revisions
 kernel.input	mirror	D	input structure from the artifact
@@ -1312,12 +1360,18 @@ kernel.hosted_delayed	ready	P	hosted next-delta wake
 sim.impl	dpi_function_hook	Cfg	observers and hooks installed by the embedder
 sim.impl	uvm_phase_objects	P+ids	saved by the app.uvm section (#188); handles to class objects keep their slot and generation, phase and objection handles are bound to the restoring run's services
 sim.impl	uvm_run_test	P+ids	saved by the app.uvm section (#188); handles to class objects keep their slot and generation, phase and objection handles are bound to the restoring run's services
+sim.impl	uvm_api_request	W	set by each UVM API call that dispatches a component's library function and cleared when the dispatch process finishes it, inside that call; dead at rest
+sim.impl	uvm_api_primed	D	set by the first UVM API phase call of this life of the run; a restored or reset run primes the dispatch process again on its first call
 sim.impl	uvm_tlm_owners	P+ids	saved by the app.uvm section (#188); handles to class objects keep their slot and generation, phase and objection handles are bound to the restoring run's services
+sim.impl	uvm_tlm_implementations	P+ids	saved by the app.uvm section (#188); handles to class objects keep their slot and generation, phase and objection handles are bound to the restoring run's services
+sim.impl	uvm_method_roles	D	built on first use from the artifact's compiled class specializations (the UVM roles of each method, by canonical identity); a restored run builds it again
+sim.impl	uvm_object_type_slot	D	set with uvm_method_roles from the artifact's compiled class specializations (the virtual slot of uvm_object's get_object_type); a restored run sets it again
 sim.impl	uvm_analysis_connections	P+ids	saved by the app.uvm section (#188); handles to class objects keep their slot and generation, phase and objection handles are bound to the restoring run's services
 sim.impl	uvm_sequence_sequencers	P+ids	saved by the app.uvm section (#188); handles to class objects keep their slot and generation, phase and objection handles are bound to the restoring run's services
 sim.impl	uvm_sequencer_items	P+ids	saved by the app.uvm section (#188); handles to class objects keep their slot and generation, phase and objection handles are bound to the restoring run's services
 sim.impl	uvm_sequencer_current	P+ids	saved by the app.uvm section (#188); handles to class objects keep their slot and generation, phase and objection handles are bound to the restoring run's services
 sim.impl	uvm_pending_items	P+ids	saved by the app.uvm section (#188); handles to class objects keep their slot and generation, phase and objection handles are bound to the restoring run's services
+sim.impl	uvm_pending_constructions	S	an object waits here only while a lowered constructor chain runs, within one process step; non-empty refuses the save with FSIM-SAVE-0011
 sim.impl	uvm_root_report_object	P+ids	saved by the app.uvm section (#188); handles to class objects keep their slot and generation, phase and objection handles are bound to the restoring run's services
 sim.impl	uvm_singletons	P+ids	saved by the app.uvm section (#188); the object of each UVM library singleton class, by class identity
 sim.impl	built	D	artifact products and caches
@@ -1337,7 +1391,11 @@ sim.impl	class_owner_parameter_values	P+ids	application run state (S6)
 sim.impl	chandle_registry	P+ids	application run state (S6)
 sim.impl	class_static_store	P+ids	application run state (S6)
 sim.impl	class_static_containers	D	artifact products and caches: storage identity -> container object id, read from the design at setup (the containers' values are saved with the interpreter containers)
+sim.impl	static_kernel_codegen	D	artifact products and caches: the static kernel's code generator, made with the interpreter from the design and the cache path; read only by native_cache_statistics
 sim.impl	class_methods	P+ids	application run state (S6)
+sim.impl	killing_randomize_state	W	work storage: a process kill sets the killing process's randomize() calls aside and the kill's return takes them back, inside one time step; what a process that killed itself left is never read again (9.7, 18.6.1)
+sim.impl	randomize_callback_contexts	W	work storage: a generated pre_randomize or post_randomize call pushes its entry and pops it when it returns, inside one time step, so it is empty at rest (18.6.1)
+sim.impl	lowered_randomize_calls	W	work storage: a randomize() call pushes its entry and pops it before the call returns, inside one time step, so it is empty at rest (18.6.1)
 sim.impl	uvm_objects	P+ids	saved by the app.uvm section (#188); handles to class objects keep their slot and generation, phase and objection handles are bound to the restoring run's services
 sim.impl	uvm_components	P+ids	saved by the app.uvm section (#188); handles to class objects keep their slot and generation, phase and objection handles are bound to the restoring run's services
 sim.impl	uvm_activity	P+ids	saved by the app.uvm section (#188); handles to class objects keep their slot and generation, phase and objection handles are bound to the restoring run's services
@@ -1379,11 +1437,11 @@ sim.impl	vpi_signal_handles	D	VPI handle tables, rebuilt on demand; not saved
 sim.impl	vpi_ports	D	VPI handle tables, rebuilt on demand; not saved
 sim.impl	vpi_handle_signals	D	VPI handle tables, rebuilt on demand; not saved
 sim.impl	vpi_statement_counters	D	VPI handle tables, rebuilt on demand; not saved
-sim.impl	vpi_assertion_coverage_keys	D	VPI handle tables, rebuilt on demand; not saved
+sim.impl	vpi_assertion_coverage_targets	D	VPI handle tables, rebuilt on demand; not saved
 sim.impl	vpi_driver_bindings	D	VPI handle tables, rebuilt on demand; not saved
 sim.impl	vpi_event_handles	D	VPI handle tables, rebuilt on demand; not saved
 sim.impl	vpi_event_signals	D	VPI handle tables, rebuilt on demand; not saved
-sim.impl	vpi_assertion_handles	D	VPI handle tables, rebuilt on demand; not saved
+sim.impl	vpi_assertion_occurrences	D	VPI handle tables, rebuilt on demand; not saved
 sim.impl	vpi_assertion_processes	D	VPI handle tables, rebuilt on demand; not saved
 sim.impl	vpi_scalar_kinds	D	VPI handle tables, rebuilt on demand; not saved
 sim.impl	vpi_categories	D	VPI handle tables, rebuilt on demand; not saved
@@ -1410,6 +1468,7 @@ sim.impl	vpi_container_scalar_kinds	D	VPI handle tables, rebuilt on demand; not 
 sim.impl	vpi_container_categories	D	VPI handle tables, rebuilt on demand; not saved
 sim.impl	vpi_value_state_observer	D	VPI handle tables, rebuilt on demand; not saved
 sim.impl	vpi_forced_signals	D	VPI handle tables, rebuilt on demand; not saved
+sim.impl	vpi_forced_words	D	VPI handle tables, rebuilt on demand; not saved
 sim.impl	vpi_bridge_mutex	D	VPI handle tables, rebuilt on demand; not saved
 sim.impl	vpi_started	P	lifecycle flags (SystemC refuses save)
 sim.impl	foreign_update_serial	P	lifecycle flags (SystemC refuses save)
@@ -1499,6 +1558,10 @@ sim.impl	assertion_control_instances	D	derived from the artifact (build_assertio
 sim.impl	assertion_control_arguments	S	exact test in the app.control audit (FSIM-SAVE-0011): the arg| payloads are sent in the same statement as the request that consumes them
 sim.impl	assertion_control_sources	S	exact test in the app.control audit (FSIM-SAVE-0011): the src| payload is sent in the same statement as the request that consumes it
 sim.impl	class_property_change_hook	Cfg	observers and hooks installed by the embedder
+sim.impl	class_property_container_change_hook	Cfg	observers and hooks installed by the embedder
+sim.impl	class_container_watches	Cfg	observers and hooks installed by the embedder
+sim.impl	class_static_container_change_hook	Cfg	observers and hooks installed by the embedder
+sim.impl	class_static_container_watches	Cfg	observers and hooks installed by the embedder
 sim.impl	class_heap_change_signal	P+ids	application run state (S6)
 sim.impl	source_function_dispatch_depth	P	lifecycle flags (SystemC refuses save)
 sim.impl	class_static_property_change_hook	Cfg	observers and hooks installed by the embedder
@@ -1540,6 +1603,8 @@ foreign.vpi_live	statement_drivers_	D	VPI handle tables and model caches, rebuil
 foreign.vpi_live	member_watches_	D	VPI handle tables and model caches, rebuilt on demand; not saved
 foreign.vpi_live	size_member_watches_	D	VPI handle tables and model caches, rebuilt on demand; not saved
 foreign.vpi_live	member_watch_hook_	Cfg	user callback or hook, dropped at restart (owner decision 5)
+foreign.vpi_live	static_container_views_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	class_change_hooked_	Cfg	user callback or hook, dropped at restart (owner decision 5)
 foreign.vpi_live	next_iterator_	W	vpi_iterate creates, vpi_scan or vpi_free_object ends; a restore drops the handles a library holds (restore_run_state clears the table, IEEE 1800-2023 38.36.3)
 foreign.vpi_live	iterators_	W	vpi_iterate creates, vpi_scan or vpi_free_object ends; a restore drops the handles a library holds (restore_run_state clears the table, IEEE 1800-2023 38.36.3)
 foreign.vpi_live	user_data_	D	VPI handle tables and model caches, rebuilt on demand; not saved
@@ -1557,6 +1622,13 @@ foreign.vpi_live	class_objects_	D	VPI handle tables and model caches, rebuilt on
 foreign.vpi_live	class_object_serials_	D	VPI handle tables and model caches, rebuilt on demand; not saved
 foreign.vpi_live	class_members_	D	VPI handle tables and model caches, rebuilt on demand; not saved
 foreign.vpi_live	class_member_index_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	bound_items_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	bound_item_index_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	via_references_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	via_reference_index_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	sync_objects_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	sync_object_serials_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	sync_messages_	D	VPI handle tables and model caches, rebuilt on demand; not saved
 foreign.vpi_live	size_callbacks_	Cfg	user callback or hook, dropped at restart (owner decision 5)
 foreign.vpi_live	reclaim_callbacks_	Cfg	user callback or hook, dropped at restart (owner decision 5)
 foreign.vpi_live	create_callbacks_	Cfg	user callback or hook, dropped at restart (owner decision 5)
@@ -1597,22 +1669,25 @@ foreign.vpi_live	typespecs_	D	VPI handle tables and model caches, rebuilt on dem
 foreign.vpi_live	typespec_index_	D	VPI handle tables and model caches, rebuilt on demand; not saved
 foreign.vpi_live	typespec_members_	D	VPI handle tables and model caches, rebuilt on demand; not saved
 foreign.vpi_live	enum_constants_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	param_assigns_	D	VPI handle tables and model caches, rebuilt on demand; not saved
 foreign.vpi_live	declared_typespec_nodes_	D	VPI handle tables and model caches, rebuilt on demand; not saved
 foreign.vpi_live	declared_typespecs_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	declared_container_typespecs_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	frame_event_element_index_	D	VPI handle tables and model caches, rebuilt on demand; not saved
 foreign.vpi_live	derived_typespecs_	D	VPI handle tables and model caches, rebuilt on demand; not saved
-foreign.vpi_live	queued_path_delays_	P	saved in the foreign.vpi section, version 2 (LiveService::io_delay_edits): delay edits made through vpi_put_delays; net_put_epoch_ is saved with the record epoch and rebased on restore
-foreign.vpi_live	queued_check_limits_	P	saved in the foreign.vpi section, version 2 (LiveService::io_delay_edits): delay edits made through vpi_put_delays; net_put_epoch_ is saved with the record epoch and rebased on restore
-foreign.vpi_live	primitive_delay_rows_	P	saved in the foreign.vpi section, version 2 (LiveService::io_delay_edits): delay edits made through vpi_put_delays; net_put_epoch_ is saved with the record epoch and rebased on restore
-foreign.vpi_live	path_delay_rows_	P	saved in the foreign.vpi section, version 2 (LiveService::io_delay_edits): delay edits made through vpi_put_delays; net_put_epoch_ is saved with the record epoch and rebased on restore
-foreign.vpi_live	check_delay_rows_	P	saved in the foreign.vpi section, version 2 (LiveService::io_delay_edits): delay edits made through vpi_put_delays; net_put_epoch_ is saved with the record epoch and rebased on restore
-foreign.vpi_live	net_delay_overrides_	P	saved in the foreign.vpi section, version 2 (LiveService::io_delay_edits): delay edits made through vpi_put_delays; net_put_epoch_ is saved with the record epoch and rebased on restore
-foreign.vpi_live	net_pulse_overrides_	P	saved in the foreign.vpi section, version 2 (LiveService::io_delay_edits): delay edits made through vpi_put_delays; net_put_epoch_ is saved with the record epoch and rebased on restore
-foreign.vpi_live	mipd_rows_	P	saved in the foreign.vpi section, version 2 (LiveService::io_delay_edits): delay edits made through vpi_put_delays; net_put_epoch_ is saved with the record epoch and rebased on restore
-foreign.vpi_live	net_put_epoch_	P	saved in the foreign.vpi section, version 2 (LiveService::io_delay_edits): delay edits made through vpi_put_delays; net_put_epoch_ is saved with the record epoch and rebased on restore
+foreign.vpi_live	queued_path_delays_	P	saved in the foreign.vpi section, version 3 (LiveService::io_delay_edits): delay edits made through vpi_put_delays; net_put_epoch_ is saved with the record epoch and rebased on restore
+foreign.vpi_live	queued_check_limits_	P	saved in the foreign.vpi section, version 3 (LiveService::io_delay_edits): delay edits made through vpi_put_delays; net_put_epoch_ is saved with the record epoch and rebased on restore
+foreign.vpi_live	primitive_delay_rows_	P	saved in the foreign.vpi section, version 3 (LiveService::io_delay_edits): delay edits made through vpi_put_delays; net_put_epoch_ is saved with the record epoch and rebased on restore
+foreign.vpi_live	path_delay_rows_	P	saved in the foreign.vpi section, version 3 (LiveService::io_delay_edits): delay edits made through vpi_put_delays; net_put_epoch_ is saved with the record epoch and rebased on restore
+foreign.vpi_live	check_delay_rows_	P	saved in the foreign.vpi section, version 3 (LiveService::io_delay_edits): delay edits made through vpi_put_delays; net_put_epoch_ is saved with the record epoch and rebased on restore
+foreign.vpi_live	net_delay_overrides_	P	saved in the foreign.vpi section, version 3 (LiveService::io_delay_edits): delay edits made through vpi_put_delays; net_put_epoch_ is saved with the record epoch and rebased on restore
+foreign.vpi_live	net_pulse_overrides_	P	saved in the foreign.vpi section, version 3 (LiveService::io_delay_edits): delay edits made through vpi_put_delays; net_put_epoch_ is saved with the record epoch and rebased on restore
+foreign.vpi_live	mipd_rows_	P	saved in the foreign.vpi section, version 3 (LiveService::io_delay_edits): delay edits made through vpi_put_delays; net_put_epoch_ is saved with the record epoch and rebased on restore
+foreign.vpi_live	net_put_epoch_	P	saved in the foreign.vpi section, version 3 (LiveService::io_delay_edits): delay edits made through vpi_put_delays; net_put_epoch_ is saved with the record epoch and rebased on restore
 foreign.vpi_live	primitive_delay_objects_	D	VPI handle tables and model caches, rebuilt on demand; not saved
 foreign.vpi_live	time_queues_	D	VPI handle tables and model caches, rebuilt on demand; not saved
 foreign.vpi_live	callback_due_	Cfg	user callback or hook, dropped at restart (owner decision 5)
-foreign.vpi_live	mipd_pulses_	P	saved in the foreign.vpi section, version 2 (LiveService::io_delay_edits): delay edits made through vpi_put_delays; net_put_epoch_ is saved with the record epoch and rebased on restore
+foreign.vpi_live	mipd_pulses_	P	saved in the foreign.vpi section, version 3 (LiveService::io_delay_edits): delay edits made through vpi_put_delays; net_put_epoch_ is saved with the record epoch and rebased on restore
 foreign.vpi_live	path_delay_hook_	Cfg	user callback or hook, dropped at restart (owner decision 5)
 foreign.vpi_live	string_cursor_	W	return-string ring: slot = strings_[string_cursor_++ % size] is assigned before its pointer is handed out
 foreign.vpi_live	vectors_	W	return-vector ring: slot = vectors_[vector_cursor_++ % size] is assigned before its pointer is handed out
@@ -1636,7 +1711,11 @@ foreign.vpi_live	assertion_fail_expressions_	D	VPI handle tables and model cache
 foreign.vpi_live	constant_statements_	D	VPI handle tables and model caches, rebuilt on demand; not saved
 foreign.vpi_live	immediate_assertion_callbacks_	Cfg	user callback or hook, dropped at restart (owner decision 5)
 foreign.vpi_live	immediate_assertion_hook_	Cfg	user callback or hook, dropped at restart (owner decision 5)
-foreign.vpi_live	call_results_	P	value each user function call returned at its last evaluation (--foreign-probes), written by LiveService::save_run_state into foreign.vpi v2 (ForeignRunState::call_results)
+foreign.vpi_live	call_results_	P	value each user function call returned at its last evaluation (--foreign-probes), written by LiveService::save_run_state into foreign.vpi v3 (ForeignRunState::call_results; v3 adds string and container results)
+foreign.vpi_live	assertion_control_task_hooked_	Cfg	whether the control-task hook is bound: bound once from the system hooks or a control-reason registration of the same command line
+foreign.vpi_live	bare_paths_	D	VPI handle tables and model caches, rebuilt on demand; not saved (the ends of acc_handle_path bare intermodule paths; a restore drops the handles a library holds)
+foreign.vpi_live	selected_generate_regions_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	vif_clockings_	D	VPI handle tables and model caches, rebuilt on demand; not saved
 foreign.vhpi_live	simulation_	Cfg	loaded modules and registrations from the same command line (identity-checked at restart)
 foreign.vhpi_live	hir_	Cfg	loaded modules and registrations from the same command line (identity-checked at restart)
 foreign.vhpi_live	design_	Cfg	loaded modules and registrations from the same command line (identity-checked at restart)
@@ -1687,12 +1766,14 @@ foreign.vhpi_live	next_time_	D	the NextTime callback ensure_next_time() register
 foreign.vhpi_live	changed_	S	exact test in LiveService::audit_rest_state (FSIM-SAVE-0011): set and cleared inside one routine, callback delivery or safe-point drain; restore_run_state clears them (reset_cycle_state)
 foreign.vhpi_live	flushing_	S	exact test in LiveService::audit_rest_state (FSIM-SAVE-0011): set and cleared inside one routine, callback delivery or safe-point drain; restore_run_state clears them (reset_cycle_state)
 foreign.vhpi_live	flushing_registered_	S	exact test in LiveService::audit_rest_state (FSIM-SAVE-0011): set and cleared inside one routine, callback delivery or safe-point drain; restore_run_state clears them (reset_cycle_state)
+foreign.vhpi_live	scoped_forces_	S	exact test in LiveService::audit_rest_state (FSIM-SAVE-0011): a force of a variable of a running call ends with its activation, whose frame objects a save does not keep, so a save while one stands is refused; restore_run_state clears the table (reset_cycle_state)
 foreign.vhpi_live	forces_	D	VHPI object tables and caches, rebuilt on demand; not saved
 foreign.vhpi_live	transaction_watch_	D	VHPI object tables and caches, rebuilt on demand; not saved
 foreign.vhpi_live	active_	D	VHPI object tables and caches, rebuilt on demand; not saved
 foreign.vhpi_live	driver_active_	D	VHPI object tables and caches, rebuilt on demand; not saved
 foreign.vhpi_live	driver_token_	D	VHPI object tables and caches, rebuilt on demand; not saved
 foreign.vhpi_live	force_token_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	local_hook_	D	VHPI object tables and caches, rebuilt on demand; not saved
 foreign.vhpi_live	execution_token_	D	VHPI object tables and caches, rebuilt on demand; not saved
 foreign.vhpi_live	running_	D	probe state rebuilt from execution points as they occur (deliver_point: process_entry, call, suspend); reset_cycle_state clears it at a restore
 foreign.vhpi_live	process_runs_	D	VHPI object tables and caches, rebuilt on demand; not saved
@@ -1703,6 +1784,7 @@ foreign.vhpi_live	statement_at_	D	VHPI object tables and caches, rebuilt on dema
 foreign.vhpi_live	all_processes_	D	VHPI object tables and caches, rebuilt on demand; not saved
 foreign.vhpi_live	all_bodies_	D	VHPI object tables and caches, rebuilt on demand; not saved
 foreign.vhpi_live	call_at_	D	VHPI object tables and caches, rebuilt on demand; not saved
+foreign.vhpi_live	calls_by_statement_	D	VHPI object tables and caches, rebuilt on demand; not saved
 foreign.vhpi_live	params_	D	VHPI object tables and caches, rebuilt on demand; not saved
 foreign.vhpi_live	process_objects_	D	VHPI object tables and caches, rebuilt on demand; not saved
 foreign.vhpi_live	transaction_token_	D	VHPI object tables and caches, rebuilt on demand; not saved
@@ -1756,6 +1838,7 @@ foreign.vhpi_live	resolved_function_	D	lazily built object for IEEE.STD_LOGIC_11
 foreign.vhpi_live	catalog_source_	Cfg	library catalog reader installed by the embedder
 foreign.vhpi_live	catalog_read_	D	lazy cache: libraries whose catalog was read
 foreign.vhpi_live	catalog_units_	D	lazy cache of catalog-only design units
+foreign.vhpi_live	specializations_by_instance_	D	lazy cache: instance path to its elaborated specialization, built from the design on first use
 foreign.tf_coordinator	scheduler	Cfg	wiring to the scheduler
 foreign.tf_coordinator	stable_order_base	Cfg	wiring to the scheduler
 foreign.tf_coordinator	owner	Cfg	wiring to the scheduler
@@ -1822,3 +1905,6 @@ sim.impl	tranif_controls	D	tranif control splits made by vpi_put_delays; rebuilt
 sim.impl	gate_delay_error	W	set by gate_delay_program and read by the same vpi_put_delays call
 sim.impl	uvm_default_printer_signal	D	cache of the signal that holds the library's uvm_default_printer, searched on the first print_topology
 sim.impl	uvm_singleton_variable_signals	D	cache of the signals that hold the library's uvm_top and uvm_cmdline_proc, searched on the first request of each singleton
+sim.impl	assertion_control_task_hook	Cfg	observers and hooks installed by the embedder (the VPI service binds it for the Table 20-8 control-task callbacks)
+foreign.vpi_live	system_value_sites_built_	D	VPI handle tables and model caches, rebuilt on demand; not saved
+foreign.vpi_live	system_value_sites_	D	VPI handle tables and model caches, rebuilt on demand; not saved

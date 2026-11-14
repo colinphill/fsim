@@ -6,6 +6,7 @@
 // elaborated so far.
 #include "hierarchy_builder_internal.hpp"
 #include "lowerer_internal.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -347,6 +348,49 @@ std::optional<SignalId> HierarchyBuilder::run_compiled_vhdl_elaboration_program(
         }
     }
     return result_image;
+}
+
+std::optional<PackedLogic4> HierarchyBuilder::evaluate_vhdl_resolver_null_value(
+    const SignalId signal, runtime::simir::Process program,
+    const RegisterId output)
+{
+    using namespace runtime::simir;
+    if (signal >= design_.signals_.size()) {
+        return std::nullopt;
+    }
+    // Each halt ends the pass: it becomes a jump to a write of the result
+    // to a scratch signal of the resolved signal's subtype, then a halt.
+    const auto tail = static_cast<InstructionIndex>(program.operations.size());
+    bool halts { };
+    for (std::size_t index = 0U; index < program.operations.size(); ++index) {
+        const auto operation = program.operations.expanded(index);
+        if (operation_get_if<Halt>(&operation) != nullptr) {
+            program.operations.replace(index, Jump { tail });
+            halts = true;
+        }
+    }
+    if (!halts) {
+        return std::nullopt;
+    }
+    const auto scratch = static_cast<SignalId>(design_.signals_.size());
+    program.operations.push_back(WriteBlocking { scratch, output });
+    program.operations.push_back(Halt { });
+    auto image = design_.signals_[signal];
+    image.vhdl_resolver.reset();
+    image.vhdl_conversion_drivers.clear();
+    image.resolution = ResolutionKind::none;
+    design_.signals_.push_back(std::move(image));
+    std::optional<PackedLogic4> value;
+    try {
+        Interpreter interpreter;
+        static_cast<void>(run_compiled_vhdl_elaboration_program(
+            interpreter, std::move(program), scratch, &value));
+    } catch (const std::exception& error) {
+        trace_evaluation("resolver null value", error.what());
+        value.reset();
+    }
+    design_.signals_.pop_back();
+    return value;
 }
 
 void HierarchyBuilder::keep_compiled_vhdl_elaboration_state(

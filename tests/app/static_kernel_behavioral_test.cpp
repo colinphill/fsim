@@ -21,6 +21,7 @@
 // $fscanf, $fgets into a module variable, $feof; 21.3) through the host's
 // file table, still as a kernel member.
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
 
 #include "../../src/runtime/simir_static_kernel.hpp"
 

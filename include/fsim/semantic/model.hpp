@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include <compare>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -129,10 +128,25 @@ struct SourceFile {
     std::string content_digest;
 };
 
+/// The definition of a macro: its name, the content digest of the source
+/// file holding the `define and its position there (IEEE 1800-2023 22.5.1).
+struct MacroDefinition {
+    std::string name;
+    std::string content_digest;
+    std::uint32_t line{};
+    std::uint32_t column{};
+
+    friend bool operator==(const MacroDefinition&, const MacroDefinition&)
+        = default;
+};
+
 struct Expansion {
     ExpansionId id;
     std::optional<ExpansionId> parent;
     std::string description;
+    /// The definition of the outermost macro on the path from the root to
+    /// this record; empty when the path holds only includes.
+    std::optional<MacroDefinition> outermost_macro = std::nullopt;
 };
 
 struct SourceSpan {
@@ -367,7 +381,8 @@ public:
     [[nodiscard]] std::optional<SourceFileId> find_source_file(
         std::string_view physical_name) const noexcept;
     [[nodiscard]] ExpansionId intern_expansion(
-        std::span<const std::string> outermost_to_innermost);
+        std::span<const std::string> outermost_to_innermost,
+        const MacroDefinition* outermost_macro = nullptr);
     [[nodiscard]] SourceSpanId intern_source_span(
         SourceFileId file,
         std::string logical_name,

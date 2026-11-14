@@ -42,17 +42,17 @@ if(NOT FSIM_CTEST_STATUS EQUAL 0)
     "cannot enumerate registered CTests: ${FSIM_CTEST_ERROR}")
 endif()
 
-string(JSON FSIM_CTEST_COUNT ERROR_VARIABLE FSIM_JSON_ERROR
-       LENGTH "${FSIM_CTEST_JSON}" tests)
-if(FSIM_JSON_ERROR OR FSIM_CTEST_COUNT LESS 1)
-  message(FATAL_ERROR "CTest returned no usable test inventory: ${FSIM_JSON_ERROR}")
+include("${FSIM_SOURCE_DIR}/cmake/CTestMetadata.cmake")
+fsim_ctest_test_objects("${FSIM_CTEST_JSON}" FSIM_CTEST_COUNT FSIM_CTEST_TEST)
+if(FSIM_CTEST_COUNT LESS 1)
+  message(FATAL_ERROR "CTest returned no usable test inventory")
 endif()
 
 set(FSIM_REGISTERED_NAMES "")
 math(EXPR FSIM_LAST_CTEST "${FSIM_CTEST_COUNT} - 1")
 foreach(FSIM_CTEST_INDEX RANGE 0 ${FSIM_LAST_CTEST})
   string(JSON FSIM_CTEST_NAME ERROR_VARIABLE FSIM_JSON_ERROR
-         GET "${FSIM_CTEST_JSON}" tests ${FSIM_CTEST_INDEX} name)
+         GET "${FSIM_CTEST_TEST_${FSIM_CTEST_INDEX}}" name)
   if(FSIM_JSON_ERROR OR FSIM_CTEST_NAME MATCHES "[\r\n]")
     message(FATAL_ERROR
       "CTest has an invalid test name at index ${FSIM_CTEST_INDEX}")

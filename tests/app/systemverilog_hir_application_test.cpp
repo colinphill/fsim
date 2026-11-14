@@ -1,5 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/semantic/vhdl_hir.hpp"
+#include "fsim/semantic/systemverilog_hir.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/frontend/design.hpp"
+#include "fsim/semantic/compiled_design.hpp"
+#include "fsim/app/artifact_schema.hpp"
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/elaboration/elaborator.hpp"
 #include "fsim/frontend/class_resolution.hpp"
@@ -3443,18 +3450,20 @@ endmodule
         assert(reverse_source == reverse_view);
         assert(partial_source != partial_view);
         assert(execution_project->design.signals().at(*resolved).resolution
-            == fsim::runtime::simir::ResolutionKind::sv_user_first);
+            == fsim::runtime::simir::ResolutionKind::user_function);
         assert(*port_actual != *port_formal);
         assert(*uwire_port_actual != *uwire_port_formal);
         assert(execution_project->design.signals().at(*port_actual).resolution
-            == fsim::runtime::simir::ResolutionKind::sv_user_first);
+            == fsim::runtime::simir::ResolutionKind::user_function);
         assert(execution_project->design.signals().at(*uwire_port_actual)
                    .resolution
             == fsim::runtime::simir::ResolutionKind::none);
         const auto design_state = execution_project->design.state();
+        // A net of a user-defined nettype starts at its data type's
+        // default, x for logic (IEEE 1800-2023 6.7.3).
         assert(design_state.signals.at(*port_actual)
                    .initial_value.to_msb_string()
-            == "ZZZZZZZZ");
+            == "XXXXXXXX");
         assert(design_state.signals.at(*uwire_port_actual)
                    .initial_value.to_msb_string()
             == "ZZZZZZZZ");

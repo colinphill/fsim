@@ -2,6 +2,7 @@
 
 #include "simir_events.hpp"
 #include "simir_internal.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 
 #include <algorithm>
 #include <array>
@@ -9,8 +10,6 @@
 #include <chrono>
 #include <exception>
 #include <limits>
-#include <new>
-#include <ranges>
 #include <unordered_map>
 
 namespace fsim::runtime::simir {
@@ -181,9 +180,7 @@ void Interpreter::Impl::ensure_update_commit_callback()
                     continue;
                 }
                 const auto process = staged.process;
-                if (driver_transaction_hook) {
-                    driver_transaction_hook(process, signal);
-                }
+                report_driver_transaction(process, signal);
                 const auto origin = capture_signal_change_origin(process);
                 const bool can_publish = hook_free_publication
                     && can_publish_native_logic9_word_prevalidated(
@@ -771,9 +768,7 @@ void Interpreter::Impl::ensure_update_commit_callback()
                 const auto process = staged.process;
                 const auto origin = capture_signal_change_origin(process);
                 staged.active = 0U;
-                if (driver_transaction_hook) {
-                    driver_transaction_hook(process, signal);
-                }
+                report_driver_transaction(process, signal);
                 const auto& route = direct_single_driver_routes[signal];
                 if (!route.active || route.process != process
                     || direct_single_driver_record(signal) == nullptr
@@ -857,9 +852,7 @@ void Interpreter::Impl::ensure_update_commit_callback()
                     };
                 }
                 const auto process = record->process;
-                if (driver_transaction_hook) {
-                    driver_transaction_hook(process, signal);
-                }
+                report_driver_transaction(process, signal);
                 if (record->value != *staged) {
                     record->value = *staged;
                     if (driver_change_hook) {
@@ -1202,6 +1195,7 @@ void Interpreter::Impl::ensure_update_commit_callback()
             // VHDL resolution functions run once all of this update's
             // driving values are committed.
             drain_vhdl_resolutions();
+            report_staged_driver_transactions();
         };
     }
 }
@@ -1749,13 +1743,15 @@ void Interpreter::Impl::stage_update_words(
                 { },
                 value_index });
             stage_selected_signal_transaction(
-                update.signal, offset.value_or(0U), update.value.width);
+                update.signal, offset.value_or(0U), update.value.width,
+                process);
         } else {
             block_native_logic9_update_before_generic(update.signal);
             pending_updates.push_back(PendingUpdate {
                 update.signal, process, offset, update.value, std::nullopt });
             stage_selected_signal_transaction(
-                update.signal, offset.value_or(0U), update.value.width);
+                update.signal, offset.value_or(0U), update.value.width,
+                process);
         }
         staged = true;
     }
@@ -1889,7 +1885,8 @@ void Interpreter::Impl::stage_validated_update_words(
                 { },
                 value_index });
             stage_selected_signal_transaction(
-                update.signal, offset.value_or(0U), update.value.width);
+                update.signal, offset.value_or(0U), update.value.width,
+                process);
             if (native_update_profile_enabled) {
                 ++native_update_profile_word_scalar;
             }
@@ -1946,7 +1943,8 @@ void Interpreter::Impl::stage_validated_update_words(
                 ++native_update_profile_word_direct;
             }
             stage_selected_signal_transaction(
-                update.signal, offset.value_or(0U), update.value.width);
+                update.signal, offset.value_or(0U), update.value.width,
+                process);
             staged_any = true;
             continue;
         }
@@ -1978,7 +1976,8 @@ void Interpreter::Impl::stage_validated_update_words(
                         ++native_update_profile_word_direct;
                     }
                     stage_selected_signal_transaction(
-                        update.signal, offset.value_or(0U), update.value.width);
+                        update.signal, offset.value_or(0U), update.value.width,
+                        process);
                     staged_any = true;
                     continue;
                 }
@@ -1996,7 +1995,8 @@ void Interpreter::Impl::stage_validated_update_words(
                 ++native_update_profile_word_direct;
             }
             stage_selected_signal_transaction(
-                update.signal, offset.value_or(0U), update.value.width);
+                update.signal, offset.value_or(0U), update.value.width,
+                process);
             staged_any = true;
             continue;
         }
@@ -2059,7 +2059,8 @@ void Interpreter::Impl::stage_validated_update_words(
                         ++native_update_profile_word_unresolved;
                     }
                     stage_selected_signal_transaction(
-                        update.signal, offset.value_or(0U), update.value.width);
+                        update.signal, offset.value_or(0U), update.value.width,
+                        process);
                     staged_any = true;
                     continue;
                 }
@@ -2100,7 +2101,8 @@ void Interpreter::Impl::stage_validated_update_words(
                         ++native_update_profile_word_resolved;
                     }
                     stage_selected_signal_transaction(
-                        update.signal, offset.value_or(0U), update.value.width);
+                        update.signal, offset.value_or(0U), update.value.width,
+                        process);
                     staged_any = true;
                     continue;
                 }
@@ -2137,7 +2139,7 @@ void Interpreter::Impl::stage_validated_update_words(
             }
         }
         stage_selected_signal_transaction(
-            update.signal, offset.value_or(0U), update.value.width);
+            update.signal, offset.value_or(0U), update.value.width, process);
         staged_any = true;
     }
     if (staged_any) {
@@ -2371,7 +2373,8 @@ bool Interpreter::Impl::stage_validated_logic9_update_batches(
         staged.mask |= mask;
         staged_any = true;
         const std::array<std::uint64_t, 1U> mask_words { mask };
-        stage_selected_signal_transaction_mask(slot.signal, mask_words);
+        stage_selected_signal_transaction_mask(
+            slot.signal, mask_words, batch.process);
         if (logic9_batch_profile_enabled) {
             ++profile.changed_slots;
             ++profile.consumed_slots;

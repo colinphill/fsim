@@ -5,6 +5,7 @@
 #include "fsim/support/path.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <set>
 #include <optional>
 #include <unordered_map>
@@ -241,7 +242,28 @@ namespace {
             }
             result.name = target.substr(escape);
             result.name_form = library::VhdlIdentifierForm::basic;
-            return result.name.size() > 1U ? std::optional { result } : std::nullopt;
+            if (result.name.size() < 2U) {
+                return std::nullopt;
+            }
+            // The argument's end terminates the name (5.6.1). The compiled
+            // unit keeps the terminating space of a name that is not a
+            // simple identifier (the parser's spelling, `\$top `); a simple
+            // one was stored without its backslash.
+            const auto body = std::string_view { result.name }.substr(1U);
+            const bool simple = (std::isalpha(
+                                     static_cast<unsigned char>(body.front()))
+                                    || body.front() == '_')
+                && std::ranges::all_of(body, [](const char character) {
+                       return std::isalnum(
+                                  static_cast<unsigned char>(character))
+                           || character == '_' || character == '$';
+                   });
+            if (simple) {
+                result.name = std::string { body };
+            } else if (result.name.back() != ' ') {
+                result.name.push_back(' ');
+            }
+            return result;
         }
         if (const auto open = target.find('('); open != std::string_view::npos) {
             if (target.empty() || target.back() != ')' || open + 2 >= target.size()) {

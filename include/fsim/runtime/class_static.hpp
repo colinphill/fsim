@@ -8,7 +8,6 @@
 #include <limits>
 #include <map>
 #include <optional>
-#include <span>
 #include <string>
 #include <string_view>
 #include <utility>

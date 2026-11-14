@@ -186,6 +186,10 @@ struct SystemVerilogClassPropertyDescriptor {
   std::optional<SystemVerilogClassHandleContainerDescriptor> handle_container;
   std::optional<PackedLogic4> initial_packed;
   std::optional<std::string> initial_string;
+  /// The value a fixed-size unpacked array property holds from
+  /// construction: its elements with their type's default (IEEE 1800-2023
+  /// 7.4, 8.7).
+  std::optional<simir::ContainerValue> initial_container;
   SystemVerilogClassRandomKind random_kind{
       SystemVerilogClassRandomKind::None};
   bool signed_value{};
@@ -287,6 +291,20 @@ class SystemVerilogClassHeap final {
   [[nodiscard]] const SystemVerilogClassPropertyValue& property(
       SystemVerilogClassHandle handle,
       std::string_view name) const;
+  // The property a simple name denotes in the object (IEEE 1800-2023 8.14:
+  // a derived class's member hides the base's): `owner::name` of the
+  // nearest class of the object's chain that declares it, searched from
+  // the class `scope` (a method's class; empty: the object's own class)
+  // up through its bases; none when no class does. property() takes only
+  // the exact `owner::name` identity.
+  [[nodiscard]] const SystemVerilogClassPropertyValue* member(
+      SystemVerilogClassHandle handle,
+      std::string_view name,
+      std::string_view scope = {}) const;
+  [[nodiscard]] SystemVerilogClassPropertyValue* member(
+      SystemVerilogClassHandle handle,
+      std::string_view name,
+      std::string_view scope = {});
   [[nodiscard]] SystemVerilogClassRandomState& random_state(
       SystemVerilogClassHandle handle,
       std::string_view name);

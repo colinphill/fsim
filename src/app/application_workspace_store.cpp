@@ -5,7 +5,6 @@
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 
-#include <algorithm>
 #include <sstream>
 
 namespace fsim::app::workspace {

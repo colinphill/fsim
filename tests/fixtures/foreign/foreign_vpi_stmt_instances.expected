@@ -1,0 +1,14 @@
+#c cbStmt on top.a.bump accepted=1
+#c cbStmt on top.b.bump accepted=1
+#c cbStmt on top.a.twice accepted=1
+#c cbStmt on top.b.twice accepted=1
+#c cbStartOfFrame accepted=1
+#c cbStartOfFrame top.a.bump origin=60 a.bump t=1
+#c cbStmt a.bump line 11 t=1
+#c cbStartOfFrame top.b.bump origin=60 b.bump t=2
+#c cbStmt b.bump line 11 t=2
+#c cbStartOfFrame top.a.bump origin=60 a.bump t=3
+#c cbStmt a.bump line 11 t=3
+#c cbStartOfFrame top.a.twice origin=19 a.twice t=4
+#c cbStmt a.twice line 14 t=4
+#c done a.n=4 b.n=2 r=8

@@ -1,0 +1,33 @@
+inside 0 low
+inside 1 low
+inside 2 wildcard
+inside 3 wildcard
+inside 4 default
+inside 5 five
+inside unknown first
+select 10101101
+range 01101101
+multi 8005ab00 ab 5 8
+member c9 c 9 0
+two 0100
+local 19
+disable 1
+disable outer 1
+body 0
+body 2
+cast 1 BLUE
+cast 0 BLUE
+cast 0 BLUE
+cast 1 15
+next BLUE
+wrap RED
+prev GREEN
+last BLUE 3 0
+bad '' xx xx
+str 5 HELLO hello ell 72 0 -1
+putc Jello
+atoi 42 66 34
+itoa -17
+hextoa ff 0
+signed -5
+result=1

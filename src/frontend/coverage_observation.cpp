@@ -2,7 +2,6 @@
 #include "fsim/frontend/coverage_observation.hpp"
 
 #include <algorithm>
-#include <ranges>
 #include <string_view>
 #include <utility>
 

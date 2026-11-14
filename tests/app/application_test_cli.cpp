@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_test_support.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/semantic/systemverilog_hir.hpp"
+#include "fsim/semantic/design_ir.hpp"
 #include "application_workflow_test_support.hpp"
 #include "../api/api_workspace_support.hpp"
 #include "../support/container_test_support.hpp"
@@ -10,7 +13,6 @@
 #include "fsim/cli/driver.hpp"
 #include "fsim/library/artifact.hpp"
 #include "fsim/support/path.hpp"
-#include "fsim/systemc/hierarchy.hpp"
 #include "fsim/systemc/scv.hpp"
 
 #include <algorithm>
@@ -24,7 +26,6 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -460,7 +461,7 @@ void ApplicationTestFixture::test_preprocessing_debug_and_cli()
     {
         std::ofstream output(mapped_vhdl_source, std::ios::binary);
         output << R"vhdl(
-entity mapped_gate is
+library ieee; use ieee.std_logic_1164.all; entity mapped_gate is
   port (value : in std_logic; result : out std_logic);
 end entity;
 architecture rtl of mapped_gate is

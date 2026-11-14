@@ -3,6 +3,7 @@
 #include "simir_execution_shared.hpp"
 
 #include "fsim/runtime/foreign_call_process.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 
 namespace fsim::runtime::simir {
 

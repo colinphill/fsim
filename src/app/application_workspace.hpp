@@ -2,6 +2,7 @@
 #pragma once
 
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
 #include "fsim/artifact/design.hpp"
 #include "fsim/cli/driver.hpp"
 

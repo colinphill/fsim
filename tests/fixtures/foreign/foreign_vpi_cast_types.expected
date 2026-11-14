@@ -1,0 +1,5 @@
+#c line 20: nib_t type=641 [3:0] value=0101
+#c line 21: nib_t type=641 [7:0] value=11000101
+#c line 22: six_t type=641 [5:0] value=000101
+#c line 23: six_t type=640 [1:0] value=01
+#c line 24: three_t type=640 [2:0] value=101

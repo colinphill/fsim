@@ -430,7 +430,16 @@ visibility remain outside the current semantic layer.
 The official IEEE-P1076 `1076-2019` source snapshot is retained
 byte-for-byte under `third_party/ieee-1076-2019` with its Apache-2.0 license,
 authors, exact checksums, and dependency-ordered inventory. Bundling is not
-activation: reviewed stages enter analysis individually. An explicit
+activation: reviewed stages enter analysis individually. The Synopsys `std_logic_arith`, `std_logic_unsigned`,
+`std_logic_signed`, `std_logic_misc`, and `std_logic_textio` sources are retained
+verbatim under `third_party/synopsys-ieee` with their copyright statements.
+The packages of the older standards (VHDL-87, 93/2000/2002 and 2008) are
+shipped under `third_party/ieee-derived/<std>` as files derived from the 2019
+sources by deleting the declarations and bodies that later standards added
+(`scripts/vhdl_ieee_removals.tsv`, `scripts/derive_ieee_packages.py`); no text of
+an older IEEE original is used. The `fsim.ieee-derived-*` and
+`fsim.ieee-name-agreement` checks reproduce them, analyze them under their own
+standard, and compare their names with fsim's projected packages. An explicit
 `ieee.std_logic_1164` use currently activates the checksum-pinned declaration
 and body through an intrinsic package projection that retains fsim's existing
 nine-state type and operator identity. Compiler-supplied roots are stored
@@ -1073,7 +1082,8 @@ the compiled-HIR bundle. Covergroups use the coverage ownership described below.
 
 ### UVM object, phase, sequence, and register foundation
 
-UVM sources are external governed inputs, never vendored compatibility source.
+UVM sources are governed unmodified third-party inputs (vendored under
+`third_party/uvm-*`), never patched compatibility source.
 The source harness validates immutable UVM 1.2 and UVM 2020-3.1 archive and
 complete-tree identities before their unmodified `uvm_pkg.sv` and macro entry
 points enter the ordinary SystemVerilog frontend. Class method hydration starts

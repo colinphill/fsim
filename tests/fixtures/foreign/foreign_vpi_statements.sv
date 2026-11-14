@@ -127,4 +127,20 @@ module top;
         $display(5);
         $write("a\n", n, "b");
     endtask
+
+    // The file forms keep their arguments as written too: the descriptor,
+    // the format, each value and string literal, and an empty argument as
+    // a null operation (21.2.1, 21.3.2, 37.42 detail 8, 37.62).
+    task automatic shown_file;
+        $fdisplay(n, "v=%0d", n, "w");
+        $fwrite(n, , n);
+    endtask
+
+    // A for loop that declares its variable is a scope, the scope of that
+    // variable; the loop's uses of it are the variable (12.7.1, 37.12
+    // detail 2).
+    task automatic counted;
+        for (byte unsigned j = 0; j < 3; j++)
+            n = j;
+    endtask
 endmodule

@@ -1,8 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/frontend/design.hpp"
+#include "fsim/frontend/token.hpp"
 
 #include <algorithm>
 #include <unordered_set>
+#include <cstddef>
+#include <optional>
+#include <span>
+#include <string>
 
 namespace fsim::frontend {
 namespace {

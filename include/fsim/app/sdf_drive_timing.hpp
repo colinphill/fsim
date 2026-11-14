@@ -2,6 +2,9 @@
 #pragma once
 
 #include "fsim/app/sdf_scheduling.hpp"
+#include "fsim/frontend/diagnostic.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_ids.hpp"
 
 #include <cstddef>
 #include <cstdint>

@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+wide el t0=true t1=false tw=true at 1000000 fs
+wide el t0=false t1=true tw=true at 2000000 fs
+wide el t0=true t1=false tw=true at 3000000 fs
+wide el t0=true t1=true tw=true at 4000000 fs

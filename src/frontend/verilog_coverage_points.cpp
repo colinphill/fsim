@@ -2,6 +2,13 @@
 #include "fsim/frontend/verilog_coverage_points.hpp"
 
 #include "fsim/frontend/source.hpp"
+#include "fsim/elaboration/verilog_coverage_points.hpp"
+#include "fsim/frontend/coverage_point_identity.hpp"
+#include "fsim/frontend/coverage_source_control.hpp"
+#include "fsim/frontend/coverage_source_identity.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/token.hpp"
+#include "fsim/support/sha256.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -11,6 +18,9 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+#include <cstddef>
+#include <functional>
+#include <span>
 
 namespace fsim::frontend {
 

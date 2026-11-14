@@ -1,14 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/frontend/class_resolution.hpp"
-#include "fsim/frontend/frontend.hpp"
 #include "fsim/frontend/systemverilog_scalar_folding.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/diagnostic.hpp"
+#include "fsim/frontend/parser.hpp"
+#include "fsim/frontend/systemverilog_scalars.hpp"
+#include "fsim/frontend/token.hpp"
 
 #include <algorithm>
 #include <iostream>
-#include <ranges>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace fsim::tests::frontend {
 namespace {

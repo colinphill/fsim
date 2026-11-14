@@ -1,13 +1,26 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "simir_internal.hpp"
-#include "simir_static_kernel_state.hpp"
 
+#include "fsim/runtime/simir_interpreter.hpp"
 #include "fsim/runtime/systemverilog_string.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_container_value.hpp"
+#include "fsim/runtime/simir_ids.hpp"
 
 #include <algorithm>
 #include <bit>
 #include <limits>
+#include <stdexcept>
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#include <string_view>
+#include <type_traits>
+#include <utility>
+#include "simir_static_kernel_state.hpp"
 
 namespace fsim::runtime::simir {
 namespace {
@@ -121,6 +134,44 @@ struct Interpreter::Impl::ProcessSynchronizationClient final
   return false;
 }
 
+std::optional<SynchronizationObject>
+Interpreter::synchronization_object(const std::uint64_t handle) const {
+  const auto encoded = handle & synchronization_handle_payload_mask;
+  if (encoded == 0U) {
+    return std::nullopt;
+  }
+  const auto index = static_cast<std::size_t>(encoded - 1U);
+  SynchronizationObject object;
+  if ((handle & synchronization_handle_tag_mask) == mailbox_handle_tag) {
+    if (index >= impl_->mailboxes.size()) {
+      return std::nullopt;
+    }
+    const auto& mailbox = impl_->mailboxes[index];
+    object.mailbox = true;
+    object.string_messages = mailbox.element_kind == MailboxElementKind::string;
+    object.messages.assign(mailbox.entries.begin(), mailbox.entries.end());
+    object.string_values.assign(
+        mailbox.string_entries.begin(), mailbox.string_entries.end());
+    for (const auto& reader : mailbox.readers) {
+      object.waiting.push_back(reader.process);
+    }
+    for (const auto& writer : mailbox.writers) {
+      object.waiting.push_back(writer.process);
+    }
+    return object;
+  }
+  if ((handle & synchronization_handle_tag_mask) == semaphore_handle_tag) {
+    if (index >= impl_->semaphores.size()) {
+      return std::nullopt;
+    }
+    for (const auto& waiter : impl_->semaphores[index].waiters) {
+      object.waiting.push_back(waiter.process);
+    }
+    return object;
+  }
+  return std::nullopt;
+}
+
 bool Interpreter::Impl::synchronization_halted(const ProcessId id) {
   if (static_kernel && static_kernel->synchronization_thread(id)) {
     return !static_kernel->synchronization_live(id);
@@ -167,6 +218,35 @@ bool Interpreter::Impl::synchronization_wake(const ProcessId id) {
   waiter.status = ProcessStatus::running;
   queue_active_current(id);
   return true;
+}
+
+bool Interpreter::trigger_dynamic_event(const std::uint64_t handle)
+{
+  if (handle == 0U
+      || (handle & synchronization_handle_tag_mask) != event_handle_tag) {
+    return false;
+  }
+  const auto encoded = handle & synchronization_handle_payload_mask;
+  if (encoded == 0U || encoded > impl_->dynamic_events.size()) {
+    return false;
+  }
+  auto& state = impl_->dynamic_events[static_cast<std::size_t>(encoded - 1U)];
+  state.last_trigger = impl_->scheduler.now();
+  auto waiters = std::move(state.waiters);
+  state.waiters.clear();
+  for (const auto waiter : waiters) {
+    impl_->synchronization_event_wake(waiter, handle);
+  }
+  return true;
+}
+
+std::uint64_t Interpreter::create_dynamic_event()
+{
+  if (impl_->dynamic_events.size() >= maximum_synchronization_objects) {
+    throw std::runtime_error { "event object limit is exhausted" };
+  }
+  impl_->dynamic_events.emplace_back();
+  return event_handle_tag | impl_->dynamic_events.size();
 }
 
 void Interpreter::Impl::synchronization_event_wake(const ProcessId id,

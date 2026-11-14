@@ -3,35 +3,36 @@
 
 namespace fsim::elaboration {
 
-std::optional<semantic::ExpressionId> Lowerer::hir_let_actual(
+Lowerer::HirLetActual Lowerer::hir_let_actual(
     const semantic::ExpressionId expression_id) const
 {
     if (specialized_hir_unit_ == nullptr || hir_let_frames_.empty()) {
-        return std::nullopt;
+        return { };
     }
     const auto expression = specialized_hir_unit_->find_expression(
         expression_id);
     if (!expression || expression->systemverilog == nullptr
         || expression->systemverilog->kind
             != semantic::sv::ExpressionKind::name) {
-        return std::nullopt;
+        return { };
     }
     const auto name = std::string_view { expression->systemverilog->text };
-    for (auto frame = hir_let_frames_.rbegin();
-        frame != hir_let_frames_.rend(); ++frame) {
+    // The innermost visible expansion binds the name; the frames an actual
+    // context hides are skipped (11.12).
+    for (auto index = hir_let_frames_.size(); index > 0U;) {
+        --index;
+        const auto& frame = hir_let_frames_[index];
+        if (frame.declaration == nullptr) {
+            index = frame.resume;
+            continue;
+        }
         const auto found = std::ranges::find(
-            frame->bindings, name, &HirLetBinding::name);
-        if (found != frame->bindings.end()) {
-            // The bound actual is evaluated in the invocation's outer
-            // context. In particular, `let same(value) = value` called as
-            // `same(value)` must not bind the actual identifier to itself.
-            if (found->actual == expression_id) {
-                continue;
-            }
-            return found->actual;
+            frame.bindings, name, &HirLetBinding::name);
+        if (found != frame.bindings.end()) {
+            return { hir_let_frames_, found->actual, index };
         }
     }
-    return std::nullopt;
+    return { };
 }
 
 const semantic::sv::LetDeclaration* Lowerer::hir_let_declaration(
@@ -137,18 +138,25 @@ bool Lowerer::push_hir_let_frame(
     const semantic::ExpressionId expression_id,
     const semantic::sv::LetDeclaration& declaration) const
 {
-    if (std::ranges::any_of(
-            hir_let_frames_,
-            [&](const HirLetFrame& frame) {
-                return frame.declaration == &declaration;
-            })) {
-        return false;
+    // A let may not expand itself, directly or through the lets its body
+    // expands (11.12); an actual is in the let expression's own context, so
+    // the expansions an actual context hides do not count.
+    for (auto index = hir_let_frames_.size(); index > 0U;) {
+        --index;
+        const auto& frame = hir_let_frames_[index];
+        if (frame.declaration == nullptr) {
+            index = frame.resume;
+            continue;
+        }
+        if (frame.declaration == &declaration) {
+            return false;
+        }
     }
     auto bindings = bind_hir_let_actuals(expression_id, declaration);
     if (!bindings) {
         return false;
     }
-    hir_let_frames_.push_back({ &declaration, std::move(*bindings) });
+    hir_let_frames_.push_back({ &declaration, std::move(*bindings), 0U });
     return true;
 }
 

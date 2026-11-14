@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
-#include "fsim/app/design_artifact.hpp"
+#include "fsim/app/built_project.hpp"
 
 #include <array>
 #include <cassert>
@@ -690,7 +690,7 @@ endmodule
     {
         std::ofstream output(vhdl_source);
         output << R"(
-entity shift_rotate_app is
+library ieee; use ieee.std_logic_1164.all; use ieee.numeric_std.all; entity shift_rotate_app is
 end entity;
 
 architecture rtl of shift_rotate_app is
@@ -806,7 +806,7 @@ end architecture;
     {
         std::ofstream output(external_mismatch_source);
         output << R"(
-entity external_mismatch_app is
+library ieee; use ieee.std_logic_1164.all; use ieee.numeric_std.all; entity external_mismatch_app is
 end entity;
 
 architecture rtl of external_mismatch_app is
@@ -1085,7 +1085,7 @@ end architecture;
     {
         std::ofstream output(falling_edge_source);
         output << R"(
-entity falling_edge_app is
+library ieee; use ieee.std_logic_1164.all; use ieee.numeric_std.all; entity falling_edge_app is
 end entity;
 
 architecture rtl of falling_edge_app is
@@ -1174,9 +1174,22 @@ begin
     end if;
   end process;
 
+  -- Resumes once for each transaction on redundant (IEEE 1076-2019 11.3,
+  -- 14.7.3.1), and redundant'transaction flips each time (16.2.4); its
+  -- initial value is not defined, so only the flips are checked.
   transaction_capture: process(redundant'transaction)
+    variable started : boolean := false;
+    variable previous : bit;
+    variable resumes : natural := 0;
+    variable flipped : boolean := true;
   begin
-    transaction_sensitive <= redundant'transaction;
+    if started then
+      resumes := resumes + 1;
+      flipped := flipped and redundant'transaction /= previous;
+    end if;
+    started := true;
+    previous := redundant'transaction;
+    transaction_sensitive <= flipped and resumes = 4;
   end process;
 
   transaction_wait: process
@@ -1187,7 +1200,11 @@ begin
   end process;
 
   observe_elapsed: process
+    variable redundant_start : bit;
+    variable single_start : bit;
   begin
+    redundant_start := redundant'transaction;
+    single_start := single'transaction;
     wait for 2 ns;
     elapsed <= clk'last_event;
     active_elapsed <= redundant'last_active;
@@ -1196,8 +1213,9 @@ begin
     stable_window_early <= clk'stable(2 ns);
     quiet_window_early <= redundant'quiet(2 ns);
     delayed_sample <= clk'delayed(1 ns);
-    redundant_transaction <= redundant'transaction;
-    single_transaction <= single'transaction;
+    -- Four transactions on redundant flip it back; one on single flips it.
+    redundant_transaction <= redundant'transaction = redundant_start;
+    single_transaction <= single'transaction /= single_start;
     wait for 2 ns;
     wait for 0 ns;
     stable_window_late <= clk'stable(2 ns);

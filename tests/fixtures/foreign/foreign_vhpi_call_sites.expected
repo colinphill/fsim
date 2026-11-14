@@ -1,0 +1,29 @@
+#c probe 1
+#c   call0: n=3 depth=30
+#c probe 2
+#c   call0: n=3 depth=31
+#c   call1: n=2 depth=20
+#c probe 3
+#c   call0: n=3 depth=31
+#c   call1: n=1 depth=10
+#c   deposit 500 into call0 accepted
+#c total=532 at 500000 fs
+#c probe 4
+#c   call2: n=2 depth=20
+#c probe 5
+#c   call1: n=1 depth=10
+#c   call2: n=2 depth=21
+#c total=564 at 1500000 fs
+#c probe 6
+#c   call3: n=4 depth=40
+#c probe 7
+#c   call1: n=3 depth=30
+#c   call3: n=4 depth=41
+#c probe 8
+#c   call1: n=2 depth=20
+#c   call3: n=4 depth=41
+#c   deposit 700 into call3 accepted
+#c probe 9
+#c   call1: n=1 depth=10
+#c   call3: n=4 depth=700
+#c total=1327 at 2500000 fs

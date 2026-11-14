@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/artifact/coverage_database_codec.hpp"
 #include "fsim/cli/driver.hpp"
@@ -7,7 +8,7 @@
 #include "fsim/frontend/coverage_point_identity.hpp"
 #include "fsim/project/configuration.hpp"
 #include "fsim/project/project.hpp"
-#include "fsim/runtime/simir_coverage.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 
 #include <algorithm>
 #include <array>

@@ -1,5 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_test_support.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
+#include "fsim/elaboration/elaborator.hpp"
+#include "fsim/frontend/parser.hpp"
+#include "fsim/frontend/token.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include <algorithm>
+#include <cassert>
+#include <iostream>
+#include <optional>
+#include <string>
+#include <vector>
 
 namespace fsim::tests::elaboration {
 
@@ -1975,6 +1986,44 @@ end architecture;
                                     .known_signed_value();
     assert(observed_count && *observed_count == 3);
   }
+
+  // A string literal's type comes from its context alone, excluding the
+  // literal itself (IEEE 1076-2019 9.3.2): TO_X01 has BIT_VECTOR and
+  // STD_ULOGIC_VECTOR overloads, so `to_x01("01XZ")` is ambiguous (12.5)
+  // whatever the characters, in a generate condition; the
+  // qualified expression names the type.
+  const auto ambiguous_string = frontend::parse_text(
+      "ambiguous_string_literal.vhd",
+      R"(
+library ieee;
+use ieee.std_logic_1164.all;
+entity ambiguous_string_generate is end entity;
+architecture rtl of ambiguous_string_generate is
+begin
+  g : if to_x01("01XZ")(1) = '0' generate
+    process begin wait; end process;
+  end generate;
+end architecture;
+
+library ieee;
+use ieee.std_logic_1164.all;
+entity qualified_string_generate is end entity;
+architecture rtl of qualified_string_generate is
+begin
+  g : if to_x01(std_ulogic_vector'("01XZ"))(1) = '0' generate
+    process begin wait; end process;
+  end generate;
+end architecture;
+)",
+      frontend::Language::Vhdl2008);
+  assert(ambiguous_string.ok());
+  const auto ambiguous_generate = compile_and_elaborate(
+      ambiguous_string.design, "vhdl:work.ambiguous_string_generate(rtl)");
+  assert(!ambiguous_generate.ok());
+  assert(has_diagnostic(ambiguous_generate, "FSIM-ELAB-VHENUM-004"));
+  const auto qualified_generate = compile_and_elaborate(
+      ambiguous_string.design, "vhdl:work.qualified_string_generate(rtl)");
+  assert(qualified_generate.ok());
 }
 
 }  // namespace fsim::tests::elaboration

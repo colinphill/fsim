@@ -6,6 +6,8 @@
 
 #include "change_mismatch_report.hpp"
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/runtime/simir.hpp"
 
 #include <algorithm>
 #include <array>

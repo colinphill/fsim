@@ -1,0 +1,4 @@
+sep u.a.x=5 v[1].x=6
+sep u.a ev 2
+sep v[1] ev 3
+sep w.b.l2 mid.q=3

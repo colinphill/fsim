@@ -2,6 +2,9 @@
 #include "application_workflow_test_support.hpp"
 
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/semantic/systemverilog_hir.hpp"
+#include "fsim/runtime/simir.hpp"
 #include "fsim/app/artifact_phase.hpp"
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/artifact/design.hpp"
@@ -701,6 +704,247 @@ endmodule
             assert(!fsim::app::build_project(rejected, diagnostics));
             assert(has_diagnostic(diagnostics, "FSIM-SV-SEM-397"));
         }
+    }
+}
+
+// The forms of local variables IEEE 1800-2023 makes illegal are errors,
+// not limitations: a match item on a subsequence that admits an empty
+// match (16.10), a local in an abort condition (16.12.14), a disable
+// condition (16.12) or a clocking event (16.10), and a local of the
+// chandle type, which assertion expressions shall not reference (16.6).
+void test_assertion_local_variable_rules(const std::filesystem::path& directory)
+{
+    const auto locals = directory / "assertion-locals";
+    std::filesystem::create_directories(locals);
+    struct Case {
+        const char* name;
+        const char* property;
+        const char* code;
+    };
+    const Case cases[] {
+        { "empty-match", "int n; @(posedge clk) (a[*0:2], n = 1) ##1 (b && n == 1);",
+          "FSIM-SV-SEM-474" },
+        { "abort", "logic v; @(posedge clk) (a, v = b) |-> accept_on (c && v) (##1 b ##1 b);",
+          "FSIM-SV-SEM-474" },
+        { "disable", "logic v; @(posedge clk) disable iff (v) (a, v = b) ##1 c;",
+          "FSIM-SV-SEM-474" },
+        { "clock", "logic v; @(posedge clk) (a, v = b) ##1 @(posedge v) c;",
+          "FSIM-SV-SEM-474" },
+        { "chandle", "chandle h; @(posedge clk) (a, h = g) ##1 (h == null);",
+          "FSIM-ELAB-SVA-002" },
+    };
+    for (const auto& item : cases) {
+        const auto source = locals / (std::string { item.name } + ".sv");
+        write_text(source,
+            std::string { "module top;\n  logic clk = 0, a = 0, b = 0, c = 0;\n"
+                          "  chandle g;\n  always #5 clk = ~clk;\n"
+                          "  property p;\n    " }
+                + item.property
+                + "\n  endproperty\n  a1: assert property (p);\n"
+                  "  initial #30 $finish;\nendmodule\n");
+        fsim::project::Config config;
+        config.base_directory = locals;
+        config.project.name = std::string { "sv-assertion-local-" } + item.name;
+        config.project.top = "sv:work.top";
+        config.source_sets = { identity_source_set(
+            fsim::project::Language::system_verilog, "2023", source) };
+        fsim::diagnostic::Engine diagnostics;
+        assert(!fsim::app::build_project(config, diagnostics));
+        assert(has_diagnostic(diagnostics, item.code));
+    }
+}
+
+// A sequence or property declaration whose body is no sequence or property
+// expression is an error also when no assertion instantiates it (IEEE
+// 1800-2023 16.8, 16.12); a cycle delay followed by a clocking event and a
+// property operator is a property (16.13.1).
+void test_assertion_declaration_bodies(const std::filesystem::path& directory)
+{
+    const auto bodies = directory / "assertion-declaration-bodies";
+    std::filesystem::create_directories(bodies);
+    struct Case {
+        const char* name;
+        const char* declaration;
+        bool legal;
+    };
+    const Case cases[] {
+        { "unbalanced-open", "sequence s;\n    (a ##1 b;\n  endsequence", false },
+        { "unbalanced-close", "sequence s;\n    a ##1 b);\n  endsequence",
+          false },
+        { "goto-sequence", "property p;\n    @(posedge clk) (a ##1 b)[->2];\n"
+                           "  endproperty",
+          false },
+        { "throughout-sequence",
+          "property p;\n    @(posedge clk) (a ##1 b) throughout c;\n"
+          "  endproperty",
+          false },
+        { "delay-clock-implication",
+          "property p;\n    @(posedge clk) a ##1 @(negedge clk) b |-> c;\n"
+          "  endproperty",
+          true },
+    };
+    for (const auto& item : cases) {
+        const auto source = bodies / (std::string { item.name } + ".sv");
+        write_text(source,
+            std::string { "module top;\n  logic clk = 0, a = 0, b = 0, c = 0;\n"
+                          "  always #5 clk = ~clk;\n  " }
+                + item.declaration + "\n  initial #30 $finish;\nendmodule\n");
+        fsim::project::Config config;
+        config.base_directory = bodies;
+        config.project.name = std::string { "sv-assertion-body-" } + item.name;
+        config.project.top = "sv:work.top";
+        config.source_sets = { identity_source_set(
+            fsim::project::Language::system_verilog, "2023", source) };
+        fsim::diagnostic::Engine diagnostics;
+        const bool built
+            = fsim::app::build_project(config, diagnostics).has_value();
+        assert(built == item.legal);
+        assert(has_diagnostic(diagnostics, "FSIM-SV-SEM-475") != item.legal);
+    }
+}
+
+// The maximal property of a concurrent assertion shall have a unique
+// semantic leading clock, and without a clock from the statement, a
+// default clocking or the procedure it shall be a sequence or property
+// instance (IEEE 1800-2023 16.16 e, f; 16.16.1).
+void test_assertion_leading_clocks(const std::filesystem::path& directory)
+{
+    const auto leading = directory / "assertion-leading-clocks";
+    std::filesystem::create_directories(leading);
+    struct Case {
+        const char* name;
+        const char* statement;
+        bool legal;
+    };
+    const Case cases[] {
+        { "and-two-clocks", "a1: assert property (m1 and m2);", false },
+        { "explicit-and-two-clocks",
+          "a1: assert property (@(posedge clk) m1 and m2);", false },
+        { "not-an-instance", "a1: assert property (m1 ##1 m2);", false },
+        { "instance", "a1: assert property (p);", true },
+    };
+    for (const auto& item : cases) {
+        const auto source = leading / (std::string { item.name } + ".sv");
+        write_text(source,
+            std::string { "module top;\n  logic clk = 0, clk2 = 0, a = 1, "
+                          "b = 1, c = 1;\n  always #5 clk = ~clk;\n"
+                          "  always #7 clk2 = ~clk2;\n"
+                          "  sequence m1; @(posedge clk) a ##1 b; endsequence\n"
+                          "  sequence m2; @(posedge clk2) b ##1 c; endsequence\n"
+                          "  property p; m1 ##1 m2; endproperty\n  " }
+                + item.statement + "\n  initial #30 $finish;\nendmodule\n");
+        fsim::project::Config config;
+        config.base_directory = leading;
+        config.project.name = std::string { "sv-assertion-leading-" } + item.name;
+        config.project.top = "sv:work.top";
+        config.source_sets = { identity_source_set(
+            fsim::project::Language::system_verilog, "2023", source) };
+        fsim::diagnostic::Engine diagnostics;
+        const bool built
+            = fsim::app::build_project(config, diagnostics).has_value();
+        assert(built == item.legal);
+        assert(has_diagnostic(diagnostics, "FSIM-SV-SEM-474") != item.legal);
+    }
+}
+
+// IEEE 1800-2023 16.8: a cyclic dependency among named sequences, through
+// their declarations or through the actuals of their instances, is an error,
+// also for declarations no assertion instantiates; 16.12.17: a recursive
+// property follows the four restrictions.
+void test_sequence_dependencies(const std::filesystem::path& directory)
+{
+    const auto dependencies = directory / "sequence-dependencies";
+    std::filesystem::create_directories(dependencies);
+    struct Case {
+        const char* name;
+        const char* items;
+        bool legal;
+        const char* code = "FSIM-SV-SEM-477";
+    };
+    // The recursive property of 16.12.17's examples, which the cases use.
+    const std::string prop_always = "property prop_always(p); p and (1'b1 "
+                                    "|=> prop_always(p)); endproperty\n  ";
+    const Case cases[] {
+        // IEEE 1800-2023 16.12.17 Restrictions 1 to 4 (F.7), also for
+        // declarations no assertion instantiates.
+        { "recursion-not-instance",
+          "property illegal_recursion_1(p); not prop_always(not p); endproperty",
+          false },
+        { "recursion-not-inside",
+          "property illegal_recursion_2(p); p and (1'b1 |=> not "
+          "illegal_recursion_2(p)); endproperty",
+          false },
+        { "recursion-disable",
+          "property illegal_recursion_3(p); disable iff (b) p and (1'b1 |=> "
+          "illegal_recursion_3(p)); endproperty",
+          false },
+        { "recursion-no-advance",
+          "property illegal_recursion_4(p); p and (1'b1 |-> "
+          "illegal_recursion_4(p)); endproperty",
+          false },
+        { "recursion-formal-expression",
+          "property fibonacci2 (int x, y, n, fib_sig); (n > 0) |-> ((fib_sig "
+          "== x) and (1'b1 |=> fibonacci2(y, x + y, n - 1, fib_sig))); "
+          "endproperty",
+          false },
+        { "recursion-asserted-negation",
+          "default clocking cb @(posedge clk); endclocking\n"
+          "  a1: assert property (not prop_always(a));",
+          false, "FSIM-SV-SEM-474" },
+        { "recursion-legal",
+          "property legal_3(p); disable iff (b) prop_always(p); endproperty\n"
+          "  property fibonacci1 (local input int x, y, n, int fib_sig); (n > "
+          "0) |-> ((fib_sig == x) and (1'b1 |=> fibonacci1(y, x + y, n - 1, "
+          "fib_sig))); endproperty\n"
+          "  property q1(v); v |=> q2(q3()); endproperty\n"
+          "  property q2(v); a or (1'b1 |=> v); endproperty\n"
+          "  property q3; q1(a && b); endproperty\n"
+          "  int fib;\n"
+          "  a1: assert property (@(posedge clk) legal_3(a));\n"
+          "  a2: assert property (@(posedge clk) fibonacci1(0, 1, 3, fib));\n"
+          "  a3: assert property (@(posedge clk) q1(a));",
+          true },
+        { "mutual",
+          "sequence s1; @(posedge clk) (a ##1 s2); endsequence\n"
+          "  sequence s2; @(posedge clk) (b ##1 s1); endsequence",
+          false },
+        { "actual-of-itself",
+          "sequence s1(x); x ##1 b; endsequence\n"
+          "  c1: cover property (@(posedge clk) s1(s1(a)));",
+          false },
+        { "unused-self",
+          "sequence q(n); a ##1 q(n); endsequence", false },
+        { "triggered-self",
+          "sequence r; @(posedge clk) a ##1 r.triggered; endsequence", false },
+        { "nested-actual",
+          "sequence s1(x); x ##1 b; endsequence\n"
+          "  sequence s2(y); s1(y) ##1 c; endsequence\n"
+          "  c1: cover property (@(posedge clk) s2(s1(a)));",
+          true },
+        // An event term whose actuals are no expressions names no sequence
+        // (9.4.2.4).
+        { "event-instance-not-sequence",
+          "initial @(nope(posedge clk));",
+          false, "FSIM-SV-SEM-476" },
+    };
+    for (const auto& item : cases) {
+        const auto source = dependencies / (std::string { item.name } + ".sv");
+        write_text(source,
+            std::string { "module top;\n  logic clk = 0, a = 1, b = 1, c = 1;\n"
+                          "  always #5 clk = ~clk;\n  " }
+                + prop_always + item.items
+                + "\n  initial #30 $finish;\nendmodule\n");
+        fsim::project::Config config;
+        config.base_directory = dependencies;
+        config.project.name = std::string { "sv-sequence-dependencies-" } + item.name;
+        config.project.top = "sv:work.top";
+        config.source_sets = { identity_source_set(
+            fsim::project::Language::system_verilog, "2023", source) };
+        fsim::diagnostic::Engine diagnostics;
+        const bool built
+            = fsim::app::build_project(config, diagnostics).has_value();
+        assert(built == item.legal);
+        assert(has_diagnostic(diagnostics, item.code) != item.legal);
     }
 }
 
@@ -1936,6 +2180,10 @@ int main()
     test_design_unit_scheduling_declarations(directory.path);
     test_predefined_environment_revision_gates(directory.path);
     test_assignment_revision_rules(directory.path);
+    test_assertion_local_variable_rules(directory.path);
+    test_assertion_declaration_bodies(directory.path);
+    test_assertion_leading_clocks(directory.path);
+    test_sequence_dependencies(directory.path);
     test_streaming_and_aggregate_assignment_rules(directory.path);
     test_operator_and_expression_revision_rules(directory.path);
     test_procedural_statement_revision_rules(directory.path);

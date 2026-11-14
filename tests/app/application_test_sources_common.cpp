@@ -3,7 +3,6 @@
 
 #include <cassert>
 #include <fstream>
-#include <string_view>
 
 namespace fsim::test {
 
@@ -279,6 +278,9 @@ class uvm_object_wrapper;
 endclass
 
 class uvm_object;
+  static function uvm_object_wrapper get_type();
+    return null;
+  endfunction
   virtual function uvm_object_wrapper get_object_type();
     return null;
   endfunction
@@ -319,60 +321,65 @@ endclass
 class uvm_default_factory extends uvm_factory;
 endclass
 
+class uvm_phase extends uvm_object;
+endclass
+
 class uvm_component extends uvm_object;
+  function new(string name, uvm_component parent);
+  endfunction
   virtual function uvm_component get_parent();
     return null;
   endfunction
   virtual function int get_num_children();
     return 0;
   endfunction
-  virtual function void phase_started();
+  virtual function void phase_started(uvm_phase phase);
   endfunction
-  virtual function void phase_ready_to_end();
+  virtual function void phase_ready_to_end(uvm_phase phase);
   endfunction
-  virtual function void phase_ended();
+  virtual function void phase_ended(uvm_phase phase);
   endfunction
-  virtual function void build_phase();
+  virtual function void build_phase(uvm_phase phase);
   endfunction
-  virtual function void connect_phase();
+  virtual function void connect_phase(uvm_phase phase);
   endfunction
-  virtual function void end_of_elaboration_phase();
+  virtual function void end_of_elaboration_phase(uvm_phase phase);
   endfunction
-  virtual function void start_of_simulation_phase();
+  virtual function void start_of_simulation_phase(uvm_phase phase);
   endfunction
-  virtual function void extract_phase();
+  virtual function void extract_phase(uvm_phase phase);
   endfunction
-  virtual function void check_phase();
+  virtual function void check_phase(uvm_phase phase);
   endfunction
-  virtual function void report_phase();
+  virtual function void report_phase(uvm_phase phase);
   endfunction
-  virtual function void final_phase();
+  virtual function void final_phase(uvm_phase phase);
   endfunction
-  virtual task run_phase(uvm_object phase);
+  virtual task run_phase(uvm_phase phase);
   endtask
-  virtual task pre_reset_phase();
+  virtual task pre_reset_phase(uvm_phase phase);
   endtask
-  virtual task reset_phase();
+  virtual task reset_phase(uvm_phase phase);
   endtask
-  virtual task post_reset_phase();
+  virtual task post_reset_phase(uvm_phase phase);
   endtask
-  virtual task pre_configure_phase();
+  virtual task pre_configure_phase(uvm_phase phase);
   endtask
-  virtual task configure_phase();
+  virtual task configure_phase(uvm_phase phase);
   endtask
-  virtual task post_configure_phase();
+  virtual task post_configure_phase(uvm_phase phase);
   endtask
-  virtual task pre_main_phase();
+  virtual task pre_main_phase(uvm_phase phase);
   endtask
-  virtual task main_phase();
+  virtual task main_phase(uvm_phase phase);
   endtask
-  virtual task post_main_phase();
+  virtual task post_main_phase(uvm_phase phase);
   endtask
-  virtual task pre_shutdown_phase();
+  virtual task pre_shutdown_phase(uvm_phase phase);
   endtask
-  virtual task shutdown_phase();
+  virtual task shutdown_phase(uvm_phase phase);
   endtask
-  virtual task post_shutdown_phase();
+  virtual task post_shutdown_phase(uvm_phase phase);
   endtask
 endclass
 endpackage
@@ -398,103 +405,125 @@ class UvmComponent extends uvm_component;
   int phase_callbacks;
   int phase_signature;
   function new(string name, uvm_component parent);
+    super.new(name, parent);
     phase_callbacks = 0;
     phase_signature = 0;
   endfunction
-  virtual function void phase_started();
+  virtual function void phase_started(uvm_phase phase);
     phase_callbacks = phase_callbacks + 1;
   endfunction
-  virtual function void phase_ready_to_end();
+  virtual function void phase_ready_to_end(uvm_phase phase);
     phase_callbacks = phase_callbacks + 1;
   endfunction
-  virtual function void phase_ended();
+  virtual function void phase_ended(uvm_phase phase);
     phase_callbacks = phase_callbacks + 1;
   endfunction
-  virtual function void build_phase();
+  virtual function void build_phase(uvm_phase phase);
     phase_callbacks = phase_callbacks + 1;
     phase_signature = phase_signature + 1;
   endfunction
-  virtual function void connect_phase();
+  virtual function void connect_phase(uvm_phase phase);
     phase_callbacks = phase_callbacks + 1;
     phase_signature = phase_signature + 2;
   endfunction
-  virtual function void end_of_elaboration_phase();
+  virtual function void end_of_elaboration_phase(uvm_phase phase);
     phase_callbacks = phase_callbacks + 1;
     phase_signature = phase_signature + 3;
   endfunction
-  virtual function void start_of_simulation_phase();
+  virtual function void start_of_simulation_phase(uvm_phase phase);
     phase_callbacks = phase_callbacks + 1;
     phase_signature = phase_signature + 4;
   endfunction
-  virtual function void extract_phase();
+  virtual function void extract_phase(uvm_phase phase);
     phase_callbacks = phase_callbacks + 1;
     phase_signature = phase_signature + 5;
   endfunction
-  virtual function void check_phase();
+  virtual function void check_phase(uvm_phase phase);
     phase_callbacks = phase_callbacks + 1;
     phase_signature = phase_signature + 6;
   endfunction
-  virtual function void report_phase();
+  virtual function void report_phase(uvm_phase phase);
     phase_callbacks = phase_callbacks + 1;
     phase_signature = phase_signature + 7;
   endfunction
-  virtual function void final_phase();
+  virtual function void final_phase(uvm_phase phase);
     phase_callbacks = phase_callbacks + 1;
     phase_signature = phase_signature + 8;
   endfunction
-  virtual task run_phase(uvm_object phase);
+  virtual task run_phase(uvm_phase phase);
     phase_callbacks = phase_callbacks + 1;
     phase_signature = phase_signature + 10;
   endtask
-  virtual task pre_reset_phase();
+  virtual task pre_reset_phase(uvm_phase phase);
     phase_callbacks = phase_callbacks + 1;
     phase_signature = phase_signature + 11;
   endtask
-  virtual task reset_phase();
+  virtual task reset_phase(uvm_phase phase);
     phase_callbacks = phase_callbacks + 1;
     phase_signature = phase_signature + 12;
   endtask
-  virtual task post_reset_phase();
+  virtual task post_reset_phase(uvm_phase phase);
     phase_callbacks = phase_callbacks + 1;
     phase_signature = phase_signature + 13;
   endtask
-  virtual task pre_configure_phase();
+  virtual task pre_configure_phase(uvm_phase phase);
     phase_callbacks = phase_callbacks + 1;
     phase_signature = phase_signature + 14;
   endtask
-  virtual task configure_phase();
+  virtual task configure_phase(uvm_phase phase);
     phase_callbacks = phase_callbacks + 1;
     phase_signature = phase_signature + 15;
   endtask
-  virtual task post_configure_phase();
+  virtual task post_configure_phase(uvm_phase phase);
     phase_callbacks = phase_callbacks + 1;
     phase_signature = phase_signature + 16;
   endtask
-  virtual task pre_main_phase();
+  virtual task pre_main_phase(uvm_phase phase);
     phase_callbacks = phase_callbacks + 1;
     phase_signature = phase_signature + 17;
   endtask
-  virtual task main_phase();
+  virtual task main_phase(uvm_phase phase);
     phase_callbacks = phase_callbacks + 1;
     phase_signature = phase_signature + 18;
   endtask
-  virtual task post_main_phase();
+  virtual task post_main_phase(uvm_phase phase);
     phase_callbacks = phase_callbacks + 1;
     phase_signature = phase_signature + 19;
   endtask
-  virtual task pre_shutdown_phase();
+  virtual task pre_shutdown_phase(uvm_phase phase);
     phase_callbacks = phase_callbacks + 1;
     phase_signature = phase_signature + 20;
   endtask
-  virtual task shutdown_phase();
+  virtual task shutdown_phase(uvm_phase phase);
     phase_callbacks = phase_callbacks + 1;
     phase_signature = phase_signature + 21;
   endtask
-  virtual task post_shutdown_phase();
+  virtual task post_shutdown_phase(uvm_phase phase);
     phase_callbacks = phase_callbacks + 1;
     phase_signature = phase_signature + 22;
   endtask
   `uvm_component_utils(UvmComponent)
+endclass
+
+// A component whose run phase waits: a delay, then an event that its
+// pre_reset phase thread triggers (IEEE 1800.2-2020 9.8, 1800-2023 9.3.2, 15.5).
+class UvmWaitComponent extends uvm_component;
+  int waited;
+  event go;
+  function new(string name, uvm_component parent);
+    super.new(name, parent);
+    waited = 0;
+  endfunction
+  virtual task run_phase(uvm_phase phase);
+    #5;
+    waited = 1;
+    @go;
+    waited = 2;
+  endtask
+  virtual task pre_reset_phase(uvm_phase phase);
+    #7;
+    -> go;
+  endtask
 endclass
 )";
 

@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include "fsim/runtime/simir.hpp"
 
+#include "fsim/runtime/file_operations.hpp"
+#include "fsim/runtime/logic.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/simir_container_value.hpp"
 #include <cstdint>
 #include <functional>
 #include <optional>

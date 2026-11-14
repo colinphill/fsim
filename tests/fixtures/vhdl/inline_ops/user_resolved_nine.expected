@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+wide o='H' ov='0''H' an='1''1''0''0' at 0.5
+wide o='0' ov='0''H' an='1''1''0''0' at 1.5
+wide o='H' ov='0''H' an='X''1''0''X' at 2.5
+wide o='X' ov='X''H' an='X''1''0''X' at 3.5

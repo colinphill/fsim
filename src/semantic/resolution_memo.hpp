@@ -9,7 +9,6 @@
 #pragma once
 
 #include "fsim/semantic/compiled_design_resolver.hpp"
-#include "fsim/semantic/shared_cache_lock.hpp"
 
 #include <cstddef>
 #include <cstdint>

@@ -9,6 +9,8 @@
 # zero mismatches at every width. The order of the four instances' lines is
 # unspecified, so the lines are sorted.
 
+include("${CMAKE_CURRENT_LIST_DIR}/../../../cmake/FsimTestWorkspace.cmake")
+
 if(NOT DEFINED FSIM_EXECUTABLE OR NOT EXISTS "${FSIM_EXECUTABLE}")
   message(FATAL_ERROR "FSIM_EXECUTABLE must name the built fsim command")
 endif()
@@ -22,7 +24,7 @@ endforeach()
 
 string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef workspace_id)
 set(case_dir "${CMAKE_CURRENT_BINARY_DIR}/fsim-vhdl-wide-fields-${workspace_id}")
-file(MAKE_DIRECTORY "${case_dir}")
+fsim_test_workspace("${case_dir}")
 file(COPY_FILE "${FSIM_FIXTURE_DIR}/wide_fields.vhd" "${case_dir}/wide_fields.vhd")
 
 function(run_fsim_step STEP_NAME)
@@ -61,3 +63,6 @@ foreach(run IN ITEMS interpreter kernel verified)
       "workspace: ${case_dir}")
   endif()
 endforeach()
+
+# Passed: remove this run's workspaces (a failure above keeps them).
+fsim_test_workspace_cleanup()

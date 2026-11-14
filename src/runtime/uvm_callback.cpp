@@ -7,7 +7,6 @@
 #include <cmath>
 #include <limits>
 #include <ranges>
-#include <sstream>
 #include <type_traits>
 
 namespace fsim::runtime {

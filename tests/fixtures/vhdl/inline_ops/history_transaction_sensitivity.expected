@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+wide sl toggled=true at 1000000 fs
+wide wp toggled=true event=false at 1000000 fs
+wide sl toggled=true at 2000000 fs
+wide wp toggled=true event=true at 2000000 fs
+wide sl toggled=true at 3000000 fs
+wide wp toggled=true event=false at 3000000 fs

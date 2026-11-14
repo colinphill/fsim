@@ -48,7 +48,7 @@
 #c line 38 rhs: vpiVarSelect parent=top.mem const=1
 #c line 38 rhs:   index 2
 #c line 39: vpiFor localvardecls=1
-#c line 39: loop variable vpiRefObj parent=top
+#c line 39: loop variable vpiIntVar scope=the loop
 #c line 41: vpiTaskCall task=top.bump arguments=2
 #c line 42: vpiSysTaskCall userdefn=0
 #c line 42: vpiFuncCall function=top.add functype=1

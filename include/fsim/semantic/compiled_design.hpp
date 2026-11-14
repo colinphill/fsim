@@ -5,7 +5,6 @@
 #include "fsim/semantic/systemverilog_hir.hpp"
 #include "fsim/semantic/vhdl_hir.hpp"
 
-#include <compare>
 #include <optional>
 #include <memory>
 #include <span>
@@ -556,6 +555,9 @@ private:
     [[nodiscard]] CompiledExpressionView
     indexed_expression(const ExpressionId id) const noexcept
     {
+        if (id.valid() && id.value() >= sv::interned_constant_base) {
+            return { systemverilog_hir.find_interned_constant(id), nullptr };
+        }
         return indexed_language_record<sv::Expression, vhdl::Expression>(
             lookup_indexes_.expressions, id);
     }

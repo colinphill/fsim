@@ -306,7 +306,9 @@ struct ReplanResult {
 
 /// Whether a fork child of a program can hold an automatic callable frame
 /// across a suspension. An operation that returns a behavioral thread to its
-/// runner (a wait, fork, join, halt, $stop or $pause) reachable from a Call
+/// runner (a wait, fork, join, halt, $stop or $pause, a move to a later region
+/// or delta, wait fork, await, suspend, a blocking mailbox or semaphore
+/// operation, a dynamic or array event wait) reachable from a Call
 /// target before its Return, or from a frame push before the pop of the same
 /// callable, makes that callable suspending. A SystemVerilog function never
 /// is (IEEE 1800-2023 13.4: no timing controls in a function); a task may
@@ -410,7 +412,32 @@ template <typename Operations>
                     || operation_holds<ForkEnd>(operation)
                     || operation_holds<Halt>(operation)
                     || operation_holds<Stop>(operation)
-                    || operation_holds<Pause>(operation);
+                    || operation_holds<Pause>(operation)
+                    // The other operations that park the thread: a later
+                    // region, the next delta, wait fork, await, suspend
+                    // (IEEE 1800-2023 4.4.2, 9.6.1, 9.7), and a mailbox or
+                    // semaphore operation that may block (15.3, 15.4).
+                    || operation_holds<WaitRegion>(operation)
+                    || operation_holds<Yield>(operation)
+                    || operation_holds<WaitFork>(operation)
+                    || operation_holds<ProcessAwait>(operation)
+                    || operation_holds<ProcessSuspend>(operation)
+                    || operation_holds<MailboxGet>(operation)
+                    || operation_holds<MailboxPut>(operation)
+                    || operation_holds<SemaphoreGet>(operation)
+                    || [&] {
+                           const auto* event
+                               = operation_get_if<DynamicEvent>(&operation);
+                           return event != nullptr
+                               && event->operation == DynamicEventOperation::wait;
+                       }()
+                    // `@(e[i])` of an event-array element (9.4.2).
+                    || [&] {
+                           const auto* element
+                               = operation_get_if<EventArrayElement>(&operation);
+                           return element != nullptr
+                               && element->operation == EventArrayOperation::wait;
+                       }();
             });
     }
     // A callable calling a suspending callable suspends.
@@ -463,6 +490,10 @@ template <typename Operations>
             return value.domain != SignalUpdateDomain::generic;
         } else if constexpr (std::is_same_v<T, WriteContainerObjectElement>) {
             return !value.transaction_signal;
+        } else if constexpr (std::is_same_v<T, WriteContainerObjectString>) {
+            // A string element write of a host object (see the planner).
+            (void)value;
+            return true;
         } else if constexpr (std::is_same_v<T, SystemVerilogMath>) {
             // The math and conversion functions (IEEE 1800-2023 20.5, 20.8);
             // the time queries read the time (see the sequential set).
@@ -584,12 +615,14 @@ struct StaticKernelInlinedProgram {
 }
 
 /// A container register type the kernel's arena holds: a fixed array of
-/// packed or scalar elements. A behavioral member holds other registers in
-/// the reference's format (Member::dynamic_containers).
+/// packed or scalar elements stored densely. A behavioral member holds other
+/// registers in the reference's format (Member::dynamic_containers), among
+/// them a sparse array, which keeps only its written elements (IEEE
+/// 1800-2023 7.4) and is addressed by ordinal like an associative array.
 [[nodiscard]] inline bool static_kernel_arena_container_type(
     const ContainerType& type)
 {
-    return type.fixed && !type.associative && !type.vhdl_shaped
+    return type.fixed && !type.sparse && !type.associative && !type.vhdl_shaped
         && (type.element_kind == ContainerElementKind::Packed
             || type.element_kind == ContainerElementKind::Scalar);
 }
@@ -860,6 +893,14 @@ template <typename OperationAt, typename Types, typename NineValued = std::nullp
                    = operation_get_if<WriteContainerObject>(&operation);
                    write != nullptr && host_object(write->object)) {
             mark(write->source);
+        } else if (const auto* element
+                   = operation_get_if<WriteContainerObjectString>(&operation);
+                   element != nullptr
+                   && element->source_kind
+                       == ContainerElementSourceKind::container) {
+            // A container value the host captures for a nonblocking element
+            // write.
+            mark(element->container_source);
         }
         if (const auto* bind
             = operation_get_if<ReadContainerObject>(&operation);
@@ -992,9 +1033,8 @@ template <typename OperationAt, typename Types, typename NineValued = std::nullp
         } else if constexpr (std::is_same_v<T, ClassStaticMethodCall>) {
             // A static method or DPI function call (IEEE 1800-2023 8.10,
             // 35.5) through the application's services; its body may touch
-            // any signal, which the planner's publish-all mode covers. A
-            // VHDL driver disconnection is a VHDL member's.
-            return !vhdl_disconnect_signal(value.method_identity).has_value();
+            // any signal, which the planner's publish-all mode covers.
+            return true;
         } else {
             return std::is_same_v<T, WaitFor>
                 // Allocation (IEEE 1800-2023 8.7), method calls (8.6) and
@@ -1098,6 +1138,9 @@ template <typename OperationAt, typename Types, typename NineValued = std::nullp
                 || std::is_same_v<T, EventTriggered>
                 // Event assignment (15.5.5.1) of host events.
                 || std::is_same_v<T, EventAlias>
+                // An event-array element a run-time index selects (7.4,
+                // 15.5): the planner keeps the array's events host signals.
+                || std::is_same_v<T, EventArrayElement>
                 // Delayed, gate-delay and inertial updates of host signals
                 // (10.3.3, 28.16, static_kernel_host_signal).
                 || std::is_same_v<T, WriteAfter>
@@ -1209,13 +1252,28 @@ template <typename OperationAt, typename Types, typename NineValued = std::nullp
 /// which ends the pass with the output register as the result
 /// (Interpreter::Impl::run_vhdl_resolver). Signal writes stay on the host.
 [[nodiscard]] inline bool static_kernel_conversion_operation(
-    const Operation& operation, std::span<const SignalId> sources)
+    const Operation& operation, std::span<const SignalId> sources,
+    const std::optional<SignalId> target = std::nullopt)
 {
     if (const auto* halt = operation_get_if<Halt>(&operation)) {
         return !halt->program_exit;
     }
+    // S'EVENT and S'ACTIVE of a source (the value of S'STABLE and S'QUIET,
+    // IEEE 1076-2019 14.7.4): read from the source's history in the update
+    // phase that changes or assigns it (StaticKernel::build_histories).
+    if (const auto* event = operation_get_if<SignalEvent>(&operation)) {
+        return std::ranges::find(sources, event->signal) != sources.end();
+    }
+    if (const auto* active = operation_get_if<SignalActive>(&operation)) {
+        // A selection is the element of S(i)'TRANSACTION (16.2.4): its
+        // history is a ranged one of the source.
+        return std::ranges::find(sources, active->signal) != sources.end();
+    }
     if (const auto* read = operation_get_if<ReadSignal>(&operation)) {
-        if (std::ranges::find(sources, read->signal) == sources.end()) {
+        // S'TRANSACTION reads its own value to toggle it (IEEE 1076-2019
+        // 14.7.4).
+        if (std::ranges::find(sources, read->signal) == sources.end()
+            && !(target && read->signal == *target)) {
             return false;
         }
     }
@@ -1280,7 +1338,8 @@ template <typename OperationAt, typename Types, typename NineValued = std::nullp
                 return false;
             }
             for (std::size_t entry = 0U; entry < value.edges.size(); ++entry) {
-                if (value.edges[entry] != EdgeKind::any) {
+                if (value.edges[entry] != EdgeKind::any
+                    && value.edges[entry] != EdgeKind::transaction) {
                     return false;
                 }
             }
@@ -1423,6 +1482,7 @@ template <typename OperationAt, typename Types, typename NineValued = std::nullp
                 || std::is_same_v<T, ForkEnd>
                 || std::is_same_v<T, WriteContainerObject>
                 || std::is_same_v<T, WriteContainerObjectElement>
+                || std::is_same_v<T, WriteContainerObjectString>
                 || std::is_same_v<T, WriteStringObject>
                 || std::is_same_v<T, FileReadLine> || std::is_same_v<T, FileScan>
                 || std::is_same_v<T, FileErrorStatus>
@@ -1453,8 +1513,6 @@ template <typename OperationAt, typename Types, typename NineValued = std::nullp
 /// of a VHDL signal assignment other than a single zero-delay inertial
 /// element without a rejection limit, which has transactions in the
 /// projected output waveform of its driver (IEEE 1076-2019 10.5.2.2); the
-/// prefix of 'EVENT, 'ACTIVE, 'LAST_VALUE, 'LAST_EVENT or 'LAST_ACTIVE
-/// (16.2.4), whose event and transaction history the host keeps; and the
 /// target of a force or release (IEEE 1800-2023 10.6.2, 1076-2019
 /// 10.5.2.1), whose forced value hides its drivers' in the host's
 /// resolution; the disable net of a concurrent assertion's monitor, whose
@@ -1467,14 +1525,10 @@ template <typename OperationAt, typename Types, typename NineValued = std::nullp
         if constexpr (std::is_same_v<T, ForceSignalSlice>
             || std::is_same_v<T, ReleaseSignalSlice>) {
             return value.signal;
-        } else if constexpr (std::is_same_v<T, SignalEvent>
-            || std::is_same_v<T, SignalActive>
-            || std::is_same_v<T, SignalLastValue>
-            || std::is_same_v<T, SignalLastEvent>
-            || std::is_same_v<T, SignalLastActive>
+        } else if constexpr (
             // %v reads the host's drivers and their strengths (IEEE
             // 1800-2023 21.2.1.5).
-            || std::is_same_v<T, SignalStrengthText>
+            std::is_same_v<T, SignalStrengthText>
             // 'DRIVING and 'DRIVING_VALUE read the member's host driver
             // (1076-2019 16.2.4).
             || std::is_same_v<T, SignalDriving>
@@ -1492,9 +1546,8 @@ template <typename OperationAt, typename Types, typename NineValued = std::nullp
                 ? std::optional<SignalId> { *value.disable_signal }
                 : std::nullopt;
         } else if constexpr (std::is_same_v<T, ClassStaticMethodCall>) {
-            // A driver disconnection (IEEE 1076-2019 10.5.2.2) edits the
-            // projected output waveform of the member's host driver.
-            return vhdl_disconnect_signal(value.method_identity);
+            // A static call touches no signal named by its identity.
+            return std::nullopt;
         } else if constexpr (
             // A VHDL delayed, transport or waveform assignment (IEEE
             // 1076-2019 10.5.2.2) edits the projected output waveform the
@@ -1516,6 +1569,32 @@ template <typename OperationAt, typename Types, typename NineValued = std::nullp
             return std::nullopt;
         }
     }, operation);
+}
+
+/// The signal a history attribute reads, with its selected range if any:
+/// 'EVENT, 'ACTIVE, 'LAST_VALUE, 'LAST_EVENT and 'LAST_ACTIVE (IEEE
+/// 1076-2019 16.2.4). The history of a kernel signal, and of a selection of
+/// it, is the kernel's (StaticKernel::build_histories); that of a host
+/// signal is the host's.
+[[nodiscard]] inline std::optional<
+    std::pair<SignalId, std::optional<SignalSelection>>>
+static_kernel_history_query(const Operation& operation)
+{
+    return visit_operation(
+        [](const auto& value) -> std::optional<
+            std::pair<SignalId, std::optional<SignalSelection>>> {
+            using T = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<T, SignalEvent>
+                || std::is_same_v<T, SignalActive>
+                || std::is_same_v<T, SignalLastValue>
+                || std::is_same_v<T, SignalLastEvent>
+                || std::is_same_v<T, SignalLastActive>) {
+                return std::pair { value.signal, value.selection };
+            } else {
+                return std::nullopt;
+            }
+        },
+        operation);
 }
 
 /// A bit range of one signal that a port-association program copies into its
@@ -1571,6 +1650,27 @@ template <typename Operations, typename SignalWidth>
             }
             const auto value = piece->second;
             pieces.insert_or_assign(copy->destination, value);
+        } else if (const auto* check = operation_get_if<IntegerCheck>(&operation)) {
+            // The subtype check of a conversion into an integer or
+            // enumeration subtype whose range holds every value of the
+            // piece's width never fails (IEEE 1076-2019 6.5.7.1).
+            const auto piece = pieces.find(check->source);
+            if (piece == pieces.end() || piece->second.width == 0U
+                || piece->second.width > 64U) {
+                return std::nullopt;
+            }
+            const auto bits = piece->second.width;
+            const bool signed_range = bits == 64U
+                ? check->lower == std::numeric_limits<std::int64_t>::min()
+                    && check->upper == std::numeric_limits<std::int64_t>::max()
+                : check->lower <= -(std::int64_t { 1 } << (bits - 1U))
+                    && check->upper >= (std::int64_t { 1 } << (bits - 1U)) - 1;
+            const bool unsigned_range = bits < 63U
+                && check->lower <= 0
+                && check->upper >= (std::int64_t { 1 } << bits) - 1;
+            if (!signed_range && !unsigned_range) {
+                return std::nullopt;
+            }
         } else if (!operation_holds<DebugPoint>(operation)
             && !operation_holds<Halt>(operation)) {
             return std::nullopt;

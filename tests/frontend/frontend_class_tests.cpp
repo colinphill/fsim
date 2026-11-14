@@ -1,10 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "fsim/frontend/frontend.hpp"
 
+#include "fsim/frontend/class_inheritance.hpp"
+#include "fsim/frontend/class_resolution.hpp"
+#include "fsim/frontend/class_specialization.hpp"
+#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/diagnostic.hpp"
+#include "fsim/frontend/parser.hpp"
+#include "fsim/frontend/source.hpp"
+#include "fsim/frontend/token.hpp"
+#include "fsim/frontend/uvm_roles.hpp"
 #include <algorithm>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace fsim::tests::frontend {
 
@@ -1133,6 +1144,7 @@ endmodule
   auto uvm_parameterized_calls = parse_text(
       "uvm_parameterized_calls.sv",
       R"(
+package uvm_pkg;
 class uvm_object;
 endclass
 class uvm_component extends uvm_object;
@@ -1159,6 +1171,8 @@ class uvm_config_db #(type T = int);
     return 1;
   endfunction
 endclass
+endpackage
+import uvm_pkg::*;
 class UvmProduct extends uvm_object;
   typedef uvm_object_registry #(UvmProduct, "UvmProduct") type_id;
 endclass
@@ -1175,6 +1189,11 @@ endmodule
   require(
       uvm_parameterized_calls.ok(),
       "UVM parameterized registry and config calls must parse");
+  // The package stands in for a governed UVM release (--uvm-release),
+  // whose declarations carry their library roles.
+  record_uvm_library_roles(*std::ranges::find(
+      uvm_parameterized_calls.design.units, std::string { "uvm_pkg" },
+      &DesignUnit::name));
   std::vector<Diagnostic> uvm_parameterized_call_diagnostics;
   require(
       resolve_systemverilog_classes(
@@ -1187,7 +1206,9 @@ endmodule
           uvm_parameterized_calls.design,
           repeated_uvm_call_diagnostics),
       "cached UVM registry/config calls must resolve repeatedly");
-  const auto& uvm_call_unit = uvm_parameterized_calls.design.units.front();
+  const auto& uvm_call_unit = *std::ranges::find(
+      uvm_parameterized_calls.design.units, std::string { "uvm_parameterized_calls" },
+      &DesignUnit::name);
   const auto& uvm_create_call =
       uvm_call_unit.processes[0].statements.front().value;
   const auto& uvm_set_call =
@@ -1221,6 +1242,46 @@ endmodule
           + std::to_string(
               uvm_get_call.operands.back().call_result_width)
           + ")");
+
+  // A registry declared outside the verified library is an ordinary class:
+  // its create is not the factory's (IEEE 1800.2-2020 8.2.4).
+  auto user_registry_calls = parse_text(
+      "user_registry_calls.sv",
+      R"(
+class uvm_object;
+endclass
+class uvm_object_registry #(
+    type T = uvm_object,
+    string Tname = "<unknown>");
+  static function T create(string name = "");
+    return null;
+  endfunction
+endclass
+class UserProduct extends uvm_object;
+  typedef uvm_object_registry #(UserProduct, "UserProduct") type_id;
+endclass
+module user_registry_calls;
+  UserProduct product;
+  initial product = UserProduct::type_id::create("product");
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(user_registry_calls.ok(), "a user registry class must parse");
+  std::vector<Diagnostic> user_registry_diagnostics;
+  require(
+      resolve_systemverilog_classes(
+          user_registry_calls.design, user_registry_diagnostics),
+      "a user registry class must resolve");
+  const auto& user_create_call =
+      user_registry_calls.design.units.front()
+          .processes.front().statements.front().value;
+  require(
+      !user_create_call.text.starts_with("@sv-static-method:@uvm-registry-create:")
+          && user_create_call.text
+              == "@sv-static-method:work::$unit::uvm_object_registry::create",
+      "a $unit class named uvm_object_registry is not the library's "
+      "registry and its create must stay an ordinary static call (got "
+          + user_create_call.text + ")");
 
   auto uvm_compare_call = parse_text(
       "uvm_compare_call.sv",

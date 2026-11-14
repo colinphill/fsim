@@ -1,0 +1,935 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Declarative items removed from the IEEE 1076-2019 package sources to give the
+# packages of the older standards (scripts/derive_ieee_packages.py).
+# Columns (tab separated): standard, package, item key, clause, reason.
+# The key is the normalized declaration: kind|name(parameter types)->result for
+# subprograms (a body is removed with its declaration), type|name for a type or
+# subtype, alias|name=target, constant|name, use|clause. Packages, parameter
+# types and result types are lower case; operators keep their quotes.
+# 1987, 1993, 2002 and 2008 are the standards of the shipped trees; the 2000
+# text equals the 2002 text for these packages, so there is no 2000 tree, and
+# 2019 is the original.  The items were found by comparing the 2019 package
+# texts with the texts of the older standards (item names, parameter types and
+# result types, with UNRESOLVED_ prefixes and STD_ULOGIC/STD_LOGIC ignored);
+# an item whose older form differs only in those respects (for instance
+# STD_LOGIC_VECTOR, UNSIGNED and SIGNED, which are types in the older texts) is
+# kept in its 2019 form and is not listed here.
+1987	std_logic_1164	function|"xnor"(std_ulogic,std_ulogic)->ux01	IEEE Std 1076-1993 7.2, 2.1	uses a reserved word or declaration form (xnor, shift operators, pure/impure) that VHDL-93 added; not in IEEE Std 1076-1987
+1987	std_logic_1164	function|"xnor"(std_ulogic_vector,std_ulogic_vector)->std_ulogic_vector	IEEE Std 1076-1993 7.2, 2.1	uses a reserved word or declaration form (xnor, shift operators, pure/impure) that VHDL-93 added; not in IEEE Std 1076-1987
+1987	std_logic_1164	use|use std . textio . all	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	function|"and"(std_ulogic_vector,std_ulogic)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	function|"and"(std_ulogic,std_ulogic_vector)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	function|"nand"(std_ulogic_vector,std_ulogic)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	function|"nand"(std_ulogic,std_ulogic_vector)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	function|"or"(std_ulogic_vector,std_ulogic)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	function|"or"(std_ulogic,std_ulogic_vector)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	function|"nor"(std_ulogic_vector,std_ulogic)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	function|"nor"(std_ulogic,std_ulogic_vector)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	function|"xor"(std_ulogic_vector,std_ulogic)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	function|"xor"(std_ulogic,std_ulogic_vector)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	function|"xnor"(std_ulogic_vector,std_ulogic)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	function|"xnor"(std_ulogic,std_ulogic_vector)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	function|"and"(std_ulogic_vector)->std_ulogic	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	function|"nand"(std_ulogic_vector)->std_ulogic	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	function|"or"(std_ulogic_vector)->std_ulogic	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	function|"nor"(std_ulogic_vector)->std_ulogic	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	function|"xor"(std_ulogic_vector)->std_ulogic	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	function|"xnor"(std_ulogic_vector)->std_ulogic	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	function|"sll"(std_ulogic_vector,integer)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	function|"srl"(std_ulogic_vector,integer)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	function|"rol"(std_ulogic_vector,integer)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	function|"ror"(std_ulogic_vector,integer)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	alias|to_bit_vector=to_bitvector [ std_ulogic_vector , bit return bit_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	alias|to_bv=to_bitvector [ std_ulogic_vector , bit return bit_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	alias|to_std_logic_vector=to_stdlogicvector [ bit_vector return std_logic_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	alias|to_slv=to_stdlogicvector [ bit_vector return std_logic_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	alias|to_std_logic_vector=to_stdlogicvector [ std_ulogic_vector return std_logic_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	alias|to_slv=to_stdlogicvector [ std_ulogic_vector return std_logic_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	alias|to_std_ulogic_vector=to_stdulogicvector [ bit_vector return std_ulogic_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	alias|to_sulv=to_stdulogicvector [ bit_vector return std_ulogic_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	alias|to_std_ulogic_vector=to_stdulogicvector [ std_logic_vector return std_ulogic_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	alias|to_sulv=to_stdulogicvector [ std_logic_vector return std_ulogic_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	function|to_01(std_ulogic_vector,std_ulogic)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	function|to_01(std_ulogic,std_ulogic)->std_ulogic	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	function|to_01(bit_vector,std_ulogic)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	function|to_01(bit,std_ulogic)->std_ulogic	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	function|"??"(std_ulogic)->boolean	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	alias|to_bstring=to_string [ std_ulogic_vector return string ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	alias|to_binary_string=to_string [ std_ulogic_vector return string ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	function|to_ostring(std_ulogic_vector)->string	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	alias|to_octal_string=to_ostring [ std_ulogic_vector return string ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	function|to_hstring(std_ulogic_vector)->string	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	alias|to_hex_string=to_hstring [ std_ulogic_vector return string ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	procedure|read(line,std_ulogic,boolean)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	procedure|read(line,std_ulogic)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	procedure|read(line,std_ulogic_vector,boolean)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	procedure|read(line,std_ulogic_vector)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	procedure|write(line,std_ulogic,side,width)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	procedure|write(line,std_ulogic_vector,side,width)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	alias|bread=read [ line , std_ulogic_vector , boolean ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	alias|bread=read [ line , std_ulogic_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	alias|binary_read=read [ line , std_ulogic_vector , boolean ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	alias|binary_read=read [ line , std_ulogic_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	procedure|oread(line,std_ulogic_vector,boolean)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	procedure|oread(line,std_ulogic_vector)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	alias|octal_read=oread [ line , std_ulogic_vector , boolean ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	alias|octal_read=oread [ line , std_ulogic_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	procedure|hread(line,std_ulogic_vector,boolean)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	procedure|hread(line,std_ulogic_vector)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	alias|hex_read=hread [ line , std_ulogic_vector , boolean ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	alias|hex_read=hread [ line , std_ulogic_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	alias|bwrite=write [ line , std_ulogic_vector , side , width ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	alias|binary_write=write [ line , std_ulogic_vector , side , width ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	procedure|owrite(line,std_ulogic_vector,side,width)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	alias|octal_write=owrite [ line , std_ulogic_vector , side , width ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	procedure|hwrite(line,std_ulogic_vector,side,width)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	alias|hex_write=hwrite [ line , std_ulogic_vector , side , width ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	type|mvl9plus	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	type|char_indexed_by_mvl9	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	type|mvl9_indexed_by_char	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	type|mvl9plus_indexed_by_char	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	constant|mvl9_to_char	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	constant|char_to_mvl9	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	constant|char_to_mvl9plus	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	constant|nbsp	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	procedure|skip_whitespace(line)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	procedure|char2tribits(character,std_ulogic_vector ( 2 downto 0 ),boolean,boolean)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1987	std_logic_1164	procedure|char2quadbits(character,std_ulogic_vector ( 3 downto 0 ),boolean,boolean)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	numeric_bit	use|use std . textio . all	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"+"(unsigned,bit)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"+"(bit,unsigned)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"+"(signed,bit)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"+"(bit,signed)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"-"(unsigned,bit)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"-"(bit,unsigned)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"-"(signed,bit)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"-"(bit,signed)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|find_leftmost(unsigned,bit)->integer	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|find_leftmost(signed,bit)->integer	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|find_rightmost(unsigned,bit)->integer	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|find_rightmost(signed,bit)->integer	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|minimum(unsigned,unsigned)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|minimum(signed,signed)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|minimum(natural,unsigned)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|minimum(integer,signed)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|minimum(unsigned,natural)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|minimum(signed,integer)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|maximum(unsigned,unsigned)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|maximum(signed,signed)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|maximum(natural,unsigned)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|maximum(integer,signed)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|maximum(unsigned,natural)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|maximum(signed,integer)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"?>"(unsigned,unsigned)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"?>"(signed,signed)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"?>"(natural,unsigned)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"?>"(integer,signed)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"?>"(unsigned,natural)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"?>"(signed,integer)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"?<"(unsigned,unsigned)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"?<"(signed,signed)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"?<"(natural,unsigned)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"?<"(integer,signed)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"?<"(unsigned,natural)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"?<"(signed,integer)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"?<="(unsigned,unsigned)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"?<="(signed,signed)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"?<="(natural,unsigned)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"?<="(integer,signed)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"?<="(unsigned,natural)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"?<="(signed,integer)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"?>="(unsigned,unsigned)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"?>="(signed,signed)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"?>="(natural,unsigned)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"?>="(integer,signed)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"?>="(unsigned,natural)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"?>="(signed,integer)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"?="(unsigned,unsigned)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"?="(signed,signed)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"?="(natural,unsigned)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"?="(integer,signed)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"?="(unsigned,natural)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"?="(signed,integer)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"?/="(unsigned,unsigned)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"?/="(signed,signed)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"?/="(natural,unsigned)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"?/="(integer,signed)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"?/="(unsigned,natural)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"?/="(signed,integer)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"sla"(unsigned,integer)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"sla"(signed,integer)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"sra"(unsigned,integer)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"sra"(signed,integer)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|resize(unsigned,unsigned)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|resize(signed,signed)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|to_unsigned(natural,unsigned)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|to_signed(integer,signed)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"and"(bit,unsigned)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"and"(unsigned,bit)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"or"(bit,unsigned)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"or"(unsigned,bit)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"nand"(bit,unsigned)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"nand"(unsigned,bit)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"nor"(bit,unsigned)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"nor"(unsigned,bit)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"xor"(bit,unsigned)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"xor"(unsigned,bit)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"xnor"(bit,unsigned)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"xnor"(unsigned,bit)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"and"(bit,signed)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"and"(signed,bit)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"or"(bit,signed)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"or"(signed,bit)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"nand"(bit,signed)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"nand"(signed,bit)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"nor"(bit,signed)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"nor"(signed,bit)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"xor"(bit,signed)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"xor"(signed,bit)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"xnor"(bit,signed)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"xnor"(signed,bit)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"and"(signed)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"nand"(signed)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"or"(signed)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"nor"(signed)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"xor"(signed)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"xnor"(signed)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"and"(unsigned)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"nand"(unsigned)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"or"(unsigned)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"nor"(unsigned)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"xor"(unsigned)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|"xnor"(unsigned)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	alias|rising_edge=std . standard . rising_edge [ std . standard . bit return std . standard . boolean ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	alias|falling_edge=std . standard . falling_edge [ std . standard . bit return std . standard . boolean ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	alias|to_bstring=to_string [ unsigned return string ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	alias|to_bstring=to_string [ signed return string ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	alias|to_binary_string=to_string [ unsigned return string ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	alias|to_binary_string=to_string [ signed return string ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|to_ostring(unsigned)->string	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|to_ostring(signed)->string	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	alias|to_octal_string=to_ostring [ unsigned return string ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	alias|to_octal_string=to_ostring [ signed return string ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|to_hstring(unsigned)->string	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	function|to_hstring(signed)->string	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	alias|to_hex_string=to_hstring [ unsigned return string ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	alias|to_hex_string=to_hstring [ signed return string ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	procedure|read(line,unsigned,boolean)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	procedure|read(line,unsigned)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	procedure|read(line,signed,boolean)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	procedure|read(line,signed)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	procedure|write(line,unsigned,side,width)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	procedure|write(line,signed,side,width)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	alias|bread=read [ line , unsigned , boolean ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	alias|bread=read [ line , signed , boolean ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	alias|bread=read [ line , unsigned ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	alias|bread=read [ line , signed ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	alias|binary_read=read [ line , unsigned , boolean ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	alias|binary_read=read [ line , signed , boolean ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	alias|binary_read=read [ line , unsigned ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	alias|binary_read=read [ line , signed ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	procedure|oread(line,unsigned,boolean)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	procedure|oread(line,signed,boolean)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	procedure|oread(line,unsigned)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	procedure|oread(line,signed)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	alias|octal_read=oread [ line , unsigned , boolean ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	alias|octal_read=oread [ line , signed , boolean ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	alias|octal_read=oread [ line , unsigned ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	alias|octal_read=oread [ line , signed ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	procedure|hread(line,unsigned,boolean)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	procedure|hread(line,signed,boolean)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	procedure|hread(line,unsigned)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	procedure|hread(line,signed)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	alias|hex_read=hread [ line , unsigned , boolean ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	alias|hex_read=hread [ line , signed , boolean ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	alias|hex_read=hread [ line , unsigned ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	alias|hex_read=hread [ line , signed ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	alias|bwrite=write [ line , unsigned , side , width ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	alias|bwrite=write [ line , signed , side , width ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	alias|binary_write=write [ line , unsigned , side , width ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	alias|binary_write=write [ line , signed , side , width ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	procedure|owrite(line,unsigned,side,width)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	procedure|owrite(line,signed,side,width)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	alias|octal_write=owrite [ line , unsigned , side , width ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	alias|octal_write=owrite [ line , signed , side , width ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	procedure|hwrite(line,unsigned,side,width)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	procedure|hwrite(line,signed,side,width)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	alias|hex_write=hwrite [ line , unsigned , side , width ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_bit	alias|hex_write=hwrite [ line , signed , side , width ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	use|use std . textio . all	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	alias|u_unsigned=unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	alias|u_signed=unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"+"(unresolved_unsigned,std_ulogic)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"+"(std_ulogic,unresolved_unsigned)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"+"(unresolved_signed,std_ulogic)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"+"(std_ulogic,unresolved_signed)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"-"(unresolved_unsigned,std_ulogic)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"-"(std_ulogic,unresolved_unsigned)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"-"(unresolved_signed,std_ulogic)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"-"(std_ulogic,unresolved_signed)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|find_leftmost(unresolved_unsigned,std_ulogic)->integer	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|find_leftmost(unresolved_signed,std_ulogic)->integer	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|find_rightmost(unresolved_unsigned,std_ulogic)->integer	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|find_rightmost(unresolved_signed,std_ulogic)->integer	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|minimum(unresolved_unsigned,unresolved_unsigned)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|minimum(unresolved_signed,unresolved_signed)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|minimum(natural,unresolved_unsigned)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|minimum(integer,unresolved_signed)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|minimum(unresolved_unsigned,natural)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|minimum(unresolved_signed,integer)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|maximum(unresolved_unsigned,unresolved_unsigned)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|maximum(unresolved_signed,unresolved_signed)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|maximum(natural,unresolved_unsigned)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|maximum(integer,unresolved_signed)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|maximum(unresolved_unsigned,natural)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|maximum(unresolved_signed,integer)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"?>"(unresolved_unsigned,unresolved_unsigned)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"?>"(unresolved_signed,unresolved_signed)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"?>"(natural,unresolved_unsigned)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"?>"(integer,unresolved_signed)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"?>"(unresolved_unsigned,natural)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"?>"(unresolved_signed,integer)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"?<"(unresolved_unsigned,unresolved_unsigned)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"?<"(unresolved_signed,unresolved_signed)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"?<"(natural,unresolved_unsigned)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"?<"(integer,unresolved_signed)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"?<"(unresolved_unsigned,natural)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"?<"(unresolved_signed,integer)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"?<="(unresolved_unsigned,unresolved_unsigned)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"?<="(unresolved_signed,unresolved_signed)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"?<="(natural,unresolved_unsigned)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"?<="(integer,unresolved_signed)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"?<="(unresolved_unsigned,natural)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"?<="(unresolved_signed,integer)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"?>="(unresolved_unsigned,unresolved_unsigned)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"?>="(unresolved_signed,unresolved_signed)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"?>="(natural,unresolved_unsigned)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"?>="(integer,unresolved_signed)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"?>="(unresolved_unsigned,natural)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"?>="(unresolved_signed,integer)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"?="(unresolved_unsigned,unresolved_unsigned)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"?="(unresolved_signed,unresolved_signed)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"?="(natural,unresolved_unsigned)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"?="(integer,unresolved_signed)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"?="(unresolved_unsigned,natural)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"?="(unresolved_signed,integer)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"?/="(unresolved_unsigned,unresolved_unsigned)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"?/="(unresolved_signed,unresolved_signed)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"?/="(natural,unresolved_unsigned)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"?/="(integer,unresolved_signed)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"?/="(unresolved_unsigned,natural)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"?/="(unresolved_signed,integer)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"sla"(unresolved_unsigned,integer)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"sla"(unresolved_signed,integer)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"sra"(unresolved_unsigned,integer)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"sra"(unresolved_signed,integer)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|resize(unresolved_unsigned,unresolved_unsigned)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|resize(unresolved_signed,unresolved_signed)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|to_unsigned(natural,unresolved_unsigned)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|to_signed(integer,unresolved_signed)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"and"(std_ulogic,unresolved_unsigned)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"and"(unresolved_unsigned,std_ulogic)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"or"(std_ulogic,unresolved_unsigned)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"or"(unresolved_unsigned,std_ulogic)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"nand"(std_ulogic,unresolved_unsigned)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"nand"(unresolved_unsigned,std_ulogic)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"nor"(std_ulogic,unresolved_unsigned)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"nor"(unresolved_unsigned,std_ulogic)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"xor"(std_ulogic,unresolved_unsigned)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"xor"(unresolved_unsigned,std_ulogic)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"xnor"(std_ulogic,unresolved_unsigned)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"xnor"(unresolved_unsigned,std_ulogic)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"and"(std_ulogic,unresolved_signed)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"and"(unresolved_signed,std_ulogic)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"or"(std_ulogic,unresolved_signed)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"or"(unresolved_signed,std_ulogic)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"nand"(std_ulogic,unresolved_signed)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"nand"(unresolved_signed,std_ulogic)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"nor"(std_ulogic,unresolved_signed)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"nor"(unresolved_signed,std_ulogic)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"xor"(std_ulogic,unresolved_signed)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"xor"(unresolved_signed,std_ulogic)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"xnor"(std_ulogic,unresolved_signed)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"xnor"(unresolved_signed,std_ulogic)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"and"(unresolved_signed)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"nand"(unresolved_signed)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"or"(unresolved_signed)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"nor"(unresolved_signed)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"xor"(unresolved_signed)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"xnor"(unresolved_signed)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"and"(unresolved_unsigned)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"nand"(unresolved_unsigned)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"or"(unresolved_unsigned)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"nor"(unresolved_unsigned)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"xor"(unresolved_unsigned)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|"xnor"(unresolved_unsigned)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|to_x01(unresolved_unsigned)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|to_x01(unresolved_signed)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|to_x01z(unresolved_unsigned)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|to_x01z(unresolved_signed)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|to_ux01(unresolved_unsigned)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|to_ux01(unresolved_signed)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|is_x(unresolved_unsigned)->boolean	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|is_x(unresolved_signed)->boolean	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	alias|to_bstring=to_string [ unresolved_unsigned return string ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	alias|to_bstring=to_string [ unresolved_signed return string ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	alias|to_binary_string=to_string [ unresolved_unsigned return string ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	alias|to_binary_string=to_string [ unresolved_signed return string ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|to_ostring(unresolved_unsigned)->string	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|to_ostring(unresolved_signed)->string	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	alias|to_octal_string=to_ostring [ unresolved_unsigned return string ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	alias|to_octal_string=to_ostring [ unresolved_signed return string ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|to_hstring(unresolved_unsigned)->string	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	function|to_hstring(unresolved_signed)->string	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	alias|to_hex_string=to_hstring [ unresolved_unsigned return string ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	alias|to_hex_string=to_hstring [ unresolved_signed return string ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	procedure|read(line,unresolved_unsigned,boolean)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	procedure|read(line,unresolved_unsigned)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	procedure|read(line,unresolved_signed,boolean)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	procedure|read(line,unresolved_signed)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	procedure|write(line,unresolved_unsigned,side,width)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	procedure|write(line,unresolved_signed,side,width)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	alias|bread=read [ line , unresolved_unsigned , boolean ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	alias|bread=read [ line , unresolved_signed , boolean ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	alias|bread=read [ line , unresolved_unsigned ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	alias|bread=read [ line , unresolved_signed ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	alias|binary_read=read [ line , unresolved_unsigned , boolean ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	alias|binary_read=read [ line , unresolved_signed , boolean ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	alias|binary_read=read [ line , unresolved_unsigned ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	alias|binary_read=read [ line , unresolved_signed ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	procedure|oread(line,unresolved_unsigned,boolean)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	procedure|oread(line,unresolved_signed,boolean)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	procedure|oread(line,unresolved_unsigned)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	procedure|oread(line,unresolved_signed)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	alias|octal_read=oread [ line , unresolved_unsigned , boolean ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	alias|octal_read=oread [ line , unresolved_signed , boolean ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	alias|octal_read=oread [ line , unresolved_unsigned ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	alias|octal_read=oread [ line , unresolved_signed ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	procedure|hread(line,unresolved_unsigned,boolean)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	procedure|hread(line,unresolved_signed,boolean)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	procedure|hread(line,unresolved_unsigned)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	procedure|hread(line,unresolved_signed)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	alias|hex_read=hread [ line , unresolved_unsigned , boolean ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	alias|hex_read=hread [ line , unresolved_signed , boolean ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	alias|hex_read=hread [ line , unresolved_unsigned ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	alias|hex_read=hread [ line , unresolved_signed ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	alias|bwrite=write [ line , unresolved_unsigned , side , width ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	alias|bwrite=write [ line , unresolved_signed , side , width ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	alias|binary_write=write [ line , unresolved_unsigned , side , width ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	alias|binary_write=write [ line , unresolved_signed , side , width ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	procedure|owrite(line,unresolved_unsigned,side,width)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	procedure|owrite(line,unresolved_signed,side,width)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	alias|octal_write=owrite [ line , unresolved_unsigned , side , width ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	alias|octal_write=owrite [ line , unresolved_signed , side , width ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	procedure|hwrite(line,unresolved_unsigned,side,width)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	procedure|hwrite(line,unresolved_signed,side,width)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	alias|hex_write=hwrite [ line , unresolved_unsigned , side , width ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	numeric_std	alias|hex_write=hwrite [ line , unresolved_signed , side , width ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+1993	std_logic_1164	use|use std . textio . all	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	function|"and"(std_ulogic_vector,std_ulogic)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	function|"and"(std_ulogic,std_ulogic_vector)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	function|"nand"(std_ulogic_vector,std_ulogic)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	function|"nand"(std_ulogic,std_ulogic_vector)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	function|"or"(std_ulogic_vector,std_ulogic)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	function|"or"(std_ulogic,std_ulogic_vector)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	function|"nor"(std_ulogic_vector,std_ulogic)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	function|"nor"(std_ulogic,std_ulogic_vector)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	function|"xor"(std_ulogic_vector,std_ulogic)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	function|"xor"(std_ulogic,std_ulogic_vector)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	function|"xnor"(std_ulogic_vector,std_ulogic)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	function|"xnor"(std_ulogic,std_ulogic_vector)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	function|"and"(std_ulogic_vector)->std_ulogic	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	function|"nand"(std_ulogic_vector)->std_ulogic	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	function|"or"(std_ulogic_vector)->std_ulogic	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	function|"nor"(std_ulogic_vector)->std_ulogic	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	function|"xor"(std_ulogic_vector)->std_ulogic	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	function|"xnor"(std_ulogic_vector)->std_ulogic	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	function|"sll"(std_ulogic_vector,integer)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	function|"srl"(std_ulogic_vector,integer)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	function|"rol"(std_ulogic_vector,integer)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	function|"ror"(std_ulogic_vector,integer)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	alias|to_bit_vector=to_bitvector [ std_ulogic_vector , bit return bit_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	alias|to_bv=to_bitvector [ std_ulogic_vector , bit return bit_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	alias|to_std_logic_vector=to_stdlogicvector [ bit_vector return std_logic_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	alias|to_slv=to_stdlogicvector [ bit_vector return std_logic_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	alias|to_std_logic_vector=to_stdlogicvector [ std_ulogic_vector return std_logic_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	alias|to_slv=to_stdlogicvector [ std_ulogic_vector return std_logic_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	alias|to_std_ulogic_vector=to_stdulogicvector [ bit_vector return std_ulogic_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	alias|to_sulv=to_stdulogicvector [ bit_vector return std_ulogic_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	alias|to_std_ulogic_vector=to_stdulogicvector [ std_logic_vector return std_ulogic_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	alias|to_sulv=to_stdulogicvector [ std_logic_vector return std_ulogic_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	function|to_01(std_ulogic_vector,std_ulogic)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	function|to_01(std_ulogic,std_ulogic)->std_ulogic	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	function|to_01(bit_vector,std_ulogic)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	function|to_01(bit,std_ulogic)->std_ulogic	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	function|"??"(std_ulogic)->boolean	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	alias|to_bstring=to_string [ std_ulogic_vector return string ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	alias|to_binary_string=to_string [ std_ulogic_vector return string ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	function|to_ostring(std_ulogic_vector)->string	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	alias|to_octal_string=to_ostring [ std_ulogic_vector return string ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	function|to_hstring(std_ulogic_vector)->string	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	alias|to_hex_string=to_hstring [ std_ulogic_vector return string ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	procedure|read(line,std_ulogic,boolean)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	procedure|read(line,std_ulogic)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	procedure|read(line,std_ulogic_vector,boolean)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	procedure|read(line,std_ulogic_vector)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	procedure|write(line,std_ulogic,side,width)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	procedure|write(line,std_ulogic_vector,side,width)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	alias|bread=read [ line , std_ulogic_vector , boolean ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	alias|bread=read [ line , std_ulogic_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	alias|binary_read=read [ line , std_ulogic_vector , boolean ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	alias|binary_read=read [ line , std_ulogic_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	procedure|oread(line,std_ulogic_vector,boolean)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	procedure|oread(line,std_ulogic_vector)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	alias|octal_read=oread [ line , std_ulogic_vector , boolean ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	alias|octal_read=oread [ line , std_ulogic_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	procedure|hread(line,std_ulogic_vector,boolean)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	procedure|hread(line,std_ulogic_vector)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	alias|hex_read=hread [ line , std_ulogic_vector , boolean ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	alias|hex_read=hread [ line , std_ulogic_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	alias|bwrite=write [ line , std_ulogic_vector , side , width ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	alias|binary_write=write [ line , std_ulogic_vector , side , width ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	procedure|owrite(line,std_ulogic_vector,side,width)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	alias|octal_write=owrite [ line , std_ulogic_vector , side , width ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	procedure|hwrite(line,std_ulogic_vector,side,width)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	alias|hex_write=hwrite [ line , std_ulogic_vector , side , width ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	type|mvl9plus	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	type|char_indexed_by_mvl9	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	type|mvl9_indexed_by_char	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	type|mvl9plus_indexed_by_char	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	constant|mvl9_to_char	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	constant|char_to_mvl9	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	constant|char_to_mvl9plus	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	constant|nbsp	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	procedure|skip_whitespace(line)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	procedure|char2tribits(character,std_ulogic_vector ( 2 downto 0 ),boolean,boolean)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+1993	std_logic_1164	procedure|char2quadbits(character,std_ulogic_vector ( 3 downto 0 ),boolean,boolean)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	numeric_bit	use|use std . textio . all	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"+"(unsigned,bit)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"+"(bit,unsigned)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"+"(signed,bit)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"+"(bit,signed)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"-"(unsigned,bit)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"-"(bit,unsigned)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"-"(signed,bit)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"-"(bit,signed)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|find_leftmost(unsigned,bit)->integer	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|find_leftmost(signed,bit)->integer	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|find_rightmost(unsigned,bit)->integer	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|find_rightmost(signed,bit)->integer	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|minimum(unsigned,unsigned)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|minimum(signed,signed)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|minimum(natural,unsigned)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|minimum(integer,signed)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|minimum(unsigned,natural)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|minimum(signed,integer)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|maximum(unsigned,unsigned)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|maximum(signed,signed)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|maximum(natural,unsigned)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|maximum(integer,signed)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|maximum(unsigned,natural)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|maximum(signed,integer)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"?>"(unsigned,unsigned)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"?>"(signed,signed)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"?>"(natural,unsigned)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"?>"(integer,signed)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"?>"(unsigned,natural)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"?>"(signed,integer)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"?<"(unsigned,unsigned)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"?<"(signed,signed)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"?<"(natural,unsigned)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"?<"(integer,signed)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"?<"(unsigned,natural)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"?<"(signed,integer)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"?<="(unsigned,unsigned)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"?<="(signed,signed)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"?<="(natural,unsigned)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"?<="(integer,signed)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"?<="(unsigned,natural)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"?<="(signed,integer)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"?>="(unsigned,unsigned)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"?>="(signed,signed)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"?>="(natural,unsigned)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"?>="(integer,signed)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"?>="(unsigned,natural)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"?>="(signed,integer)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"?="(unsigned,unsigned)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"?="(signed,signed)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"?="(natural,unsigned)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"?="(integer,signed)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"?="(unsigned,natural)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"?="(signed,integer)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"?/="(unsigned,unsigned)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"?/="(signed,signed)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"?/="(natural,unsigned)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"?/="(integer,signed)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"?/="(unsigned,natural)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"?/="(signed,integer)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"sla"(unsigned,integer)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"sla"(signed,integer)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"sra"(unsigned,integer)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"sra"(signed,integer)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|resize(unsigned,unsigned)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|resize(signed,signed)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|to_unsigned(natural,unsigned)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|to_signed(integer,signed)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"and"(bit,unsigned)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"and"(unsigned,bit)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"or"(bit,unsigned)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"or"(unsigned,bit)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"nand"(bit,unsigned)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"nand"(unsigned,bit)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"nor"(bit,unsigned)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"nor"(unsigned,bit)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"xor"(bit,unsigned)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"xor"(unsigned,bit)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"xnor"(bit,unsigned)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"xnor"(unsigned,bit)->unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"and"(bit,signed)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"and"(signed,bit)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"or"(bit,signed)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"or"(signed,bit)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"nand"(bit,signed)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"nand"(signed,bit)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"nor"(bit,signed)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"nor"(signed,bit)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"xor"(bit,signed)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"xor"(signed,bit)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"xnor"(bit,signed)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"xnor"(signed,bit)->signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"and"(signed)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"nand"(signed)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"or"(signed)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"nor"(signed)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"xor"(signed)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"xnor"(signed)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"and"(unsigned)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"nand"(unsigned)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"or"(unsigned)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"nor"(unsigned)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"xor"(unsigned)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|"xnor"(unsigned)->bit	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	alias|rising_edge=std . standard . rising_edge [ std . standard . bit return std . standard . boolean ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	alias|falling_edge=std . standard . falling_edge [ std . standard . bit return std . standard . boolean ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	alias|to_bstring=to_string [ unsigned return string ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	alias|to_bstring=to_string [ signed return string ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	alias|to_binary_string=to_string [ unsigned return string ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	alias|to_binary_string=to_string [ signed return string ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|to_ostring(unsigned)->string	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|to_ostring(signed)->string	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	alias|to_octal_string=to_ostring [ unsigned return string ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	alias|to_octal_string=to_ostring [ signed return string ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|to_hstring(unsigned)->string	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	function|to_hstring(signed)->string	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	alias|to_hex_string=to_hstring [ unsigned return string ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	alias|to_hex_string=to_hstring [ signed return string ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	procedure|read(line,unsigned,boolean)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	procedure|read(line,unsigned)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	procedure|read(line,signed,boolean)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	procedure|read(line,signed)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	procedure|write(line,unsigned,side,width)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	procedure|write(line,signed,side,width)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	alias|bread=read [ line , unsigned , boolean ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	alias|bread=read [ line , signed , boolean ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	alias|bread=read [ line , unsigned ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	alias|bread=read [ line , signed ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	alias|binary_read=read [ line , unsigned , boolean ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	alias|binary_read=read [ line , signed , boolean ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	alias|binary_read=read [ line , unsigned ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	alias|binary_read=read [ line , signed ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	procedure|oread(line,unsigned,boolean)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	procedure|oread(line,signed,boolean)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	procedure|oread(line,unsigned)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	procedure|oread(line,signed)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	alias|octal_read=oread [ line , unsigned , boolean ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	alias|octal_read=oread [ line , signed , boolean ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	alias|octal_read=oread [ line , unsigned ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	alias|octal_read=oread [ line , signed ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	procedure|hread(line,unsigned,boolean)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	procedure|hread(line,signed,boolean)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	procedure|hread(line,unsigned)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	procedure|hread(line,signed)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	alias|hex_read=hread [ line , unsigned , boolean ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	alias|hex_read=hread [ line , signed , boolean ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	alias|hex_read=hread [ line , unsigned ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	alias|hex_read=hread [ line , signed ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	alias|bwrite=write [ line , unsigned , side , width ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	alias|bwrite=write [ line , signed , side , width ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	alias|binary_write=write [ line , unsigned , side , width ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	alias|binary_write=write [ line , signed , side , width ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	procedure|owrite(line,unsigned,side,width)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	procedure|owrite(line,signed,side,width)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	alias|octal_write=owrite [ line , unsigned , side , width ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	alias|octal_write=owrite [ line , signed , side , width ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	procedure|hwrite(line,unsigned,side,width)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	procedure|hwrite(line,signed,side,width)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	alias|hex_write=hwrite [ line , unsigned , side , width ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_bit	alias|hex_write=hwrite [ line , signed , side , width ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	use|use std . textio . all	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	alias|u_unsigned=unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	alias|u_signed=unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"+"(unresolved_unsigned,std_ulogic)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"+"(std_ulogic,unresolved_unsigned)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"+"(unresolved_signed,std_ulogic)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"+"(std_ulogic,unresolved_signed)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"-"(unresolved_unsigned,std_ulogic)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"-"(std_ulogic,unresolved_unsigned)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"-"(unresolved_signed,std_ulogic)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"-"(std_ulogic,unresolved_signed)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|find_leftmost(unresolved_unsigned,std_ulogic)->integer	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|find_leftmost(unresolved_signed,std_ulogic)->integer	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|find_rightmost(unresolved_unsigned,std_ulogic)->integer	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|find_rightmost(unresolved_signed,std_ulogic)->integer	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|minimum(unresolved_unsigned,unresolved_unsigned)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|minimum(unresolved_signed,unresolved_signed)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|minimum(natural,unresolved_unsigned)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|minimum(integer,unresolved_signed)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|minimum(unresolved_unsigned,natural)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|minimum(unresolved_signed,integer)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|maximum(unresolved_unsigned,unresolved_unsigned)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|maximum(unresolved_signed,unresolved_signed)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|maximum(natural,unresolved_unsigned)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|maximum(integer,unresolved_signed)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|maximum(unresolved_unsigned,natural)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|maximum(unresolved_signed,integer)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"?>"(unresolved_unsigned,unresolved_unsigned)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"?>"(unresolved_signed,unresolved_signed)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"?>"(natural,unresolved_unsigned)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"?>"(integer,unresolved_signed)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"?>"(unresolved_unsigned,natural)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"?>"(unresolved_signed,integer)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"?<"(unresolved_unsigned,unresolved_unsigned)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"?<"(unresolved_signed,unresolved_signed)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"?<"(natural,unresolved_unsigned)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"?<"(integer,unresolved_signed)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"?<"(unresolved_unsigned,natural)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"?<"(unresolved_signed,integer)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"?<="(unresolved_unsigned,unresolved_unsigned)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"?<="(unresolved_signed,unresolved_signed)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"?<="(natural,unresolved_unsigned)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"?<="(integer,unresolved_signed)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"?<="(unresolved_unsigned,natural)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"?<="(unresolved_signed,integer)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"?>="(unresolved_unsigned,unresolved_unsigned)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"?>="(unresolved_signed,unresolved_signed)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"?>="(natural,unresolved_unsigned)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"?>="(integer,unresolved_signed)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"?>="(unresolved_unsigned,natural)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"?>="(unresolved_signed,integer)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"?="(unresolved_unsigned,unresolved_unsigned)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"?="(unresolved_signed,unresolved_signed)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"?="(natural,unresolved_unsigned)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"?="(integer,unresolved_signed)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"?="(unresolved_unsigned,natural)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"?="(unresolved_signed,integer)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"?/="(unresolved_unsigned,unresolved_unsigned)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"?/="(unresolved_signed,unresolved_signed)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"?/="(natural,unresolved_unsigned)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"?/="(integer,unresolved_signed)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"?/="(unresolved_unsigned,natural)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"?/="(unresolved_signed,integer)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"sla"(unresolved_unsigned,integer)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"sla"(unresolved_signed,integer)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"sra"(unresolved_unsigned,integer)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"sra"(unresolved_signed,integer)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|resize(unresolved_unsigned,unresolved_unsigned)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|resize(unresolved_signed,unresolved_signed)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|to_unsigned(natural,unresolved_unsigned)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|to_signed(integer,unresolved_signed)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"and"(std_ulogic,unresolved_unsigned)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"and"(unresolved_unsigned,std_ulogic)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"or"(std_ulogic,unresolved_unsigned)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"or"(unresolved_unsigned,std_ulogic)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"nand"(std_ulogic,unresolved_unsigned)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"nand"(unresolved_unsigned,std_ulogic)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"nor"(std_ulogic,unresolved_unsigned)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"nor"(unresolved_unsigned,std_ulogic)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"xor"(std_ulogic,unresolved_unsigned)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"xor"(unresolved_unsigned,std_ulogic)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"xnor"(std_ulogic,unresolved_unsigned)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"xnor"(unresolved_unsigned,std_ulogic)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"and"(std_ulogic,unresolved_signed)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"and"(unresolved_signed,std_ulogic)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"or"(std_ulogic,unresolved_signed)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"or"(unresolved_signed,std_ulogic)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"nand"(std_ulogic,unresolved_signed)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"nand"(unresolved_signed,std_ulogic)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"nor"(std_ulogic,unresolved_signed)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"nor"(unresolved_signed,std_ulogic)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"xor"(std_ulogic,unresolved_signed)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"xor"(unresolved_signed,std_ulogic)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"xnor"(std_ulogic,unresolved_signed)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"xnor"(unresolved_signed,std_ulogic)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"and"(unresolved_signed)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"nand"(unresolved_signed)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"or"(unresolved_signed)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"nor"(unresolved_signed)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"xor"(unresolved_signed)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"xnor"(unresolved_signed)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"and"(unresolved_unsigned)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"nand"(unresolved_unsigned)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"or"(unresolved_unsigned)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"nor"(unresolved_unsigned)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"xor"(unresolved_unsigned)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|"xnor"(unresolved_unsigned)->std_ulogic	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|to_x01(unresolved_unsigned)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|to_x01(unresolved_signed)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|to_x01z(unresolved_unsigned)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|to_x01z(unresolved_signed)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|to_ux01(unresolved_unsigned)->unresolved_unsigned	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|to_ux01(unresolved_signed)->unresolved_signed	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|is_x(unresolved_unsigned)->boolean	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|is_x(unresolved_signed)->boolean	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	alias|to_bstring=to_string [ unresolved_unsigned return string ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	alias|to_bstring=to_string [ unresolved_signed return string ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	alias|to_binary_string=to_string [ unresolved_unsigned return string ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	alias|to_binary_string=to_string [ unresolved_signed return string ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|to_ostring(unresolved_unsigned)->string	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|to_ostring(unresolved_signed)->string	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	alias|to_octal_string=to_ostring [ unresolved_unsigned return string ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	alias|to_octal_string=to_ostring [ unresolved_signed return string ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|to_hstring(unresolved_unsigned)->string	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	function|to_hstring(unresolved_signed)->string	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	alias|to_hex_string=to_hstring [ unresolved_unsigned return string ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	alias|to_hex_string=to_hstring [ unresolved_signed return string ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	procedure|read(line,unresolved_unsigned,boolean)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	procedure|read(line,unresolved_unsigned)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	procedure|read(line,unresolved_signed,boolean)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	procedure|read(line,unresolved_signed)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	procedure|write(line,unresolved_unsigned,side,width)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	procedure|write(line,unresolved_signed,side,width)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	alias|bread=read [ line , unresolved_unsigned , boolean ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	alias|bread=read [ line , unresolved_signed , boolean ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	alias|bread=read [ line , unresolved_unsigned ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	alias|bread=read [ line , unresolved_signed ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	alias|binary_read=read [ line , unresolved_unsigned , boolean ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	alias|binary_read=read [ line , unresolved_signed , boolean ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	alias|binary_read=read [ line , unresolved_unsigned ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	alias|binary_read=read [ line , unresolved_signed ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	procedure|oread(line,unresolved_unsigned,boolean)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	procedure|oread(line,unresolved_signed,boolean)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	procedure|oread(line,unresolved_unsigned)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	procedure|oread(line,unresolved_signed)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	alias|octal_read=oread [ line , unresolved_unsigned , boolean ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	alias|octal_read=oread [ line , unresolved_signed , boolean ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	alias|octal_read=oread [ line , unresolved_unsigned ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	alias|octal_read=oread [ line , unresolved_signed ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	procedure|hread(line,unresolved_unsigned,boolean)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	procedure|hread(line,unresolved_signed,boolean)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	procedure|hread(line,unresolved_unsigned)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	procedure|hread(line,unresolved_signed)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	alias|hex_read=hread [ line , unresolved_unsigned , boolean ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	alias|hex_read=hread [ line , unresolved_signed , boolean ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	alias|hex_read=hread [ line , unresolved_unsigned ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	alias|hex_read=hread [ line , unresolved_signed ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	alias|bwrite=write [ line , unresolved_unsigned , side , width ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	alias|bwrite=write [ line , unresolved_signed , side , width ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	alias|binary_write=write [ line , unresolved_unsigned , side , width ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	alias|binary_write=write [ line , unresolved_signed , side , width ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	procedure|owrite(line,unresolved_unsigned,side,width)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	procedure|owrite(line,unresolved_signed,side,width)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	alias|octal_write=owrite [ line , unresolved_unsigned , side , width ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	alias|octal_write=owrite [ line , unresolved_signed , side , width ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	procedure|hwrite(line,unresolved_unsigned,side,width)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	procedure|hwrite(line,unresolved_signed,side,width)	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	alias|hex_write=hwrite [ line , unresolved_unsigned , side , width ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	numeric_std	alias|hex_write=hwrite [ line , unresolved_signed , side , width ]	IEEE Std 1076-2008 16.8	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1076.3-1997 text
+2002	std_logic_1164	use|use std . textio . all	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	function|"and"(std_ulogic_vector,std_ulogic)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	function|"and"(std_ulogic,std_ulogic_vector)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	function|"nand"(std_ulogic_vector,std_ulogic)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	function|"nand"(std_ulogic,std_ulogic_vector)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	function|"or"(std_ulogic_vector,std_ulogic)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	function|"or"(std_ulogic,std_ulogic_vector)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	function|"nor"(std_ulogic_vector,std_ulogic)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	function|"nor"(std_ulogic,std_ulogic_vector)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	function|"xor"(std_ulogic_vector,std_ulogic)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	function|"xor"(std_ulogic,std_ulogic_vector)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	function|"xnor"(std_ulogic_vector,std_ulogic)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	function|"xnor"(std_ulogic,std_ulogic_vector)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	function|"and"(std_ulogic_vector)->std_ulogic	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	function|"nand"(std_ulogic_vector)->std_ulogic	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	function|"or"(std_ulogic_vector)->std_ulogic	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	function|"nor"(std_ulogic_vector)->std_ulogic	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	function|"xor"(std_ulogic_vector)->std_ulogic	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	function|"xnor"(std_ulogic_vector)->std_ulogic	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	function|"sll"(std_ulogic_vector,integer)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	function|"srl"(std_ulogic_vector,integer)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	function|"rol"(std_ulogic_vector,integer)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	function|"ror"(std_ulogic_vector,integer)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	alias|to_bit_vector=to_bitvector [ std_ulogic_vector , bit return bit_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	alias|to_bv=to_bitvector [ std_ulogic_vector , bit return bit_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	alias|to_std_logic_vector=to_stdlogicvector [ bit_vector return std_logic_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	alias|to_slv=to_stdlogicvector [ bit_vector return std_logic_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	alias|to_std_logic_vector=to_stdlogicvector [ std_ulogic_vector return std_logic_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	alias|to_slv=to_stdlogicvector [ std_ulogic_vector return std_logic_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	alias|to_std_ulogic_vector=to_stdulogicvector [ bit_vector return std_ulogic_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	alias|to_sulv=to_stdulogicvector [ bit_vector return std_ulogic_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	alias|to_std_ulogic_vector=to_stdulogicvector [ std_logic_vector return std_ulogic_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	alias|to_sulv=to_stdulogicvector [ std_logic_vector return std_ulogic_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	function|to_01(std_ulogic_vector,std_ulogic)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	function|to_01(std_ulogic,std_ulogic)->std_ulogic	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	function|to_01(bit_vector,std_ulogic)->std_ulogic_vector	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	function|to_01(bit,std_ulogic)->std_ulogic	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	function|"??"(std_ulogic)->boolean	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	alias|to_bstring=to_string [ std_ulogic_vector return string ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	alias|to_binary_string=to_string [ std_ulogic_vector return string ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	function|to_ostring(std_ulogic_vector)->string	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	alias|to_octal_string=to_ostring [ std_ulogic_vector return string ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	function|to_hstring(std_ulogic_vector)->string	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	alias|to_hex_string=to_hstring [ std_ulogic_vector return string ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	procedure|read(line,std_ulogic,boolean)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	procedure|read(line,std_ulogic)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	procedure|read(line,std_ulogic_vector,boolean)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	procedure|read(line,std_ulogic_vector)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	procedure|write(line,std_ulogic,side,width)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	procedure|write(line,std_ulogic_vector,side,width)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	alias|bread=read [ line , std_ulogic_vector , boolean ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	alias|bread=read [ line , std_ulogic_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	alias|binary_read=read [ line , std_ulogic_vector , boolean ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	alias|binary_read=read [ line , std_ulogic_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	procedure|oread(line,std_ulogic_vector,boolean)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	procedure|oread(line,std_ulogic_vector)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	alias|octal_read=oread [ line , std_ulogic_vector , boolean ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	alias|octal_read=oread [ line , std_ulogic_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	procedure|hread(line,std_ulogic_vector,boolean)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	procedure|hread(line,std_ulogic_vector)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	alias|hex_read=hread [ line , std_ulogic_vector , boolean ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	alias|hex_read=hread [ line , std_ulogic_vector ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	alias|bwrite=write [ line , std_ulogic_vector , side , width ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	alias|binary_write=write [ line , std_ulogic_vector , side , width ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	procedure|owrite(line,std_ulogic_vector,side,width)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	alias|octal_write=owrite [ line , std_ulogic_vector , side , width ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	procedure|hwrite(line,std_ulogic_vector,side,width)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	alias|hex_write=hwrite [ line , std_ulogic_vector , side , width ]	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	type|mvl9plus	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	type|char_indexed_by_mvl9	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	type|mvl9_indexed_by_char	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	type|mvl9plus_indexed_by_char	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	constant|mvl9_to_char	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	constant|char_to_mvl9	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	constant|char_to_mvl9plus	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	constant|nbsp	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	procedure|skip_whitespace(line)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	procedure|char2tribits(character,std_ulogic_vector ( 2 downto 0 ),boolean,boolean)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2002	std_logic_1164	procedure|char2quadbits(character,std_ulogic_vector ( 3 downto 0 ),boolean,boolean)	IEEE Std 1076-2008 16.7	added to the package by IEEE Std 1076-2008; not in the IEEE Std 1164-1993 text
+2008	std_logic_textio	use|use std . textio . all	IEEE Std 1076-2019 16.7	added to the package by IEEE Std 1076-2019; not in the IEEE Std 1076-2008 text
+2008	std_logic_textio	library|library ieee	IEEE Std 1076-2019 16.7	added to the package by IEEE Std 1076-2019; not in the IEEE Std 1076-2008 text
+2008	std_logic_textio	use|use ieee . std_logic_1164 . all	IEEE Std 1076-2019 16.7	added to the package by IEEE Std 1076-2019; not in the IEEE Std 1076-2008 text
+2008	std_logic_textio	alias|read=ieee . std_logic_1164 . read [ line , std_ulogic ]	IEEE Std 1076-2019 16.7	added to the package by IEEE Std 1076-2019; not in the IEEE Std 1076-2008 text
+2008	std_logic_textio	alias|read=ieee . std_logic_1164 . read [ line , std_ulogic , boolean ]	IEEE Std 1076-2019 16.7	added to the package by IEEE Std 1076-2019; not in the IEEE Std 1076-2008 text
+2008	std_logic_textio	alias|read=ieee . std_logic_1164 . read [ line , std_ulogic_vector ]	IEEE Std 1076-2019 16.7	added to the package by IEEE Std 1076-2019; not in the IEEE Std 1076-2008 text
+2008	std_logic_textio	alias|read=ieee . std_logic_1164 . read [ line , std_ulogic_vector , boolean ]	IEEE Std 1076-2019 16.7	added to the package by IEEE Std 1076-2019; not in the IEEE Std 1076-2008 text
+2008	std_logic_textio	alias|write=ieee . std_logic_1164 . write [ line , std_ulogic , side , width ]	IEEE Std 1076-2019 16.7	added to the package by IEEE Std 1076-2019; not in the IEEE Std 1076-2008 text
+2008	std_logic_textio	alias|write=ieee . std_logic_1164 . write [ line , std_ulogic_vector , side , width ]	IEEE Std 1076-2019 16.7	added to the package by IEEE Std 1076-2019; not in the IEEE Std 1076-2008 text
+2008	std_logic_textio	alias|hread=ieee . std_logic_1164 . hread [ line , std_ulogic_vector ]	IEEE Std 1076-2019 16.7	added to the package by IEEE Std 1076-2019; not in the IEEE Std 1076-2008 text
+2008	std_logic_textio	alias|hread=ieee . std_logic_1164 . hread [ line , std_ulogic_vector , boolean ]	IEEE Std 1076-2019 16.7	added to the package by IEEE Std 1076-2019; not in the IEEE Std 1076-2008 text
+2008	std_logic_textio	alias|hwrite=ieee . std_logic_1164 . hwrite [ line , std_ulogic_vector , side , width ]	IEEE Std 1076-2019 16.7	added to the package by IEEE Std 1076-2019; not in the IEEE Std 1076-2008 text
+2008	std_logic_textio	alias|oread=ieee . std_logic_1164 . oread [ line , std_ulogic_vector ]	IEEE Std 1076-2019 16.7	added to the package by IEEE Std 1076-2019; not in the IEEE Std 1076-2008 text
+2008	std_logic_textio	alias|oread=ieee . std_logic_1164 . oread [ line , std_ulogic_vector , boolean ]	IEEE Std 1076-2019 16.7	added to the package by IEEE Std 1076-2019; not in the IEEE Std 1076-2008 text
+2008	std_logic_textio	alias|owrite=ieee . std_logic_1164 . owrite [ line , std_ulogic_vector , side , width ]	IEEE Std 1076-2019 16.7	added to the package by IEEE Std 1076-2019; not in the IEEE Std 1076-2008 text
+1993	numeric_std	type|unsigned	IEEE Std 1076-2008 6.3, 16.8	element-resolution subtype of the 2008 text; this standard declares UNSIGNED itself (see the rewrites table)
+1993	numeric_std	type|signed	IEEE Std 1076-2008 6.3, 16.8	element-resolution subtype of the 2008 text; this standard declares SIGNED itself (see the rewrites table)
+2002	numeric_std	type|unsigned	IEEE Std 1076-2008 6.3, 16.8	element-resolution subtype of the 2008 text; this standard declares UNSIGNED itself (see the rewrites table)
+2002	numeric_std	type|signed	IEEE Std 1076-2008 6.3, 16.8	element-resolution subtype of the 2008 text; this standard declares SIGNED itself (see the rewrites table)

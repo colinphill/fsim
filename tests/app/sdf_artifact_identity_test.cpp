@@ -2,18 +2,39 @@
 #include "fsim/app/sdf_portable_archive.hpp"
 
 #include "fsim/support/sha256.hpp"
+#include "fsim/app/sdf_annotation_scope.hpp"
+#include "fsim/app/sdf_artifact_identity.hpp"
+#include "fsim/app/sdf_cell_resolution.hpp"
+#include "fsim/app/sdf_endpoint_resolution.hpp"
+#include "fsim/app/sdf_mapping_validation.hpp"
+#include "fsim/app/sdf_schema.hpp"
+#include "fsim/artifact/coverage_identity.hpp"
+#include "fsim/artifact/design.hpp"
+#include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/elaboration/elaborator.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/sdf.hpp"
+#include "fsim/frontend/token.hpp"
+#include "fsim/library/artifact.hpp"
+#include "fsim/runtime/logic.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/simir_ids.hpp"
 
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
-#include <ranges>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <cstddef>
+#include <exception>
+#include <memory>
+#include <span>
+#include <system_error>
+#include <vector>
 
 namespace {
 void require(const bool condition, const std::string_view message)

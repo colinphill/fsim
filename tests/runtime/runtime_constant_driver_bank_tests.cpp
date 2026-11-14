@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "../../src/runtime/simir_internal.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 
 #include <array>
 #include <cstdlib>

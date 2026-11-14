@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include "fsim/project/project.hpp"
 
 #include <cstddef>
 #include <cstdint>

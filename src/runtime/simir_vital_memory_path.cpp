@@ -1,5 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "simir_internal.hpp"
+#include "fsim/runtime/logic.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include <algorithm>
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <optional>
+#include <stdexcept>
+#include <utility>
+#include <vector>
 
 namespace fsim::runtime::simir {
 namespace {

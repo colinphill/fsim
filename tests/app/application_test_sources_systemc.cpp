@@ -3,7 +3,6 @@
 
 #include <cassert>
 #include <fstream>
-#include <string_view>
 
 namespace fsim::test {
 

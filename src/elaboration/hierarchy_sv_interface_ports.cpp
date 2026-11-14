@@ -168,16 +168,26 @@ bool HierarchyBuilder::forward_compiled_systemverilog_interface_port(
     }
     const auto actual_type
         = systemverilog_interface_types_.find(source_path);
+    // The port's interface is the one of that name in the library of the
+    // module that declares the port (3.13, 33); the actual must be an
+    // instance of that definition.
+    const auto formal_interface = formal.interface_type.empty()
+        ? std::optional<semantic::CompiledUnitView> { }
+        : compiled_->find_unit(semantic::UnitKind::systemverilog_interface,
+              child_unit.library.empty() ? std::string_view { "work" }
+                                         : std::string_view { child_unit.library },
+              formal.interface_type);
     if (!formal.interface_type.empty()
         && actual_type != systemverilog_interface_types_.end()
-        && actual_type->second != formal.interface_type) {
+        && (!formal_interface || formal_interface->systemverilog == nullptr
+            || actual_type->second.unit != formal_interface->systemverilog->id)) {
         diagnose(
             "FSIM-ELAB-SVIFACE-003",
             "interface port '" + child_path + "."
                 + formal.name + "' requires type '"
                 + formal.interface_type + "' but actual '"
                 + source_path + "' has type '"
-                + actual_type->second + "'",
+                + actual_type->second.name + "'",
             formal.source);
         return false;
     }
@@ -323,13 +333,16 @@ bool HierarchyBuilder::forward_compiled_systemverilog_interface_port(
         : std::string_view { child_unit.library };
     // A generic interface port (`interface.mp a`) has the connected
     // actual's interface type (25.4).
-    const auto& interface_type = formal.interface_type.empty()
-            && actual_type != systemverilog_interface_types_.end()
-        ? actual_type->second
+    const bool generic_port = formal.interface_type.empty()
+        && actual_type != systemverilog_interface_types_.end();
+    const std::string& interface_type = generic_port
+        ? actual_type->second.name
         : formal.interface_type;
-    const auto interface_unit = compiled_->find_unit(
-        semantic::UnitKind::systemverilog_interface,
-        library, interface_type);
+    const auto interface_unit = generic_port
+        ? compiled_->find_unit(actual_type->second.unit)
+        : compiled_->find_unit(
+              semantic::UnitKind::systemverilog_interface,
+              library, interface_type);
     const auto* interface = interface_unit
             && interface_unit->systemverilog != nullptr
         ? interface_unit->systemverilog

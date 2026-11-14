@@ -2,14 +2,19 @@
 #include "runtime_test_support.hpp"
 
 #include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 #include "fsim/runtime/systemverilog_chandle.hpp"
 #include "fsim/runtime/systemverilog_scalar.hpp"
 #include "fsim/runtime/vcd_writer.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir_ids.hpp"
 
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <cstddef>
+#include <optional>
 
 namespace fsim::tests::runtime {
 namespace {

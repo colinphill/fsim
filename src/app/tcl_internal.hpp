@@ -3,7 +3,6 @@
 
 #include "application_internal.hpp"
 #include "fsim/app/sdf_control.hpp"
-#include "tcl.hpp"
 #include "tcl_references.hpp"
 
 #include <array>

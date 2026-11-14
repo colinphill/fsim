@@ -6,7 +6,7 @@
 #include <map>
 #include <mutex>
 #include <set>
-#include <string_view>
+#include <unordered_map>
 #include <utility>
 
 namespace fsim::runtime {
@@ -65,7 +65,8 @@ struct SystemVerilogVpiAssertionApi::Impl {
     SystemVerilogVpiCallbackManager* callbacks { };
     SystemVerilogVpiAssertionControlHook control_hook;
     mutable std::mutex mutex;
-    std::map<fsim_vpi_handle_v1, Record> records;
+    // Looked up once per assertion outcome.
+    std::unordered_map<fsim_vpi_handle_v1, Record> records;
     std::set<fsim_vpi_handle_v1> reserved_objects;
 };
 
@@ -120,6 +121,31 @@ namespace {
             return;
         }
         ++value;
+    }
+
+    void count_outcome(SystemVerilogVpiAssertionStatistics& statistics,
+        const SystemVerilogVpiAssertionOutcome outcome)
+    {
+        if (outcome != SystemVerilogVpiAssertionOutcome::Disabled) {
+            saturating_increment(statistics.attempts, statistics);
+        }
+        switch (outcome) {
+        case SystemVerilogVpiAssertionOutcome::Success:
+            saturating_increment(statistics.successes, statistics);
+            break;
+        case SystemVerilogVpiAssertionOutcome::Failure:
+            saturating_increment(statistics.failures, statistics);
+            break;
+        case SystemVerilogVpiAssertionOutcome::Vacuous:
+            saturating_increment(statistics.vacuous, statistics);
+            break;
+        case SystemVerilogVpiAssertionOutcome::Disabled:
+            saturating_increment(statistics.disabled, statistics);
+            break;
+        case SystemVerilogVpiAssertionOutcome::Aborted:
+            saturating_increment(statistics.aborted, statistics);
+            break;
+        }
     }
 
 } // namespace
@@ -639,13 +665,12 @@ SystemVerilogVpiAssertionApiError SystemVerilogVpiAssertionApi::observe(
         return SystemVerilogVpiAssertionApiError::InvalidRequest;
     }
     // The registry validates the object once: a record with a kind came
-    // from an earlier outcome of the same assertion.
-    const auto validated = [&] {
-        std::scoped_lock lock { impl_->mutex };
-        const auto found = impl_->records.find(object);
-        return found != impl_->records.end() && found->second.kind.has_value();
-    }();
-    if (!validated) {
+    // from an earlier outcome of the same assertion, so later outcomes take
+    // one lock and one lookup.
+    std::unique_lock lock { impl_->mutex };
+    auto found = impl_->records.find(object);
+    if (found == impl_->records.end() || !found->second.kind) {
+        lock.unlock();
         const auto info = impl_->registry->lookup(object);
         if (!info) {
             return assertion_object_error(info.error);
@@ -653,52 +678,50 @@ SystemVerilogVpiAssertionApiError SystemVerilogVpiAssertionApi::observe(
         if (info.value->kind != SystemVerilogVpiObjectKind::Assertion) {
             return SystemVerilogVpiAssertionApiError::InvalidObject;
         }
-    }
-
-    {
-        std::scoped_lock lock { impl_->mutex };
-        const auto found = impl_->records.find(object);
+        lock.lock();
+        found = impl_->records.find(object);
         if (found == impl_->records.end()) {
             if (impl_->records.size() + impl_->reserved_objects.size()
                     >= maximum_assertion_objects
                 && !impl_->reserved_objects.contains(object)) {
                 return SystemVerilogVpiAssertionApiError::ResourceLimit;
             }
-            impl_->records.emplace(object, Impl::Record { });
-        }
-        auto& record = impl_->records.at(object);
-        if (record.kind && *record.kind != event.kind) {
-            return SystemVerilogVpiAssertionApiError::InvalidRequest;
-        }
-        record.kind = event.kind;
-        auto& statistics = record.statistics;
-        if (event.outcome != SystemVerilogVpiAssertionOutcome::Disabled) {
-            saturating_increment(statistics.attempts, statistics);
-        }
-        switch (event.outcome) {
-        case SystemVerilogVpiAssertionOutcome::Success:
-            saturating_increment(statistics.successes, statistics);
-            break;
-        case SystemVerilogVpiAssertionOutcome::Failure:
-            saturating_increment(statistics.failures, statistics);
-            break;
-        case SystemVerilogVpiAssertionOutcome::Vacuous:
-            saturating_increment(statistics.vacuous, statistics);
-            break;
-        case SystemVerilogVpiAssertionOutcome::Disabled:
-            saturating_increment(statistics.disabled, statistics);
-            break;
-        case SystemVerilogVpiAssertionOutcome::Aborted:
-            saturating_increment(statistics.aborted, statistics);
-            break;
+            found = impl_->records.emplace(object, Impl::Record { }).first;
         }
     }
+    auto& record = found->second;
+    if (record.kind && *record.kind != event.kind) {
+        return SystemVerilogVpiAssertionApiError::InvalidRequest;
+    }
+    record.kind = event.kind;
+    count_outcome(record.statistics, event.outcome);
+    lock.unlock();
 
     const auto callback = impl_->callbacks->dispatch_assertion(
         object, std::move(event));
     return callback == SystemVerilogVpiCallbackError::None
         ? SystemVerilogVpiAssertionApiError::None
         : SystemVerilogVpiAssertionApiError::CallbackFailure;
+}
+
+SystemVerilogVpiAssertionApiError SystemVerilogVpiAssertionApi::count(
+    const fsim_vpi_handle_v1 object,
+    const SystemVerilogVpiAssertionKind kind,
+    const SystemVerilogVpiAssertionOutcome outcome)
+{
+    if (impl_) {
+        std::scoped_lock lock { impl_->mutex };
+        if (const auto found = impl_->records.find(object);
+            found != impl_->records.end() && found->second.kind == kind) {
+            count_outcome(found->second.statistics, outcome);
+            return SystemVerilogVpiAssertionApiError::None;
+        }
+    }
+    // The object's first outcome is validated and recorded in full.
+    SystemVerilogVpiAssertionEvent event;
+    event.kind = kind;
+    event.outcome = outcome;
+    return observe(object, std::move(event));
 }
 
 SystemVerilogVpiAssertionStatusResult

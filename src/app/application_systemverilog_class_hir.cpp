@@ -1,5 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_systemverilog_hir_internal.hpp"
+#include "fsim/frontend/class_specialization.hpp"
+#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/source.hpp"
+#include "fsim/frontend/systemverilog_scalars.hpp"
+#include "fsim/frontend/token.hpp"
+#include "fsim/semantic/model.hpp"
+#include "fsim/semantic/systemverilog_class_specialization.hpp"
+#include "fsim/semantic/systemverilog_hir.hpp"
 
 #include <limits>
 #include <map>
@@ -7,6 +16,15 @@
 #include <set>
 #include <string_view>
 #include <sstream>
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <iterator>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace fsim::app::application_detail {
 namespace systemverilog_hir_detail {
@@ -1595,6 +1613,7 @@ void SystemVerilogHirBuilder::add_class(
     output.interface_class = input.is_interface;
     output.forward_declaration = input.is_forward_declaration;
     output.end_name = input.end_name;
+    output.uvm_role = input.uvm_role;
     output.source = source(input.span);
     const auto parent_origin = model_.scopes()[parent_scope.value()].origin;
     output.origin = origin(
@@ -1669,6 +1688,7 @@ void SystemVerilogHirBuilder::add_class(
             : sv::ClassRandomKind::none;
         retained.static_storage = property.is_static;
         retained.constant = property.is_const;
+        retained.uvm_role = property.uvm_role;
         retained.parameter = property.is_parameter;
         // An enumeration's literal values; an implicit value follows the
         // previous one (IEEE 1800-2017 6.19).
@@ -1732,6 +1752,7 @@ void SystemVerilogHirBuilder::add_class(
         retained.external = method.is_extern;
         retained.out_of_block_definition = method.out_of_block_definition;
         retained.defined = method.defined;
+        retained.uvm_role = method.uvm_role;
         retained.source = retained_declaration.source;
         retained.origin = retained_declaration.origin;
         output.methods.push_back(std::move(retained));

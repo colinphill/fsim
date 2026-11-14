@@ -1,9 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "runtime_test_support.hpp"
 
+#include "fsim/runtime/simir_interpreter.hpp"
 #include "fsim/runtime/systemverilog_scalar.hpp"
 #include "fsim/runtime/simir.hpp"
 #include "fsim/runtime/vcd_writer.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir_debug.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include "fsim/runtime/simir_operations_extended.hpp"
 
 #include <cfenv>
 #include <cstdint>
@@ -12,6 +17,8 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <optional>
+#include <utility>
 
 namespace fsim::tests::runtime {
 namespace {

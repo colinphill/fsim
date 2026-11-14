@@ -9,7 +9,6 @@
 #include <algorithm>
 #include <array>
 #include <limits>
-#include <ranges>
 #include <set>
 #include <stdexcept>
 #include <utility>

@@ -1,0 +1,4 @@
+#c mid data=5 bits=4
+#c top data=abc bits=12
+#c top.v defname=SBus assigns=2 W=12,D=24
+#c top.v3 defname=SBus assigns=2 W=3,D=6

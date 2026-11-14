@@ -3,7 +3,6 @@
 
 #include "fsim/compiler/cache_support.hpp"
 #include "fsim/support/native_filesystem.hpp"
-#include "fsim/support/path.hpp"
 
 namespace fsim::app::workspace {
 namespace {

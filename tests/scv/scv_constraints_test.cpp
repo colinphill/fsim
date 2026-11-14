@@ -2,7 +2,6 @@
 
 #include "fsim/systemc/scv_constraints.hpp"
 
-#include <array>
 #include <cassert>
 #include <cstdint>
 #include <limits>

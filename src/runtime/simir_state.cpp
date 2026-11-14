@@ -1,12 +1,43 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "simir_internal.hpp"
 #include "simir_events.hpp"
+#include "simir_static_kernel_state.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 #include "fsim/runtime/systemverilog_string.hpp"
+#include "fsim/runtime/logic.hpp"
+#include "fsim/runtime/output_format.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_container_value.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include "fsim/runtime/simir_shared_vector.hpp"
+#include "fsim/runtime/systemverilog_scalar.hpp"
+#include "simir_cohort_snapshot_pool.hpp"
+#include "simir_driver_table.hpp"
+#include "simir_process_program.hpp"
+#include "simir_signal_storage.hpp"
+#include "fsim/runtime/simir_operation_storage.hpp"
+#include "fsim/runtime/simir_operations_extended.hpp"
+#include "fsim/runtime/simir_signal_queries.hpp"
 
 #include <algorithm>
 #include <cassert>
 #include <cstdlib>
 #include <utility>
+#include <array>
+#include <bit>
+#include <cstdint>
+#include <exception>
+#include <limits>
+#include <memory>
+#include <optional>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <type_traits>
+#include <vector>
 
 namespace fsim::runtime::simir {
 
@@ -2323,8 +2354,17 @@ Interpreter::Impl::find_signal_selection_history(
 void Interpreter::Impl::stage_selected_signal_transaction(
     const SignalId signal,
     const std::size_t offset,
-    const std::size_t width)
+    const std::size_t width,
+    const std::optional<ProcessId> driver)
 {
+    // The kernel's republication of its own drivers is no transaction of
+    // them (StaticKernel::publish_slot).
+    if (driver && driver_transaction_hook && !static_kernel_publishing
+        && width != 0U) {
+        staged_driver_transactions[{ *driver, signal }].emplace_back(
+            static_cast<std::uint32_t>(offset),
+            static_cast<std::uint32_t>(width));
+    }
     if (signal >= signal_selection_histories.size()
         || signal_selection_histories[signal].empty()) {
         return;
@@ -2353,8 +2393,30 @@ void Interpreter::Impl::stage_selected_signal_transaction(
 
 void Interpreter::Impl::stage_selected_signal_transaction_mask(
     const SignalId signal,
-    const std::span<const std::uint64_t> mask_words)
+    const std::span<const std::uint64_t> mask_words,
+    const std::optional<ProcessId> driver)
 {
+    if (driver && driver_transaction_hook && !static_kernel_publishing) {
+        // Each run of set bits is one write of the driver's bits.
+        auto& ranges = staged_driver_transactions[{ *driver, signal }];
+        const auto bits = mask_words.size() * 64U;
+        for (std::size_t bit = 0U; bit < bits;) {
+            const auto set = [&](const std::size_t at) {
+                return ((mask_words[at / 64U] >> (at % 64U)) & UINT64_C(1))
+                    != 0U;
+            };
+            if (!set(bit)) {
+                ++bit;
+                continue;
+            }
+            const auto low = bit;
+            while (bit < bits && set(bit)) {
+                ++bit;
+            }
+            ranges.emplace_back(static_cast<std::uint32_t>(low),
+                static_cast<std::uint32_t>(bit - low));
+        }
+    }
     if (signal >= signal_selection_histories.size()
         || signal_selection_histories[signal].empty()) {
         return;
@@ -2410,6 +2472,41 @@ void Interpreter::Impl::note_selected_signal_transaction(
     if (signal_selection_transaction_pending_listed[signal] != 0U) {
         std::erase(signal_selection_pending_transaction_signals, signal);
         signal_selection_transaction_pending_listed[signal] = 0U;
+    }
+}
+
+void Interpreter::Impl::report_driver_transaction(
+    const ProcessId process, const SignalId signal)
+{
+    if (!driver_transaction_hook) {
+        return;
+    }
+    const auto staged = staged_driver_transactions.find({ process, signal });
+    if (staged == staged_driver_transactions.end()) {
+        report_driver_transaction(process, signal, 0U,
+            static_cast<std::uint32_t>(get_signal(signal).initial_value.width()));
+        return;
+    }
+    // The entry stays, empty, until the update phase ends: another commit
+    // site of the same updates (a resolved signal's driver, then its
+    // projection) reports nothing more (report_staged_driver_transactions).
+    const auto ranges = std::exchange(staged->second, { });
+    for (const auto& [offset, width] : ranges) {
+        report_driver_transaction(process, signal, offset, width);
+    }
+}
+
+void Interpreter::Impl::report_staged_driver_transactions()
+{
+    if (!driver_transaction_hook) {
+        staged_driver_transactions.clear();
+        return;
+    }
+    auto staged = std::exchange(staged_driver_transactions, { });
+    for (const auto& [key, ranges] : staged) {
+        for (const auto& [offset, width] : ranges) {
+            report_driver_transaction(key.first, key.second, offset, width);
+        }
     }
 }
 
@@ -2597,7 +2694,8 @@ void Interpreter::Impl::notify_execution_point(
     const ExecutionPointKind kind,
     const SourceLocation& source,
     const std::string_view scope,
-    const std::string_view callee)
+    const std::string_view callee,
+    const DebugPoint* const frame)
 {
     // The static kernel's host process runs a stub program that is not part
     // of the design: it raises no execution points. (Its members do, through
@@ -2631,7 +2729,7 @@ void Interpreter::Impl::notify_execution_point(
         instruction, kind, source,
         scope.empty() ? std::string_view { process.cold().current_scope }
                       : scope,
-        callee);
+        callee, std::nullopt, frame);
 }
 
 void Interpreter::Impl::notify_execution_point(
@@ -2643,16 +2741,20 @@ void Interpreter::Impl::notify_execution_point(
     const SourceLocation& source,
     const std::string_view scope,
     const std::string_view callee,
-    const std::optional<ProcessId> parent)
+    const std::optional<ProcessId> parent,
+    const DebugPoint* const frame)
 {
     if (execution_point_hook) {
-        execution_point_hook(
-            scheduler,
-            ExecutionPoint {
-                process, design_process, instruction, kind, source,
-                std::string { scope }, program.language_standard(),
-                program.compatibility_profile(), std::string { callee },
-                parent });
+        ExecutionPoint point {
+            process, design_process, instruction, kind, source,
+            std::string { scope }, program.language_standard(),
+            program.compatibility_profile(), std::string { callee },
+            parent };
+        if (frame != nullptr) {
+            point.callee_declaration = frame->callee_declaration;
+            point.callee_receiver = frame->callee_receiver.str();
+        }
+        execution_point_hook(scheduler, point);
     }
 }
 
@@ -2745,6 +2847,10 @@ void Interpreter::Impl::notify_execution_point(
                 time_format, value.scalar_kind);
             text += tick
                 ? make_time_output(value.prefix, { }, *tick, time_format,
+                      value.use_timeformat_width, value.minimum_width,
+                      value.left_justify, value.zero_pad)
+                : has_unknown_bits(current)
+                ? make_unknown_time_output(value.prefix, { }, current, time_format,
                       value.use_timeformat_width, value.minimum_width,
                       value.left_justify, value.zero_pad)
                 : make_formatted_output(value.prefix, { },
@@ -3677,6 +3783,11 @@ void Interpreter::Impl::note_signal_transaction(
     if (signal_transaction_hook) {
         signal_transaction_hook(signal_id);
     }
+    if (static_kernel && !static_kernel_publishing) {
+        // A transaction the host commits on a signal the kernel holds (a
+        // foreign deposit, IEEE 1076-2019 22.5.3, 14.7.3.1).
+        static_kernel->note_host_transaction(signal_id);
+    }
     // A port conversion of an active source is itself active in the same
     // cycle, even without an event (IEEE 1076-2008 14.7.3.3).
     if (!vhdl_conversion_dependents.empty()) {
@@ -3754,6 +3865,24 @@ void Interpreter::Impl::note_signal_transaction(
             auto& process = get_process(sensitivity.process);
             if (process.waiting_on_static) {
                 queue_static_next_delta(sensitivity.process, origin);
+            }
+        }
+    }
+    // A wait on the signal's transactions (WaitOn with EdgeKind::transaction,
+    // S'TRANSACTION; IEEE 1076-2019 16.2.4) resumes whether or not the value
+    // changed.
+    if (signal_id < dynamic_fanout.size()) {
+        // Copy because queue_next_delta removes a process from every dynamic list.
+        const auto dynamic = dynamic_fanout[signal_id];
+        for (const auto& registration : dynamic) {
+            if (registration.edge != EdgeKind::transaction
+                || registration.process >= processes.size()) {
+                continue;
+            }
+            auto& process = get_process(registration.process);
+            if (dynamic_wait_satisfied(process, signal_id, registration)) {
+                mark_dynamic_event_resume(process);
+                queue_next_delta(registration.process, origin);
             }
         }
     }

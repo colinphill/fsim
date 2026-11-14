@@ -982,7 +982,15 @@ and must pass license review before they are bundled. The official IEEE-P1076
 `1076-2019` VHDL package source snapshot is bundled byte-for-byte under its
 Apache-2.0 license with pinned provenance and checksums; the
 [feature matrix](docs/feature-matrix.md) identifies which reviewed package
-profiles are currently executable. The
+profiles are currently executable. The Accellera UVM 1.2 and
+1800.2-2020.3.1 kits (Apache-2.0) are bundled unmodified under
+`third_party/uvm-1.2` and `third_party/uvm-2020.3.1`, and the Synopsys
+`std_logic_arith`, `std_logic_unsigned`, `std_logic_signed`, `std_logic_misc`,
+and `std_logic_textio` packages are bundled verbatim under
+`third_party/synopsys-ieee` with their copyright statements (see the
+`NOTICE` there and the installed `share/doc/fsim/third-party` directory). The IEEE package sources of VHDL-87, 93/2002 and 2008 are derived from the
+2019 sources (`third_party/ieee-derived`), never copied from IEEE's older
+originals. The
 [v1 conformance audit](docs/v1-conformance-audit.md) pins every public
 behavioral reference, records excluded license classes, and explicitly forbids
 unreviewed test-text imports.

@@ -3,17 +3,30 @@
 
 #include "fsim/runtime/simir.hpp"
 #include "fsim/support/vhdl_time.hpp"
+#include "fsim/frontend/input_format.hpp"
+#include "fsim/frontend/systemverilog_scalars.hpp"
+#include "fsim/runtime/file_operations.hpp"
+#include "fsim/runtime/logic.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/systemverilog_scalar.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <bit>
-#include <boost/multiprecision/cpp_int.hpp>
 #include <cctype>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
 #include <tuple>
+#include <cstdint>
+#include <functional>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+#include <boost/multiprecision/cpp_int.hpp>
 
 namespace fsim::runtime::simir {
 namespace {

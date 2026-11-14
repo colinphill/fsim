@@ -1,0 +1,32 @@
+#c handles :top:p:n :top:p:v :top:p:v(3) :top:p:t
+#c at 0 fs: n=0 v=0000 t=0
+#c change :top:p:n at 1000000 fs: 1
+#c change :top:p:v at 1000000 fs: 0001
+#c change :top:p:t at 1000000 fs: 1
+#c step 2
+#c change :top:p:n at 2000000 fs: 100
+#c force :top:p:n at 2000000 fs: 100
+#c force :top:p:n at 2000000 fs: 100
+#c change :top:p:v at 2000000 fs: Z001
+#c change :top:p:v(3) at 2000000 fs: Z
+#c force :top:p:v(3) at 2000000 fs: Z
+#c change :top:p:t at 2000000 fs: 50
+#c force :top:p:t at 2000000 fs: 50
+#c at 2000000 fs: n=100 v=Z001 t=50
+#c change :top:p:v at 3000000 fs: Z011
+#c step 4
+#c change :top:p:v at 4000000 fs: Z000
+#c at 4000000 fs: n=100 v=Z000 t=50
+#c change :top:p:v at 5000000 fs: Z001
+#c step 6
+#c release :top:p:n at 6000000 fs: 100
+#c release :top:p:n at 6000000 fs: 100
+#c release :top:p:v at 6000000 fs: Z001
+#c release :top:p:t at 6000000 fs: 50
+#c at 6000000 fs: n=100 v=Z001 t=50
+#c change :top:p:n at 7000000 fs: 101
+#c change :top:p:v at 7000000 fs: 0011
+#c change :top:p:v(3) at 7000000 fs: 0
+#c change :top:p:t at 7000000 fs: 51
+#c step 8
+#c at 8500000 fs: n=101 v=0011 t=51

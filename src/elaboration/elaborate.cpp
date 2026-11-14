@@ -3,8 +3,30 @@
 #include "lowerer_internal.hpp"
 
 #include "fsim/support/phase_profile.hpp"
+#include "elaboration_targets.hpp"
+#include "elaborator_internal.hpp"
+#include "fsim/elaboration/coverage_hir_points.hpp"
+#include "fsim/elaboration/elaborator.hpp"
+#include "fsim/frontend/diagnostic.hpp"
+#include "fsim/semantic/compiled_design.hpp"
+#include "fsim/semantic/compiled_design_specialization.hpp"
+#include "fsim/semantic/model.hpp"
+#include "fsim/semantic/systemverilog_hir.hpp"
+#include "fsim/semantic/vhdl_hir.hpp"
 
 #include <optional>
+#include <algorithm>
+#include <cctype>
+#include <cstddef>
+#include <cstdint>
+#include <iterator>
+#include <memory>
+#include <span>
+#include <string>
+#include <string_view>
+#include <unordered_set>
+#include <utility>
+#include <vector>
 
 namespace fsim::elaboration {
 using namespace elaboration_detail;
@@ -217,10 +239,16 @@ ElaborationResult elaborate_impl(
         }
         // A Verilog escaped identifier names its unit, so an escaped
         // module (`\$top`) is its own root alias (IEEE 1800-2017 5.6.1).
-        const bool escaped_alias = root.alias.size() > 1U
+        // It keeps one terminating space, as the parser's names do.
+        if (root.alias.size() > 1U && root.alias.front() == '\\'
+            && root.alias.back() != ' ') {
+            root.alias.push_back(' ');
+        }
+        const bool escaped_alias = root.alias.size() > 2U
             && root.alias.front() == '\\'
             && std::ranges::all_of(
-                root.alias,
+                std::string_view { root.alias }.substr(
+                    0U, root.alias.size() - 1U),
                 [](const unsigned char character) {
                     return std::isgraph(character) != 0;
                 });
@@ -555,6 +583,9 @@ ElaborationResult elaborate_impl(
     }
     hierarchy_phase.reset();
     ScopedLoweringEntryProfile::report_and_reset();
+    // Finalizing drops the index of class specializations.
+    result.instance_class_specializations
+        = builder->take_instance_class_specializations();
     {
         const support::ScopedPhaseProfile finalize_phase {
             "elaboration_finalize" };

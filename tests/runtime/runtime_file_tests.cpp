@@ -5,6 +5,7 @@
 #include "fsim/runtime/file_scanning.hpp"
 #include "fsim/runtime/output_format.hpp"
 #include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 
 #include <array>
 #include <chrono>

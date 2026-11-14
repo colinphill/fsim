@@ -1,0 +1,12 @@
+b3=3 b5=5 b7=7 b1=1
+made: box#(3)=2 box#(5)=2 box#(7)=1 box#(1)=1
+
+--- UVM Report Summary ---
+
+** Report counts by severity
+UVM_INFO :    0
+UVM_WARNING :    0
+UVM_ERROR :    0
+UVM_FATAL :    0
+** Report counts by id
+

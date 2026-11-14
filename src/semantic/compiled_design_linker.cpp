@@ -2204,6 +2204,138 @@ void resolve_linked_vhdl_type_marks(CompiledDesign& design)
     design.refresh_lookup_indexes();
 }
 
+// Calls `visit(type, scope)` for each type reference of the classes (their
+// parameters, properties, and the actuals of their base and interface
+// relations) with the scope that declares it, in one fixed order.
+template <typename Classes, typename Visit>
+void visit_class_type_references(Classes& classes, Visit&& visit)
+{
+    for (auto& declaration : classes) {
+        const auto scope = declaration.scope;
+        for (auto& parameter : declaration.parameters) {
+            if (parameter.type) {
+                visit(*parameter.type, scope);
+            }
+            if (parameter.default_type) {
+                visit(*parameter.default_type, scope);
+            }
+        }
+        for (auto& property : declaration.properties) {
+            visit(property.type, scope);
+        }
+        const auto relation = [&](auto& related) {
+            for (auto& actual : related.actuals) {
+                if (actual.type) {
+                    visit(*actual.type, scope);
+                }
+            }
+        };
+        if (declaration.base) {
+            relation(*declaration.base);
+        }
+        for (auto& related : declaration.extended_interfaces) {
+            relation(related);
+        }
+        for (auto& related : declaration.implemented_interfaces) {
+            relation(related);
+        }
+    }
+}
+
+// Projecting one object drops the type identities another object owns, so a
+// class parameter or property, or a typedef or structure member, whose type
+// names a typedef declared elsewhere keeps only the spelling. Rebind those
+// once every object is linked, resolving the name in the scope that declares
+// it (IEEE 1800-2023 6.18, 8.25, 26.3), so that a class specialization sees
+// the type the name denotes.
+void resolve_linked_systemverilog_types(CompiledDesign& design)
+{
+    const auto scope_valid = [&](const ScopeId scope) {
+        return scope.valid()
+            && scope.value() < design.semantics.scopes().size();
+    };
+    const auto resolve = [&](const sv::TypeReference& type,
+                             const ScopeId scope) -> std::optional<TypeId> {
+        if (type.target.resolved() || type.target.spelling.empty()
+            || !type.class_identity.empty() || !scope_valid(scope)
+            || type.implicit || !type.named) {
+            return std::nullopt;
+        }
+        const CompiledDesignResolver resolver {
+            design, design.semantics.scopes()[scope.value()].unit
+        };
+        const auto selected = resolver
+            .resolve_systemverilog_named_type(
+                type.target.spelling, scope, false, type.source_order)
+            .unique();
+        const auto declaration = selected
+            ? design.find_declaration(*selected)
+            : std::nullopt;
+        if (!declaration || declaration->systemverilog == nullptr
+            || !declaration->systemverilog->declared_type) {
+            return std::nullopt;
+        }
+        return declaration->systemverilog->declared_type;
+    };
+    // The targets found, in the order the references are visited.
+    std::vector<std::optional<TypeId>> class_targets;
+    bool found { };
+    visit_class_type_references(design.systemverilog_hir.classes(),
+        [&](const sv::TypeReference& type, const ScopeId scope) {
+            class_targets.push_back(resolve(type, scope));
+            found = found || class_targets.back().has_value();
+        });
+    struct Definition {
+        std::size_t position { };
+        std::size_t member { };
+        bool base { };
+        TypeId target;
+    };
+    std::vector<Definition> definitions;
+    const auto& hir = design.systemverilog_hir;
+    for (std::size_t position = 0; position < hir.types().size();
+        ++position) {
+        const auto& definition = hir.types()[position];
+        const auto declaration
+            = design.find_declaration(definition.declaration);
+        if (!declaration || declaration->systemverilog == nullptr) {
+            continue;
+        }
+        const auto scope = declaration->systemverilog->scope;
+        if (const auto target = resolve(definition.base, scope);
+            target && *target != definition.id) {
+            definitions.push_back({ position, 0U, true, *target });
+        }
+        for (std::size_t member = 0; member < definition.members.size();
+            ++member) {
+            if (const auto target
+                = resolve(definition.members[member].type, scope)) {
+                definitions.push_back({ position, member, false, *target });
+            }
+        }
+    }
+    if (!found && definitions.empty()) {
+        return;
+    }
+    std::size_t next { };
+    visit_class_type_references(design.systemverilog_hir.mutable_classes(),
+        [&](sv::TypeReference& type, const ScopeId) {
+            if (const auto& target = class_targets[next++]) {
+                type.target.target = *target;
+            }
+        });
+    auto& types = design.systemverilog_hir.mutable_types();
+    for (const auto& entry : definitions) {
+        if (entry.base) {
+            types[entry.position].base.target.target = entry.target;
+        } else {
+            types[entry.position].members[entry.member].type.target.target
+                = entry.target;
+        }
+    }
+    design.refresh_lookup_indexes();
+}
+
 CompiledReference systemverilog_configuration_reference(
     const sv::Unit& owner, const CompiledReferenceKind kind,
     const std::string_view library, const std::string_view name,
@@ -2930,6 +3062,18 @@ bool systemverilog_callable_form(const sv::DeclarationForm form)
         || form == sv::DeclarationForm::task;
 }
 
+// The declarations of a package a use can lead to and the library objects keep
+// by identity: callables, and the variables, nets and parameters a name
+// expression names (IEEE 1800-2023 26.3).
+bool systemverilog_package_member_form(const sv::DeclarationForm form)
+{
+    return systemverilog_callable_form(form)
+        || form == sv::DeclarationForm::variable
+        || form == sv::DeclarationForm::net
+        || form == sv::DeclarationForm::parameter
+        || form == sv::DeclarationForm::local_parameter;
+}
+
 struct SystemVerilogPackageTarget {
     UnitId unit;
     std::string library;
@@ -2943,7 +3087,7 @@ systemverilog_package_declaration_identity(
     const CompiledDesign& design, const sv::Declaration& declaration,
     const sv::Unit& package)
 {
-    if (!systemverilog_callable_form(declaration.form)
+    if (!systemverilog_package_member_form(declaration.form)
         || !declaration.id.valid()
         || declaration.id.value() >= design.semantics.declarations().size()
         || !declaration.source.valid()
@@ -2988,7 +3132,7 @@ external_systemverilog_package_target(const CompiledDesign& design,
         return std::nullopt;
     }
     const auto& declaration = *declarations[declaration_id.value()];
-    if (!systemverilog_callable_form(declaration.form)
+    if (!systemverilog_package_member_form(declaration.form)
         || !declaration.scope.valid()
         || declaration.scope.value() >= design.semantics.scopes().size()) {
         return std::nullopt;
@@ -3177,7 +3321,11 @@ std::vector<CompiledReference> project_systemverilog_package_member_uses(
     };
 
     for (const auto& expression : design.systemverilog_hir.expressions()) {
-        if (expression.kind == sv::ExpressionKind::call
+        // A name expression's resolution is recorded like a call's: a name
+        // that leads to a package's declaration (IEEE 1800-2023 26.3) keeps
+        // that declaration through the library objects.
+        if ((expression.kind == sv::ExpressionKind::call
+                || expression.kind == sv::ExpressionKind::name)
             && expression.referenced_name) {
             append_use(expression.scope, expression.source,
                 *expression.referenced_name, expression.id, std::nullopt);
@@ -4368,6 +4516,7 @@ static CompiledLinkResult finalize_linked_design(CompiledDesign output)
         !error.empty()) {
         return { std::nullopt, error, "FSIM-FE-VHORDER-011" };
     }
+    resolve_linked_systemverilog_types(output);
     resolve_linked_vhdl_architecture_names(output);
     resolve_linked_vhdl_type_marks(output);
     resolve_linked_vhdl_binding_maps(output);

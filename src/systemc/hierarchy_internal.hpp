@@ -7,15 +7,9 @@
 
 #include <sysc/kernel/sc_simcontext.h>
 
-#include <algorithm>
 #include <cctype>
-#include <exception>
-#include <iterator>
-#include <limits>
-#include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
-#include <utility>
 
 namespace fsim::systemc {
 

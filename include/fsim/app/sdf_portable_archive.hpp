@@ -1,17 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include "fsim/app/sdf_artifact_identity.hpp"
 #include "fsim/library/artifact.hpp"
+#include "fsim/app/sdf_mapping_validation.hpp"
+#include "fsim/app/sdf_schema.hpp"
+#include "fsim/artifact/design.hpp"
+#include "fsim/frontend/diagnostic.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
-#include <optional>
 #include <span>
 #include <string>
 #include <vector>
+#include <string_view>
 
 namespace fsim::app {
 

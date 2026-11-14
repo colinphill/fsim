@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "simir_internal.hpp"
 #include "simir_container_helpers.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 
 #include <algorithm>
-#include <charconv>
 #include <type_traits>
 #include <utility>
 
@@ -2330,9 +2330,41 @@ void Interpreter::Impl::write_container_object_element_value(
     const SignalChangeOrigin origin)
 {
     if (package_static_initialization_active) {
-        throw std::logic_error {
-            "package startup processes cannot write container elements"
-        };
+        // A startup initializer writes direct storage it owns (IEEE
+        // 1800-2023 8.9, 6.21): the element write is a write of the object's
+        // new value, which checks the process's closure.
+        const auto& current = get_container_object(id).initial_value;
+        if (!current.type.sparse) {
+            write_container_object_path_value(id, { }, { }, index,
+                signed_index, linear_index, { }, value, nullptr, nullptr,
+                process, instruction, origin);
+            return;
+        }
+        if (value.width() != current.type.element_width || value.is_logic9()
+            || (current.type.two_state && has_unknown(value))) {
+            container_error(
+                process, instruction,
+                "container element write type mismatch");
+        }
+        // An unknown or out-of-range index writes nothing (7.4.6).
+        if (!linear_index && !fixed_index_in_range(current.type, index)) {
+            return;
+        }
+        auto replacement = current;
+        const auto ordinal = linear_index
+            ? known_index(
+                  process, instruction, index, true,
+                  "multidimensional linear index")
+            : sparse_offset(process, instruction, replacement.type, index);
+        if (ordinal >= sparse_container_element_count(replacement.type)) {
+            container_error(
+                process, instruction,
+                "container index is out of range");
+        }
+        if (write_sparse_container_element(replacement, ordinal, value)) {
+            write_container_object_value(id, replacement, process, origin);
+        }
+        return;
     }
     auto& object = get_container_object(id);
     invalidate_container_aggregate_extract(id);

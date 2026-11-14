@@ -3,7 +3,8 @@
 // array (IEEE 1800-2023 37.11 detail 1), the typespec of a generate scope's
 // parameter declared with a typedef (37.28, 37.85), and cbValueChange on a
 // string element of an unpacked array and on a string class property
-// (38.36.1).
+// (38.36.1); unpacked structure parameters whose type is spelled in place
+// or declared in a package (37.28).
 // Lines starting with "#c " form the checked trace.
 #include "fsim/runtime/vpi_abi.h"
 #include "sv_vpi_user.h"
@@ -69,6 +70,31 @@ static void generate_parameter(const char* name)
         (int)value.value.integer);
 }
 
+static void structure_parameter(const char* path)
+{
+    vpiHandle object = vpi_handle_by_name((PLI_BYTE8*)path, NULL);
+    vpiHandle typespec;
+    vpiHandle iterator;
+    vpiHandle member;
+    if (object == NULL) {
+        vpi_printf("#c %s missing\n", path);
+        return;
+    }
+    typespec = vpi_handle(vpiTypespec, object);
+    vpi_printf("#c %s type=%s size=%d typespec=%s name=%s\n", path,
+        text(vpi_get_str(vpiType, object)), (int)vpi_get(vpiSize, object),
+        typespec != NULL ? text(vpi_get_str(vpiType, typespec)) : "-",
+        typespec != NULL ? text(vpi_get_str(vpiName, typespec)) : "-");
+    iterator = vpi_iterate(vpiMember, object);
+    while (iterator != NULL && (member = vpi_scan(iterator)) != NULL) {
+        s_vpi_value value = { vpiIntVal, { 0 } };
+        vpi_get_value(member, &value);
+        vpi_printf("#c %s member %s type=%s value=%d\n", path,
+            text(vpi_get_str(vpiName, member)),
+            text(vpi_get_str(vpiType, member)), (int)value.value.integer);
+    }
+}
+
 static PLI_INT32 changed(p_cb_data data)
 {
     vpi_printf("#c change %s value=%s\n", (const char*)data->user_data,
@@ -107,6 +133,8 @@ static PLI_INT32 check(p_cb_data data)
     generate_parameter("NP");
     generate_parameter("GP");
     generate_parameter("BP");
+    structure_parameter("top.RI");
+    structure_parameter("lp_pkg::PK");
     // A string element of an unpacked array.
     watch(array != NULL ? vpi_handle_by_index(array, 1) : NULL, "sa[1]");
     // A string property of a live class object.

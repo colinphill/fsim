@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "fsim/runtime/simir_interpreter.hpp"
 #include "fsim/runtime/vhpi_plugin.hpp"
 
 #include <array>

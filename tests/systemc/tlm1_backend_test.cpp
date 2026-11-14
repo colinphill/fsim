@@ -2,6 +2,9 @@
 #include "fsim/systemc/kernel_backend_tlm1.hpp"
 #include "fsim/support/sha256.hpp"
 #include "sc_main_export.hpp"
+#include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/systemc/kernel_backend_protocol.hpp"
+#include "fsim/systemc/kernel_backend_value_codec.hpp"
 
 #include <systemc>
 #include <tlm>
@@ -12,6 +15,8 @@
 #include <optional>
 #include <string_view>
 #include <vector>
+#include <span>
+#include <string>
 
 namespace {
 

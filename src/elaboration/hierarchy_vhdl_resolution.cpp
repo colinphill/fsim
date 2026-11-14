@@ -32,7 +32,7 @@ HierarchyBuilder::register_compiled_vhdl_resolution(
         ? binding.source
         : declaration_source;
 
-    if (binding.kind == ResolutionKind::vhdl_user_function) {
+    if (binding.kind == ResolutionKind::user_function) {
         vhdl_function_resolvers_.insert_or_assign(signal,
             PendingVhdlResolver { binding.body, source,
                 std::make_shared<const semantic::SpecializedHirUnit>(
@@ -103,7 +103,7 @@ void HierarchyBuilder::register_compiled_vhdl_record_resolution(
     static const std::string designator { "@vhdl-record-resolution" };
     resolver_by_signal_.insert_or_assign(signal, designator);
     vhdl_resolution_kinds_.insert_or_assign(
-        designator, ResolutionKind::vhdl_user_function);
+        designator, ResolutionKind::user_function);
     const auto body = segments.front().function;
     vhdl_function_resolvers_.insert_or_assign(signal,
         PendingVhdlResolver { body, source,
@@ -118,13 +118,21 @@ void HierarchyBuilder::lower_compiled_vhdl_resolvers(
     for (const auto& [signal, pending] : vhdl_function_resolvers_) {
         if (signal >= design_.signals_.size()
             || design_.signals_[signal].resolution
-                != ResolutionKind::vhdl_user_function) {
+                != ResolutionKind::user_function) {
             continue;
         }
+        // An inout formal that takes its effective value from its actual
+        // (driving_mirror) keeps that program; the function gives its
+        // driving value from its own drivers (IEEE 1076-2019 14.7.3.2), and
+        // with none the driving value is its default.
+        const bool split_formal = design_.signals_[signal].vhdl_resolver
+            && design_.signals_[signal].vhdl_resolver->driving_mirror;
         const auto found = drivers.find(signal);
         if (found == drivers.end() || found->second.empty()) {
             // Without drivers the resolution function is never called.
-            set_resolution(signal, ResolutionKind::none);
+            if (!split_formal) {
+                set_resolution(signal, ResolutionKind::none);
+            }
             continue;
         }
         const SignalBindings signals;
@@ -177,8 +185,18 @@ void HierarchyBuilder::lower_compiled_vhdl_resolvers(
         }
         const auto process = program->process.id;
         design_.append_process_record(std::move(program->process));
-        VhdlSignalResolver resolver {
-            process, program->input, program->output, found->second };
+        // A split formal keeps its effective-value program; its drivers'
+        // function (and, guarded, the variants for fewer connected drivers)
+        // give its driving value.
+        VhdlSignalResolver resolver = split_formal
+            ? *design_.signals_[signal].vhdl_resolver
+            : VhdlSignalResolver {
+                  process, program->input, program->output, found->second };
+        if (split_formal) {
+            resolver.driving_resolver = VhdlResolverVariant {
+                process, program->input, program->output };
+            resolver.driving_drivers = found->second;
+        }
         // A guarded signal resolves its connected drivers only; a bus with
         // none calls the function with a null array (14.7.3.2).
         if (const auto guarded = vhdl_guarded_signal_kinds_.find(signal);
@@ -208,6 +226,18 @@ void HierarchyBuilder::lower_compiled_vhdl_resolvers(
                         std::numeric_limits<ProcessId>::max(), 0U, 0U });
                     continue;
                 }
+                if (count == 0U) {
+                    // The function is pure: its result for a null array is
+                    // a constant, evaluated here once (null_value), and
+                    // no program is left for it.
+                    if (auto value = evaluate_vhdl_resolver_null_value(
+                            signal, variant->process, variant->output)) {
+                        resolver.null_value = std::move(*value);
+                        resolver.variants.push_back(VhdlResolverVariant {
+                            std::numeric_limits<ProcessId>::max(), 0U, 0U });
+                        continue;
+                    }
+                }
                 if (!variant) {
                     break;
                 }
@@ -236,7 +266,7 @@ void HierarchyBuilder::lower_compiled_vhdl_resolvers(
             });
         const bool guarded_complete = resolver.guarded_kind == 0U
             || resolver.variants.size() == declared;
-        if (foreign && guarded_complete) {
+        if (foreign && guarded_complete && !split_formal) {
             const VhdlResolverVariant none {
                 std::numeric_limits<ProcessId>::max(), 0U, 0U };
             resolver.variants.resize(declared, none);
@@ -273,6 +303,32 @@ void HierarchyBuilder::lower_compiled_vhdl_resolvers(
             }
         }
         design_.signals_[signal].vhdl_resolver = std::move(resolver);
+    }
+    // A split inout formal of a std_logic subtype has no function program of
+    // its own: its driving value is std_logic_1164's resolution of its
+    // drivers, and that of an unresolved subtype is its one driver's
+    // (IEEE 1076-2019 14.7.3.2). The kernel needs those drivers, in order,
+    // to hold their values as sources of the formal; a split formal with
+    // drivers and no driving program is such a formal.
+    for (const auto& [signal, mirror] : vhdl_formal_driving_mirrors_) {
+        static_cast<void>(mirror);
+        auto& resolver = design_.signals_[signal].vhdl_resolver;
+        const auto found = drivers.find(signal);
+        if (!resolver || !resolver->driving_mirror
+            || resolver->driving_resolver
+            || !resolver->driving_drivers.empty()
+            || vhdl_function_resolvers_.contains(signal)
+            || found == drivers.end() || found->second.empty()) {
+            continue;
+        }
+        const auto native = explicit_resolution(signal)
+                                .value_or(native_resolution(
+                                    design_.signal_info_[signal]));
+        if (native != ResolutionKind::std_logic
+            && native != ResolutionKind::none) {
+            continue;
+        }
+        resolver->driving_drivers = found->second;
     }
 }
 
@@ -926,7 +982,7 @@ SignalId HierarchyBuilder::add_vhdl_formal_driving_mirror(
     design_.signal_info_.push_back(std::move(info));
     design_.signals_.push_back(std::move(signal));
     design_.signals_[formal].vhdl_resolver->driving_mirror = mirror;
-    set_resolution(formal, ResolutionKind::vhdl_user_function);
+    set_resolution(formal, ResolutionKind::user_function);
     vhdl_formal_driving_mirrors_.insert_or_assign(formal, mirror);
     return mirror;
 }
@@ -991,12 +1047,11 @@ bool HierarchyBuilder::lower_compiled_vhdl_formal_conversion(
         return false;
     }
     const bool resolved = vhdl_conversion_destination_resolved(destination);
-    // Only an unresolved inout formal splits its effective value from its
-    // driving value; a resolved one keeps its continuous assignments.
-    if (conversion->effective && resolved) {
-        return false;
-    }
     auto& program = conversion->conversion;
+    // An inout formal splits its effective value, the conversion of its
+    // actual's (IEEE 1076-2019 14.7.3.3), from its driving value, which only
+    // its own drivers give (14.7.3.2), whether or not its subtype is
+    // resolved: the conversion of the actual is no source of the formal.
     if (conversion->effective) {
         auto& process = program.program.process;
         process.language_standard = owner.standard;
@@ -1228,7 +1283,13 @@ bool HierarchyBuilder::lower_compiled_vhdl_input_conversion(
     const std::optional<semantic::vhdl::SubtypeIndication>& context,
     const semantic::vhdl::Unit& owner)
 {
-    if (!vhdl_conversion_actual(specialization, actual)
+    // A formal whose subtype has a resolution function of the design's own
+    // (an inout one: only formals that drive their actual register it)
+    // takes the actual's effective value through this program whatever the
+    // actual; its own drivers resolve to its driving value, one source of
+    // the actual (IEEE 1076-2019 14.7.3.2, 14.7.3.3).
+    if ((!vhdl_conversion_actual(specialization, actual)
+            && !vhdl_function_resolvers_.contains(destination))
         || destination >= design_.signals_.size()
         || design_.signals_[destination].vhdl_resolver) {
         return false;

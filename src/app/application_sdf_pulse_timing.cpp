@@ -2,8 +2,15 @@
 
 #include "fsim/app/sdf_pulse_timing.hpp"
 #include "sdf_diagnostic.hpp"
+#include "fsim/app/sdf_path_timing.hpp"
+#include "fsim/app/sdf_target_plan.hpp"
+#include "fsim/app/sdf_value_policy.hpp"
+#include "fsim/elaboration/elaborator.hpp"
+#include "fsim/frontend/diagnostic.hpp"
+#include "fsim/frontend/sdf.hpp"
+#include "fsim/frontend/source.hpp"
+#include "fsim/runtime/scheduler.hpp"
 
-#include <boost/multiprecision/cpp_int.hpp>
 
 #include <algorithm>
 #include <array>
@@ -11,10 +18,16 @@
 #include <map>
 #include <optional>
 #include <ranges>
-#include <set>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <span>
+#include <vector>
+#include <boost/multiprecision/cpp_int.hpp>
+#include <set>
 
 namespace fsim::app {
 namespace {

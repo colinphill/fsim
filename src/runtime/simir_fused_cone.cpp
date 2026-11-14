@@ -8,6 +8,7 @@
 // records match unfused execution. Members are pure functions of their
 // inputs, so the recomputed values are exact for the current inputs.
 #include "simir_internal.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 
 #include <limits>
 #include <stdexcept>

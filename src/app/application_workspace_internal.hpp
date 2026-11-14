@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include "application_workspace.hpp"
 #include "application_workspace_objects.hpp"
 #include "application_workspace_store.hpp"
 #include "fsim/support/vhdl_identifier.hpp"

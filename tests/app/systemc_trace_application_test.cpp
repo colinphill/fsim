@@ -2,19 +2,28 @@
 #include "application_systemc_trace.hpp"
 #include "fsim/systemc/kernel_backend_binding_inventory_accellera.hpp"
 #include "fsim/systemc/kernel_backend_inventory_accellera.hpp"
+#include "application_trace_observation.hpp"
+#include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/systemverilog_scalar.hpp"
+#include "fsim/runtime/trace_model.hpp"
+#include "fsim/systemc/kernel_backend_binding_inventory.hpp"
+#include "fsim/systemc/kernel_backend_inventory.hpp"
+#include "fsim/systemc/kernel_backend_protocol.hpp"
+#include "fsim/systemc/kernel_backend_value_codec.hpp"
 
 #include <systemc>
 
 #include <array>
 #include <cassert>
 #include <cstddef>
-#include <cstdint>
-#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
+#include <ios>
+#include <string_view>
 
 namespace {
 

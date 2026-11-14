@@ -2,7 +2,6 @@
 #include "fsim/artifact/coverage_exclusion_report.hpp"
 
 #include <algorithm>
-#include <limits>
 #include <new>
 #include <tuple>
 

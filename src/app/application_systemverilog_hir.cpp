@@ -1,5 +1,27 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_systemverilog_hir_internal.hpp"
+#include "application_internal.hpp"
+#include "fsim/frontend/class_specialization.hpp"
+#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/source.hpp"
+#include "fsim/frontend/token.hpp"
+#include "fsim/semantic/model.hpp"
+#include "fsim/semantic/systemverilog_hir.hpp"
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <iterator>
+#include <optional>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <tuple>
+#include <unordered_set>
+#include <utility>
+#include <vector>
 
 namespace fsim::app::application_detail {
 namespace sv = semantic::sv;
@@ -1233,6 +1255,13 @@ namespace systemverilog_hir_detail {
             break;
         }
         output.label = input.then_scope;
+        output.gate_array = input.gate_array;
+        if (input.gate_array) {
+            output.gate_array_left = expression(
+                input.gate_array_left, output.scope, declaration_origin);
+            output.gate_array_right = expression(
+                input.gate_array_right, output.scope, declaration_origin);
+        }
         output.alternative_label = input.else_scope;
         output.alternative_discriminator
             = std::move(alternative_discriminator);
@@ -1585,6 +1614,16 @@ namespace systemverilog_hir_detail {
         for (auto& item : pending) {
             output.declarations.push_back(item.build());
         }
+        // The governed UVM library package: its declarations take the roles
+        // recorded on the frontend unit (support::UvmRole).
+        if (support::uvm_library(input.uvm_role)) {
+            output.uvm_role = input.uvm_role;
+            for (const auto id : output.declarations) {
+                auto& recorded = declaration(id);
+                recorded.uvm_role = support::declared_uvm_role(
+                    input.uvm_declaration_roles, recorded.name);
+            }
+        }
         for (const auto& input_modport : input.systemverilog_modports) {
             const auto declaration_id = std::ranges::find_if(
                 hir_.declarations(), [&](const sv::Declaration& declaration) {
@@ -1669,6 +1708,12 @@ namespace systemverilog_hir_detail {
             input.systemverilog_clocking_blocks) {
             output.clocking_blocks.push_back(clocking_block(
                 input_clocking, output.scope, output.origin));
+        }
+        output.default_decay_time = input.default_decay_time;
+        if (input.systemverilog_default_disable_condition) {
+            output.default_disable_condition = expression(
+                *input.systemverilog_default_disable_condition, output.scope,
+                output.origin);
         }
         if (input.systemverilog_default_clocking_block) {
             const auto default_source = source(

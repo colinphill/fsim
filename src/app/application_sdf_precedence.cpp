@@ -3,16 +3,29 @@
 #include "fsim/app/sdf_delay_modes.hpp"
 #include "fsim/app/sdf_precedence.hpp"
 #include "sdf_diagnostic.hpp"
+#include "fsim/app/sdf_pulse_timing.hpp"
+#include "fsim/app/sdf_target_plan.hpp"
+#include "fsim/app/sdf_value_policy.hpp"
+#include "fsim/elaboration/elaborator.hpp"
+#include "fsim/frontend/diagnostic.hpp"
+#include "fsim/frontend/sdf.hpp"
+#include "fsim/frontend/source.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir.hpp"
 
 #include <algorithm>
 #include <array>
 #include <map>
 #include <optional>
-#include <ranges>
 #include <set>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <cstddef>
+#include <functional>
+#include <memory>
+#include <span>
+#include <vector>
 
 namespace fsim::app {
 namespace {

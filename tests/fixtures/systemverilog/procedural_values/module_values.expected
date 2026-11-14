@@ -1,0 +1,7 @@
+cast 0 BLUE
+cast 1 GREEN
+cast 0 GREEN
+block 2.000000 3
+task 3.000000 8 -3 5.000000 -8
+sampled 5 14 5
+changes 1 0 0 0

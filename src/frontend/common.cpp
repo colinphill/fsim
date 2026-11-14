@@ -141,6 +141,7 @@ SourceSpan cover(const SourceSpan& first, const SourceSpan& last)
     }
     if (result.expansion_stack.empty()) {
         result.expansion_stack = last.expansion_stack;
+        result.macro_origin = last.macro_origin;
     }
     return result;
 }

@@ -5,8 +5,8 @@
 -- compiled with. Every design unit sees them through the implicit
 -- `use STD.STANDARD.all;` (12.4).
 entity top is
-end entity;
+end top;
 
 architecture t of top is
 begin
-end architecture;
+end t;

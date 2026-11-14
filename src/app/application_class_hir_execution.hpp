@@ -1,8 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include "application_internal.hpp"
 
+#include "fsim/app/application.hpp"
+#include "fsim/runtime/class_heap.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_container_value.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include "fsim/semantic/model.hpp"
+#include "fsim/semantic/systemverilog_class_specialization.hpp"
+#include "fsim/semantic/systemverilog_hir.hpp"
 #include <algorithm>
 #include <functional>
 #include <memory>
@@ -10,6 +18,13 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <cstddef>
+#include <cstdint>
+#include <map>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
 
 namespace fsim::app::application_detail {
 
@@ -186,6 +201,44 @@ public:
         assertion_control_ = std::move(control);
         execution_probe_ = std::move(probe);
     }
+    // The frames of the methods the executor runs, for the foreign
+    // interfaces (IEEE 1800-2023 37.43, simulate --foreign-probes): a
+    // frame's start and end, as generated code reports them. `frame` is a
+    // serial the executor never reuses, `callee` the method's name and
+    // `declaration` its HIR declaration. The probe returns whether it
+    // reported the point; the statements of a frame it reported are
+    // reported through the execution probe.
+    using FrameProbe = std::function<bool(
+        std::optional<runtime::simir::ProcessId>,
+        runtime::simir::ExecutionPointKind, semantic::SourceSpanId,
+        std::uint64_t frame, std::string_view callee,
+        semantic::DeclarationId declaration)>;
+    void set_frame_probe(FrameProbe probe)
+    {
+        frame_probe_ = std::move(probe);
+    }
+    // An automatic variable of a running frame (37.43 detail 1): a formal
+    // or local of the method, in declaration order.
+    struct FrameVariable {
+        semantic::DeclarationId declaration { };
+        std::string name;
+        bool string_value { };
+    };
+    // The automatic variables of a running frame; empty when the frame
+    // has ended.
+    [[nodiscard]] std::vector<FrameVariable> frame_variables(
+        std::uint64_t frame) const;
+    // The value of an automatic variable of a running frame, and a value
+    // written to it (vpi_put_value with vpiNoDelay, 37.43 detail 3); none or
+    // false when the frame has ended or does not hold the variable.
+    [[nodiscard]] std::optional<runtime::PackedLogic4> read_frame_packed(
+        std::uint64_t frame, semantic::DeclarationId variable) const;
+    [[nodiscard]] std::optional<std::string> read_frame_string(
+        std::uint64_t frame, semantic::DeclarationId variable) const;
+    bool write_frame_packed(std::uint64_t frame,
+        semantic::DeclarationId variable, const runtime::PackedLogic4& value);
+    bool write_frame_string(std::uint64_t frame,
+        semantic::DeclarationId variable, std::string_view value);
     // The class of a generated scope or design element instance, made when
     // a loaded design first names it (IEEE 1800-2023 6.22, 27.4).
     using GeneratedSpecialization = std::function<
@@ -316,8 +369,42 @@ public:
     [[nodiscard]] const semantic::sv::SpecializedClassMethod* method_named(
         runtime::SystemVerilogClassHandle handle,
         std::string_view name) const;
-    [[nodiscard]] const semantic::sv::SpecializedClassMethod* static_method(
-        std::string_view canonical_identity) const;
+    // The method a component's class runs for a virtual method of the
+    // library's uvm_component (IEEE 1800.2-2020 13.1): the method of the
+    // library class declares the virtual slot, and the object's most derived
+    // method of that slot is returned (IEEE 1800-2023 8.20). Null when the
+    // object's class has none.
+    [[nodiscard]] const semantic::sv::SpecializedClassMethod*
+    uvm_component_method(runtime::SystemVerilogClassHandle handle,
+        support::UvmRole library_method) const;
+    // How many times the simulation entered this executor: a function,
+    // task or constructor body that no generated code runs. A compiled
+    // (v4) run of lowered class code enters it never.
+    [[nodiscard]] std::uint64_t invocations() const noexcept
+    {
+        return invocations_;
+    }
+    /// The entries by the body they ran (a method's or `<class>::new`
+    /// canonical identity), for the profile census.
+    /// The allocation scope of the construction in progress, named in the
+    /// census entry of a constructor body the executor runs.
+    void set_census_scope(std::string_view scope) { census_scope_ = scope; }
+    [[nodiscard]] const std::map<std::string, std::uint64_t>&
+    invocation_sites() const noexcept
+    {
+        return invocation_sites_;
+    }
+    // A call of the static method `canonical_identity` (`selection` is the
+    // call's expression, if any): the specialization it runs in and the
+    // method as that specialization sees it (IEEE 1800-2023 8.25.1).
+    struct StaticCall {
+        const semantic::sv::SpecializedClassMethod* method { };
+        std::string specialization;
+    };
+    [[nodiscard]] StaticCall static_call(
+        const semantic::sv::Expression* selection,
+        std::string_view canonical_identity,
+        runtime::SystemVerilogClassHandle handle) const;
 
     // `specialization` is the one a static method runs in (IEEE 1800-2023
     // 8.25.1); a method of an object runs in the object's.
@@ -809,6 +896,9 @@ private:
     const semantic::Model* semantics_ { };
     mutable std::optional<HirLookupIndex> hir_index_;
     const runtime::SystemVerilogClassHeap& heap_;
+    std::uint64_t invocations_ { };
+    std::map<std::string, std::uint64_t> invocation_sites_;
+    std::string census_scope_;
     FunctionInvoker invoke_function_;
     StaticFunctionInvoker invoke_static_function_;
     PropertyRead read_property_;
@@ -877,6 +967,68 @@ private:
     // The function being executed returns a string.
     bool string_return_ { };
     std::map<std::uint32_t, VariableReference> active_references_;
+    // The running frames by serial (IEEE 1800-2023 37.43), and the one whose
+    // statements execute() runs now.
+    struct ActiveFrame {
+        const semantic::sv::SpecializedClassMethod* method { };
+        PackedEnvironment* packed { };
+        StringEnvironment* strings { };
+        StringBindingEnvironment* bindings { };
+        // Whether the frame probe reported the frame's start.
+        bool reported { };
+    };
+    std::map<std::uint64_t, ActiveFrame> active_frames_;
+    std::uint64_t frame_serial_ { };
+    std::uint64_t current_frame_ { };
+    FrameProbe frame_probe_;
+    // A frame for the duration of a method body's execution.
+    // The source of the method call the executor is making, which the frame
+    // it activates takes as its call point (IEEE 1800-2023 37.43 detail 6),
+    // as generated code reports the call before the frame.
+    class CallSite {
+    public:
+        CallSite(SystemVerilogClassHirExecution& owner,
+            const semantic::SourceSpanId source)
+            : owner_ { owner }
+            , previous_ { std::exchange(owner.call_site_, source) }
+        {
+        }
+        CallSite(const CallSite&) = delete;
+        CallSite& operator=(const CallSite&) = delete;
+        ~CallSite() { owner_.call_site_ = previous_; }
+
+    private:
+        SystemVerilogClassHirExecution& owner_;
+        std::optional<semantic::SourceSpanId> previous_;
+    };
+    std::optional<semantic::SourceSpanId> call_site_ { };
+    // A constructor's frame takes no call point: a `new` is no task,
+    // function or method call (37.43 detail 6).
+    class FrameScope {
+    public:
+        FrameScope(SystemVerilogClassHirExecution& owner,
+            const semantic::sv::SpecializedClassMethod& method,
+            PackedEnvironment& packed, StringEnvironment& strings,
+            StringBindingEnvironment& bindings, bool constructor = false);
+        FrameScope(const FrameScope&) = delete;
+        FrameScope& operator=(const FrameScope&) = delete;
+        ~FrameScope();
+        // The method returns: the frame ends.
+        void finish();
+
+    private:
+        SystemVerilogClassHirExecution& owner_;
+        std::uint64_t serial_ { };
+        std::uint64_t previous_ { };
+    };
+    [[nodiscard]] const ActiveFrame* active_frame(std::uint64_t frame) const
+    {
+        const auto found = active_frames_.find(frame);
+        return found == active_frames_.end() ? nullptr : &found->second;
+    }
+    // Whether `variable` is an automatic variable of the frame's method.
+    [[nodiscard]] bool frame_declares(
+        const ActiveFrame& frame, semantic::DeclarationId variable) const;
 };
 
 } // namespace fsim::app::application_detail

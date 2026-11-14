@@ -3,18 +3,16 @@
 // KIR analyses of the engine v4 static kernel: reachability and liveness
 // pruning, 'U' tracking and dead-constant elimination.
 #include "simir_static_kernel_compiled_internal.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 #include "fsim/support/stack_growth.hpp"
 
 #include <array>
-#include <cxxabi.h>
 #include <iostream>
 #include <limits>
 #include <map>
 #include <numeric>
-#include <queue>
 #include <string>
 #include <tuple>
-#include <typeinfo>
 #include <unordered_map>
 
 namespace fsim::runtime::simir {
@@ -216,7 +214,8 @@ bool Interpreter::Impl::StaticKernel::debug_register_defined(
     // The reference evaluator shows a local as <uninitialized> until some
     // operation has written its register. The kernel does not track writes,
     // so the answer is the may-be-written set at the member's last debug
-    // point: registers written on some path from the entry to it. A member
+    // point (of any kind: a frame's entry follows the writes of its formals
+    // and locals): registers written on some path from the entry to it. A member
     // with a fork also counts the writes of earlier operations (fork
     // branches run in order until they wait, and share the registers).
     // Under the debugger plan every statement is a debug point, so a write
@@ -224,12 +223,13 @@ bool Interpreter::Impl::StaticKernel::debug_register_defined(
     // did not run; one followed by a control transfer first still counts.
     const auto size = static_cast<std::uint32_t>(member.operations().size());
     const auto registers = member.registers.size();
-    if (member.debug_pc == no_slot && debug_points_) {
+    const auto at = member.debug_reached_pc;
+    if (at == no_slot && debug_points_) {
         // Under the debugger plan every statement is a debug point: a member
         // that has reached none has not run, so it has written nothing.
         return false;
     }
-    if (member.debug_pc == no_slot || member.debug_pc >= size
+    if (at == no_slot || at >= size
         || reg >= registers) {
         return true;
     }
@@ -259,7 +259,7 @@ bool Interpreter::Impl::StaticKernel::debug_register_defined(
         }
         return true;
     };
-    if (member.debug_defined_pc != member.debug_pc) {
+    if (member.debug_defined_pc != at) {
         std::vector<std::uint64_t> in(static_cast<std::size_t>(size) * words, 0U);
         std::vector<std::uint8_t> seen(size, 0U);
         std::vector<std::uint32_t> return_targets;
@@ -333,10 +333,10 @@ bool Interpreter::Impl::StaticKernel::debug_register_defined(
             }
         }
         member.debug_defined.assign(
-            in.begin() + static_cast<std::ptrdiff_t>(member.debug_pc * words),
-            in.begin() + static_cast<std::ptrdiff_t>((member.debug_pc + 1U) * words));
+            in.begin() + static_cast<std::ptrdiff_t>(at * words),
+            in.begin() + static_cast<std::ptrdiff_t>((at + 1U) * words));
         if (has_fork) {
-            for (std::uint32_t pc = 0U; pc < member.debug_pc; ++pc) {
+            for (std::uint32_t pc = 0U; pc < at; ++pc) {
                 operation_registers(member.operations()[pc], reads, write);
                 if (write && *write < registers && executed(pc)) {
                     member.debug_defined[*write / 64U]
@@ -344,7 +344,7 @@ bool Interpreter::Impl::StaticKernel::debug_register_defined(
                 }
             }
         }
-        member.debug_defined_pc = member.debug_pc;
+        member.debug_defined_pc = at;
     }
     return (member.debug_defined[reg / 64U] >> (reg % 64U) & 1U) != 0U;
 }

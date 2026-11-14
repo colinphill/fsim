@@ -4,10 +4,27 @@
 #include "elaborator_internal.hpp"
 #include "hierarchy_sv_generate_internal.hpp"
 #include "scoped_bindings.hpp"
+#include "virtual_interface_definition.hpp"
 #include "systemverilog_template_bindings.hpp"
 #include "vhdl_lowering_index.hpp"
 #include "../runtime/simir_process_program.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
+#include "elaboration_targets.hpp"
+#include "fsim/elaboration/elaborator.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/source.hpp"
+#include "fsim/frontend/systemverilog_scalars.hpp"
+#include "fsim/frontend/token.hpp"
+#include "fsim/runtime/logic.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include "fsim/runtime/vpi_types.hpp"
+#include "fsim/semantic/compiled_design.hpp"
+#include "fsim/semantic/compiled_design_specialization.hpp"
+#include "fsim/semantic/model.hpp"
+#include "fsim/semantic/systemverilog_hir.hpp"
+#include "fsim/semantic/vhdl_hir.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -23,6 +40,8 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <deque>
+#include <string_view>
 
 namespace fsim::elaboration {
 
@@ -129,6 +148,12 @@ public:
 
     [[nodiscard]] std::vector<SelectedSystemVerilogClass>
     take_selected_systemverilog_classes();
+    // The class specializations lowering made for types whose actuals read
+    // the parameters of their design element instance; call before
+    // finalize(), which drops the index.
+    [[nodiscard]] std::shared_ptr<
+        const std::vector<semantic::sv::ClassSpecialization>>
+    take_instance_class_specializations();
     std::vector<VitalWireLocations> take_vital_wire_locations()
     {
         return std::move(vital_wire_locations_);
@@ -741,6 +766,13 @@ private:
         runtime::simir::Process process,
         std::optional<SignalId> result,
         std::optional<PackedLogic4>* value = nullptr);
+    // A guarded bus's value with no connected driver (IEEE 1076-2019
+    // 14.7.3.2): one run of `program`, the signal's resolver program for
+    // a null array, whose halt leaves the value in register `output`. The
+    // resolution function is pure, so the value is a constant. nullopt
+    // when the program cannot run at elaboration.
+    std::optional<PackedLogic4> evaluate_vhdl_resolver_null_value(
+        SignalId signal, runtime::simir::Process program, RegisterId output);
     // Keeps the shared-variable state an elaboration-time evaluation left;
     // `images` gives the interpreter's ids of the design signals it holds,
     // all of them under their own ids when null.
@@ -1443,12 +1475,24 @@ private:
 
     // Record the gate, switch and pull instances of one scope for the VPI
     // primitive objects (IEEE 1800-2023 37.35).
+    // The element a loop generate gives a gate instance array (IEEE 1800-2023
+    // 28.3.6): the primitive belongs to the scope that holds the array.
+    struct GateArrayElement {
+        std::string name;
+        std::int64_t index { };
+        std::int64_t left { };
+        std::int64_t right { };
+        // The name of the processes of the element: its generate scope, then
+        // the name of the gate in it.
+        std::string driver_name;
+    };
     void record_verilog_primitives(
         const std::vector<semantic::sv::PrimitiveInstance>& primitives,
         const semantic::SpecializedHirUnit& specialization,
         const std::string& scope_path,
         const SignalMap& signals,
-        std::span<const runtime::simir::ProcessId> processes);
+        std::span<const runtime::simir::ProcessId> processes,
+        const GateArrayElement* array_element = nullptr);
 
     void activate_compiled_systemverilog_defparams(
         std::span<const semantic::sv::Defparam> defparams,
@@ -1535,6 +1579,36 @@ private:
     std::optional<ResolutionKind> explicit_resolution(SignalId signal);
     void register_systemverilog_resolution_functions(
         const semantic::sv::Unit& unit);
+    // The resolution function of user-defined nettype `nettype` (IEEE
+    // 1800-2023 6.6.7), found in the nettype's scope, or of the nettype a
+    // nettype alias renames; nullopt for a nettype without one. Reports an
+    // invisible or ambiguous function once (SVNETTYPE-001/002) and gives
+    // nullopt with `error` set.
+    struct SystemVerilogNettypeFunction {
+        std::optional<semantic::DeclarationId> function;
+        // The nettype that names the function (the alias's target).
+        const semantic::sv::TypeDefinition* nettype { };
+        bool error { };
+    };
+    [[nodiscard]] SystemVerilogNettypeFunction systemverilog_nettype_function(
+        semantic::TypeId nettype,
+        const semantic::CompiledDesignResolver& resolver);
+    // The user-defined nettype `type`, used in `scope`, names (IEEE
+    // 1800-2023 6.6.7), by the identity of its declaration; a name of
+    // another unit's nettype is resolved through `resolver`.
+    [[nodiscard]] std::optional<semantic::TypeId> systemverilog_user_nettype(
+        const semantic::sv::TypeReference& type,
+        const semantic::CompiledDesignResolver& resolver,
+        semantic::ScopeId scope) const;
+    // A net of a user-defined nettype: binds its resolver program to the
+    // nettype's function, or records an unresolved nettype net (6.6.7).
+    void register_systemverilog_nettype_net(SignalId signal,
+        const semantic::sv::Declaration& declaration,
+        const SystemVerilogHirMaterialization& materialization);
+    void lower_compiled_systemverilog_resolvers(
+        const std::unordered_map<SignalId, std::vector<ProcessId>>& drivers,
+        const std::unordered_map<SignalId,
+            std::vector<std::vector<Process::DriverRegion>>>& array_regions);
     void set_resolution(SignalId signal, ResolutionKind resolution);
     void validate_process_drivers();
     // The hidden nets of a program's concurrent assertions run in the
@@ -1858,6 +1932,10 @@ private:
         // of the packages the class depends on, as class static
         // initializers may.
         bool class_allocation { };
+        // A string or container variable, whose initializer's value is
+        // written to the object (the signal is the object's own).
+        std::optional<runtime::simir::StringObjectId> string_object;
+        std::optional<runtime::simir::ContainerObjectId> container_object;
     };
 
     void resolve_compiled_systemverilog_virtual_interface_initializers(
@@ -1944,6 +2022,8 @@ private:
         std::vector<semantic::ProcessId> processes;
         std::vector<std::pair<semantic::StatementId, std::size_t>>
             statements;
+        /// The UVM dispatch process waits for a later pass too.
+        bool uvm_api { };
     };
     bool lower_deferred_systemverilog_processes(
         const semantic::sv::Unit& unit,
@@ -2039,6 +2119,21 @@ private:
         bool canonicalize = true);
     // Append the processes `source` generated while lowering (fork
     // branches, assertion threads) to the specialization.
+    // The design's one dormant UVM dispatch process (the simulation's UVM
+    // phase services call components through it); emitted with the first
+    // lowered process of a design that declares a uvm_component. With
+    // `retry`, a hierarchical reference its bodies miss (a virtual interface
+    // member whose interface instance is bound later) defers it to a later
+    // pass of the same instance, as a process is deferred
+    // (uvm_api_process_deferred_path_).
+    enum class UvmApiEmission : std::uint8_t { done, deferred, failed };
+    [[nodiscard]] UvmApiEmission emit_uvm_api_process(Lowerer& source,
+        const semantic::sv::Unit& unit, SpecializationInfo& specialization,
+        std::optional<std::uint32_t> program_owner,
+        frontend::Language language, const std::string& path, bool retry);
+    bool uvm_api_process_emitted_ { };
+    /// The instance whose later pass retries the deferred dispatch process.
+    std::optional<std::string> uvm_api_process_deferred_path_;
     void append_generated_systemverilog_processes(Lowerer& source,
         const semantic::sv::Unit& unit,
         SpecializationInfo& specialization,
@@ -2076,7 +2171,8 @@ private:
     // A class typespec named after the specialization its declaration's
     // parameterized class type selects (IEEE 1800-2023 8.25, 37.32).
     [[nodiscard]] std::shared_ptr<const runtime::SystemVerilogVpiTypespec>
-    specialized_class_typespec(const semantic::sv::Declaration& declaration,
+    specialized_class_typespec(const semantic::SpecializedHirUnit& instance,
+        const semantic::sv::Declaration& declaration,
         std::shared_ptr<const runtime::SystemVerilogVpiTypespec> typespec);
 
     bool materialize_compiled_systemverilog_declaration(
@@ -2302,6 +2398,12 @@ private:
     // instantiates; instance selectors name it as their first component
     // (IEEE 1800-2023 33.4.1.1).
     std::string active_compiled_systemverilog_configuration_cell_;
+    // The library list a liblist clause of a configuration selected for an
+    // instance, by configuration and configured instance path: the
+    // instance's descendants inherit it (IEEE 1800-2023 33.4.1.5).
+    std::map<std::pair<const semantic::sv::Unit*, std::string>,
+        std::vector<std::string>>
+        compiled_systemverilog_inherited_liblists_;
     struct ActiveCompiledSystemVerilogDefparam {
         std::string target_path;
         std::string parameter;
@@ -2360,7 +2462,7 @@ private:
     std::unordered_map<std::string,
         std::unordered_map<std::string, semantic::SpecializedHirActualIdentity>>
         systemverilog_interface_type_actuals_;
-    std::unordered_map<std::string, std::string>
+    std::unordered_map<std::string, SystemVerilogInterfaceInstanceType>
         systemverilog_interface_types_;
     // Each instance's and loop-generate iteration's specialization; an
     // interface's is reserved before the instantiating unit's processes
@@ -2444,8 +2546,26 @@ private:
     // Whether the packages' parameters were recorded for VPI with an
     // earlier specialization (IEEE 1800-2023 37.10).
     bool vpi_package_parameters_recorded_ { };
+    // The HIR cast expressions to a named type, collected once for the VPI
+    // typespec of each cast (IEEE 1800-2023 6.24.1, 37.59).
+    bool vpi_cast_expressions_collected_ { };
+    std::vector<const semantic::sv::Expression*> vpi_cast_expressions_;
+    // The HIR calls and names that spell the name of a let declaration of
+    // the design, collected with the casts; each is resolved per
+    // specialization (IEEE 1800-2023 11.12, 37.57).
+    std::vector<const semantic::sv::Expression*> vpi_let_candidates_;
     std::vector<PendingSystemVerilogPackageInitializer>
         systemverilog_package_initializers_;
+    // Set by the string and container declaration materializers when a
+    // package variable's initializer is not an elaboration constant: it
+    // then runs as a package startup action.
+    bool package_object_initializer_pending_ { };
+    // Set while a package variable that is not a packed value is
+    // materialized: its initializer may run as a package startup action.
+    bool package_object_initializer_allowed_ { };
+    // The initializer reads a variable or calls a function, so the
+    // materializers do not fold it (IEEE 1800-2023 6.8, 10.5).
+    bool package_object_initializer_forced_ { };
     std::unordered_map<std::uint32_t, ContainerObjectId>
         systemverilog_package_container_objects_;
     std::unordered_map<std::uint32_t, StringObjectId>
@@ -2515,8 +2635,35 @@ private:
     std::unordered_map<SignalId, std::uint8_t> vhdl_guarded_signal_kinds_;
     std::unordered_map<std::string, ResolutionKind>
         vhdl_resolution_kinds_;
-    std::unordered_map<std::string, ResolutionKind>
-        systemverilog_resolution_kinds_;
+    // Nets of user-defined nettypes with a resolution function (IEEE
+    // 1800-2023 6.6.7): the function and the specialization it is lowered
+    // in, shared by the nets of one instance.
+    struct PendingSystemVerilogResolver {
+        semantic::DeclarationId function;
+        semantic::SourceSpanId source;
+        std::shared_ptr<const semantic::SpecializedHirUnit> specialization;
+        // The net is an array of nets of the nettype, which resolve only as
+        // its elements (rewrite_eligible_element_net_families, or each from
+        // its own drivers in one program), `elements` of them (0 when its
+        // dimensions are not known).
+        bool array { };
+        std::size_t elements { };
+    };
+    std::map<SignalId, PendingSystemVerilogResolver>
+        systemverilog_function_resolvers_;
+    // Arrays of such nets, split into their elements: their aggregate
+    // views (rewrite_eligible_element_net_families).
+    std::set<SignalId> systemverilog_nettype_array_proxies_;
+    // Nets of nettypes without one: at most one driver each.
+    std::map<SignalId, semantic::SourceSpanId>
+        systemverilog_unresolved_nettype_nets_;
+    std::unordered_map<std::uint32_t, SystemVerilogNettypeFunction>
+        systemverilog_nettype_functions_;
+    const semantic::SpecializedHirUnit*
+        systemverilog_resolver_specialization_key_ { };
+    std::string systemverilog_resolver_specialization_path_;
+    std::shared_ptr<const semantic::SpecializedHirUnit>
+        systemverilog_resolver_specialization_;
     std::vector<semantic::UnitId>
         systemverilog_resolution_unit_registrations_;
 

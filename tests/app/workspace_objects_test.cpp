@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/artifact_phase.hpp"
+#include "fsim/semantic/vhdl_hir.hpp"
+#include "fsim/semantic/systemverilog_hir.hpp"
+#include "fsim/semantic/compiled_design.hpp"
 #include "fsim/app/trace_archive.hpp"
 #include "fsim/artifact/object.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
@@ -74,7 +77,9 @@ void republish_object(const std::filesystem::path& object,
 }
 
 detail::WorkspaceObjectSelection compile(const std::filesystem::path& root,
-    const std::string& name, const std::string_view text)
+    const std::string& name, const std::string_view text,
+    const fsim::project::SystemVerilogUvmRelease uvm_release
+    = fsim::project::SystemVerilogUvmRelease::none)
 {
     const auto source = root / (name + ".sv");
     write_file(source, text);
@@ -87,6 +92,7 @@ detail::WorkspaceObjectSelection compile(const std::filesystem::path& root,
     sources.standard = "2017";
     sources.library = "work";
     sources.files = { source };
+    sources.uvm_release = uvm_release;
     config.source_sets.push_back(std::move(sources));
     detail::WorkspaceObjectSelection result;
     result.path = root / (name + ".fsimobj");
@@ -416,15 +422,17 @@ void mark_uvm_release(const detail::WorkspaceObjectSelection& object)
 
 void check_split_uvm_environment(const std::filesystem::path& root)
 {
+    // The package is the governed release's library (--uvm-release), so its
+    // declarations carry their library roles; the consumer is marked with
+    // the release afterwards, as a unit compiled against that library is.
     const auto package = compile(root, "uvm-package", R"(
 package uvm_pkg;
   class uvm_object;
   endclass
 endpackage
-)");
+)", fsim::project::SystemVerilogUvmRelease::uvm_1_2);
     const auto consumer = compile(root, "uvm-consumer",
         "module uvm_consumer; endmodule\n");
-    mark_uvm_release(package);
     mark_uvm_release(consumer);
     fsim::diagnostic::Engine diagnostics;
     assert(!detail::load_object_workspace(std::array { consumer.path }, diagnostics));

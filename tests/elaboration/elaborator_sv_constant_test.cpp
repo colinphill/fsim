@@ -2,10 +2,10 @@
 #include "elaborator_test_support.hpp"
 
 #include "fsim/frontend/parser.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 
 #include <cassert>
 #include <iostream>
-#include <ranges>
 #include <string_view>
 
 namespace fsim::tests::elaboration {

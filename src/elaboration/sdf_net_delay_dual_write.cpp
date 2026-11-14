@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "sdf_net_delay_dual_write.hpp"
 
-#include "lowerer_driver_regions.hpp"
 #include "systemverilog_template_bindings.hpp"
 
 #include <algorithm>

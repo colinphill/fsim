@@ -7,7 +7,6 @@
 #include "fsim/runtime/vpi_abi.h"
 #include "vpi_user.h"
 
-#include <stdio.h>
 #include <string.h>
 
 static PLI_INT32 unused(p_cb_data data)

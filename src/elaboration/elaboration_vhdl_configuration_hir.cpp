@@ -397,10 +397,7 @@ const semantic::vhdl::Declaration* named_declaration(
         return nullptr;
     }
     const auto& name = *expression.referenced_name;
-    const auto id = name.selected ? name.selected
-        : name.overloads.size() == 1U
-        ? std::optional { name.overloads.front() }
-        : std::nullopt;
+    const auto id = name.selected;
     if (id) {
         const auto declaration = compiled.find_declaration(*id);
         return declaration ? declaration->vhdl : nullptr;
@@ -625,13 +622,12 @@ std::optional<std::vector<std::string>> configuration_block_scopes(
         const auto low = descending ? *right : *left;
         const auto high = descending ? *left : *right;
         std::vector<std::string> scopes;
-        constexpr std::int64_t maximum_scopes = 65536;
-        if (low <= high && high - low >= maximum_scopes) {
-            return std::nullopt;
-        }
-        for (auto value = low; value <= high; ++value) {
+        for (auto value = low; low <= high; ++value) {
             scopes.push_back(
                 block.block.spelling + "[" + std::to_string(value) + "]");
+            if (value == high) {
+                break;
+            }
         }
         return scopes;
     }
@@ -665,13 +661,16 @@ std::optional<std::vector<std::string>> configuration_block_scopes(
                     high = static_range_bound(compiled, type->vhdl->base, "'high", 0U);
                 }
             }
-            if (!low || !high || (*low <= *high && *high - *low >= 65536)) {
+            if (!low || !high) {
                 return std::nullopt;
             }
             std::vector<std::string> scopes;
-            for (auto value = *low; value <= *high; ++value) {
+            for (auto value = *low; *low <= *high; ++value) {
                 scopes.push_back(
                     block.block.spelling + "[" + std::to_string(value) + "]");
+                if (value == *high) {
+                    break;
+                }
             }
             return scopes;
         }

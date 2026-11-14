@@ -3,6 +3,7 @@
 #include "application_hierarchy_path_codec.hpp"
 #include "application_internal.hpp"
 #include "application_runtime_path_codec.hpp"
+#include "fsim/app/artifact_schema.hpp"
 #include "fsim/support/path.hpp"
 
 #include <filesystem>
@@ -348,8 +349,12 @@ std::optional<std::string> serialize_systemverilog_class_specializations(
     const std::span<const semantic::sv::ClassSpecialization> specializations,
     diagnostic::Engine& diagnostics)
 {
+    // Pooled constants are saved as the constants, not as process-local ids.
+    const auto portable
+        = semantic::sv::portable_class_specializations(specializations);
     return serialize("FSIMSVCS",
-        kSystemVerilogClassSpecializationStateSchema, specializations,
+        kSystemVerilogClassSpecializationStateSchema,
+        std::span<const semantic::sv::ClassSpecialization> { portable },
         diagnostics);
 }
 

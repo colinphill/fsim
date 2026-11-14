@@ -565,4 +565,57 @@ dynamic_part_write_value(
 
 
 
+std::optional<SignalId> event_array_element_signal(
+    const EventArrayElement& operation, const PackedLogic4& index) {
+  const auto width = index.width();
+  if (width == 0 || operation.elements.empty()) {
+    return std::nullopt;
+  }
+  // An index with an unknown or high-impedance bit is invalid (IEEE
+  // 1800-2023 7.4.6).
+  for (std::size_t bit = 0; bit < width; ++bit) {
+    const auto value = index.get(bit);
+    if (value == Logic4::x || value == Logic4::z) {
+      return std::nullopt;
+    }
+  }
+  const bool negative =
+      operation.index_signed && index.get(width - 1) == Logic4::one;
+  std::uint64_t raw{};
+  for (std::size_t bit = 0; bit < width; ++bit) {
+    const bool one = index.get(bit) == Logic4::one;
+    if (bit < 64) {
+      if (one) {
+        raw |= UINT64_C(1) << bit;
+      }
+    } else if (one != negative) {
+      // Beyond 64 bits: outside every declared range.
+      return std::nullopt;
+    }
+  }
+  if (negative) {
+    if (width < 64) {
+      raw |= ~UINT64_C(0) << width;
+    } else if ((raw >> 63) == 0) {
+      return std::nullopt;
+    }
+  } else if (raw > static_cast<std::uint64_t>(
+                 std::numeric_limits<std::int64_t>::max())) {
+    return std::nullopt;
+  }
+  const auto value = static_cast<std::int64_t>(raw);
+  // The declared bounds are 32-bit (hir_systemverilog_event_array_selection).
+  if (value < std::numeric_limits<std::int32_t>::min()
+      || value > std::numeric_limits<std::int32_t>::max()) {
+    return std::nullopt;
+  }
+  const auto position = operation.descending ? operation.left - value
+                                             : value - operation.left;
+  if (position < 0
+      || position >= static_cast<std::int64_t>(operation.elements.size())) {
+    return std::nullopt;
+  }
+  return operation.elements[static_cast<std::size_t>(position)];
+}
+
 } // namespace fsim::runtime::simir

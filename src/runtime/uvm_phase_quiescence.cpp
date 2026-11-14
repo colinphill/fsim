@@ -4,7 +4,6 @@
 #include "uvm_phase_internal.hpp"
 
 #include <algorithm>
-#include <ranges>
 #include <string>
 
 namespace fsim::runtime {

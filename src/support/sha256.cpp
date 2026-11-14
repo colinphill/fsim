@@ -3,7 +3,6 @@
 
 #include <algorithm>
 #include <bit>
-#include <stdexcept>
 
 #if (defined(__x86_64__) || defined(_M_X64)) \
     && (defined(__GNUC__) || defined(__clang__))

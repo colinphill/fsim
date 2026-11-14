@@ -4,7 +4,6 @@
 #include <algorithm>
 #include <exception>
 #include <limits>
-#include <ranges>
 #include <utility>
 
 namespace fsim::runtime {

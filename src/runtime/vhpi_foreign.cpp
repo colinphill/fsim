@@ -4,7 +4,6 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
-#include <ranges>
 #include <unordered_set>
 #include <utility>
 

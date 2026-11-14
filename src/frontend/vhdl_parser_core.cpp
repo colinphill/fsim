@@ -658,8 +658,14 @@ DesignUnit VhdlParser::parse_package(const Token& start, const bool body)
     }
     if (body) {
         expect_keyword("end", true, "FSIM-VHDL-PARSE-166");
-        (void)match_keyword("package", true);
-        (void)match_keyword("body", true);
+        if (keyword("package", 0, true)) {
+            (void)require_vhdl_standard(
+                current(), VhdlStandard::Vhdl1993,
+                "the 'package body' keywords after 'end'",
+                "select VHDL-1993 or omit the keywords");
+            (void)advance();
+            (void)match_keyword("body", true);
+        }
         if (at(TokenKind::Identifier)) {
             const auto end_name = advance();
             if (vhdl_name(end_name.text) != unit.name) {
@@ -1951,7 +1957,15 @@ void VhdlParser::parse_vhdl_end(std::string_view expected_kind,
     std::string_view expected_name)
 {
     expect_keyword("end", true, "FSIM-VHDL-PARSE-012");
-    match_keyword(expected_kind, true);
+    if (keyword(expected_kind, 0, true)) {
+        // The kind keyword after `end` is VHDL-1993 syntax (IEEE 1076-1993
+        // 1.1.1, 1.2, 4.3: [ entity ] [ architecture ] [ package ] ...).
+        (void)require_vhdl_standard(
+            current(), VhdlStandard::Vhdl1993,
+            "the '" + std::string { expected_kind } + "' keyword after 'end'",
+            "select VHDL-1993 or omit the keyword");
+        (void)advance();
+    }
     if (at(TokenKind::Identifier)) {
         const auto end_name = advance();
         // The simple name at the end repeats the unit's (IEEE 1076-2008

@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace fsim::runtime {
@@ -173,6 +174,17 @@ enum class SystemVerilogVpiArrayKind {
 // type. `name` is the typedef's, empty for a built-in or inline type, and
 // `alias` (at most one) is the type a typedef of a typedef or of a built-in
 // type names (vpiTypedefAlias).
+// A parameter value an interface typespec assigns: the actual of
+// `virtual SBus#(16)` for the interface's parameter `name` (IEEE 1800-2023
+// 37.28, 37.30).
+struct SystemVerilogVpiParamAssign {
+    std::string name;
+    std::int64_t value { };
+
+    friend bool operator==(const SystemVerilogVpiParamAssign&,
+        const SystemVerilogVpiParamAssign&) = default;
+};
+
 struct SystemVerilogVpiTypespec {
     SystemVerilogVpiTypespecKind kind { SystemVerilogVpiTypespecKind::Logic };
     std::string name;
@@ -194,6 +206,14 @@ struct SystemVerilogVpiTypespec {
     // then holds the interface's typespec (its vpiParent, 37.30 details 1
     // and 2).
     std::string def_name;
+    // The parameter values an interface typespec's actuals assign, in the
+    // interface's parameter order (IEEE 1800-2023 37.30 vpiParamAssign); on
+    // the interface level of a modport typespec's `element`.
+    std::vector<SystemVerilogVpiParamAssign> param_assigns;
+    // A class typespec's class: the identity of the specialization, or of
+    // the declaration of a class with no parameters (IEEE 1800-2023 8.25);
+    // empty for a built-in class (37.32 detail 13).
+    std::string class_identity;
 
     friend bool operator==(
         const SystemVerilogVpiTypespec&,
@@ -204,11 +224,13 @@ struct SystemVerilogVpiTypespec {
 // `name` is the typedef's when the type was named through one.
 [[nodiscard]] inline SystemVerilogVpiTypespec
 make_systemverilog_vpi_interface_typespec(const std::string_view interface_name,
-    const std::string_view modport, const std::string_view name)
+    const std::string_view modport, const std::string_view name,
+    std::vector<SystemVerilogVpiParamAssign> param_assigns = { })
 {
     SystemVerilogVpiTypespec interface;
     interface.kind = SystemVerilogVpiTypespecKind::Interface;
     interface.def_name = std::string { interface_name };
+    interface.param_assigns = std::move(param_assigns);
     if (modport.empty()) {
         interface.name = std::string { name };
         return interface;
@@ -311,6 +333,9 @@ struct SystemVerilogVpiTypeInfo {
     // `unconnected_drive where its definition is (IEEE 1800-2023 22.8,
     // 22.9, 37.10 vpiDefNetType, vpiUnconnDrive).
     SystemVerilogVpiNetKind default_net_kind { SystemVerilogVpiNetKind::Wire };
+    // The argument of the `default_decay_time directive where the definition
+    // is (IEEE 1800-2023 E.2, vpiDefDecayTime); empty when none.
+    std::string default_decay_time;
     SystemVerilogVpiUnconnectedDrive unconnected_drive {
         SystemVerilogVpiUnconnectedDrive::None
     };

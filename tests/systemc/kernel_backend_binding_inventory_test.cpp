@@ -3,17 +3,22 @@
 #include "fsim/systemc/kernel_backend_binding_inventory_accellera.hpp"
 #include "fsim/systemc/kernel_backend_inventory_accellera.hpp"
 #include "sc_main_export.hpp"
+#include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/semantic/hierarchy_path.hpp"
+#include "fsim/systemc/kernel_backend_inventory.hpp"
+#include "fsim/systemc/kernel_backend_protocol.hpp"
+#include "fsim/systemc/kernel_backend_synchronization.hpp"
 
 #include <systemc>
 
 #include <array>
 #include <cassert>
 #include <cstddef>
-#include <ranges>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
+#include <algorithm>
 
 namespace {
 

@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "fsim/frontend/frontend.hpp"
 
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/diagnostic.hpp"
+#include "fsim/frontend/parser.hpp"
+#include "fsim/frontend/source.hpp"
+#include "fsim/frontend/token.hpp"
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -8,6 +12,8 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <cstddef>
+#include <limits>
 
 namespace fsim::tests::frontend {
 
@@ -46,7 +52,7 @@ void test_vhdl_revision_lexical_profiles()
 
     const auto vhdl_1987_identifier = parse_text(
         "vhdl87-later-word.vhd",
-        "entity shared is end entity shared;",
+        "entity shared is end shared;",
         Language::Vhdl2008,
         VhdlStandard::Vhdl1987);
     require(
@@ -262,7 +268,7 @@ end entity;
     for (const auto standard : older_standards) {
         const auto parsed = parse_text(
             "vhdl-legacy-integer-range.vhd",
-            "entity legacy_integer is port (value : in integer); end entity;",
+            "entity legacy_integer is port (value : in integer); end legacy_integer;",
             Language::Vhdl2008, standard);
         const auto* legacy = parsed.design.find(
             UnitKind::VhdlEntity, "legacy_integer");
@@ -563,59 +569,59 @@ void test_vhdl_2019_profile_isolation()
   type Guard is protected
     generic (type Element_T);
   end protected Guard;
-end package;)",
+end;)",
             "FSIM-FE-VHSTD-003" },
         ProfileCase {
             "unspecified-type",
-            "entity E is generic (type Element_T is private); end entity;",
+            "entity E is generic (type Element_T is private); end;",
             "FSIM-FE-VHSTD-003" },
         ProfileCase {
             "mode-view",
             R"(package P is
   type Pair_T is record Ready, Valid : bit; end record;
   view Producer of Pair_T is Ready : in; Valid : out; end view;
-end package;)",
+end;)",
             "FSIM-FE-VHSTD-003" },
         ProfileCase {
             "view-interface",
-            "entity E is port (Bus : view Producer); end entity;",
+            "entity E is port (Bus : view Producer); end;",
             "FSIM-FE-VHSTD-003" },
         ProfileCase {
             "conditional-expression",
             R"(architecture rtl of E is
   constant Value : integer := 1 when true else 2;
-begin end architecture;)",
+begin end;)",
             "FSIM-FE-VHSTD-003" },
         ProfileCase {
             "result-subtype-identifier",
             R"(package P is
   function Make return Result of bit_vector;
-end package;)",
+end;)",
             "FSIM-FE-VHSTD-003" },
         ProfileCase {
             "sequential-block",
             R"(architecture rtl of E is begin
   process begin Region : block begin null; end block; wait; end process;
-end architecture;)",
+end;)",
             "FSIM-FE-VHSTD-003" },
         ProfileCase {
             "index-attribute",
             R"(package P is
   type Vector_T is array (integer range <>) of bit;
   subtype Index_T is Vector_T'index;
-end package;)",
+end;)",
             "FSIM-FE-VHSTD-003" },
         ProfileCase {
             "reflect-attribute",
             R"(architecture rtl of E is
   signal Value : integer;
-begin Value <= integer'reflect; end architecture;)",
+begin Value <= integer'reflect; end;)",
             "FSIM-FE-VHSTD-003" },
         ProfileCase {
             "converse-attribute",
             R"(package P is
   alias Consumer is Producer'converse;
-end package;)",
+end;)",
             "FSIM-FE-VHSTD-003" },
         ProfileCase {
             "object-attribute-shorthand",
@@ -623,12 +629,12 @@ end package;)",
   type State_T is (Idle, Busy);
   signal State : State_T;
   signal Position : integer;
-begin Position <= State'pos; end architecture;)",
+begin Position <= State'pos; end;)",
             "FSIM-FE-VHSTD-003" },
         ProfileCase {
             "conditional-analysis",
             "`if VHDL_VERSION = \"2019\" then\n"
-            "entity E is end entity;\n"
+            "entity E is end;\n"
             "`end if\n",
             "FSIM-VHDL-CA-001" }
     };
@@ -672,7 +678,7 @@ begin Position <= State'pos; end architecture;)",
     for (const auto standard : older_standards) {
         const auto access = parse_text(
             "vhdl-legacy-access-policy.vhd",
-            "package P is type Pointer_T is access integer; end package;",
+            "package P is type Pointer_T is access integer; end P;",
             Language::Vhdl2008, standard);
         const auto& info = *access.design.units.front()
                                 .type_aliases.front().type.vhdl_access;
@@ -818,7 +824,7 @@ void test_vhdl_synopsys_declaration_profiles()
                                         const std::string_view declarations) {
         return "library ieee;\nuse ieee.std_logic_1164.all;\npackage "
             + std::string { package } + " is\n" + std::string { declarations }
-        + "\nend package " + std::string { package } + ";\n";
+        + "\nend " + std::string { package } + ";\n";
     };
     for (const auto standard : older_standards) {
         const auto arith = parse_text(
@@ -923,7 +929,7 @@ void test_vhdl_revision_exact_diagnostics()
         Expected {
             "corpus-vhdl87-direct-entity",
             "architecture rtl of corpus_vhdl87 is begin\n"
-            "  u : entity work.child;\nend architecture;\n",
+            "  u : entity work.child;\nend;\n",
             VhdlStandard::Vhdl1987,
             "direct entity instantiation requires VHDL-1993 or later, but "
             "this source selects VHDL-1987; declare and instantiate a "

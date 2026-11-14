@@ -2,16 +2,30 @@
 #include "fsim/app/sdf_portable_archive.hpp"
 
 #include "fsim/support/bounded_bytes.hpp"
-#include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
+#include "fsim/app/sdf_artifact_identity.hpp"
+#include "fsim/app/sdf_mapping_validation.hpp"
+#include "fsim/app/sdf_schema.hpp"
+#include "fsim/artifact/design.hpp"
+#include "fsim/frontend/diagnostic.hpp"
+#include "fsim/frontend/sdf.hpp"
+#include "fsim/frontend/source.hpp"
+#include "fsim/library/artifact.hpp"
 
 #include <algorithm>
 #include <array>
-#include <limits>
-#include <ranges>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
+#include <cstddef>
+#include <cstdint>
+#include <filesystem>
+#include <memory>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
 
 namespace fsim::app {
 namespace {

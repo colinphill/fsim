@@ -46,7 +46,8 @@ using SignalOperationGroup = OperationGroup<ReadSignal, SignalEvent, SignalLastV
     WriteProjectedWaveformDynamicSlice, SignalLastActive,
     SignalDriving, SignalDrivingValue, ReadSimulationTime,
     VitalTimingCheck, VitalDelay,
-    WriteInertialDynamicPartSlice, WriteDelayed, WriteNetDelay>;
+    WriteInertialDynamicPartSlice, WriteDelayed, WriteNetDelay,
+    EventArrayElement>;
 
 using StringOperationGroup = OperationGroup<LoadStringConstant, CopyStringRegister, ReadStringObject,
     WriteStringObject, ConcatenateStrings, CompareStrings,
@@ -71,7 +72,7 @@ using ContainerOperationGroup = OperationGroup<SystemVerilogScalarBinary, System
     ContainerStringRead, ContainerStringWrite, FormatContainerPattern,
     ContainerElementRead, ContainerElementWrite,
     VhdlEnvironmentDirectory, VhdlEnvironmentGetCallPath, PlaEvaluate,
-    ContainerBitstream, VhdlShaped>;
+    ContainerBitstream, VhdlShaped, WriteContainerObjectString>;
 
 using FileOperationGroup = OperationGroup<FileOpen, FileClose, FileWriteLiteral, FileWriteFormatted,
     FileWriteString, FileReadLine, FileEndOfFile,
@@ -331,7 +332,7 @@ static_assert(
         + std::variant_size_v<ControlOperationGroup::Storage>
         + std::variant_size_v<OutputOperationGroup::Storage>
         + std::variant_size_v<ClassOperationGroup::Storage>
-    == 203);
+    == 205);
 
 template <typename Alternative>
 [[nodiscard]] Alternative* operation_get_if(Operation* operation) noexcept

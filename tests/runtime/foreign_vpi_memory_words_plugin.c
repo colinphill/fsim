@@ -8,7 +8,6 @@
 #include "fsim/runtime/vpi_abi.h"
 #include "vpi_user.h"
 
-#include <stdio.h>
 #include <string.h>
 
 static vpiHandle word(const char* array, int index)

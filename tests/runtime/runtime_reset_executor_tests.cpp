@@ -10,6 +10,7 @@
 #include "runtime_test_support.hpp"
 
 #include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 
 #include <memory>
 #include <stdexcept>

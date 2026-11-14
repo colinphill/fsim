@@ -124,8 +124,15 @@ module top;
   leaf u3(.a(la[3:0]), .y(), .z());
 endmodule
 
-// The typedefs of a package (3.12.1, 37.10).
+// A type a wildcard import makes visible in a package (26.3).
+package pkg_q;
+  typedef bit [2:0] q_t;
+endpackage
+// The typedefs of a package (3.12.1, 37.10); the member type of a structure
+// written in place is found through the package's import.
 package pkg_p;
+  import pkg_q::*;
   typedef int pk_int_t;
   typedef logic [1:0] pk_pair_t;
+  typedef struct packed { q_t a; } pk_sq_t;
 endpackage

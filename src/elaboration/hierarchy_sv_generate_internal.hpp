@@ -20,6 +20,10 @@ struct Occurrence {
     // Shared: occurrences of identical instance templates reuse one
     // specialization (see HierarchyBuilder::cached_generate_occurrences).
     std::shared_ptr<const semantic::SpecializedHirUnit> specialization;
+    // Of an iteration of a loop generate: the genvar value and the path of
+    // the scope that holds the generate.
+    std::int64_t genvar_value { };
+    std::string parent_path;
 };
 
 struct Diagnostic {

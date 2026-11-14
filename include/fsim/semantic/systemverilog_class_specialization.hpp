@@ -5,6 +5,7 @@
 #include "fsim/semantic/compiled_design_resolver.hpp"
 
 #include <cstddef>
+#include <functional>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -14,6 +15,10 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+
+namespace fsim::semantic {
+class SpecializedHirUnit;
+}
 
 namespace fsim::semantic::sv {
 
@@ -63,6 +68,12 @@ struct SpecializedClassParameter {
     std::string display_identity;
     std::string canonical_identity;
     std::optional<ExpressionId> expression;
+    // The pool literal `expression` names, as kind and canonical text, when
+    // the parameter is bound to one (Hir::intern_constant). The pool's ids are
+    // valid in the producing process only: a saved specialization keeps this
+    // constant, and loading interns it again (reintern_class_constants).
+    ExpressionKind constant_kind { ExpressionKind::invalid };
+    std::string constant_text;
     // The instantiating specialization's parameters and localparams that
     // `expression` reads (`Cls #(PMINUS1 + 1)` in a parameterized class).
     std::vector<std::pair<DeclarationId, ExpressionId>> context_bindings;
@@ -95,6 +106,9 @@ struct SpecializedClassProperty {
     SourceSpanId source;
     OriginId origin;
     std::vector<std::uint64_t> enumeration_domain { };
+    // The property's role in the governed UVM library
+    // (ClassProperty::uvm_role).
+    support::UvmRole uvm_role { };
 };
 
 struct SpecializedClassMethod {
@@ -118,6 +132,8 @@ struct SpecializedClassMethod {
     bool final_method { };
     bool external { };
     bool defined { true };
+    // The method's role in the governed UVM library (ClassMethod::uvm_role).
+    support::UvmRole uvm_role { };
     SourceSpanId source;
     OriginId origin;
 };
@@ -161,6 +177,9 @@ struct ClassSpecialization {
     // block is a distinct type in each generated scope (IEEE 1800-2017
     // 27.4, 8.2), whose members see that scope's genvar values.
     std::vector<std::pair<std::string, std::string>> generate_environment;
+    // The declaration's role in the governed UVM library
+    // (ClassDeclaration::uvm_role).
+    support::UvmRole uvm_role { };
     SourceSpanId source;
     OriginId origin;
 };
@@ -216,6 +235,44 @@ struct ClassSpecializationResult {
 /// Dense number of one specialization in a ClassSpecializationIndex.
 using ClassSpecializationId = std::uint32_t;
 
+/// The value of one class-type actual in the design element instance being
+/// lowered, folded there (`C #(N) c;` in a module with parameter `N`, IEEE
+/// 1800-2023 8.25, 23.2.2). `logic` marks a four-state value, whose `text` is
+/// a based literal (`4'b10x1`), `string` a string value, whose `text` is its
+/// decoded bytes, `real` a real value, whose `text` is a decimal that reads
+/// back as the same double (IEEE 1800-2023 6.12); otherwise `text` is the
+/// decimal integer. The
+/// specialization binds the class parameter to a literal the design's pool
+/// holds for the value (Hir::intern_constant), so the binding reads the same
+/// in every unit.
+struct ClassInstanceActual {
+    ExpressionId expression;
+    bool logic { };
+    bool string { };
+    bool real { };
+    std::string text;
+};
+
+/// The actuals of the class-handle type `type` (nested class-type actuals
+/// included) that read parameters of the design element instance `unit`,
+/// folded in that instance. Empty when no actual reads one. `real_value`
+/// folds an expression of real type (the caller owns the real evaluator).
+[[nodiscard]] std::vector<ClassInstanceActual> class_instance_actuals(
+    const SpecializedHirUnit& unit, const TypeReference& type,
+    const std::function<std::optional<double>(ExpressionId)>& real_value
+    = { });
+
+/// `specializations` as they are saved: ids of pooled constants removed
+/// (the constant itself stays in each parameter), since such an id is valid
+/// only in the process that interned it.
+[[nodiscard]] std::vector<ClassSpecialization> portable_class_specializations(
+    std::span<const ClassSpecialization> specializations);
+
+/// Intern again the constants the saved parameters hold, giving each its id
+/// in `hir`'s pool of this process.
+void reintern_class_constants(
+    std::span<ClassSpecialization> specializations, const Hir& hir);
+
 /// One design's class specializations, computed once, with the lookups
 /// lowering needs: by identity, by declaration or static selection, the
 /// base chain and the derived set.
@@ -245,10 +302,13 @@ public:
     /// The specialization a class-handle type names, its actuals evaluated
     /// in the parameter environment of specialization `context` (none:
     /// constant actuals only); materialized when new.
+    /// `instance_actuals` give the values of the actuals that read the
+    /// parameters of the instantiating design element, in that instance.
     [[nodiscard]] std::optional<ClassSpecializationId> specialize(
         const TypeReference& type,
         std::optional<ClassSpecializationId> context,
-        SourceSpanId source = { });
+        SourceSpanId source = { },
+        std::span<const ClassInstanceActual> instance_actuals = { });
     [[nodiscard]] std::optional<ClassSpecializationId> find(
         std::string_view specialization_identity) const;
     /// The specialization a bare class name denotes.

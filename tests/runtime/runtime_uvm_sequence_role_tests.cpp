@@ -182,6 +182,8 @@ agent_descriptor(const SystemVerilogClassHandle component,
   result.component = component;
   result.kind = SystemVerilogUvmSequenceRoleKind::Agent;
   result.default_agent_mode = mode;
+  result.active_config_field = "is_active";
+  result.active_config_type = "uvm_pkg::uvm_active_passive_enum";
   result.function_dispatch = [&](const auto, const auto, const auto) {
     ++function_calls;
   };

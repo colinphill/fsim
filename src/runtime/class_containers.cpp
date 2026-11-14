@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/class_heap.hpp"
 
-#include <algorithm>
 #include <stdexcept>
 #include <utility>
 

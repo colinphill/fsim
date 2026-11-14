@@ -1115,7 +1115,13 @@ FunctionDeclaration VhdlParser::parse_vhdl_function(
 
   expect_keyword(
       "end", true, "FSIM-VHDL-PARSE-162");
-  (void)match_keyword("function", true);
+  if (keyword("function", 0, true)) {
+    (void)require_vhdl_standard(
+        current(), VhdlStandard::Vhdl1993,
+        "the 'function' keyword after 'end'",
+        "select VHDL-1993 or omit the keyword");
+    (void)advance();
+  }
   if (at(TokenKind::Identifier)
       || at(TokenKind::StringLiteral)) {
     const auto end_name = advance();
@@ -1366,7 +1372,13 @@ ProcedureDeclaration VhdlParser::parse_vhdl_procedure(
 
   expect_keyword(
       "end", true, "FSIM-VHDL-PARSE-177");
-  (void)match_keyword("procedure", true);
+  if (keyword("procedure", 0, true)) {
+    (void)require_vhdl_standard(
+        current(), VhdlStandard::Vhdl1993,
+        "the 'procedure' keyword after 'end'",
+        "select VHDL-1993 or omit the keyword");
+    (void)advance();
+  }
   if (at(TokenKind::Identifier)
       || at(TokenKind::StringLiteral)) {
     const auto end_name = advance();

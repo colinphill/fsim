@@ -5,9 +5,10 @@
 #include "fsim/runtime/uvm_factory.hpp"
 #include "fsim/runtime/uvm_object.hpp"
 #include "fsim/runtime/uvm_registry.hpp"
-#include "fsim/support/uvm_identity.hpp"
+#include "fsim/support/uvm_role.hpp"
 
 #include <algorithm>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -47,17 +48,56 @@ find_specialization(
   return *found;
 }
 
+// Whether the class declares the members the registration macros make
+// (`uvm_object_utils`, IEEE 1800.2-2020 B.2.1): a static method hiding the
+// library's uvm_object::get_type, and a method overriding its virtual
+// get_object_type (IEEE 1800-2023 8.20).
 [[nodiscard]] bool has_registry_utility_methods(
+    const std::span<const semantic::sv::ClassSpecialization> specializations,
     const semantic::sv::ClassSpecialization& specialization) {
-  const auto get_type = std::ranges::find(
-      specialization.methods, std::string_view { "get_type" },
-      &semantic::sv::SpecializedClassMethod::name);
-  const auto get_object_type = std::ranges::find(
-      specialization.methods, std::string_view { "get_object_type" },
-      &semantic::sv::SpecializedClassMethod::name);
-  return get_type != specialization.methods.end() && get_type->static_method
-      && get_object_type != specialization.methods.end()
-      && !get_object_type->static_method;
+  // The library's uvm_object of the class's base chain: a method of the
+  // class that overrides or hides one of its methods replaces it in the
+  // class's own method list.
+  const semantic::sv::ClassSpecialization* library_object = nullptr;
+  for (const auto* current = &specialization; current != nullptr;
+       current = current->base
+           ? &find_specialization(
+                 specializations, current->base->specialization_identity)
+           : nullptr) {
+    if (current->uvm_role == support::UvmRole::object) {
+      library_object = current;
+      break;
+    }
+  }
+  if (library_object == nullptr || library_object == &specialization)
+    return false;
+  const auto library_method = [&](const support::UvmRole role) {
+    const auto found = std::ranges::find(library_object->methods, role,
+        &semantic::sv::SpecializedClassMethod::uvm_role);
+    return found == library_object->methods.end() ? nullptr : &*found;
+  };
+  const auto* library_get_type
+      = library_method(support::UvmRole::object_get_type);
+  const auto* library_get_object_type
+      = library_method(support::UvmRole::object_get_object_type);
+  if (library_get_type == nullptr || library_get_object_type == nullptr)
+    return false;
+  // Members of a class below uvm_object, the library's own classes that
+  // use the macros included.
+  const auto& library_identity = library_object->declaration_identity;
+  const auto get_type = std::ranges::any_of(specialization.methods,
+      [&](const semantic::sv::SpecializedClassMethod& method) {
+        return method.owner_identity != library_identity
+            && method.static_method
+            && method.name == library_get_type->name;
+      });
+  const auto get_object_type = std::ranges::any_of(specialization.methods,
+      [&](const semantic::sv::SpecializedClassMethod& method) {
+        return method.owner_identity != library_identity
+            && !method.static_method && method.virtual_slot
+            && method.virtual_slot == library_get_object_type->virtual_slot;
+      });
+  return get_type && get_object_type;
 }
 
 [[nodiscard]] std::string registry_type_name(
@@ -83,34 +123,20 @@ find_specialization(
 bool is_systemverilog_uvm_type(
     const std::span<const semantic::sv::ClassSpecialization> specializations,
     const semantic::sv::ClassSpecialization& specialization,
-    const std::string_view base_name) {
-  const auto* current = &specialization;
-  while (current != nullptr) {
-    if (class_leaf_name(current->declaration_identity) == base_name
-        && support::is_uvm_library_identity(current->declaration_identity))
+    const support::UvmRole role) {
+  for (const auto* current = &specialization; current != nullptr;
+       current = current->base
+           ? &find_specialization(
+                 specializations, current->base->specialization_identity)
+           : nullptr) {
+    if (current->uvm_role == role)
       return true;
-    current = current->base
-        ? &find_specialization(
-              specializations, current->base->specialization_identity)
-        : nullptr;
   }
-  const auto inherited_property = std::ranges::any_of(
-      specialization.properties, [&](const auto& property) {
-        return class_leaf_name(property.owner_identity) == base_name
-            && support::is_uvm_library_identity(property.owner_identity);
-      });
-  if (inherited_property)
-    return true;
-  const auto owner_fragment = "::" + std::string { base_name } + "::";
-  return std::ranges::any_of(
-      specialization.methods, [&](const auto& method) {
-        return method.canonical_identity.find(owner_fragment)
-            != std::string::npos
-            && support::is_uvm_library_identity(method.canonical_identity);
-      });
+  return false;
 }
 
 void ensure_systemverilog_uvm_object_type(
+    const std::span<const semantic::sv::ClassSpecialization> specializations,
     const semantic::sv::ClassSpecialization& specialization,
     runtime::SystemVerilogUvmObjectService& objects) {
   if (objects.contains_type(specialization.specialization_identity))
@@ -119,9 +145,19 @@ void ensure_systemverilog_uvm_object_type(
   descriptor.specialization_identity = specialization.specialization_identity;
   descriptor.type_name
       = std::string { class_leaf_name(specialization.declaration_identity) };
+  // The fields of the library's uvm_object are the object service's own.
+  std::set<std::string_view> library_object;
+  for (const auto* current = &specialization; current != nullptr;
+       current = current->base
+           ? &find_specialization(
+                 specializations, current->base->specialization_identity)
+           : nullptr) {
+    if (current->uvm_role == support::UvmRole::object)
+      library_object.insert(current->declaration_identity);
+  }
   for (const auto& property : specialization.properties) {
     if (property.static_storage
-        || class_leaf_name(property.owner_identity) == "uvm_object") {
+        || library_object.contains(property.owner_identity)) {
       continue;
     }
     descriptor.fields.push_back({
@@ -137,8 +173,9 @@ void register_systemverilog_uvm_object_types(
     runtime::SystemVerilogUvmObjectService& objects) {
   for (const auto& specialization : specializations) {
     if (is_systemverilog_uvm_type(
-            specializations, specialization, "uvm_object")) {
-      ensure_systemverilog_uvm_object_type(specialization, objects);
+            specializations, specialization, support::UvmRole::object)) {
+      ensure_systemverilog_uvm_object_type(
+          specializations, specialization, objects);
     }
   }
 }
@@ -148,8 +185,8 @@ void register_systemverilog_uvm_registry_types(
     runtime::SystemVerilogUvmRegistryService& registry) {
   for (const auto& specialization : specializations) {
     if (!is_systemverilog_uvm_type(
-            specializations, specialization, "uvm_object")
-        || !has_registry_utility_methods(specialization)) {
+            specializations, specialization, support::UvmRole::object)
+        || !has_registry_utility_methods(specializations, specialization)) {
       continue;
     }
     (void)registry.register_type({
@@ -158,7 +195,7 @@ void register_systemverilog_uvm_registry_types(
         specialization.declaration_identity,
         registry_type_name(specialization),
         is_systemverilog_uvm_type(
-            specializations, specialization, "uvm_component")
+            specializations, specialization, support::UvmRole::component)
             ? runtime::SystemVerilogUvmRegisteredKind::Component
             : runtime::SystemVerilogUvmRegisteredKind::Object,
         !specialization.parameters.empty(),
@@ -178,29 +215,40 @@ invoke_systemverilog_uvm_factory_method(
   const auto& specialization = find_specialization(
       specializations, heap.object(receiver).specialization_identity);
   if (!is_systemverilog_uvm_type(
-          specializations, specialization, "uvm_factory")) {
+          specializations, specialization, support::UvmRole::factory)) {
     return std::nullopt;
   }
-  const auto separator = canonical_identity.rfind("::");
-  const auto method = separator == std::string_view::npos
-      ? canonical_identity
-      : canonical_identity.substr(separator + 2U);
-  if (method == "set_type_override_by_type" && actuals.size() >= 2U) {
+  // The factory method the call names, by its recorded role: the method of
+  // the class that declares it, which an override replaces in the
+  // receiver's own list.
+  auto method = support::UvmRole::none;
+  for (const auto& candidate : specializations) {
+    const auto found = std::ranges::find(candidate.methods,
+        canonical_identity,
+        &semantic::sv::SpecializedClassMethod::canonical_identity);
+    if (found != candidate.methods.end()) {
+      method = found->uvm_role;
+      break;
+    }
+  }
+  using support::UvmRole;
+  if (method == UvmRole::factory_set_type_override_by_type
+      && actuals.size() >= 2U) {
     const auto replace = actuals.size() < 3U
         || actuals[2].low_word().aval != 0;
     (void)factory.set_type_override_by_type(
         actuals[0].low_word().aval, actuals[1].low_word().aval, replace);
     return runtime::PackedLogic4::from_aval_bval(1, 0, 0);
   }
-  if (method == "find_override_by_type" && !actuals.empty()) {
+  if (method == UvmRole::factory_find_override_by_type && !actuals.empty()) {
     const auto resolved = factory.resolve_by_type(actuals[0].low_word().aval);
     return runtime::PackedLogic4::from_aval_bval(64, resolved.resolved, 0);
   }
-  if (method == "create_object_by_type" && !actuals.empty()) {
+  if (method == UvmRole::factory_create_object_by_type && !actuals.empty()) {
     return runtime::PackedLogic4::from_aval_bval(
         64, factory.create_object_by_type(actuals[0].low_word().aval), 0);
   }
-  if (method == "print") {
+  if (method == UvmRole::factory_print) {
     (void)factory.report(actuals.empty() || actuals[0].low_word().aval != 0);
     return runtime::PackedLogic4::from_aval_bval(1, 0, 0);
   }

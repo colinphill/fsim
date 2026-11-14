@@ -1,11 +1,22 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/artifact/object.hpp"
+#include "fsim/semantic/design_ir.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
 #include "fsim/support/path.hpp"
 
 #include "../../src/app/application_workspace_selection.hpp"
 
 #include "sqlite3.h"
+#include "../../src/app/application_internal.hpp"
+#include "../../src/app/application_workspace.hpp"
+#include "../../src/app/application_workspace_internal.hpp"
+#include "../../src/app/application_workspace_objects.hpp"
+#include "../../src/app/application_workspace_store.hpp"
+#include "fsim/app/application.hpp"
+#include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/project/project.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/semantic/model.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -16,6 +27,10 @@
 #include <set>
 #include <string>
 #include <vector>
+#include <cstddef>
+#include <string_view>
+#include <system_error>
+#include <utility>
 
 namespace {
 

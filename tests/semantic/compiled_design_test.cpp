@@ -8231,6 +8231,37 @@ void test_specialized_hir_vhdl_local_array_constant_function()
         UnitKind::vhdl_entity, vhdl::UnitKind::entity,
         "packed_array_constant_function");
     const auto scope = builder.model.units()[unit.value()].scope;
+    // STD_LOGIC_VECTOR and TO_UNSIGNED denote the IEEE declarations only
+    // where use clauses make them visible (IEEE 1076-2019 12.4), and
+    // library IEEE is visible only through a library clause (12.3). The
+    // packages are units of the design, as analysis supplies them.
+    std::vector<CompiledReference> references;
+    for (const char* const package : { "std_logic_1164", "numeric_std" }) {
+        const auto package_unit = builder.add_vhdl_unit(
+            UnitKind::vhdl_package, vhdl::UnitKind::package, package, {},
+            "ieee");
+        // The package reference a use clause makes (analysis records it).
+        references.push_back(CompiledReference {
+            CompiledReferenceKind::package, unit, "ieee", package, { },
+            builder.source, package_unit });
+    }
+    {
+        vhdl::ContextItem library_clause;
+        library_clause.kind = vhdl::ContextKind::library_clause;
+        library_clause.source = builder.source;
+        library_clause.selected_names.push_back(
+            vhdl_name("ieee", builder.source));
+        builder.vhdl_unit(unit).context.push_back(std::move(library_clause));
+    }
+    for (const std::string_view package :
+         { "ieee.std_logic_1164", "ieee.numeric_std" }) {
+        vhdl::ContextItem clause;
+        clause.kind = vhdl::ContextKind::use_clause;
+        clause.source = builder.source;
+        clause.selected_names.push_back(vhdl_name(
+            std::string { package } + ".all", builder.source));
+        builder.vhdl_unit(unit).context.push_back(std::move(clause));
+    }
     const auto add_expression_in_scope
         = [&](const ScopeId expression_scope,
               const vhdl::ExpressionKind kind, std::string text,
@@ -8301,6 +8332,7 @@ void test_specialized_hir_vhdl_local_array_constant_function()
     const auto integer_subtype = [] {
         vhdl::SubtypeIndication subtype;
         subtype.type_mark.spelling = "integer";
+        subtype.provided_type = vhdl::ProvidedType::integer;
         subtype.domain = vhdl::ValueDomain::integer;
         return subtype;
     };
@@ -8308,6 +8340,7 @@ void test_specialized_hir_vhdl_local_array_constant_function()
                                     const ExpressionId right) {
         vhdl::SubtypeIndication subtype;
         subtype.type_mark.spelling = "std_logic_vector";
+        subtype.provided_type = vhdl::ProvidedType::std_logic_vector;
         subtype.domain = vhdl::ValueDomain::logic9;
         vhdl::RangeConstraint range;
         range.kind = vhdl::RangeKind::array_index;
@@ -8571,7 +8604,9 @@ void test_specialized_hir_vhdl_local_array_constant_function()
     const auto runtime_call = add_expression(
         vhdl::ExpressionKind::call, "pack_cells",
         { name("runtime", runtime) }, function);
-    auto design = builder.finish();
+    CompiledDesign design { std::move(builder.model),
+        std::move(builder.systemverilog), std::move(builder.vhdl_hir), { },
+        std::move(references) };
     assert(design.valid());
     const std::array<SpecializedHirActualIdentity, 0> actuals { };
     const auto specialized = make_specialized_hir_unit(
@@ -8598,6 +8633,31 @@ void test_specialized_hir_vhdl_integer_array_constant_function()
         UnitKind::vhdl_entity, vhdl::UnitKind::entity,
         "integer_array_constant_function");
     const auto scope = builder.model.units()[unit.value()].scope;
+    // STD_LOGIC_VECTOR denotes the IEEE declaration only where a use clause
+    // makes it visible (IEEE 1076-2019 12.3, 12.4); the package is a unit of
+    // the design, as analysis supplies it.
+    const auto logic_package = builder.add_vhdl_unit(
+        UnitKind::vhdl_package, vhdl::UnitKind::package, "std_logic_1164",
+        {}, "ieee");
+    // The package reference the use clause makes (analysis records it).
+    std::vector<CompiledReference> references;
+    references.push_back(CompiledReference {
+        CompiledReferenceKind::package, unit, "ieee", "std_logic_1164", { },
+        builder.source, logic_package });
+    {
+        vhdl::ContextItem library_clause;
+        library_clause.kind = vhdl::ContextKind::library_clause;
+        library_clause.source = builder.source;
+        library_clause.selected_names.push_back(
+            vhdl_name("ieee", builder.source));
+        builder.vhdl_unit(unit).context.push_back(std::move(library_clause));
+        vhdl::ContextItem clause;
+        clause.kind = vhdl::ContextKind::use_clause;
+        clause.source = builder.source;
+        clause.selected_names.push_back(vhdl_name(
+            "ieee.std_logic_1164.all", builder.source));
+        builder.vhdl_unit(unit).context.push_back(std::move(clause));
+    }
     const auto add_expression = [&](const ScopeId expression_scope,
                                     const vhdl::ExpressionKind kind,
                                     std::string text,
@@ -8645,6 +8705,7 @@ void test_specialized_hir_vhdl_integer_array_constant_function()
     const auto integer_subtype = [] {
         vhdl::SubtypeIndication subtype;
         subtype.type_mark.spelling = "integer";
+        subtype.provided_type = vhdl::ProvidedType::integer;
         subtype.domain = vhdl::ValueDomain::integer;
         return subtype;
     };
@@ -8652,6 +8713,7 @@ void test_specialized_hir_vhdl_integer_array_constant_function()
                                     const std::int64_t right) {
         vhdl::SubtypeIndication subtype;
         subtype.type_mark.spelling = "std_logic_vector";
+        subtype.provided_type = vhdl::ProvidedType::std_logic_vector;
         subtype.domain = vhdl::ValueDomain::logic9;
         vhdl::RangeConstraint range;
         range.kind = vhdl::RangeKind::array_index;
@@ -8739,6 +8801,10 @@ void test_specialized_hir_vhdl_integer_array_constant_function()
             ? "integer"
             : "boolean";
         definition.element_subtype->domain = element_domain;
+        definition.element_subtype->provided_type
+            = element_domain == vhdl::ValueDomain::integer
+            ? vhdl::ProvidedType::integer
+            : vhdl::ProvidedType::boolean;
         if (element_domain == vhdl::ValueDomain::integer) {
             definition.element_subtype->executable_width = 32U;
             definition.element_subtype->signed_value = true;
@@ -8973,7 +9039,9 @@ void test_specialized_hir_vhdl_integer_array_constant_function()
         { literal(512), literal(0) }, function);
     builder.vhdl_unit(unit).declarations.push_back(function);
 
-    auto design = builder.finish();
+    CompiledDesign design { std::move(builder.model),
+        std::move(builder.systemverilog), std::move(builder.vhdl_hir), { },
+        std::move(references) };
     assert(design.valid());
     const std::array<SpecializedHirActualIdentity, 0> actuals { };
     const auto specialized = make_specialized_hir_unit(

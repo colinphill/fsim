@@ -1,6 +1,29 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_test_support.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 #include "fsim/semantic/compiled_design_normalization.hpp"
+#include "fsim/elaboration/elaborator.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/parser.hpp"
+#include "fsim/frontend/token.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include "fsim/semantic/systemverilog_hir.hpp"
+#include <algorithm>
+#include <array>
+#include <cassert>
+#include <cstddef>
+#include <cstdint>
+#include <initializer_list>
+#include <iostream>
+#include <limits>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 namespace fsim::tests::elaboration {
 
@@ -1752,12 +1775,13 @@ endmodule
             return fsim::runtime::simir::operation_holds<
                 fsim::runtime::simir::Call>(operation);
         });
-    // `failing(8'h00)` divides by zero and folds to x (IEEE 1800-2017
-    // 11.4.2).
-    if (membership_calls != 3) {
+    // The three `observed` calls and `failing(8'h00)`: a user function call
+    // in procedural code is no constant expression context and runs when the
+    // expression does (IEEE 1800-2023 13.4.3), so elaboration keeps it.
+    if (membership_calls != 4) {
         std::cerr << "membership call count: " << membership_calls << '\n';
     }
-    assert(membership_calls == 3);
+    assert(membership_calls == 4);
     auto interpreter = elaborated.design->create_interpreter();
     (void)interpreter->run();
     const auto value = [&](const std::string_view name) {
@@ -1949,9 +1973,10 @@ endmodule
             return fsim::runtime::simir::operation_holds<fsim::runtime::simir::Call>(
                 operation);
         });
-    // `failing(8'h00)` divides by zero and folds to x (IEEE 1800-2017
-    // 11.4.2); the three `observed` calls remain.
-    assert(case_calls == 3);
+    // The three `observed` calls and `failing(8'h00)`: a user function
+    // call in procedural code is no constant expression context and runs
+    // when the expression does (IEEE 1800-2023 13.4.3).
+    assert(case_calls == 4);
     auto interpreter = elaborated.design->create_interpreter();
     (void)interpreter->run();
     const auto value = [&](const std::string_view name) {

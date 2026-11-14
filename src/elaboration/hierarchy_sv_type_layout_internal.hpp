@@ -40,6 +40,12 @@ systemverilog_container_type(
     const semantic::SpecializedHirUnit& working_specialization,
     const semantic::sv::TypeReference& reference);
 
+// Whether a container of `type` can be stored: a one-dimensional packed
+// array beyond the dense storage budget becomes sparse (`type.sparse`), so
+// it stores only its written elements, as a design variable does.
+[[nodiscard]] bool materialize_container_storage(
+    runtime::simir::ContainerType& type);
+
 // The constant value of a container declaration's initializer (IEEE
 // 1800-2017 10.9, 10.10, 7.9.11); `element_type` is the declared element.
 [[nodiscard]] std::optional<runtime::simir::ContainerValue>
@@ -63,6 +69,14 @@ systemverilog_vpi_declared_type(
 // such as a virtual interface, or a bound that is not constant.
 [[nodiscard]] std::optional<runtime::SystemVerilogVpiTypespec>
 systemverilog_vpi_typespec(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::sv::TypeReference& reference, semantic::ScopeId scope);
+
+// The fixed unpacked array type of a named-event array declared with
+// `reference` (IEEE 1800-2023 7.4, 15.5), following a typedef of the array
+// and of its element (6.18); nullopt for any other type.
+[[nodiscard]] std::optional<semantic::sv::TypeReference>
+systemverilog_event_array_type(
     const semantic::SpecializedHirUnit& specialization,
     const semantic::sv::TypeReference& reference, semantic::ScopeId scope);
 

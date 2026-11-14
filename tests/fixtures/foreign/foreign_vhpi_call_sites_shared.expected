@@ -1,0 +1,12 @@
+#c probe 1
+#c   call0: x=3 v=6
+#c probe 2
+#c   call1: y=5 w=105
+#c probe 3
+#c   call2: x=3 v=6
+#c probe 4
+#c   call3: x=5 v=10
+#c probe 5
+#c   call4: y=1 w=101
+#c probe 6
+#c   call5: x=8 v=16

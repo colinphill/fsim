@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/runtime/fst_reader.hpp"
 #include "fsim/runtime/fst_value_encoder.hpp"
@@ -12,7 +13,6 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
-#include <ranges>
 #include <sstream>
 #include <string>
 #include <vector>

@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "verilog_parser_internal.hpp"
 #include "verilog_parser_assertion_support.hpp"
+#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/source.hpp"
+#include "fsim/frontend/token.hpp"
 
-#include <charconv>
-#include <map>
 
 #include <algorithm>
 #include <optional>
@@ -12,6 +14,9 @@
 #include <string_view>
 #include <unordered_set>
 #include <vector>
+#include <cstddef>
+#include <ranges>
+#include <utility>
 
 namespace fsim::frontend {
 
@@ -292,6 +297,8 @@ namespace {
         add_names(unit.type_aliases);
         add_names(unit.functions);
         add_names(unit.tasks);
+        // A let declaration is instanced like a function (11.12).
+        add_names(unit.systemverilog_lets);
         for (const auto& clocking : unit.systemverilog_clocking_blocks) {
             names.insert(clocking.name);
         }
@@ -1040,6 +1047,21 @@ void VerilogParser::structure_property_expression(
                 recurrence.range = std::move(range);
                 operand_start = *right + 1U;
                 last = *right;
+            }
+            // The weak eventually and the strong always take a bounded
+            // range (IEEE 1800-2023 16.12.13, 16.12.11).
+            if (!recurrence.range
+                && (recurrence.kind
+                        == SystemVerilogPropertyRecurrenceKind::Eventually
+                    || recurrence.kind
+                        == SystemVerilogPropertyRecurrenceKind::StrongAlways)) {
+                error(
+                    tokens[position],
+                    "FSIM-SV-PARSE-305",
+                    "a property '" + tokens[position].text
+                        + "' operator requires a bounded range");
+                position = last;
+                continue;
             }
             if (operand_start == tokens.size()) {
                 error(

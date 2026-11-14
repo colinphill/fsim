@@ -16,8 +16,6 @@
 #include "fsim/runtime/simir_shared_body_scan.hpp"
 #include "fsim/support/parallel_for.hpp"
 #include "elaborated_design_process_access.hpp"
-#include "../runtime/simir_region_graph_bindings.hpp"
-#include "../runtime/simir_region_graph_program_access.hpp"
 #include "../runtime/simir_static_kernel.hpp"
 
 #include <algorithm>
@@ -40,6 +38,43 @@
 #include <vector>
 
 namespace fsim::elaboration {
+
+// Whether `operation` may change the container register `container`
+// (Lowerer::write_back_changed_hir_class_caches).
+bool hir_operation_writes_container(
+    const runtime::simir::Operation& operation,
+    const runtime::simir::ContainerRegisterId container)
+{
+    // The operands only read: a write-back, a read, a copy's source.
+    const auto read_only = runtime::simir::visit_operation([&](const auto& op) {
+        using T = std::decay_t<decltype(op)>;
+        if constexpr (std::is_same_v<T, runtime::simir::ClassPropertyContainerWrite>
+            || std::is_same_v<T, runtime::simir::ContainerRead>
+            || std::is_same_v<T, runtime::simir::CompareContainers>) {
+            return true;
+        } else if constexpr (std::is_same_v<T, runtime::simir::ContainerElementRead>
+            || std::is_same_v<T, runtime::simir::CopyContainerRegister>
+            || std::is_same_v<T, runtime::simir::LocateContainer>) {
+            return op.destination != container;
+        } else {
+            return false;
+        }
+    }, operation);
+    if (read_only) {
+        return false;
+    }
+    if (const auto* write = runtime::simir::operation_get_if<
+            runtime::simir::ContainerWrite>(&operation)) {
+        return write->target == container;
+    }
+    bool named = false;
+    runtime::simir::static_kernel_container_operands(operation,
+        [&](const runtime::simir::ContainerRegisterId id) {
+            named = named || id == container;
+        });
+    return named;
+}
+
 using namespace runtime::simir;
 
 namespace {
@@ -51,7 +86,8 @@ void collect_container_objects(
         using T = std::decay_t<decltype(value)>;
         if constexpr (std::is_same_v<T, ReadContainerObject>
             || std::is_same_v<T, WriteContainerObject>
-            || std::is_same_v<T, WriteContainerObjectElement>) {
+            || std::is_same_v<T, WriteContainerObjectElement>
+            || std::is_same_v<T, WriteContainerObjectString>) {
             objects.push_back(value.object);
         } else if constexpr (std::is_same_v<T, PlaEvaluate>
             || std::is_same_v<T, WaitPla>) {
@@ -176,6 +212,7 @@ runtime::simir::Process host_stub(const runtime::simir::ProcessProgramView& host
     stub.debug_locals.clear();
     stub.call_results.clear();
     stub.frame_locals.clear();
+    stub.call_frames = { };
     stub.debug_string_locals.clear();
     stub.debug_container_locals.clear();
     stub.expression_profiles = { };
@@ -556,6 +593,10 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     // (Impl::run_vhdl_resolver, run_vhdl_conversion_drivers), which a
     // behavioral member runs in the kernel (StaticKernel::run_resolver).
     std::vector<std::uint8_t> resolution_program(process_count, 0U);
+    // The resolution function of a net of a user-defined nettype (IEEE
+    // 1800-2023 6.6.7), a SystemVerilog program the update commit runs the
+    // same way.
+    std::vector<std::uint8_t> nettype_program(process_count, 0U);
     for (const auto& signal : signals_) {
         for (const auto& driver : signal.vhdl_conversion_drivers) {
             if (driver.program < process_count) {
@@ -568,11 +609,17 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         }
         if (resolver->process < process_count) {
             resolution_program[resolver->process] = 1U;
+            nettype_program[resolver->process]
+                = resolver->systemverilog_nettype ? 1U : 0U;
         }
         for (const auto& variant : resolver->variants) {
             if (variant.process < process_count) {
                 resolution_program[variant.process] = 1U;
             }
+        }
+        if (resolver->driving_resolver
+            && resolver->driving_resolver->process < process_count) {
+            resolution_program[resolver->driving_resolver->process] = 1U;
         }
     }
     // The driver of an implicit signal (S'DELAYED, S'TRANSACTION, S'STABLE,
@@ -585,6 +632,91 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             && !view.initialize() && !view.postponed() && !view.observed()
             && !view.reactive() && !view.final()
             && name.size() > suffix.size() && name.ends_with(suffix);
+    };
+    // The driver of S'DELAYED(T) (IEEE 1076-2019 16.2.4) copies its prefix
+    // into the implicit signal as `S'DELAYED(T) <= transport S after T`: it
+    // reads the prefix, projects the value and waits. The implicit signal is
+    // then an ordinary VHDL signal that a member writes through a projected
+    // transaction, which the kernel holds (StaticKernel::projected_edit).
+    const auto delayed_copy_driver = [&](const ProcessProgramView& view) {
+        if (!implicit_signal_driver(view)) {
+            return false;
+        }
+        const auto& operations = view.operations();
+        if (operations.size() != 4U) {
+            return false;
+        }
+        Operation scratch;
+        const auto* read = operation_get_if<ReadSignal>(
+            &operations.expanded_ref(0U, scratch));
+        if (read == nullptr) {
+            return false;
+        }
+        const auto value = read->destination;
+        const auto* project = operation_get_if<WriteProjected>(
+            &operations.expanded_ref(1U, scratch));
+        return project != nullptr && project->source == value
+            && project->mode == ProjectedDelayMode::transport
+            && operation_holds<WaitSensitivity>(operations.expanded_ref(2U, scratch))
+            && operation_holds<Jump>(operations.expanded_ref(3U, scratch));
+    };
+    // The driver of the trigger signal of S'STABLE(T) or S'QUIET(T) (IEEE
+    // 1076-2019 16.2.4, 14.7.4): after an event (or transaction) on S, a
+    // transport waveform of FALSE then TRUE after T, or for T = 0 a toggle
+    // one cycle later. The prefix whose events or transactions run it, or
+    // nullopt.
+    const auto state_trigger_prefix = [&](const ProcessProgramView& view)
+        -> std::optional<SignalId> {
+        if (!implicit_signal_driver(view)) {
+            return std::nullopt;
+        }
+        const auto sensitivity = view.static_sensitivity();
+        const auto& operations = view.operations();
+        if (sensitivity.size() != 1U || sensitivity.front().width != 0U
+            || (sensitivity.front().edge != EdgeKind::any
+                && sensitivity.front().edge != EdgeKind::transaction)
+            || operations.size() != 5U || view.driver_regions().size() != 1U) {
+            return std::nullopt;
+        }
+        const auto trigger = view.driver_regions().front().signal;
+        Operation scratch;
+        const auto& first = operations.expanded_ref(0U, scratch);
+        if (operation_holds<LoadConstant>(first)) {
+            const auto* second = operation_get_if<LoadConstant>(
+                &operations.expanded_ref(1U, scratch));
+            const auto* waveform = operation_get_if<WriteProjectedWaveform>(
+                &operations.expanded_ref(2U, scratch));
+            if (second == nullptr || waveform == nullptr
+                || waveform->signal != trigger
+                || waveform->mode != ProjectedDelayMode::transport) {
+                return std::nullopt;
+            }
+        } else if (const auto* read = operation_get_if<ReadSignal>(&first)) {
+            if (read->signal != trigger) {
+                return std::nullopt;
+            }
+            const auto value = read->destination;
+            const auto* invert = operation_get_if<UnaryNot>(
+                &operations.expanded_ref(1U, scratch));
+            if (invert == nullptr || invert->source != value) {
+                return std::nullopt;
+            }
+            const auto inverted = invert->destination;
+            const auto* write = operation_get_if<WriteProjected>(
+                &operations.expanded_ref(2U, scratch));
+            if (write == nullptr || write->source != inverted
+                || write->signal != trigger || write->delay != 0U
+                || write->mode != ProjectedDelayMode::transport) {
+                return std::nullopt;
+            }
+        } else {
+            return std::nullopt;
+        }
+        if (!operation_holds<WaitSensitivity>(operations.expanded_ref(3U, scratch))
+            || !operation_holds<Jump>(operations.expanded_ref(4U, scratch))) {
+            return std::nullopt;
+        }
+        return sensitivity.front().signal;
     };
     // The first property that keeps a process off the kernel whatever its
     // body, or nullptr; `behavioral` applies the behavioral tier's rules.
@@ -639,8 +771,9 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         // prefix, or on each of its transactions (StaticKernel::
         // wake_transaction_waiters).
         if (!view.initialize() && !view.final()
-            && !(behavioral && vhdl && view.id() < process_count
-                && resolution_program[view.id()] != 0U)
+            && !(behavioral && view.id() < process_count
+                && resolution_program[view.id()] != 0U
+                && (vhdl || nettype_program[view.id()] != 0U))
             && !(behavioral && vhdl && implicit_signal_driver(view)
                 && !view.static_sensitivity().empty())
             && hit("not_initialized")) {
@@ -1343,6 +1476,19 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                             dynamic_written->insert(value.object);
                         }
                     }
+                } else if constexpr (std::is_same_v<T, WriteContainerObjectString>) {
+                    // A string element write of a host object (a string
+                    // container is never kernel storage), through the host:
+                    // blocking now, nonblocking from its NBA region
+                    // (Impl::write_object_string_element).
+                    if (vhdl || value.object >= container_objects_.size()
+                        || static_kernel_arena_container_type(
+                            container_objects_[value.object].initial_value.type)
+                        || !host_container_ok(value.object)) {
+                        dynamic_reason = "dynamic_container_alias";
+                    } else if (dynamic_written != nullptr) {
+                        dynamic_written->insert(value.object);
+                    }
                 } else if constexpr (std::is_same_v<T, FileBinaryRead>) {
                     // $fread into an array register: private storage (or
                     // a binding's copy of its memory), filled whole.
@@ -1585,6 +1731,9 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             } else if (const auto* element
                 = operation_get_if<WriteContainerObjectElement>(&operation)) {
                 host_container_write[op] = dynamic_written.contains(element->object);
+            } else if (const auto* string_element
+                = operation_get_if<WriteContainerObjectString>(&operation)) {
+                host_container_write[op] = dynamic_written.contains(string_element->object);
             }
         }
         auto& uses = container_uses[index];
@@ -1614,6 +1763,12 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             if (const auto* element
                 = operation_get_if<WriteContainerObjectElement>(&operation);
                 element != nullptr && dynamic_written.contains(element->object)) {
+                continue;
+            }
+            if (const auto* string_element
+                = operation_get_if<WriteContainerObjectString>(&operation);
+                string_element != nullptr
+                && dynamic_written.contains(string_element->object)) {
                 continue;
             }
             collect_container_objects(operation, uses);
@@ -1712,6 +1867,9 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                                     || (edge == EdgeKind::any
                                         && fixed_event(signal)))
                                 && (edge == EdgeKind::any
+                                    // A wait on S'TRANSACTION: the kernel
+                                    // wakes it from the signal's history.
+                                    || edge == EdgeKind::transaction
                                     || ((edge == EdgeKind::posedge
                                             || edge == EdgeKind::negedge)
                                         && signals_[signal].initial_value.width()
@@ -1720,6 +1878,19 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                                 member.waited.push_back(signal);
                                 if (edge != EdgeKind::any) {
                                     member.edge_waited.push_back(signal);
+                                }
+                            }
+                        }
+                    } else if constexpr (std::is_same_v<T, EventArrayElement>) {
+                        // A wait on the element a run-time index selects
+                        // may wait on any of them (IEEE 1800-2023 7.4.6,
+                        // 9.4.2): the host activates the kernel when one
+                        // is triggered.
+                        if (value.operation == EventArrayOperation::wait) {
+                            for (const auto signal : value.elements) {
+                                supported = supported && signal < signal_count;
+                                if (supported) {
+                                    member.waited.push_back(signal);
                                 }
                             }
                         }
@@ -1793,6 +1964,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 const bool denied = visit_operation([&](const auto& value) {
                     using T = std::decay_t<decltype(value)>;
                     if constexpr (std::is_same_v<T, WriteContainerObjectElement>
+                        || std::is_same_v<T, WriteContainerObjectString>
                         || std::is_same_v<T, WriteContainerObject>) {
                         if (host_container_write[op] == 0U
                             && value.object < container_objects_.size()
@@ -2362,6 +2534,12 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     // The programs of live wirings (below): VHDL port routing, whose formal
     // the kernel updates in the VHDL update phase (IEEE 1076-2008 6.5.7.1).
     std::vector<std::uint8_t> wiring_program(process_count, 0U);
+    // The programs among them that are conversion functions or type
+    // conversions (IEEE 1076-2019 6.5.7.1), not pure routing: behavioral
+    // members the kernel runs as it runs a resolution function
+    // (StaticKernel::wire_value); the wiring replaces them as writers of its
+    // target only.
+    std::vector<std::uint8_t> convert_program(process_count, 0U);
     const auto vhdl_written = [&](const SignalId signal) {
         return std::ranges::all_of(graph_signals[signal].writers,
             [&](const auto& writer) {
@@ -2433,8 +2611,10 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     for (std::size_t object = 0U; object < object_count; ++object) {
         const auto& container = container_objects_[object];
         const auto& type = container.initial_value.type;
+        // A sparse array keeps only its written elements on the host
+        // (static_kernel_arena_container_type).
         container_shape_ok[object] = !host_signals && type.fixed
-            && !type.associative
+            && !type.sparse && !type.associative
             && !container.slice_alias
             && (type.element_kind == ContainerElementKind::Packed
                 || type.element_kind == ContainerElementKind::Scalar)
@@ -2477,16 +2657,60 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     // target a host signal, an attribute query its prefix and a force its
     // target: the host holds the projected output waveform of the member's
     // driver, the signal's history and the force (static_kernel_host_signal).
+    // A whole signal's history queries stay on the kernel when the signal is
+    // a VHDL signal whose every writer is a VHDL member (history_signal): the
+    // kernel keeps its events and transactions (StaticKernel::build_histories).
+    // The reason a query keeps its signal on the host, or nullptr.
+    const auto history_blocker = [&](const SignalId signal,
+                                     const std::optional<SignalSelection>& selection)
+        -> const char* {
+        if (signal >= signal_count) {
+            return "range";
+        }
+        const auto signal_width = static_cast<std::uint32_t>(
+            signals_[signal].initial_value.width());
+        if (selection
+            && (selection->width == 0U || selection->offset > signal_width
+                || selection->width > signal_width - selection->offset)) {
+            return "selection";
+        }
+        const auto& node = graph_signals[signal];
+        if (node.writes_undeclared) {
+            return "undeclared_write";
+        }
+        if (node.descriptor.external_driver) {
+            return "external_driver";
+        }
+        if ((static_cast<std::uint32_t>(node.observations)
+                & static_cast<std::uint32_t>(RegionObservation::mutation
+                    | RegionObservation::unknown))
+            != 0U) {
+            return "observed";
+        }
+        if (!std::ranges::all_of(node.writers,
+                [&](const RegionAccess& writer) {
+                    return writer.process < process_count
+                        && candidates[writer.process]
+                        && candidates[writer.process]->vhdl;
+                })) {
+            return "writer";
+        }
+        return nullptr;
+    };
     SharedBodyOperationScan host_signal_operations {
         [](const Operation& operation) {
             return static_kernel_host_signal(operation).has_value()
+                || static_kernel_history_query(operation).has_value()
                 || operation_holds<MonitorInstall>(operation)
-                || operation_holds<SvaOperation>(operation);
+                || operation_holds<SvaOperation>(operation)
+                || operation_holds<EventArrayElement>(operation);
         }
     };
     // Each candidate's touched signals are collected on the --jobs threads
     // into its own list, then marked in process order.
     std::vector<std::vector<SignalId>> touched_by_process(process_count);
+    std::vector<std::vector<std::pair<SignalId, const char*>>> blocked_by_process(
+        plan_profile ? process_count : 0U);
     std::vector<std::vector<SignalId>> deposited_by_process(process_count);
     std::vector worker_host_signal_operations(
         support::parallel_workers(process_count), host_signal_operations);
@@ -2500,13 +2724,24 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         // through it), and an implicit signal's driver updates its signal
         // as the reference's does, from its SystemVerilog domain (IEEE
         // 1076-2019 16.2.4).
+        // The driver of the trigger of S'STABLE(T) or S'QUIET(T) is a member
+        // when S has a kernel history (its events or transactions wake the
+        // member: StaticKernel::history_transaction). A member sensitive to
+        // the transactions of S (a sensitivity list with S'TRANSACTION, IEEE
+        // 1076-2019 11.3) likewise needs that history; otherwise S stays a
+        // host signal.
+        const auto toggled = state_trigger_prefix(views[index]);
+        const bool toggle_member = toggled && *toggled < signal_count
+            && history_blocker(*toggled, std::nullopt) == nullptr;
         for (const auto& entry : candidates[index]->sensitivity) {
             if (entry.edge == EdgeKind::transaction
-                && entry.signal < signal_count) {
+                && entry.signal < signal_count && !toggle_member
+                && history_blocker(entry.signal, std::nullopt) != nullptr) {
                 touched.push_back(entry.signal);
             }
         }
-        if (implicit_signal_driver(views[index])) {
+        if (implicit_signal_driver(views[index])
+            && !delayed_copy_driver(views[index]) && !toggle_member) {
             for (const auto& region : views[index].driver_regions()) {
                 if (region.signal < signal_count) {
                     touched.push_back(region.signal);
@@ -2527,6 +2762,26 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             if (const auto target = static_kernel_host_signal(operation);
                 target && *target < signal_count) {
                 touched.push_back(*target);
+            }
+            // The events of an array a run-time index selects from: the host
+            // keeps their identities and trigger history (IEEE 1800-2023
+            // 15.5), as for EventTriggered.
+            if (const auto* array = operation_get_if<EventArrayElement>(&operation)) {
+                for (const auto signal : array->elements) {
+                    if (signal < signal_count) {
+                        touched.push_back(signal);
+                    }
+                }
+            }
+            if (const auto query = static_kernel_history_query(operation);
+                query && query->first < signal_count) {
+                if (const auto* blocker
+                    = history_blocker(query->first, query->second)) {
+                    touched.push_back(query->first);
+                    if (plan_profile) {
+                        blocked_by_process[index].emplace_back(query->first, blocker);
+                    }
+                }
             }
             // A monitor's abort net, whose changes the host's commit path
             // follows, and its wake bit, which the host toggles (IEEE
@@ -2557,6 +2812,18 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     for (const auto& touched : touched_by_process) {
         for (const auto signal : touched) {
             host_touched[signal] = 1U;
+        }
+    }
+    if (plan_profile) {
+        std::set<std::pair<SignalId, std::string>> reported;
+        for (const auto& blocked : blocked_by_process) {
+            for (const auto& [signal, reason] : blocked) {
+                if (reported.emplace(signal, reason).second) {
+                    std::cerr << "fsim-kernel-plan: history_host signal="
+                              << signals_[signal].name << " reason=" << reason
+                              << '\n';
+                }
+            }
         }
     }
     for (const auto& deposited : deposited_by_process) {
@@ -2647,6 +2914,18 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                         || value.ticks != 1U || value.clock || value.gate) {
                         if (value.signal < signal_count) {
                             host_touched[value.signal] = 1U;
+                        }
+                    }
+                } else if constexpr (std::is_same_v<T, WaitOn>) {
+                    // A host process waiting on a signal's transactions
+                    // (S'TRANSACTION) hears them through the host's commit,
+                    // which a kernel signal's unchanged assignments never
+                    // reach.
+                    for (std::size_t entry = 0U; entry < value.edges.size()
+                         && entry < value.signals.size(); ++entry) {
+                        if (value.edges[entry] == EdgeKind::transaction
+                            && value.signals[entry] < signal_count) {
+                            host_touched[value.signals[entry]] = 1U;
                         }
                     }
                 } else if constexpr (std::is_same_v<T, SvaOperation>) {
@@ -2806,6 +3085,51 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         ProcessId stub { };
         ProcessId program { };
         bool live { };
+        /// The source is the driving-value mirror of a split inout formal
+        /// (VhdlSignalResolver::driving_mirror) and the target a
+        /// user-resolved actual: the wire feeds the stub's source of the
+        /// actual's resolution (IEEE 1076-2019 14.7.3.2).
+        bool mirror { };
+        /// The program is a conversion function or type conversion of the
+        /// source, not routing (IEEE 1076-2019 6.5.7.1).
+        bool convert { };
+    };
+    // The split inout formal each driving-value mirror belongs to.
+    constexpr auto no_signal = std::numeric_limits<SignalId>::max();
+    std::vector<SignalId> mirror_of(signals_.size(), no_signal);
+    for (std::size_t index = 0U; vhdl_mode && index < signals_.size(); ++index) {
+        const auto& resolver = signals_[index].vhdl_resolver;
+        if (resolver && resolver->driving_mirror
+            && *resolver->driving_mirror < signals_.size()) {
+            mirror_of[*resolver->driving_mirror] = static_cast<SignalId>(index);
+        }
+    }
+    // A conversion function or type conversion of one signal (IEEE 1076-2019
+    // 6.5.7.1): a program the VHDL behavioral tier made a member, whose
+    // operations are pure value operations and reads of `source`
+    // (static_kernel_conversion_operation). The kernel runs it as it runs a
+    // resolution function and carries its result like a wire's bits.
+    const auto conversion_member = [&](const ProcessId program,
+                                       const SignalId source) {
+        if (!vhdl_mode || mixed || program >= process_count
+            || source >= signal_count || !views[program].valid()
+            || !candidates[program] || !candidates[program]->vhdl
+            || candidates[program]->kind != behavioral_kind) {
+            return false;
+        }
+        const auto& operations = views[program].operations();
+        Operation scratch;
+        for (std::size_t op = 0U; op < operations.size(); ++op) {
+            // A conversion function's history queries stay on the host.
+            if (!static_kernel_conversion_operation(
+                    operations.expanded_ref(op, scratch),
+                    std::span<const SignalId> { &source, 1U })
+                || operation_holds<SignalEvent>(operations.expanded_ref(op, scratch))
+                || operation_holds<SignalActive>(operations.expanded_ref(op, scratch))) {
+                return false;
+            }
+        }
+        return operations.size() != 0U;
     };
     std::vector<DriverWiring> driver_wirings;
     stage("assertion_switch_regions");
@@ -2813,29 +3137,74 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         const auto& drivers = signals_[index].vhdl_conversion_drivers;
         std::vector<DriverWiring> wired;
         for (const auto& driver : drivers) {
+            // A conversion driver feeds a user-resolved actual's resolution
+            // as one source (not a copy of its value); so does the mirror of
+            // a split inout formal, whose driving value it carries.
+            const bool single_source = driver.sources.size() == 1U
+                && driver.sources.front() < signals_.size();
+            const bool mirror_source = single_source
+                && mirror_of[driver.sources.front()] != no_signal;
+            const bool user_feed = vhdl_mode && !mixed && index < signal_count
+                && signals_[index].vhdl_resolver
+                && signals_[index].resolution == ResolutionKind::user_function
+                // A resolved actual, or a split formal that is itself the
+                // actual of an inner one (its own drivers include the stub).
+                && (signals_[index].vhdl_resolver->driving_mirror
+                    ? signals_[index].vhdl_resolver->sources.size() == 1U
+                    : signals_[index].vhdl_resolver->sources.empty())
+                && single_source;
+            // Likewise a std_logic actual, which the kernel resolves over
+            // its sources natively (IEEE 1076-2019 14.7.3.2).
+            const bool native_feed = vhdl_mode && !mixed && index < signal_count
+                && !signals_[index].vhdl_resolver
+                && signals_[index].resolution == ResolutionKind::std_logic
+                && signals_[index].value_kind == ValueKind::logic9
+                && single_source;
+            const bool mirror_feed = user_feed;
             if (!vhdl_mode || index >= signal_count
-                || signals_[index].vhdl_resolver || driver.sources.size() != 1U
+                || (signals_[index].vhdl_resolver && !mirror_feed)
+                || driver.sources.size() != 1U
                 || driver.program >= process_count || driver.stub >= process_count
                 || !views[driver.program].valid()) {
                 break;
             }
-            const auto wire = static_kernel_wiring(
+            auto wire = static_kernel_wiring(
                 views[driver.program].operations(), driver.output,
                 wiring_signal_width);
             const auto source = driver.sources.front();
             const auto target_width = wiring_signal_width(
                 static_cast<SignalId>(index));
+            const bool convert = !wire && source != index
+                && source < signal_count
+                && (mirror_source || user_feed || native_feed)
+                && conversion_member(driver.program, source);
+            if (convert) {
+                // The stub's driver region is the part of the actual the
+                // program's result drives.
+                std::uint32_t part = static_cast<std::uint32_t>(target_width);
+                if (driver.offset) {
+                    for (const auto& region : views[driver.stub].driver_regions()) {
+                        if (region.signal == index && !region.whole
+                            && region.offset == *driver.offset) {
+                            part = region.width;
+                        }
+                    }
+                }
+                wire = StaticKernelWiring { source, 0U, part };
+            }
             if (!wire || wire->source != source || source >= signal_count
                 || source == index
                 || (driver.offset
                         ? *driver.offset + std::uint64_t { wire->width }
                             > target_width
                         : wire->width != target_width)
-                || signals_[source].value_kind != signals_[index].value_kind) {
+                || (!convert
+                    && signals_[source].value_kind != signals_[index].value_kind)) {
                 break;
             }
             wired.push_back({ static_cast<SignalId>(index), source,
-                driver.stub, driver.program, true });
+                driver.stub, driver.program, true, (user_feed || native_feed) && mirror_source,
+                convert });
         }
         if (!drivers.empty() && wired.size() == drivers.size()) {
             driver_wirings.insert(driver_wirings.end(), wired.begin(),
@@ -2874,32 +3243,85 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         SignalId source { };
         ProcessId program { };
         bool live { };
+        /// The driving-value mirror of a split inout formal (the target),
+        /// whose own drivers resolve into it; none for any other wiring.
+        SignalId mirror { std::numeric_limits<SignalId>::max() };
+        /// The program is a conversion function or type conversion of the
+        /// source, not routing (IEEE 1076-2019 6.5.7.1).
+        bool convert { };
     };
     std::vector<Wiring> wirings;
     std::vector<std::int32_t> wiring_of_target(signal_count, -1);
     for (SignalId target = 0U; vhdl_mode && target < signal_count; ++target) {
         const auto& resolver = signals_[target].vhdl_resolver;
         if (!resolver || resolver->sources.size() != 1U
-            || !resolver->drivers.empty() || !resolver->variants.empty()
-            || resolver->guarded_kind != 0U || resolver->driving_mirror
-            || !signals_[target].vhdl_conversion_drivers.empty()
+            || !resolver->drivers.empty()
+            // A guarded split formal has the variants of its driving
+            // function for fewer connected drivers.
+            || (resolver->driving_mirror
+                    ? (resolver->guarded_kind == 0U
+                            ? !resolver->variants.empty()
+                            : resolver->variants.size()
+                                > resolver->driving_drivers.size())
+                    : (!resolver->variants.empty()
+                        || resolver->guarded_kind != 0U))
+            || (resolver->driving_mirror
+                && !(vhdl_mode && !mixed && *resolver->driving_mirror < signal_count
+                    && mirror_of[*resolver->driving_mirror] == target
+                    && signals_[*resolver->driving_mirror].initial_value.width()
+                        == signals_[target].initial_value.width()
+                    && signals_[*resolver->driving_mirror].value_kind
+                        == signals_[target].value_kind
+                    && !signals_[*resolver->driving_mirror].vhdl_resolver
+                    && (resolver->driving_resolver
+                            ? !resolver->driving_drivers.empty()
+                                && resolver->driving_resolver->process < process_count
+                                && views[resolver->driving_resolver->process].valid()
+                            // Drivers and no program: a std_logic or an
+                            // unresolved formal, whose sources the kernel
+                            // resolves natively.
+                            : true)))
+            || (!signals_[target].vhdl_conversion_drivers.empty()
+                && !(resolver->driving_mirror
+                    && std::ranges::all_of(
+                        signals_[target].vhdl_conversion_drivers,
+                        [&](const auto& driver) {
+                            return driver.sources.size() == 1U
+                                && driver.sources.front() < signal_count
+                                && mirror_of[driver.sources.front()] != no_signal;
+                        })))
             || resolver->process >= process_count
             || !views[resolver->process].valid()) {
             continue;
         }
-        const auto wire = static_kernel_wiring(
+        auto wire = static_kernel_wiring(
             views[resolver->process].operations(), resolver->output,
             wiring_signal_width);
         const auto source = resolver->sources.front();
+        // Only the conversions of a split inout formal's driving value
+        // (its mirror) and of its actual are wires; an ordinary port
+        // conversion stays a conversion member (below).
+        const bool convert = !wire && source != target
+            && (resolver->driving_mirror
+                || (source < signal_count && mirror_of[source] != no_signal))
+            && conversion_member(resolver->process, source);
+        if (convert) {
+            wire = StaticKernelWiring { source, 0U,
+                static_cast<std::uint32_t>(wiring_signal_width(target)) };
+        }
         if (!wire || wire->source != source || source >= signal_count
             || source == target
             || wire->width != wiring_signal_width(target)
-            || signals_[source].value_kind != signals_[target].value_kind) {
+            || (!convert
+                && signals_[source].value_kind != signals_[target].value_kind)) {
             continue;
         }
         wiring_of_target[target] = static_cast<std::int32_t>(wirings.size());
-        wirings.push_back({ target, source, resolver->process, true });
+        wirings.push_back({ target, source, resolver->process, true,
+            resolver->driving_mirror ? *resolver->driving_mirror : no_signal,
+            convert });
         wiring_program[resolver->process] = 1U;
+        convert_program[resolver->process] = convert ? 1U : 0U;
     }
     // A port-association conversion (IEEE 1076-2008 6.5.7.1, 14.7.3.3): a
     // resolver with sources and no drivers whose program is a pure function
@@ -2935,9 +3357,16 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         bool pure = operations.size() != 0U;
         Operation expanded_scratch;
         for (std::size_t op = 0U; op < operations.size() && pure; ++op) {
+            const auto& operation = operations.expanded_ref(op, expanded_scratch);
             pure = static_kernel_conversion_operation(
-                operations.expanded_ref(op, expanded_scratch),
-                resolver->sources);
+                operation, resolver->sources, target);
+            // S'STABLE and S'QUIET read the history of a source, which the
+            // kernel keeps when the source qualifies (history_blocker).
+            if (const auto query = static_kernel_history_query(operation);
+                pure && query) {
+                pure = query->first < signal_count
+                    && history_blocker(query->first, query->second) == nullptr;
+            }
         }
         if (!pure) {
             continue;
@@ -3037,7 +3466,66 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 && info.resolution == ResolutionKind::sv_wire
                 && info.vhdl_conversion_drivers.empty());
     };
-    const auto basic_ok = [&](const SignalId signal) {
+    // A VHDL signal with a resolution function of the design's own (IEEE
+    // 1076-2019 4.6, 14.7.3.2) over a fixed set of drivers: no foreign
+    // drivers (variants past the declared drivers), port-association
+    // sources or conversion drivers. Its values are of two planes or nine
+    // states (a function over STD_ULOGIC). The kernel holds each driver's
+    // value as a source and runs the function's resolver member in the
+    // update phase (Slot::user); of a guarded signal (6.4.2.3), the
+    // variant for its connected drivers, and with none a bus takes
+    // null_value and a register keeps its value.
+    // Every conversion driver of a user-resolved actual feeds its resolution
+    // the driving value of a split inout formal's mirror (a live driver
+    // wiring, DriverWiring::mirror).
+    const auto mirror_stubs_live = [&](const SignalId signal) {
+        return std::ranges::all_of(signals_[signal].vhdl_conversion_drivers,
+            [&](const auto& driver) {
+                return std::ranges::any_of(driver_wirings,
+                    [&](const DriverWiring& wiring) {
+                        return wiring.live && wiring.target == signal
+                            && wiring.stub == driver.stub;
+                    });
+            });
+    };
+    const auto user_resolved = [&](const SignalId signal) {
+        const auto& info = signals_[signal];
+        const auto& resolver = info.vhdl_resolver;
+        // An inout formal split into its effective value (a live wiring from
+        // its actual) and its driving value, which its own drivers give the
+        // mirror (IEEE 1076-2019 14.7.3.2, 14.7.3.3).
+        if (resolver && resolver->driving_mirror) {
+            return wiring_of_target[signal] >= 0
+                && wirings[static_cast<std::size_t>(wiring_of_target[signal])].live
+                && (info.vhdl_conversion_drivers.empty()
+                    || mirror_stubs_live(signal))
+                && (info.value_kind == ValueKind::logic4
+                    || info.value_kind == ValueKind::logic9);
+        }
+        // A net of a user-defined nettype resolves the same way, its drivers
+        // SystemVerilog members (IEEE 1800-2023 6.6.7).
+        return (vhdl_mode || (resolver && resolver->systemverilog_nettype))
+            && info.resolution == ResolutionKind::user_function
+            && (info.value_kind == ValueKind::logic4
+                || info.value_kind == ValueKind::logic9)
+            && resolver
+            // A nettype net nothing drives still takes its function's
+            // result for no drivers at time zero (IEEE 1800-2023 6.6.7).
+            && (!resolver->drivers.empty() || resolver->systemverilog_nettype)
+            && (resolver->guarded_kind != 0U
+                    ? resolver->variants.size() <= resolver->drivers.size()
+                    : resolver->variants.empty() && !resolver->null_value)
+            && resolver->sources.empty()
+            && !resolver->driving_mirror
+            && (info.vhdl_conversion_drivers.empty()
+                || mirror_stubs_live(signal))
+            && resolver->process < process_count
+            && views[resolver->process].valid();
+    };
+    // `undriven`: the signal has no writer, so its implicit driver (an
+    // undriven net's 'Z', IEEE 1800-2023 6.6) is its only source and its
+    // value stays the initial one.
+    const auto basic_ok = [&](const SignalId signal, const bool undriven = false) {
         const auto& node = graph_signals[signal];
         const auto& info = signals_[signal];
         // Members make only zero-delay inertial projected writes, which
@@ -3046,20 +3534,35 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             && (vhdl_mode || !node.partial_projected_transactions)
             && host_touched[signal] == 0U
             && (info.value_kind == ValueKind::logic4
-                || (vhdl_mode && (!mixed || vhdl_written(signal)))
+                || (vhdl_mode && (!mixed || vhdl_written(signal) || undriven))
+                // A nine-value net nothing drives keeps its initial value,
+                // which a SystemVerilog kernel's members read through the
+                // four-state mapping of the port (IEEE 1800-2023 6.6).
+                || (undriven && !vhdl_mode)
                 || resolved_net(signal))
             && info.systemverilog_scalar == runtime::SystemVerilogScalarKind::None
-            && !info.event_variable && !info.implicit_driver
+            && !info.event_variable && (undriven || !info.implicit_driver)
             && !info.charge_strength
             && signals_[signal].initial_value.width() != 0U
             // Any other nine-value SystemVerilog net maps even a sole
-            // driver's 'H' to 1, so its resolution is not the identity.
-            && (resolved_net(signal)
+            // driver's 'H' to 1, so its resolution is not the identity (a net
+            // nothing drives has no resolution to apply: it keeps its
+            // initial value).
+            && (resolved_net(signal) || undriven
                 || !(info.value_kind == ValueKind::logic9
                     && info.resolution == ResolutionKind::sv_wire))
             && (info.resolution == ResolutionKind::none
                 || info.resolution == ResolutionKind::sv_wire
-                || (vhdl_mode && info.resolution == ResolutionKind::std_logic));
+                || (vhdl_mode && info.resolution == ResolutionKind::std_logic)
+                // Nothing drives the net: no resolution applies.
+                || (undriven && info.resolution == ResolutionKind::std_logic)
+                // An alias family's proxy holds its leaves' values, each
+                // resolved by its nettype (an array of nettype nets, IEEE
+                // 1800-2023 6.6.7): the proxy itself has no resolution.
+                || (proxy_signal[signal] != 0U
+                    && info.resolution == ResolutionKind::user_function
+                    && !info.vhdl_resolver)
+                || user_resolved(signal));
     };
     // The positions in a process's driver regions that drive a signal, in
     // region order, indexed on first use (a process drives few signals but
@@ -3104,11 +3607,44 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                     && views[writer.process].drive_strength() == DriveStrength { };
             });
         }
+        if (resolution == ResolutionKind::user_function) {
+            // An alias family's proxy over nettype nets (basic_ok): its
+            // leaves' drivers write them; a write of the whole array stays
+            // with the host.
+            if (proxy_signal[signal] != 0U && !signals_[signal].vhdl_resolver) {
+                return node.writers.empty();
+            }
+            // Each writer is one of the resolver's drivers, a VHDL member
+            // (user_resolved).
+            if (!user_resolved(signal)) {
+                return false;
+            }
+            const auto& resolver = *signals_[signal].vhdl_resolver;
+            const auto& drivers = resolver.driving_mirror
+                ? resolver.driving_drivers : resolver.drivers;
+            return std::ranges::all_of(node.writers, [&](const auto& writer) {
+                // The program of a split formal's wiring, or the stub of a
+                // mirror's driver wiring, is a writer the kernel replaces.
+                if (wiring_program[writer.process] != 0U
+                    && (!candidates[writer.process]
+                        || convert_program[writer.process] != 0U)) {
+                    return resolver.driving_mirror
+                        || std::ranges::find(drivers, writer.process) != drivers.end();
+                }
+                return candidates[writer.process]
+                    && candidates[writer.process]->vhdl
+                        != resolver.systemverilog_nettype
+                    && views[writer.process].drive_strength() == DriveStrength { }
+                    && std::ranges::find(drivers, writer.process) != drivers.end();
+            });
+        }
         if (vhdl_mode && (resolution == ResolutionKind::sv_wire
                 || resolution == ResolutionKind::std_logic)) {
             // Each element must have exactly one driving process, so the
-            // resolution function is the identity; a resolved std_logic
-            // signal must also have a driver for every element.
+            // resolution function is the identity. An element of a resolved
+            // std_logic signal that no process drives has no source and
+            // keeps the signal's default value (IEEE 1076-2019 14.7.3.2):
+            // the kernel never writes it.
             std::map<ProcessId, std::vector<std::pair<std::uint32_t,
                 std::uint32_t>>> per_process;
             for (const auto& writer : node.writers) {
@@ -3138,35 +3674,37 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 regions.insert(regions.end(), ranges.begin(), ranges.end());
             }
             std::ranges::sort(regions);
-            std::uint64_t covered = 0U;
             std::uint32_t reach = 0U;
             bool overlapping = false;
             for (const auto& region : regions) {
                 // Regions of different processes share elements.
                 overlapping = overlapping || region.first < reach;
-                const auto begin = std::max(region.first, reach);
-                if (region.second > begin) {
-                    covered += region.second - begin;
-                }
                 reach = std::max(reach, region.second);
             }
             if (!overlapping) {
-                return resolution != ResolutionKind::std_logic || covered == width;
+                return true;
             }
             // Several processes drive an element (IEEE 1076-2019 14.7.3.2):
             // the kernel resolves a std_logic signal over its drivers
             // (Slot::resolved, StaticKernel::resolve_nine_word) when every
-            // element has one and every driver is a VHDL member. A
-            // resolution function of the design's own, a guarded signal's
-            // variants, conversion drivers and drive strengths keep the
-            // signal on the host.
+            // driver is a VHDL member; an element no source drives keeps its
+            // value. A resolution function of the design's own, a guarded
+            // signal's variants, conversion drivers and drive strengths keep
+            // the signal on the host.
             const auto& info = signals_[signal];
-            return resolution == ResolutionKind::std_logic && covered == width
+            // A conversion driver that feeds a source of the signal from the
+            // driving-value mirror of a split inout formal is a writer the
+            // kernel replaces (its stub).
+            return resolution == ResolutionKind::std_logic
                 && info.value_kind == ValueKind::logic9 && !info.vhdl_resolver
-                && info.vhdl_conversion_drivers.empty()
+                && (info.vhdl_conversion_drivers.empty()
+                    || mirror_stubs_live(signal))
                 && std::ranges::all_of(node.writers, [&](const auto& writer) {
-                       return candidates[writer.process]
-                           && candidates[writer.process]->vhdl
+                       if (!candidates[writer.process]) {
+                           return wiring_program[writer.process] != 0U
+                               && !info.vhdl_conversion_drivers.empty();
+                       }
+                       return candidates[writer.process]->vhdl
                            && views[writer.process].drive_strength()
                                == DriveStrength { };
                    });
@@ -3333,8 +3871,17 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         std::ranges::fill(owned_container, 0U);
         std::ranges::fill(owned_family, 0U);
         for (SignalId signal = 0U; signal < signal_count; ++signal) {
+            const auto& node = graph_signals[signal];
+            // A nettype net nothing drives takes its function's result for
+            // no drivers (IEEE 1800-2023 6.6.7), which the kernel computes.
+            const auto& resolver = signals_[signal].vhdl_resolver;
+            const bool undriven_nettype = node.writers.empty() && resolver
+                && resolver->systemverilog_nettype && resolver->drivers.empty()
+                && !node.writes_undeclared && !node.writers_unknown
+                && !node.descriptor.external_driver
+                && alias_written[signal] == 0U && host_deposited[signal] == 0U;
             if (alias_role[signal] == 0U
-                && !graph_signals[signal].writers.empty()
+                && (!node.writers.empty() || undriven_nettype)
                 && signal_ok(signal)) {
                 owned[signal] = 1U;
             }
@@ -3348,9 +3895,19 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             const auto own_undriven = [&](const SignalId source) {
                 if (source < signal_count && owned[source] == 0U
                     && alias_role[source] == 0U && proxy_signal[source] == 0U
+                    // A split formal's mirror is written by the kernel's
+                    // resolution of the formal's drivers, not undriven.
+                    && mirror_of[source] == no_signal
                     && graph_signals[source].writers.empty()
+                    // A write the graph does not list (a $fread target, a
+                    // foreign driver) is a driver.
+                    && !graph_signals[source].writes_undeclared
+                    && !graph_signals[source].writers_unknown
+                    && !graph_signals[source].descriptor.external_driver
+                    && alias_written[source] == 0U
+                    && host_deposited[source] == 0U
                     && undriven_actual[source] != 0U
-                    && basic_ok(source)) {
+                    && basic_ok(source, true)) {
                     owned[source] = 1U;
                 }
             };
@@ -3363,6 +3920,12 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 if (conversion.live) {
                     std::ranges::for_each(conversion.sources, own_undriven);
                 }
+            }
+            // So is any other signal no process drives (a declared signal
+            // that only holds its initial value, a port left open): its
+            // readers read its slot.
+            for (SignalId undriven = 0U; undriven < signal_count; ++undriven) {
+                own_undriven(undriven);
             }
         }
         // A wired formal is kernel-owned with its source; the program is its
@@ -3383,6 +3946,18 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 }
                 owned[wiring.target] = 1U;
                 again = true;
+            }
+            // The driving-value mirror of a split formal is owned with it:
+            // the kernel's resolution of the formal's drivers is its only
+            // writer.
+            for (const auto& wiring : wirings) {
+                if (wiring.live && wiring.mirror != no_signal
+                    && owned[wiring.target] != 0U && owned[wiring.mirror] == 0U
+                    && alias_role[wiring.mirror] == 0U
+                    && basic_ok(wiring.mirror)) {
+                    owned[wiring.mirror] = 1U;
+                    again = true;
+                }
             }
             // A converted formal likewise, with every source: plain
             // signals, which the kernel reads in its update phase.
@@ -3579,9 +4154,23 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     }
     for (auto& wiring : wirings) {
         if (wiring.live
-            && (owned[wiring.source] == 0U || owned[wiring.target] == 0U)) {
+            && (owned[wiring.source] == 0U || owned[wiring.target] == 0U
+                || (wiring.mirror != no_signal
+                    && (owned[wiring.mirror] == 0U
+                        || (std::ranges::none_of(driver_wirings,
+                                [&](const DriverWiring& feed) {
+                                    return feed.live && feed.mirror
+                                        && feed.source == wiring.mirror;
+                                })
+                            // An unresolved actual converted from the mirror.
+                            && std::ranges::none_of(wirings,
+                                [&](const Wiring& follow) {
+                                    return follow.live
+                                        && follow.source == wiring.mirror;
+                                })))))) {
             wiring.live = false;
             wiring_program[wiring.program] = 0U;
+            convert_program[wiring.program] = 0U;
             host_touched[wiring.source] = 1U;
             wiring_of_target[wiring.target] = -1;
             revalidate = true;
@@ -3630,12 +4219,42 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     if (diagnose) {
         std::map<std::string, std::size_t> reasons;
         std::map<std::string, std::string> examples;
+        std::size_t owned_count { };
         for (SignalId signal = 0U; signal < signal_count; ++signal) {
-            if (graph_signals[signal].writers.empty() || owned[signal] != 0U
-                || proxy_signal[signal] != 0U) {
+            owned_count += owned[signal] != 0U ? 1U : 0U;
+        }
+        std::cerr << "fsim-kernel-plan: signals total=" << signal_count
+                  << " owned=" << owned_count << '\n';
+        for (SignalId signal = 0U; signal < signal_count; ++signal) {
+            if (owned[signal] != 0U || proxy_signal[signal] != 0U) {
                 continue;
             }
             const auto& node = graph_signals[signal];
+            if (node.writers.empty()) {
+                const std::string reason = std::string { "undriven:" }
+                    + (alias_role[signal] != 0U ? "alias" : "plain")
+                    + (basic_ok(signal) ? "" : ":not_basic")
+                    + (basic_ok(signal, true) ? "" : ":not_basic_undriven")
+                    + (alias_written[signal] != 0U ? ":alias_written" : "")
+                    + (host_deposited[signal] != 0U ? ":host_deposited" : "")
+                    + (mirror_of[signal] != no_signal ? ":mirror" : "")
+                    + ":kind" + std::to_string(static_cast<int>(signals_[signal].value_kind))
+                    + ":res" + std::to_string(static_cast<int>(signals_[signal].resolution))
+                    + (vhdl_mode ? ":vhdl_mode" : "") + (mixed ? ":mixed" : "")
+                    + ":scalar" + std::to_string(static_cast<int>(signals_[signal].systemverilog_scalar))
+                    + (signals_[signal].event_variable ? ":event_variable" : "")
+                    + (signals_[signal].charge_strength ? ":charge" : "")
+                    + (graph_signals[signal].dynamic_fork_writers ? ":fork" : "")
+                    + (host_touched[signal] != 0U ? ":host_touched" : "")
+                    + (graph_signals[signal].writes_undeclared ? ":undeclared" : "")
+                    + (graph_signals[signal].writers_unknown ? ":unknown" : "")
+                    + (graph_signals[signal].descriptor.external_driver ? ":external" : "")
+                    + (undriven_actual[signal] == 0U ? ":driven_actual" : "")
+                    + (forces ? ":forces" : "") + (host_signals ? ":host_signals" : "");
+                ++reasons[reason];
+                examples.emplace(reason, signals_[signal].name);
+                continue;
+            }
             std::string reason = alias_role[signal] != 0U ? "alias:" : "";
             if (!basic_ok(signal)) {
                 reason += host_touched[signal] != 0U ? "host_touched" : "basic";
@@ -4597,7 +5216,9 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         // would no longer see the source's intermediate values.
         std::vector<std::vector<SignalId>> follows(enabled ? process_count : 0U);
         for (const auto& wiring : driver_wirings) {
-            if (enabled && wiring.live && wiring.program < process_count) {
+            // (A mirror feeds a resolution, which is not a copy.)
+            if (enabled && wiring.live && !wiring.mirror
+                && wiring.program < process_count) {
                 follows[wiring.program].push_back(wiring.target);
             }
         }
@@ -4906,9 +5527,11 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     std::vector<std::uint8_t> member(process_count, 0U);
     for (std::size_t index = 0U; index < process_count; ++index) {
         // A live wiring's or conversion's program is the kernel's own update
-        // (below), never a resolver member.
+        // (below), never a resolver member; a live conversion function or
+        // type conversion of a wiring is one, run by the wiring.
         if (!candidates[index]
-            || (resolution_program[index] != 0U && wiring_program[index] != 0U)) {
+            || (resolution_program[index] != 0U && wiring_program[index] != 0U
+                && convert_program[index] == 0U)) {
             continue;
         }
         member[index] = 1U;
@@ -4983,6 +5606,11 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                     if (variant.process < process_count) {
                         role[variant.process] = "commit_program:guarded";
                     }
+                }
+                if (resolver->driving_resolver
+                    && resolver->driving_resolver->process < process_count) {
+                    role[resolver->driving_resolver->process]
+                        = "commit_program:driving";
                 }
             }
             for (const auto& driver : signals_[signal].vhdl_conversion_drivers) {
@@ -5101,6 +5729,32 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         }
     }
     std::vector<std::uint8_t> virtual_owned(signal_count, 0U);
+    const auto host_reader = [&](const SignalId signal) {
+        return std::ranges::any_of(graph_signals[signal].readers,
+            [&](const auto& reader) {
+                return reader.process >= process_count
+                    || (member[reader.process] == 0U
+                        && wired_program[reader.process] == 0U);
+            });
+    };
+    // An array's aggregate alias the host keeps (an array of nettype nets,
+    // IEEE 1800-2023 6.6.7) holds its elements' values: its readers, host
+    // processes or members reading the host's copy, read the elements'
+    // signals, so owned elements publish to the host.
+    std::vector<std::uint8_t> aggregate_read(signal_count, 0U);
+    for (const auto& alias : container_aggregate_signal_aliases_) {
+        if (alias.object < object_count && alias.signal < signal_count
+            && (publish_all
+                || (owned[alias.signal] == 0U && owned_family[alias.object] == 0U
+                        ? !graph_signals[alias.signal].readers.empty()
+                        : host_reader(alias.signal)))) {
+            for (const auto signal : element_signals[alias.object]) {
+                if (signal < signal_count) {
+                    aggregate_read[signal] = 1U;
+                }
+            }
+        }
+    }
     // Signals that already have a writer region (the wiring and conversion
     // loops below add their targets).
     std::vector<std::uint8_t> has_writer_region(signal_count, 0U);
@@ -5182,14 +5836,30 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 emit();
             }
         }
-        if (publish_all
-            || std::ranges::any_of(graph_signals[signal].readers,
-                [&](const auto& reader) {
-                    return reader.process >= process_count
-                        || (member[reader.process] == 0U
-                            && wired_program[reader.process] == 0U);
-                })) {
+        if (publish_all || aggregate_read[signal] != 0U || host_reader(signal)) {
             spec->boundary_outputs.push_back(signal);
+        }
+    }
+    // The host's copy of a split formal is the conversion of its actual's
+    // host copy, in the host's update commit: the kernel publishes the
+    // actual, not the formal.
+    for (bool again = true; again;) {
+        again = false;
+        for (const auto& wiring : wirings) {
+            if (!wiring.live || wiring.mirror == no_signal) {
+                continue;
+            }
+            const auto found = std::ranges::find(
+                spec->boundary_outputs, wiring.target);
+            if (found == spec->boundary_outputs.end()) {
+                continue;
+            }
+            spec->boundary_outputs.erase(found);
+            if (std::ranges::find(spec->boundary_outputs, wiring.source)
+                == spec->boundary_outputs.end()) {
+                spec->boundary_outputs.push_back(wiring.source);
+            }
+            again = true;
         }
     }
     // The kernel's wiring is the only writer of a wired formal; the program
@@ -5201,6 +5871,16 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 0U,
                 static_cast<std::uint32_t>(
                     signals_[wiring.target].initial_value.width()) });
+        }
+        // The kernel's resolution of a split formal's drivers is the only
+        // writer of its mirror; the wiring's program is its driver identity.
+        if (wiring.live && wiring.mirror != no_signal
+            && has_writer_region[wiring.mirror] == 0U) {
+            has_writer_region[wiring.mirror] = 1U;
+            spec->writer_regions.push_back({ wiring.mirror, wiring.program,
+                0U,
+                static_cast<std::uint32_t>(
+                    signals_[wiring.mirror].initial_value.width()) });
         }
     }
     // A conversion member is its formal's only writer.

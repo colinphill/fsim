@@ -245,6 +245,9 @@ bool rename_operation(Operation& operation,
     if (const auto* const value = operation_get_if<EventTriggered>(&operation)) {
         return !named(value->event);
     }
+    if (const auto* const value = operation_get_if<EventArrayElement>(&operation)) {
+        return std::ranges::none_of(value->elements, named);
+    }
     if (const auto* const value = operation_get_if<EventAlias>(&operation)) {
         return !named(value->target) && !(value->has_source && named(value->source));
     }

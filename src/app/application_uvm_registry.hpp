@@ -18,16 +18,19 @@ class SystemVerilogUvmRegistryService;
 
 namespace fsim::app::application_detail {
 
+// Whether `specialization`, or a class of its base chain, is the library
+// class with role `role` (support::UvmRole).
 [[nodiscard]] bool is_systemverilog_uvm_type(
     std::span<const semantic::sv::ClassSpecialization> specializations,
     const semantic::sv::ClassSpecialization& specialization,
-    std::string_view base_name);
+    support::UvmRole role);
 
 void register_systemverilog_uvm_object_types(
     std::span<const semantic::sv::ClassSpecialization> specializations,
     runtime::SystemVerilogUvmObjectService& objects);
 
 void ensure_systemverilog_uvm_object_type(
+    std::span<const semantic::sv::ClassSpecialization> specializations,
     const semantic::sv::ClassSpecialization& specialization,
     runtime::SystemVerilogUvmObjectService& objects);
 

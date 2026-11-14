@@ -91,6 +91,99 @@ enum class CompiledVhdlStandardScalarIdentity : std::uint8_t {
     time,
 };
 
+/// The predefined subtypes of STD.STANDARD's scalar types (IEEE 1076-2019
+/// 16.3): NATURAL and POSITIVE of INTEGER, DELAY_LENGTH of TIME.
+enum class CompiledVhdlStandardScalarSubtype : std::uint8_t {
+    none,
+    natural,
+    positive,
+    delay_length,
+};
+
+/// The simple name of the declaration of STD.STANDARD a scalar identity
+/// denotes (IEEE 1076-2019 16.3): its type, or the predefined subtype of it.
+[[nodiscard]] constexpr std::string_view vhdl_standard_scalar_declaration_name(
+    const CompiledVhdlStandardScalarIdentity identity,
+    const CompiledVhdlStandardScalarSubtype subtype
+    = CompiledVhdlStandardScalarSubtype::none) noexcept
+{
+    using Identity = CompiledVhdlStandardScalarIdentity;
+    using Subtype = CompiledVhdlStandardScalarSubtype;
+    switch (subtype) {
+    case Subtype::natural: return "natural";
+    case Subtype::positive: return "positive";
+    case Subtype::delay_length: return "delay_length";
+    case Subtype::none: break;
+    }
+    switch (identity) {
+    case Identity::bit: return "bit";
+    case Identity::boolean: return "boolean";
+    case Identity::character: return "character";
+    case Identity::file_open_kind: return "file_open_kind";
+    case Identity::file_open_status: return "file_open_status";
+    case Identity::range_direction: return "range_direction";
+    case Identity::integer: return "integer";
+    case Identity::real: return "real";
+    case Identity::severity_level: return "severity_level";
+    case Identity::time: return "time";
+    case Identity::none: break;
+    }
+    return { };
+}
+
+/// A type or subtype whose declaration the compiler provides (see
+/// vhdl::ProvidedType).
+using CompiledVhdlProvidedType = vhdl::ProvidedType;
+
+/// The simple name of the declaration a provided type identity denotes in
+/// its package (the resolved form for a vector type).
+[[nodiscard]] constexpr std::string_view vhdl_provided_type_name(
+    const CompiledVhdlProvidedType type) noexcept
+{
+    using Type = CompiledVhdlProvidedType;
+    switch (type) {
+    case Type::none: return { };
+    case Type::boolean: return "boolean";
+    case Type::bit: return "bit";
+    case Type::character: return "character";
+    case Type::severity_level: return "severity_level";
+    case Type::integer: return "integer";
+    case Type::natural: return "natural";
+    case Type::positive: return "positive";
+    case Type::real: return "real";
+    case Type::time: return "time";
+    case Type::delay_length: return "delay_length";
+    case Type::file_open_kind: return "file_open_kind";
+    case Type::file_open_status: return "file_open_status";
+    case Type::range_direction: return "range_direction";
+    case Type::string: return "string";
+    case Type::bit_vector: return "bit_vector";
+    case Type::boolean_vector: return "boolean_vector";
+    case Type::integer_vector: return "integer_vector";
+    case Type::real_vector: return "real_vector";
+    case Type::time_vector: return "time_vector";
+    case Type::std_ulogic: return "std_ulogic";
+    case Type::std_logic: return "std_logic";
+    case Type::std_ulogic_vector: return "std_ulogic_vector";
+    case Type::std_logic_vector: return "std_logic_vector";
+    case Type::numeric_std_unsigned:
+    case Type::numeric_bit_unsigned:
+    case Type::std_logic_arith_unsigned: return "unsigned";
+    case Type::numeric_std_signed:
+    case Type::numeric_bit_signed:
+    case Type::std_logic_arith_signed: return "signed";
+    case Type::sfixed: return "sfixed";
+    case Type::ufixed: return "ufixed";
+    case Type::ieee_float: return "float";
+    case Type::textio_line: return "line";
+    case Type::textio_text: return "text";
+    case Type::textio_side: return "side";
+    case Type::textio_width: return "width";
+    case Type::textio_line_vector: return "line_vector";
+    }
+    return { };
+}
+
 struct CompiledVhdlTypeIdentityResolution {
     CompiledResolutionStatus status {
         CompiledResolutionStatus::not_found
@@ -101,6 +194,11 @@ struct CompiledVhdlTypeIdentityResolution {
     };
     CompiledVhdlStandardScalarIdentity standard_scalar_type {
         CompiledVhdlStandardScalarIdentity::none
+    };
+    // The subtype of `standard_scalar_type` the name denotes, when it
+    // denotes one of STANDARD's predefined subtypes.
+    CompiledVhdlStandardScalarSubtype standard_scalar_subtype {
+        CompiledVhdlStandardScalarSubtype::none
     };
 };
 
@@ -443,6 +541,13 @@ public:
     resolve_vhdl_package_members(const vhdl::Name&, ScopeId use_scope,
         const CompiledDeclarationPredicate& predicate = { }) const;
 
+    /// Complete a generic type actual's subtype indication where it is
+    /// written: the type its mark denotes when analysis selected none
+    /// (including a member of a package instance a use clause makes
+    /// visible), and the provided type that type is.
+    void complete_vhdl_type_actual(
+        vhdl::SubtypeIndication& subtype, ScopeId scope) const;
+
     /// The template and generic bindings of the package instance declared by
     /// `instance`; `use_scope` gives the library of an unprefixed template.
     [[nodiscard]] std::optional<CompiledVhdlPackageInstanceBinding>
@@ -477,6 +582,29 @@ public:
     /// not have synthetic owning HIR units.
     [[nodiscard]] bool vhdl_standard_package_member_visible(
         const vhdl::Name&, ScopeId use_scope) const;
+
+    /// Whether a name denotes `member` of the compiler-provided package
+    /// `library.package` where it is written (IEEE 1076-2019 12.3, 12.4):
+    /// its expanded name `library.package.member`, `package.member` where
+    /// the package name is visible, or the simple name made visible by a use
+    /// clause that no declaration hides.
+    [[nodiscard]] bool vhdl_denotes_provided_package_member(
+        std::string_view spelling, std::string_view library,
+        std::string_view package, std::string_view member,
+        ScopeId use_scope) const;
+
+    /// The compiler-provided type or subtype a type mark denotes where it is
+    /// written (IEEE 1076-2019 12.3, 12.4, 16.3-16.8): a type of a retained
+    /// copy of a provided package, or one whose declaration is not retained;
+    /// none for any other type, a source type of the same simple name
+    /// included.
+    [[nodiscard]] CompiledVhdlProvidedType resolve_vhdl_provided_type(
+        std::string_view spelling, ScopeId use_scope) const;
+
+    /// The compiler-provided type a retained type declaration is (16.4,
+    /// 16.7, 16.8): its simple name in the package that declares it.
+    [[nodiscard]] CompiledVhdlProvidedType vhdl_provided_type_of(
+        TypeId type) const;
 
     /// Whether a simple name denotes package STD.STANDARD at a use site: a
     /// use clause `use std.standard;` of the unit makes the package name

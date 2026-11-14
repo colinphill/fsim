@@ -1,0 +1,62 @@
+#c :top vhpirootinstk
+#c   decl :top:s
+#c   :top:h(0) vhpiforgeneratek index=0 label=h
+#c     decl :top:h(0):i
+#c     decl :top:h(0):c
+#c   :top:h(1) vhpiforgeneratek index=1 label=h
+#c     decl :top:h(1):i
+#c     decl :top:h(1):c
+#c   :top:k vhpiifgeneratek label=k
+#c     decl :top:k:d
+#c   :top:x vhpiifgeneratek label=x
+#c     decl :top:x:b
+#c   :top:y vhpiifgeneratek label=y
+#c     decl :top:y:e
+#c   :top:z vhpiifgeneratek label=z
+#c     decl :top:z:f
+#c   :top:n(2) vhpiforgeneratek index=2 label=n
+#c     decl :top:n(2):i
+#c     :top:n(2):q vhpiifgeneratek label=q
+#c   :top:n(1) vhpiforgeneratek index=1 label=n
+#c     decl :top:n(1):i
+#c stmt :top:h(0)
+#c stmt :top:h(1)
+#c stmt :top:k
+#c stmt :top:x
+#c stmt :top:y
+#c stmt :top:z
+#c stmt :top:n(2)
+#c stmt :top:n(1)
+#c by name top.g(1): null
+#c by name top.g(0): null
+#c by name top.h(0): :top:h(0)
+#c by name top.h(1): :top:h(1)
+#c by name top.h(2): null
+#c by name top.h(0).e(3): null
+#c by name top.k: :top:k
+#c by name top.k.d: :top:k:d
+#c by name top.m: null
+#c by name top.n(1): :top:n(1)
+#c by name top.n(2).q: :top:n(2):q
+#c by name top.n(1).q: null
+#c by name top.n(2).q.p: :top:n(2):q:p
+#c by name top.k.k: null
+#c by name top.x: :top:x
+#c by name top.x.a: null
+#c by name top.x.b: :top:x:b
+#c by name top.x.x: null
+#c by name top.y: :top:y
+#c by name top.y.e: :top:y:e
+#c by name top.y.y: null
+#c by name top.z: :top:z
+#c by name top.z.f: :top:z:f
+#c by name top.h: null
+#c by name top.h.c: null
+#c by name top.h.i: null
+#c by name top.n: null
+#c by name top.n.q: null
+#c by name top.h(1).c: :top:h(1):c
+#c by name :top:h: null
+#c by name top.g: null
+#c by name top.g(0).x: null
+#c by name :top:g: null

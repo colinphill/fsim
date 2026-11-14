@@ -2,7 +2,6 @@
 #include "fsim/runtime/class_methods.hpp"
 #include "fsim/support/stack_growth.hpp"
 
-#include <algorithm>
 #include <stdexcept>
 #include <utility>
 
@@ -25,12 +24,15 @@ SystemVerilogClassMethodFrame::property(const std::string_view name) {
   if (runtime_ == nullptr) {
     throw std::logic_error{"class method frame has no runtime"};
   }
-  try {
-    return runtime_->heap_->property(
-        this_handle_, owner_type_ + "::" + std::string{name});
-  } catch (const std::out_of_range&) {
-    return runtime_->heap_->property(this_handle_, name);
+  // A name in a method denotes the member of the method's class or of
+  // its nearest base that declares it (IEEE 1800-2023 8.14, 8.15).
+  auto* const found = runtime_->heap_->member(this_handle_, name, owner_type_);
+  if (found == nullptr) {
+    throw std::out_of_range{
+        "SystemVerilog class property '" + std::string{name}
+        + "' does not exist"};
   }
+  return *found;
 }
 
 const SystemVerilogClassPropertyValue&
@@ -38,12 +40,14 @@ SystemVerilogClassMethodFrame::property(const std::string_view name) const {
   if (runtime_ == nullptr) {
     throw std::logic_error{"class method frame has no runtime"};
   }
-  try {
-    return std::as_const(*runtime_->heap_).property(
-        this_handle_, owner_type_ + "::" + std::string{name});
-  } catch (const std::out_of_range&) {
-    return std::as_const(*runtime_->heap_).property(this_handle_, name);
+  const auto* const found
+      = std::as_const(*runtime_->heap_).member(this_handle_, name, owner_type_);
+  if (found == nullptr) {
+    throw std::out_of_range{
+        "SystemVerilog class property '" + std::string{name}
+        + "' does not exist"};
   }
+  return *found;
 }
 
 SystemVerilogClassPropertyValue&

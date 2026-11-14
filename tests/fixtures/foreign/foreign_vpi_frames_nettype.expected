@@ -1,0 +1,10 @@
+#c t=0 start origin=top.n origin-type=vpiNet value=0 thread=null
+#c t=0 end origin=top.n origin-type=vpiNet value=0 thread=null
+#c t=0 start origin=top.a[0] origin-type=vpiNet value=0 thread=null
+#c t=0 end origin=top.a[0] origin-type=vpiNet value=0 thread=null
+#c t=0 start origin=top.a[1] origin-type=vpiNet value=0 thread=null
+#c t=0 end origin=top.a[1] origin-type=vpiNet value=0 thread=null
+#c t=1 start origin=top.n origin-type=vpiNet value=3 thread=null
+#c t=1 end origin=top.n origin-type=vpiNet value=3 thread=null
+#c t=1 start origin=top.a[1] origin-type=vpiNet value=1 thread=null
+#c t=1 end origin=top.a[1] origin-type=vpiNet value=1 thread=null

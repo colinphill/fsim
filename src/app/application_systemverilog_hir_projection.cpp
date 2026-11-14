@@ -191,6 +191,8 @@ void SystemVerilogHirBuilder::apply_named_type_dimensions(
         spelling
     };
     output.source_order = input.systemverilog_source_order;
+    output.implicit = input.implicit_type;
+    output.named = !input.named_type.empty();
     // A named typedef base uses the declaration selected in this lexical
     // scope. The frontend cache can retain a different visible typedef's
     // packed shape; explicit use-site dimensions have an inline type instead.
@@ -1896,6 +1898,8 @@ template <typename Input>
     output.name = output.explicit_label
         ? input.label
         : "$assertion$" + std::to_string(index + 1U);
+    output.checker_instance = input.checker_instance;
+    output.checker_name = input.checker_name;
     output.property_tokens = source_tokens(input.property_tokens);
     output.has_pass_action = input.has_pass_action;
     output.pass_action_tokens = source_tokens(input.pass_action_tokens);
@@ -1931,6 +1935,8 @@ template <typename Input>
     sv::AssertionDeclaration output;
     output.kind = static_cast<sv::AssertionDeclarationKind>(input.kind);
     output.name = input.name;
+    output.checker_instance = input.checker_instance;
+    output.checker_name = input.checker_name;
     output.name_source = source(input.name_span);
     output.header_tokens = source_tokens(input.header_tokens);
     output.header_source = source(input.header_span);

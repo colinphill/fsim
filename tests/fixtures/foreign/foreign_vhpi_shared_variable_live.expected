@@ -1,0 +1,9 @@
+#c before sv=5 sw=1010
+#c deposit sv accepted
+#c deposit sw accepted
+#c after sv=40 sw=0101
+#c process saw obs=40
+#c end sv=41 sw=0101
+#c deposit sv at the end of the step accepted
+#c process left obs=60
+#c last sv=60 sw=0101

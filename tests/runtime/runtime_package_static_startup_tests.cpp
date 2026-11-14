@@ -3,14 +3,13 @@
 
 #include "fsim/runtime/packed_value.hpp"
 #include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 
-#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <functional>
 #include <limits>
 #include <memory>
-#include <span>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
@@ -960,15 +959,73 @@ namespace {
             process.register_count = 1U;
             process.container_register_count = 1U;
             process.container_register_types.push_back(queue_type);
+            process.startup_writable_container_object_ids = { object };
             process.operations = {
                 WriteContainerObjectElement {
-                    object, 0U, 0U, true, false, false,
+                    object, 0U, 0U, true, false, true,
                     std::nullopt, std::nullopt, { }, { } },
                 Halt { },
             };
             require_invalid_argument(
                 [&] { (void)interpreter.add_process(std::move(process)); },
-                "cannot use direct container-element writes");
+                "cannot defer a container element write");
+        }
+        {
+            // A blocking element write publishes the object's new value at
+            // once, through the same direct closure as a whole write (IEEE
+            // 1800-2023 8.9, 6.21): a queue write one past the end appends.
+            Interpreter interpreter;
+            const auto target = interpreter.add_signal({
+                "package.element_write_target",
+                PackedLogic4::from_msb_string("0") });
+            const auto object = interpreter.add_container_object({
+                "package.element_write_items", empty_queue, std::nullopt,
+                kPackageOwnerId });
+            auto process = startup_process(0U, target, 1U);
+            process.register_count = 2U;
+            process.startup_writable_container_object_ids = { object };
+            process.operations = {
+                LoadConstant {
+                    0U, PackedLogic4::from_aval_bval(32U, 0U, 0U) },
+                LoadConstant {
+                    1U, PackedLogic4::from_msb_string("00101010") },
+                WriteContainerObjectElement {
+                    object, 0U, 1U, true, false, false,
+                    std::nullopt, std::nullopt, { }, { } },
+                Halt { },
+            };
+            (void)interpreter.add_process(std::move(process));
+            interpreter.start();
+            require(interpreter.container_object_value_snapshot(object)
+                        == changed_queue,
+                "a package startup element write publishes the object's new value");
+        }
+        {
+            // The element write of an object outside the process's closure
+            // is refused when the process is added.
+            Interpreter interpreter;
+            const auto target = interpreter.add_signal({
+                "package.foreign_element_target",
+                PackedLogic4::from_msb_string("0") });
+            const auto foreign = interpreter.add_container_object({
+                "package.foreign_element_items", empty_queue, std::nullopt,
+                kPackageOwnerId + 1U });
+            auto process = startup_process(0U, target, 1U);
+            process.register_count = 2U;
+            process.startup_writable_container_object_ids = { foreign };
+            process.operations = {
+                LoadConstant {
+                    0U, PackedLogic4::from_aval_bval(32U, 0U, 0U) },
+                LoadConstant {
+                    1U, PackedLogic4::from_msb_string("00101010") },
+                WriteContainerObjectElement {
+                    foreign, 0U, 1U, true, false, false,
+                    std::nullopt, std::nullopt, { }, { } },
+                Halt { },
+            };
+            require_invalid_argument(
+                [&] { (void)interpreter.add_process(std::move(process)); },
+                "container permission is not direct owned storage");
         }
         {
             Interpreter interpreter;

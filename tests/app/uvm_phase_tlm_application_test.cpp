@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/semantic/systemverilog_hir.hpp"
+#include "fsim/semantic/systemverilog_class_specialization.hpp"
 #include "fsim/app/artifact_phase.hpp"
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/artifact/design.hpp"
@@ -26,7 +29,6 @@
 #include <iostream>
 #include <iterator>
 #include <optional>
-#include <ranges>
 #include <span>
 #include <sstream>
 #include <string>
@@ -851,9 +853,9 @@ ExerciseResult exercise(fsim::app::BuiltProject project,
       component_specialization, "worker", 0, right_root, component_declaration);
   assert(
       left && right &&
-      simulation.read_class_property(left, "marker").packed.low_word().aval ==
+      simulation.class_heap().member(left, "marker")->packed.low_word().aval ==
           10 &&
-      simulation.read_class_property(right, "marker").packed.low_word().aval ==
+      simulation.class_heap().member(right, "marker")->packed.low_word().aval ==
           10);
 
   std::vector<std::string> phase_order;
@@ -1061,6 +1063,12 @@ ExerciseResult exercise(fsim::app::BuiltProject project,
   });
   const auto run = simulation.run();
   assert(run.status == fsim::runtime::RunStatus::completed && run.time == 5);
+  // A compiled run enters the host class executor never (owner decision):
+  // the phase methods, the constructor chains and the factory's creations
+  // run as generated code.
+  if (engine == fsim::app::SimulationEngine::compiled) {
+    assert(simulation.class_execution_statistics().invocations == 0U);
+  }
   const std::string source_line{
       "FSIM-UVM-PHASE-TLM-SOURCE payload=37 result=42 pass=1\n"};
   const std::string smoke_line{
@@ -1077,9 +1085,9 @@ ExerciseResult exercise(fsim::app::BuiltProject project,
               "final:left", "final:right"}));
   assert((tlm_results == std::vector<std::uint64_t>{42, 42}));
   assert(
-      simulation.read_class_property(left, "marker").packed.low_word().aval ==
+      simulation.class_heap().member(left, "marker")->packed.low_word().aval ==
           9 &&
-      simulation.read_class_property(right, "marker").packed.low_word().aval ==
+      simulation.class_heap().member(right, "marker")->packed.low_word().aval ==
           9);
   assert(std::ranges::any_of(callbacks, [](const auto &event) {
     return event.kind == SystemVerilogUvmActivityKind::Objection &&
@@ -1280,13 +1288,22 @@ int main(int argc, char **argv) {
                                  work / (optimization_name + '-' + argv[7]),
                                  release);
     assert(result.transcript == kExpectedTranscript);
+    // The cold run has no ahead-of-time build to restore code from: it
+    // compiles its kernel in memory and stores nothing. The warm run, after
+    // `elaborate --aot`, loads every template and automaton from the build's
+    // index and compiles none (Simulation::native_cache_statistics).
     if (engine == fsim::app::SimulationEngine::compiled &&
         std::string_view{argv[7]} == "cold.fst") {
       assert(result.cache.hits == 0);
+      assert(result.cache.stores == 0);
     }
     if (engine == fsim::app::SimulationEngine::compiled &&
         std::string_view{argv[7]} == "warm.fst") {
+      assert(result.cache.hits > 0);
       assert(result.cache.misses == 0);
+      assert(result.cache.stores == 0);
+      assert(result.cache.load_failures == 0 &&
+             result.cache.rejected_entries == 0);
     }
     std::cout << result.transcript << " release=" << release
               << " stage=simulate optimization=" << optimization_name

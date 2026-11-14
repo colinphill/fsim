@@ -2,6 +2,7 @@
 #pragma once
 
 #include "../../src/runtime/simir_internal.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 
 namespace fsim::runtime::simir {
 

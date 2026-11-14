@@ -57,6 +57,22 @@ namespace fsim::runtime::simir {
     bool left_justify,
     bool zero_pad);
 
+/// Whether `value` has a bit at x or z.
+[[nodiscard]] bool has_unknown_bits(const PackedLogic4& value) noexcept;
+
+/// `%t` of a value with unknown bits: the letter `%d` shows (x, z, X or Z;
+/// IEEE 1800-2023 21.2.1.3), in the `%t` field (the $timeformat minimum
+/// width when `use_timeformat_width`), without the unit suffix.
+[[nodiscard]] std::string make_unknown_time_output(
+    std::string_view prefix,
+    std::string_view suffix,
+    const PackedLogic4& value,
+    const SystemVerilogTimeFormat& time_format,
+    bool use_timeformat_width,
+    std::uint32_t minimum_width,
+    bool left_justify,
+    bool zero_pad);
+
 /// The SimIR format of a conversion that consumes a value: %p and %v show
 /// decimal digits; %m, %l and %t do not consume a value and are rejected.
 [[nodiscard]] OutputFormat runtime_output_format(frontend::OutputFormat format);

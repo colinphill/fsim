@@ -442,6 +442,48 @@ uint64_t acc_object(const vpiHandle object) {
   return static_cast<uint64_t>(reinterpret_cast<std::uintptr_t>(object));
 }
 
+// The data path of an edge-sensitive module path (IEEE 1364-2001 23.42:
+// `posedge (clk => (q +: d))`, whose one input is the data source and whose
+// one output is the path's destination). The VPI model has no object for it
+// (IEEE 1800-2023 37.39 gives the module path only its vpiModDataPathIn
+// terminals), so the ACC layer names each module path's data path with an
+// object of its own, outside the VPI handle space (VPI handles are tagged
+// 0xC0 in their top byte or are addresses).
+constexpr uint64_t data_path_tag = uint64_t{0xDA} << 56U;
+constexpr uint64_t data_path_serial_mask = (uint64_t{1} << 56U) - 1U;
+
+std::vector<vpiHandle>& data_path_owners() {
+  static std::vector<vpiHandle> owners;
+  return owners;
+}
+
+// The data path object of a module path: the same object for every request
+// about the same path.
+uint64_t data_path_object(const vpiHandle path) {
+  auto& owners = data_path_owners();
+  const auto found = std::ranges::find_if(owners, [&](const vpiHandle owner) {
+    return vpi_compare_objects(owner, path) == 1;
+  });
+  const auto index = static_cast<uint64_t>(found - owners.begin());
+  if (found == owners.end()) {
+    owners.push_back(path);
+  }
+  return data_path_tag | (index + 1U);
+}
+
+// The module path whose data path the object is; none for any other object.
+std::optional<vpiHandle> data_path_owner(const uint64_t object) {
+  if ((object & ~data_path_serial_mask) != data_path_tag) {
+    return std::nullopt;
+  }
+  const auto serial = object & data_path_serial_mask;
+  const auto& owners = data_path_owners();
+  if (serial == 0U || serial > owners.size()) {
+    return std::nullopt;
+  }
+  return owners[serial - 1U];
+}
+
 // An ACC direction constant of a vpiDirection value; 0 when there is none.
 PLI_INT32 acc_direction(const PLI_INT32 direction) {
   switch (direction) {
@@ -826,6 +868,10 @@ uint32_t FSIM_NATIVE_PLUGIN_CALL acc_resolve(void* /*user_data*/,
   if (object == 0) {
     return FSIM_ACC_VPI_OBJECT_INVALID;
   }
+  if (data_path_owner(object)) {
+    *type = accDataPath;
+    return FSIM_ACC_VPI_OBJECT_VALID;
+  }
   const auto full_type = acc_types(vpi_object(object)).second;
   if (full_type == 0) {
     return FSIM_ACC_VPI_OBJECT_WRONG_TYPE;
@@ -1113,8 +1159,15 @@ uint32_t FSIM_NATIVE_PLUGIN_CALL acc_object_query(
     return object_result(
         vpi_handle_multi(vpiInterModPath, first, vpi_object(query->second)),
         handle);
-  // A data path has no VPI object to start from.
+  // The data path of an edge-sensitive module path; a path without a data
+  // source has none (IEEE 1364-2001 23.42).
   case FSIM_ACC_OBJECT_DATAPATH:
+    if (first == nullptr || vpi_get(vpiType, first) != vpiModPath ||
+        first_member(vpiModDataPathIn, first) == nullptr) {
+      return FSIM_ACC_VPI_OBJECT_NOT_FOUND;
+    }
+    *handle = data_path_object(first);
+    return FSIM_ACC_VPI_OBJECT_VALID;
   default: return FSIM_ACC_VPI_OBJECT_NOT_FOUND;
   }
 }
@@ -1218,6 +1271,23 @@ uint32_t read_design(fsim_acc_read_result_v3* const result) {
 bool three_state_primitive(vpiHandle object);
 
 // An object's type, range, value and names (FSIM_ACC_READ_OBJECT).
+// A data path object (IEEE 1364-2001 23.42): its type and full type are
+// accDataPath; it has no name or value of its own.
+uint32_t read_data_path(fsim_acc_read_result_v3* const result) {
+  auto& storage = acc_read_storage();
+  result->type = accDataPath;
+  result->full_type = accDataPath;
+  result->index = -1;
+  result->width = 1;
+  storage.text[0].clear();
+  result->name = storage.text[0].c_str();
+  result->name_size = 0;
+  storage.text[1].clear();
+  result->full_name = storage.text[1].c_str();
+  result->full_name_size = 0;
+  return FSIM_ACC_VPI_OBJECT_VALID;
+}
+
 uint32_t read_object(const vpiHandle object,
                      fsim_acc_read_result_v3* const result) {
   const auto [type, full_type] = acc_types(object);
@@ -1284,9 +1354,11 @@ uint32_t read_object(const vpiHandle object,
                                   FSIM_ACC_TIMING_CAP_POLARITY;
     result->timing_delay_count = 12;
   } else if ((type == accPort || type == accPortBit) &&
-             result->direction == accInput) {
-    // The delay of a module input port or of a bit of one, a MIPD (22.5.2),
-    // with the pulse limits of its SDF record or a put.
+             (result->direction == accInput ||
+              result->direction == accInout)) {
+    // The delay of a module input or inout port or of a bit of one, a MIPD
+    // (22.5.2; 1364-2005 16.2.4 annotates a load port that is an input or
+    // inout port), with the pulse limits of its SDF record or a put.
     result->timing_capabilities =
         FSIM_ACC_TIMING_CAP_DELAYS | FSIM_ACC_TIMING_CAP_PULSE;
     result->timing_delay_count = 12;
@@ -1376,6 +1448,9 @@ uint32_t FSIM_NATIVE_PLUGIN_CALL acc_read(
     fsim_acc_read_result_v3* const result) {
   switch (query->operation) {
   case FSIM_ACC_READ_OBJECT:
+    if (data_path_owner(query->object)) {
+      return read_data_path(result);
+    }
     return read_object(vpi_object(query->object), result);
   case FSIM_ACC_READ_ATTRIBUTE:
     return read_attribute(vpi_object(query->object), query->attribute_name,
@@ -1490,8 +1565,19 @@ bool connection_object(const vpiHandle object) {
 }
 
 std::vector<vpiHandle> iteration_members(const fsim_acc_iterator_query_v3& query) {
-  const auto owner = vpi_object(query.owner);
   std::vector<vpiHandle> items;
+  // A data path has one input, the data source, and one output, the module
+  // path's destination (IEEE 1364-2001 23.42, Figure 104).
+  if (const auto path = data_path_owner(query.owner)) {
+    if (query.family == FSIM_ACC_ITERATOR_INPUT) {
+      items = members(vpiModDataPathIn, *path);
+    } else if (query.family == FSIM_ACC_ITERATOR_OUTPUT) {
+      items = members(vpiModPathOut, *path);
+    }
+    keep_acc_objects(items);
+    return items;
+  }
+  const auto owner = vpi_object(query.owner);
   switch (query.family) {
   // Every object kind Table 171 lists; the requested types filter them.
   case FSIM_ACC_ITERATOR_GENERIC:

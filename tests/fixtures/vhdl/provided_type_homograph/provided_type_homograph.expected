@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
+pthom sfixed '0''1''1''1'
+pthom ufixed '0''1''1''1''1''0'
+pthom float '1''0''0''1'

@@ -1,0 +1,16 @@
+1 bit[2:0]
+2 int
+3 int unsigned
+4 bit signed[3:0]
+5 logic[3:0]
+6 logic[3:0]
+7 bit[9:1]
+8 enum{AA=32'sd0,BB=32'sd1,CC=32'sd99}A::e_t
+9 struct packed{logic[3:0] a;bit b;}top.ps_t
+10 struct{bit x;bit y;}top.us_t$[0:9]
+11 enum{R=2'd0,G=2'd1,B=2'd2}top.c_t
+12 int$[$]
+13 int$[]
+14 string
+15 real
+16 logic[31:0]

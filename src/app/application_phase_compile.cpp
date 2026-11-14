@@ -17,7 +17,6 @@
 #include "fsim/version.hpp"
 
 #include <fstream>
-#include <iomanip>
 #include <map>
 #include <set>
 #include <sstream>

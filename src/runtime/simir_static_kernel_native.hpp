@@ -112,6 +112,11 @@ struct StaticKernelSvaTable {
     /// Impl::assertion_controls: the control words (IEEE 1800-2023 20.11)
     /// an assertion control read loads (KOp::sva_sampled_load, aux 8).
     const std::int64_t* controls { };
+    /// StaticKernel::history_words_ (KOp::sva_sampled_load, aux 16): word 0
+    /// the update cycles begun, then eight words per history (flags, the
+    /// time and cycle of the latest event, the time and cycle of the latest
+    /// transaction).
+    const std::uint64_t* history { };
 };
 
 /// Generated code's view of one unit activation. Field offsets are part of
@@ -178,6 +183,17 @@ struct StaticKernelNativeFrame {
     void* call_stack { };
     /// The same body's growable frame stack (CompiledBody::frame_entries).
     void* frame_stack { };
+    /// Per member, nonzero while the debug interface forces or watches one
+    /// of its VHDL variables: a variable store (CompiledBody::variable_stores)
+    /// then calls `fsim_sk_variable_store`. Null while it watches none.
+    const std::uint8_t* variable_hooks { };
+    /// While an observer watches a signal (StaticKernel::watch_writes_):
+    /// the kernel's flag, nonzero while a completed write of an output has
+    /// not reached the host. Generated code tests it where a statement
+    /// begins (CompiledBody::statement_starts) and then calls
+    /// `fsim_sk_flush_writes`, so each statement's write is its own value
+    /// change. Null while nothing is watched.
+    const std::uint8_t* watch_writes { };
 };
 inline constexpr std::uint32_t static_kernel_no_fast_notify = static_kernel_no_fast_notify_value;
 
@@ -212,6 +228,15 @@ struct StaticKernelNativeHelpers {
     /// A gated mark of a dissolved partition (`fsim_sk_member_due`):
     /// nonzero when the member at this position runs in the pass.
     std::uint32_t (*member_due)(StaticKernelNativeFrame*, std::uint32_t position) { };
+    /// A store of VHDL variable `reg` of the frame's member while the debug
+    /// interface hooks its variables (`fsim_sk_variable_store`): restores
+    /// the forced bits in the caller's registers and reports the change;
+    /// nonzero when the register now holds unknown bits.
+    std::uint32_t (*variable_store)(StaticKernelNativeFrame*,
+        kernel_word::Word* registers, std::uint32_t reg) { };
+    /// Hands the completed writes of watched outputs to the host
+    /// (`fsim_sk_flush_writes`; StaticKernelNativeFrame::watch_writes).
+    void (*flush_writes)(StaticKernelNativeFrame*) { };
     /// Executes a generic instruction against the caller's registers, one
     /// helper per operation kind (the instruction's `sub`; generated code
     /// calls `fsim_sk_generic_<sub>`).
@@ -318,9 +343,31 @@ struct StaticKernelTemplate {
     std::vector<std::uint32_t>* resume_points { };
 };
 
+/// How a code generator used the code built ahead of time (elaborate --aot):
+/// the counts a simulation reports as its native cache statistics. A run whose
+/// kernel finds the index of an ahead-of-time build looks every template and
+/// attempt automaton up in it: a hit loads its code, a miss compiles it. A
+/// run without such an index compiles its kernel in memory and looks nothing
+/// up.
+struct StaticKernelCodegenCacheStatistics {
+    std::uint64_t hits { };
+    std::uint64_t misses { };
+    /// Templates and automata an ahead-of-time build stored.
+    std::uint64_t stores { };
+    /// Indexes that did not parse (the build's code is not used).
+    std::uint64_t rejected_entries { };
+    std::uint64_t load_failures { };
+    std::uint64_t store_failures { };
+};
+
 class StaticKernelCodegen {
 public:
     virtual ~StaticKernelCodegen() = default;
+    [[nodiscard]] virtual StaticKernelCodegenCacheStatistics
+    cache_statistics() const noexcept
+    {
+        return { };
+    }
     /// One entry per template; null entries stay on the interpreter tier.
     [[nodiscard]] virtual std::vector<StaticKernelNativeEntry> compile(
         std::span<const StaticKernelTemplate> templates,

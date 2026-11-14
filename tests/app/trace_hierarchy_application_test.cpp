@@ -3,6 +3,15 @@
 #include "fsim/runtime/fst_writer.hpp"
 #include "fsim/systemc/kernel_backend_binding_inventory.hpp"
 #include "fsim/systemc/kernel_backend_inventory.hpp"
+#include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/runtime/systemverilog_scalar.hpp"
+#include "fsim/runtime/trace_model.hpp"
+#include "fsim/semantic/design_ir.hpp"
+#include "fsim/semantic/hierarchy_path.hpp"
+#include "fsim/semantic/model.hpp"
+#include "fsim/systemc/kernel_backend_protocol.hpp"
+#include "fsim/systemc/kernel_backend_synchronization.hpp"
+#include "fsim/systemc/kernel_backend_value_codec.hpp"
 
 #include <array>
 #include <cassert>

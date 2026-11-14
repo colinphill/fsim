@@ -7,6 +7,7 @@
 #include "application_hierarchy_path_codec.hpp"
 #include "application_phase_profile.hpp"
 
+#include "fsim/app/artifact_schema.hpp"
 #include "fsim/support/sha256.hpp"
 
 #include <algorithm>
@@ -14,7 +15,6 @@
 #include <functional>
 #include <limits>
 #include <new>
-#include <ranges>
 #include <set>
 #include <stdexcept>
 #include <type_traits>
@@ -179,12 +179,17 @@ template <typename ProcessRows>
                     return false;
                 }
                 operation_container_writes.push_back(container_write->object);
-            } else if (operation_holds<WriteContainerObjectElement>(
-                           operation)) {
-                report_error(diagnostics,
-                    "runtime package process contains an element container write",
-                    source_name);
-                return false;
+            } else if (const auto* element_write
+                = operation_get_if<WriteContainerObjectElement>(
+                    &operation)) {
+                if (element_write->nonblocking
+                    || element_write->transaction_signal) {
+                    report_error(diagnostics,
+                        "runtime package process contains a deferred container element write",
+                        source_name);
+                    return false;
+                }
+                operation_container_writes.push_back(element_write->object);
             }
         }
         const auto canonicalize = [](auto& ids) {
@@ -649,7 +654,7 @@ bool visit_runtime_paths(StateType& state, Callback&& callback)
         state.code_coverage_inventory, state.signal_driver_inventory,
         state.verilog_primitives, state.sdf_net_delays,
         state.systemverilog_interface_handles, state.hierarchical_reads,
-        state.uses_simulation_control,
+        state.uses_simulation_control, state.class_container_types,
     };
 }
 

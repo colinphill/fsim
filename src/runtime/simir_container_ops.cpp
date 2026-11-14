@@ -2,12 +2,23 @@
 #include "simir_container_ops.hpp"
 #include "simir_internal.hpp"
 #include "simir_container_helpers.hpp"
+#include "fsim/runtime/logic.hpp"
+#include "fsim/runtime/output_format.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_container_value.hpp"
+#include "fsim/runtime/simir_ids.hpp"
 
 #include <algorithm>
 #include <limits>
 #include <optional>
 #include <string>
 #include <utility>
+#include <cstddef>
+#include <cstdint>
+#include <exception>
+#include <span>
+#include <vector>
 
 namespace fsim::runtime::simir {
 namespace {
@@ -163,9 +174,13 @@ void consume_container_bits(
             return value.type.element_types.size() == 1U
                 ? stream_element_bits(value.type.element_types.front())
                 : 0U;
-        default:
-            return 0U;
+        case ContainerElementKind::Aggregate:
+            // A dynamic array or queue of unpacked structures takes whole
+            // elements, each its members' bits (11.4.14.4); the type of a
+            // variable-size array is not fixed, so these are one element's.
+            return stream_element_bits(value.type);
         }
+        return 0U;
     }();
     if (resize) {
         if (element_bits == 0U) {

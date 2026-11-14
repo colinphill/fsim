@@ -2,7 +2,6 @@
 #include "fsim/runtime/uvm_object.hpp"
 #include "fsim/support/stack_growth.hpp"
 
-#include <algorithm>
 #include <exception>
 #include <functional>
 #include <map>

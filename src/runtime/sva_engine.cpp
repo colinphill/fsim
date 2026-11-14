@@ -151,6 +151,11 @@ struct CompiledPlan {
     // 1800-2023 16.12.14), at every evaluation, a tick of its clocks or
     // not: an evaluation in which no clock ticked still applies it.
     bool async_abort { };
+    // A recursive property (IEEE 1800-2023 16.12.17): a node reaches itself
+    // through its children. Only such a plan forwards an instance to the
+    // operand its outcome now is (Instance::forward), which keeps the chain
+    // of instances short however long the recursion runs.
+    bool recursive { };
     // Step events (39.4.2): produced only while `stepping` is set for the
     // attempt being advanced (39.5.2). `state_base[i]` numbers sequence i's
     // program counters as state ids; `guard_positions[g]` is the source
@@ -1146,7 +1151,7 @@ public:
     // The instance tree as record words, preorder: property node, start,
     // flags (verdict 0-1, vacuous 2, matched_once 3, antecedent_done 4,
     // satisfied 5, until_stopped 6, has matcher 7, has chosen 8, at_point 9,
-    // point_inclusive 10, initialized 11), chosen
+    // point_inclusive 10, initialized 11, nonvacuous 12), chosen
     // branch, consequent count, the failed node's position (line, column),
     // then the counts of operands, started
     // children and until entries, the valuation of the local variables
@@ -1162,7 +1167,8 @@ public:
             | (vacuous_ ? 4 : 0) | (matched_once_ ? 8 : 0)
             | (antecedent_done_ ? 16 : 0) | (satisfied_ ? 32 : 0)
             | (until_stopped_ ? 64 : 0) | (matcher_ ? 128 : 0)
-            | (chosen_ ? 256 : 0) | (initialized_ ? 2048 : 0) | point_);
+            | (chosen_ ? 256 : 0) | (initialized_ ? 2048 : 0)
+            | (nonvacuous_ ? 4096 : 0) | point_);
         out.push_back(chosen_ ? static_cast<std::int64_t>(*chosen_) : 0);
         out.push_back(static_cast<std::int64_t>(consequents_));
         out.push_back(fail_.line);
@@ -1206,7 +1212,7 @@ public:
         auto instance = std::make_unique<Instance>(plan, node, start);
         const auto& property = plan.properties[node];
         const auto flags = in.next();
-        if ((flags & 3) > 2 || flags < 0 || flags >= 4096
+        if ((flags & 3) > 2 || flags < 0 || flags >= 8192
             || ((flags & point_inclusive) != 0 && (flags & at_point) == 0)
             || ((flags & at_point) != 0 && !plan.multiclocked())) {
             throw corrupt();
@@ -1219,6 +1225,7 @@ public:
         instance->satisfied_ = (flags & 32) != 0;
         instance->until_stopped_ = (flags & 64) != 0;
         instance->initialized_ = (flags & 2048) != 0;
+        instance->nonvacuous_ = (flags & 4096) != 0;
         const auto chosen = in.next();
         if ((flags & 256) != 0) {
             if (chosen < 0
@@ -1429,6 +1436,84 @@ public:
             resolve(true, true);
             break;
         }
+        if (decided() || !plan_.recursive) {
+            return;
+        }
+        // An operand whose outcome is now exactly that of one of its own
+        // operands gives way to it: a recursive property (16.12.17) then
+        // keeps a short chain of instances however long it runs.
+        const auto collapse = [now](std::unique_ptr<Instance>& operand) {
+            while (auto next = operand->forward(now)) {
+                operand = std::move(next);
+            }
+        };
+        for (auto& entry : operands_) {
+            collapse(entry.second);
+        }
+        for (auto& item : started_) {
+            collapse(item);
+        }
+    }
+
+    // The operand this undecided instance's outcome now is exactly, taken
+    // out of it: its verdict, its failure and, with this instance's floor
+    // carried over, its vacuity. None when the instance still combines
+    // operands, waits for an antecedent, or is a nexttime whose operand has
+    // not started (at the end of the run that nexttime holds, 16.12.10,
+    // whatever the operand's empty trace gives).
+    [[nodiscard]] std::unique_ptr<Instance> forward(const std::int64_t now)
+    {
+        if (!plan_.recursive || decided() || plan_.multiclocked()) {
+            return nullptr;
+        }
+        std::unique_ptr<Instance>* sole { };
+        bool nonvacuous = nonvacuous_;
+        switch (plan_.properties[node_].kind) {
+        case PropertyKind::conjunction:
+            // `p and q` once p held: q's outcome, nonvacuous if p was.
+            if (operands_.size() == 2U && started_.empty()) {
+                for (std::size_t index = 0; index < 2U; ++index) {
+                    const auto& held = operands_[index].second;
+                    auto& other = operands_[1U - index].second;
+                    if (held->decided() && held->holds() && !other->decided()) {
+                        sole = &other;
+                        nonvacuous = nonvacuous || !held->vacuous();
+                        break;
+                    }
+                }
+            }
+            break;
+        case PropertyKind::implication:
+            // `s |-> p` once s can match no more and one consequent is left.
+            if (antecedent_done_ && !matcher_ && operands_.empty()
+                && started_.size() == 1U && !started_.front()->decided()) {
+                sole = &started_.front();
+                nonvacuous = nonvacuous || satisfied_;
+            }
+            break;
+        case PropertyKind::conditional:
+        case PropertyKind::nexttime:
+            // A strong nexttime keeps its own end-of-run obligation (16.12.10).
+            if (operands_.size() == 1U && started_.empty()
+                && !(plan_.properties[node_].kind == PropertyKind::nexttime
+                    && plan_.properties[node_].strong)
+                && (plan_.properties[node_].kind == PropertyKind::nexttime
+                    || (chosen_ && operands_.front().first == *chosen_))
+                && (plan_.properties[node_].kind != PropertyKind::nexttime
+                    || operands_.front().second->start_ <= now)
+                && !operands_.front().second->decided()) {
+                sole = &operands_.front().second;
+            }
+            break;
+        default:
+            break;
+        }
+        if (sole == nullptr) {
+            return nullptr;
+        }
+        auto result = std::move(*sole);
+        result->nonvacuous_ = result->nonvacuous_ || nonvacuous;
+        return result;
     }
 
     // The verdict at the end of simulation: weak obligations hold, strong
@@ -1702,7 +1787,7 @@ private:
     void resolve(const bool holds, const bool vacuous)
     {
         verdict_ = holds ? Verdict::holds : Verdict::fails;
-        vacuous_ = holds && vacuous;
+        vacuous_ = holds && vacuous && !nonvacuous_;
         operands_.clear();
         started_.clear();
         until_.clear();
@@ -1960,6 +2045,9 @@ private:
     std::optional<std::size_t> chosen_;
     bool until_stopped_ { };
     bool initialized_ { };
+    // The instance took the place of one whose success is nonvacuous
+    // whatever this instance's is (forward).
+    bool nonvacuous_ { };
     std::vector<std::int64_t> locals_;
     std::vector<std::pair<std::size_t, std::unique_ptr<Instance>>> operands_;
     std::vector<std::unique_ptr<Instance>> started_;
@@ -2060,6 +2148,26 @@ void Monitor::build(const std::vector<std::int64_t>& bounds)
                        || property.kind == PropertyKind::reject)
                 && !property.synchronous;
         });
+    {
+        std::vector<std::uint8_t> mark(plan_->properties.size());
+        const auto cyclic = [&](const auto& self, const std::uint32_t node) -> bool {
+            if (node >= mark.size() || mark[node] == 2U) {
+                return false;
+            }
+            if (mark[node] == 1U) {
+                return true;
+            }
+            mark[node] = 1U;
+            for (const auto child : plan_->properties[node].children) {
+                if (self(self, child)) {
+                    return true;
+                }
+            }
+            mark[node] = 2U;
+            return false;
+        };
+        plan_->recursive = cyclic(cyclic, plan_->root);
+    }
     storage_ = AttemptStorage(clock_count(plan));
     storage_.set(layout::h_tick, -1);
     storage_.set(layout::h_flags,

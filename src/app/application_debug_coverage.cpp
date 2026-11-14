@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
 
-#include "fsim/runtime/simir_coverage.hpp"
 
 #include <new>
 #include <unordered_set>

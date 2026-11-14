@@ -24,6 +24,8 @@
 #c setup fetch ok=1 error=0
 #c setup limit 8.000
 #c fetch on module ok=0 error=1
+#c datapath type=426 fulltype=426 input=top.pe.d output=top.pe.q more=0/0
+#c datapath of a plain path null
 #c change y_and 12 1
 #c change y_udp 13 0
 #c change w_path 16 1

@@ -1,0 +1,15 @@
+#c line 15 op=67 bin=x01z
+#c line 16 op=67 bin=111111111101
+#c line 17 op=67 bin=001010x01z
+#c line 18 op=67 bin=1010x01z
+#c line 19 op=67 bin=1101
+#c line 20 op=67 bin=00000000000000000000000010100010
+#c line 21 op=67 bin=11111101
+#c line 22 op=67 bin=00000000000000000000000000000011
+#c line 23 op=67 bin=11111111111111111111111111111101
+#c line 24 op=67 real=-3
+#c line 25 op=67 real=2.5
+#c line 26 op=67 bin=0000000000000000000000001010x01z
+#c line 27 op=67 bin=z
+#c line 28 op=67 bin=0
+#c line 29 op=67 bin=1010x01z

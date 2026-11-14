@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "simir_internal.hpp"
 #include "simir_events.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 
-#include <bit>
 #include <cstdio>
 #include <cstdlib>
-#include <deque>
 
 namespace fsim::runtime::simir {
 
@@ -52,8 +51,8 @@ void Interpreter::Impl::stage_update_unrouted(
         offset,
         { },
         value_index });
-    stage_selected_signal_transaction(
-        signal, offset.value_or(0U), pending_update_values.back().width());
+    stage_selected_signal_transaction(signal, offset.value_or(0U),
+        pending_update_values.back().width(), driver);
     schedule_update_commit();
 }
 
@@ -664,8 +663,7 @@ void Interpreter::Impl::schedule_projected_scalar_waveform(
     const ProcessId process,
     const SignalId signal,
     const std::uint32_t offset,
-    const std::vector<
-        std::pair<PackedLogic4, SimulationTick>>& elements,
+    const std::vector<ProjectedWaveformValue>& elements,
     const SimulationTick rejection,
     const ProjectedDelayMode mode,
     const std::vector<bool>* const retained_old)
@@ -674,7 +672,7 @@ void Interpreter::Impl::schedule_projected_scalar_waveform(
         throw std::invalid_argument(
             "a projected waveform must contain at least one element");
     }
-    const auto first_delay = elements.front().second;
+    const auto first_delay = elements.front().delay;
     if (mode == ProjectedDelayMode::inertial
         && rejection > first_delay) {
         throw std::invalid_argument(
@@ -682,7 +680,7 @@ void Interpreter::Impl::schedule_projected_scalar_waveform(
     }
     auto previous_delay = first_delay;
     for (std::size_t index = 0; index < elements.size(); ++index) {
-        const auto delay = elements[index].second;
+        const auto delay = elements[index].delay;
         if (index != 0 && delay <= previous_delay) {
             throw std::invalid_argument(
                 "projected-waveform delays must be strictly ascending");
@@ -719,11 +717,12 @@ void Interpreter::Impl::schedule_projected_scalar_waveform(
     const auto old_count = transactions.size();
     std::vector<std::uint64_t> new_ids;
     new_ids.reserve(elements.size());
-    for (const auto& [value, delay] : elements) {
+    for (const auto& element : elements) {
         const auto id = next_projected_transaction_id++;
         new_ids.push_back(id);
         transactions.push_back(ProjectedTransaction {
-            id, scheduler.now() + delay, value.get_logic9(0U), { } });
+            id, scheduler.now() + element.delay,
+            element.value.get_logic9(0U), { }, element.null });
     }
     if (mode == ProjectedDelayMode::inertial
         && old_count != 0) {
@@ -747,8 +746,8 @@ void Interpreter::Impl::schedule_projected_scalar_waveform(
             for (std::size_t index = transactions.size() - 1;
                 index-- > 0;) {
                 if (!marked[index] && marked[index + 1]
-                    && transactions[index].value
-                        == transactions[index + 1].value) {
+                    && same_projected_value(
+                        transactions[index], transactions[index + 1])) {
                     marked[index] = true;
                 }
             }
@@ -766,7 +765,7 @@ void Interpreter::Impl::schedule_projected_scalar_waveform(
 
     for (std::size_t index = 0; index < new_ids.size(); ++index) {
         const auto id = new_ids[index];
-        const auto delay = elements[index].second;
+        const auto delay = elements[index].delay;
         const auto pending = std::ranges::find(
             transactions, id, &ProjectedTransaction::id);
         if (pending == transactions.end()) {
@@ -825,6 +824,30 @@ void Interpreter::Impl::schedule_projected_waveform(
         throw std::invalid_argument(
             "projected write range is outside its target signal");
     }
+    // The new transactions delete the driver's pending null transactions
+    // at or after the first of them, and an inertial assignment those in
+    // its pulse rejection interval: a null transaction never has the value
+    // of the new one (IEEE 1076-2019 10.5.2.2). A null transaction
+    // disconnects the whole driver, so only an assignment of the whole
+    // driver deletes one.
+    if (!vhdl_pending_disconnects.empty() && first == 0U
+        && width == target_width) {
+        if (const auto pending = vhdl_pending_disconnects.find(
+                std::pair { signal, process });
+            pending != vhdl_pending_disconnects.end()) {
+            const auto delay = elements.front().delay;
+            const auto earliest = scheduler.now() + delay
+                - (mode == ProjectedDelayMode::inertial
+                        ? std::min(rejection, delay)
+                        : SimulationTick { });
+            std::erase_if(pending->second, [&](const SimulationTick time) {
+                return time >= earliest;
+            });
+            if (pending->second.empty()) {
+                vhdl_pending_disconnects.erase(pending);
+            }
+        }
+    }
     // A single zero-delay inertial element has no pulse to reject.  When this
     // driver's selected scalar elements have no pending projected
     // transactions, staging the update in the current update phase is
@@ -849,8 +872,11 @@ void Interpreter::Impl::schedule_projected_waveform(
         && mode == ProjectedDelayMode::inertial
         && rejection == 0U
         && elements.front().delay == 0U
+        && elements.front().null == 0U
         && !target_has_pending_transaction()) {
         const auto& value = elements.front().value;
+        // A value transaction reconnects disconnected elements (14.7.2).
+        reconnect_vhdl_null_elements(process, signal, first, width);
         if (target_width <= 64U && value.is_logic9()) {
             const auto source = value.logic9_low_word();
             std::array<std::uint64_t, 4> planes { };
@@ -935,7 +961,8 @@ void Interpreter::Impl::schedule_projected_waveform(
             const auto id = next_projected_transaction_id++;
             transaction_ids.push_back(id);
             transactions.push_back(ProjectedTransaction {
-                id, transaction_time, element.value.get_logic9(bit), { } });
+                id, transaction_time, element.value.get_logic9(bit), { },
+                element.null });
 
             if (mode == ProjectedDelayMode::inertial
                 && old_count != 0U) {
@@ -948,8 +975,8 @@ void Interpreter::Impl::schedule_projected_waveform(
                 for (std::size_t index = transactions.size() - 1U;
                     index-- > 0U;) {
                     if (!marked[index] && marked[index + 1U]
-                        && transactions[index].value
-                            == transactions[index + 1U].value) {
+                        && same_projected_value(
+                            transactions[index], transactions[index + 1U])) {
                         marked[index] = true;
                     }
                 }
@@ -1020,11 +1047,13 @@ void Interpreter::Impl::schedule_projected_waveform(
                 const auto threshold = first_time - rejection;
                 const auto old_value_equals_next = [&](const std::size_t index) {
                     for (std::size_t bit = 0; bit < width; ++bit) {
-                        const auto here = (*bits[bit])[index].value;
+                        const auto& here = (*bits[bit])[index];
                         const auto next = index + 1U < old_count
-                            ? (*bits[bit])[index + 1U].value
-                            : elements.front().value.get_logic9(bit);
-                        if (here != next) {
+                            ? (*bits[bit])[index + 1U]
+                            : ProjectedTransaction { 0U, 0U,
+                                  elements.front().value.get_logic9(bit), { },
+                                  elements.front().null };
+                        if (!same_projected_value(here, next)) {
                             return false;
                         }
                     }
@@ -1045,9 +1074,7 @@ void Interpreter::Impl::schedule_projected_waveform(
             }
         }
     }
-    std::vector<
-        std::pair<PackedLogic4, SimulationTick>>
-        scalar_elements;
+    std::vector<ProjectedWaveformValue> scalar_elements;
     scalar_elements.reserve(elements.size());
     for (std::size_t bit = 0; bit < width; ++bit) {
         scalar_elements.clear();
@@ -1058,8 +1085,8 @@ void Interpreter::Impl::schedule_projected_waveform(
             } else {
                 scalar.set(0, element.value.get(bit));
             }
-            scalar_elements.emplace_back(
-                std::move(scalar), element.delay);
+            scalar_elements.push_back(
+                { std::move(scalar), element.delay, element.null });
         }
         schedule_projected_scalar_waveform(
             process,

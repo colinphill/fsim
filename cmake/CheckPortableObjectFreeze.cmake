@@ -14,6 +14,8 @@ set(FSIM_LIBRARY_HEADER
   "${FSIM_SOURCE_DIR}/include/fsim/library/artifact.hpp")
 set(FSIM_BUNDLE_HEADER
   "${FSIM_SOURCE_DIR}/include/fsim/app/design_artifact.hpp")
+set(FSIM_SCHEMA_HEADER
+  "${FSIM_SOURCE_DIR}/include/fsim/app/artifact_schema.hpp")
 set(FSIM_OBJECT_CODEC "${FSIM_SOURCE_DIR}/src/artifact/object.cpp")
 set(FSIM_BUNDLE_CODEC
   "${FSIM_SOURCE_DIR}/src/app/application_design_artifact_hir_codec.cpp")
@@ -94,9 +96,10 @@ fsim_require_portable_object_tokens("${FSIM_OBJECT_HEADER}"
   "through a private temporary file and one")
 fsim_require_portable_object_tokens("${FSIM_LIBRARY_HEADER}"
   "kPortableSchemaVersion = 16"
-  "kCompiledHirSchemaVersion = 3")
+  "kCompiledHirSchemaVersion = 6")
+fsim_require_portable_object_tokens("${FSIM_SCHEMA_HEADER}"
+  "kCompiledHirBundleSchema = 6")
 fsim_require_portable_object_tokens("${FSIM_BUNDLE_HEADER}"
-  "kCompiledHirBundleSchema = 3"
   "serialize_compiled_hir_bundle("
   "deserialize_compiled_hir_bundle(")
 
@@ -131,7 +134,7 @@ fsim_require_portable_object_tokens("${FSIM_OBJECT_TEST}"
   "kCodeCoverageArtifactDiagnostic"
   "stale-coverage"
   "kPortableSchemaVersion == 16U"
-  "kCompiledHirSchemaVersion == 3U"
+  "kCompiledHirSchemaVersion == 6U"
   "corrupt-magic"
   "stale-format"
   "future-format"

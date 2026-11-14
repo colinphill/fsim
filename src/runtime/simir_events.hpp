@@ -12,6 +12,7 @@
 
 #include "fsim/runtime/scheduler_events.hpp"
 #include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 
 #include <string_view>
 

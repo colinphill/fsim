@@ -3,10 +3,8 @@
 #include "fsim/app/sdf_vital_scheduling.hpp"
 
 #include <algorithm>
-#include <limits>
 #include <map>
 #include <optional>
-#include <ranges>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>

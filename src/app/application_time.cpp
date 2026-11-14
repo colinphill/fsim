@@ -4,6 +4,36 @@
 #include "fsim/support/vhdl_time.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
 #include "fsim/semantic/compiled_design_specialization.hpp"
+#include "application_compiled_source.hpp"
+#include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/token.hpp"
+#include "fsim/project/project.hpp"
+#include "fsim/semantic/compiled_design.hpp"
+#include "fsim/semantic/model.hpp"
+#include "fsim/semantic/systemverilog_hir.hpp"
+#include "fsim/semantic/vhdl_hir.hpp"
+#include <algorithm>
+#include <array>
+#include <cctype>
+#include <charconv>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <iterator>
+#include <limits>
+#include <map>
+#include <numeric>
+#include <optional>
+#include <set>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <utility>
+#include <vector>
 
 namespace fsim::app::application_detail {
 

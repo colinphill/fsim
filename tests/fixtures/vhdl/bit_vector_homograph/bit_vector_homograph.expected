@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+bvhom s(1) '1'
+bvhom t(3) '1'
+bvhom r.f(0) '1'
+bvhom r.f(1) '0'
+bvhom c(0) '1'
+bvhom d(1) '1'
+bvhom d(0) '0'
+bvhom e(1) '0'
+bvhom slice s '1'
+bvhom slice t '0'
+bvhom width 4

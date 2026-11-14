@@ -2,7 +2,6 @@
 #include "fsim/runtime/vpi_bridge.h"
 #include "acc_internal.hpp"
 
-#include <array>
 #include <vector>
 #include <atomic>
 #include <cstdarg>

@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/semantic/vhdl_hir.hpp"
+#include "fsim/runtime/simir.hpp"
 #include "fsim/app/artifact_phase.hpp"
 #include "fsim/app/design_artifact.hpp"
-#include "fsim/frontend/parser.hpp"
 #include "fsim/runtime/vcd_writer.hpp"
-#include "fsim/support/environment.hpp"
-#include "fsim/version.hpp"
 
 #include "governed_process_limits.hpp"
 #include "vhdl_ieee_integration_support.hpp"
@@ -856,7 +856,7 @@ architecture rtl of ieee_integration is
   signal vital_in_skew_seen : std_logic;
   signal vital_out_skew_seen : std_logic;
 begin
-  mapped <= to_x01("ULH-WZ01");
+  mapped <= to_x01(std_ulogic_vector'("ULH-WZ01"));
   numeric_logic <= ieee.numeric_std.resize(
       ieee.numeric_std.to_unsigned(3, 8), 12);
   numeric_bits <= ieee.numeric_bit.to_unsigned(5, 8);

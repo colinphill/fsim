@@ -7,6 +7,8 @@
 # scheduler must equal std_logic_textio.expected: the "weak" reports of the
 # source and the messages that READ, OREAD and HREAD without GOOD report.
 
+include("${CMAKE_CURRENT_LIST_DIR}/../../../cmake/FsimTestWorkspace.cmake")
+
 if(NOT DEFINED FSIM_EXECUTABLE OR NOT EXISTS "${FSIM_EXECUTABLE}")
   message(FATAL_ERROR "FSIM_EXECUTABLE must name the built fsim command")
 endif()
@@ -20,6 +22,7 @@ endforeach()
 
 string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef workspace_id)
 set(workspace "${CMAKE_CURRENT_BINARY_DIR}/fsim-std-logic-textio-${workspace_id}")
+fsim_test_workspace("${workspace}")
 
 function(run_fsim_step CASE_DIR STEP_NAME)
   execute_process(
@@ -67,3 +70,6 @@ foreach(case IN ITEMS std_logic_textio)
     endif()
   endforeach()
 endforeach()
+
+# Passed: remove this run's workspaces (a failure above keeps them).
+fsim_test_workspace_cleanup()

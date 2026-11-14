@@ -9,7 +9,7 @@ endif()
 set(FSIM_CONTRACT
   "${FSIM_SOURCE_DIR}/tests/feature_matrix/ast_lifetime_governance.tsv")
 set(FSIM_APPLICATION_HEADER
-  "${FSIM_SOURCE_DIR}/include/fsim/app/application.hpp")
+  "${FSIM_SOURCE_DIR}/include/fsim/app/built_project.hpp")
 if(DEFINED FSIM_AST_LIFETIME_TEST_APPLICATION_HEADER)
   set(FSIM_APPLICATION_HEADER "${FSIM_AST_LIFETIME_TEST_APPLICATION_HEADER}")
 endif()

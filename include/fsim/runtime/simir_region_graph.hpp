@@ -3,13 +3,11 @@
 
 #include "fsim/runtime/simir.hpp"
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <optional>
 #include <span>
-#include <string>
 #include <string_view>
 #include <vector>
 
@@ -18,13 +16,6 @@ namespace fsim::runtime::simir {
 namespace region_graph_detail {
 class RegionGraphProgramBuilder;
 }
-
-/// The signal a VHDL driver disconnection names: the static call
-/// "@vhdl-disconnect:<signal>:<delay>" that the lowerer emits for a guarded
-/// signal assignment whose guard is false (IEEE 1076-2019 11.6, 10.5.2.2).
-/// Nothing for any other identity.
-[[nodiscard]] std::optional<SignalId> vhdl_disconnect_signal(
-    std::string_view identity);
 
 /// Capabilities requested by an observer, not an assertion that storage may
 /// disappear. Execution must materialize the requested state before exposing it.

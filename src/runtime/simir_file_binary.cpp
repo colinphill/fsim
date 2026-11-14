@@ -3,7 +3,6 @@
 #include "simir_internal.hpp"
 
 #include <algorithm>
-#include <limits>
 #include <stdexcept>
 
 namespace fsim::runtime::simir {

@@ -14,6 +14,7 @@
 // the queues, the wakes and every later order are the serial kernel's
 // whatever the thread count.
 #include "simir_static_kernel_state.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 
 #include <algorithm>
 #include <bit>

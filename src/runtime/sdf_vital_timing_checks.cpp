@@ -3,9 +3,7 @@
 #include "fsim/app/sdf_vital_timing_checks.hpp"
 
 #include <algorithm>
-#include <limits>
 #include <map>
-#include <ranges>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>

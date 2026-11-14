@@ -9,6 +9,8 @@
 # out of the binding map: elaboration fails with FSIM-ELAB-VHCOMP-017
 # (6.5.7.3).
 
+include("${CMAKE_CURRENT_LIST_DIR}/../../../cmake/FsimTestWorkspace.cmake")
+
 if(NOT DEFINED FSIM_EXECUTABLE OR NOT EXISTS "${FSIM_EXECUTABLE}")
   message(FATAL_ERROR "FSIM_EXECUTABLE must name the built fsim command")
 endif()
@@ -44,7 +46,7 @@ set(kernel_reports "")
 foreach(case IN ITEMS bc1 bc2 bc3 bc4 bc5 bc6)
   string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef workspace_id)
   set(case_dir "${CMAKE_CURRENT_BINARY_DIR}/fsim-binding-conversions-${workspace_id}")
-  file(MAKE_DIRECTORY "${case_dir}")
+  fsim_test_workspace("${case_dir}")
   file(COPY_FILE "${FSIM_FIXTURE_DIR}/${case}.vhd" "${case_dir}/${case}.vhd")
   set(top work.top)
   if(case STREQUAL "bc4")
@@ -88,3 +90,6 @@ foreach(run IN ITEMS interpreter kernel)
       "Expected:\n${expected}\n${run}:\n${${run}_reports}")
   endif()
 endforeach()
+
+# Passed: remove this run's workspaces (a failure above keeps them).
+fsim_test_workspace_cleanup()

@@ -216,6 +216,22 @@ module fsim_uvm_phase_tlm_example;
 
   logic observed_pass;
   int observed_payload;
+  fsim_uvm_payload nonblocking_payload;
+
+  // A nonblocking write of a class property (IEEE 1800-2023 10.4.2) matures
+  // in the NBA region of its time step; the host's UVM API calls before the
+  // run must not disturb it, and a final procedure (9.2.3) sees it.
+  initial begin
+    nonblocking_payload = new("nonblocking_payload");
+    nonblocking_payload.value <= 91;
+  end
+
+  final begin
+    if (nonblocking_payload.value != 91) begin
+      $display("FSIM-UVM-PHASE-TLM-NBA-LOST value=%0d",
+               nonblocking_payload.value);
+    end
+  end
 
   initial begin
     fsim_uvm_payload payload;

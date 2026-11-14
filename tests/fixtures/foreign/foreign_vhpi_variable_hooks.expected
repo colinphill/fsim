@@ -1,0 +1,27 @@
+#c start at 0 fs: a=0 b=0 c=0 r=0
+#c first a at 1000000 fs: 1
+#c second a at 1000000 fs: 1
+#c watch c at 1000000 fs: 102
+#c first a at 1000000 fs: 2
+#c second a at 1000000 fs: 2
+#c watch c at 1000000 fs: 203
+#c remove first: rc=0
+#c step at 2500000 fs: a=2 b=201 c=203 r=302
+#c second a at 3000000 fs: 3
+#c watch c at 3000000 fs: 205
+#c second a at 3000000 fs: 4
+#c watch c at 3000000 fs: 207
+#c remove second: rc=0
+#c step at 4500000 fs: a=4 b=203 c=207 r=707
+#c watch c at 5000000 fs: 209
+#c watch c at 5000000 fs: 211
+#c step at 6500000 fs: a=6 b=205 c=211 r=1116
+#c again a at 7000000 fs: 7
+#c watch c at 7000000 fs: 213
+#c again a at 7000000 fs: 8
+#c watch c at 7000000 fs: 215
+#c step at 8500000 fs: a=8 b=207 c=215 r=1529
+#c again a at 9000000 fs: 9
+#c watch c at 9000000 fs: 217
+#c again a at 9000000 fs: 10
+#c watch c at 9000000 fs: 219

@@ -4,7 +4,6 @@
 
 #include <array>
 #include <optional>
-#include <ranges>
 #include <utility>
 
 namespace fsim::test {

@@ -4,7 +4,6 @@
 
 #include "run_state_archive.hpp"
 
-#include <algorithm>
 #include <limits>
 #include <set>
 #include <stdexcept>

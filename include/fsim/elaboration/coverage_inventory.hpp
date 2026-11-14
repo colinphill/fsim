@@ -3,7 +3,6 @@
 
 #include "fsim/elaboration/coverage_instance_identity.hpp"
 #include "fsim/frontend/coverage_point_identity.hpp"
-#include "fsim/frontend/design.hpp"
 #include "fsim/runtime/code_coverage.hpp"
 
 #include <cstddef>

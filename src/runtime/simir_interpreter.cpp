@@ -1,26 +1,59 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/scheduler_events.hpp"
-#include "fsim/runtime/run_state_image.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 #include "fsim/runtime/systemverilog_string.hpp"
 #include "simir_internal.hpp"
 #include "simir_static_kernel.hpp"
 #include "simir_static_kernel_state.hpp"
-#include "simir_execution_context.hpp"
 
 #include <algorithm>
-#include <bit>
-#include <chrono>
 #include <cmath>
 #include <ctime>
 #include <cstdlib>
-#include <iomanip>
 #include <iostream>
 #include <limits>
 #include <map>
 #include <memory>
-#include <numeric>
 #include <ranges>
+#include "fsim/runtime/run_state_image.hpp"
+#include "simir_execution_context.hpp"
+#include "fsim/runtime/logic.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_container_value.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include "fsim/runtime/simir_operation_storage.hpp"
+#include "fsim/runtime/simir_operations_extended.hpp"
+#include "fsim/runtime/simir_shared_vector.hpp"
+#include "fsim/runtime/simir_signal_queries.hpp"
+#include "fsim/runtime/simir_vital.hpp"
+#include "fsim/runtime/sva_engine.hpp"
+#include "fsim/runtime/systemverilog_scalar.hpp"
+#include "simir_driver_table.hpp"
+#include "simir_operation_kinds.hpp"
+#include "simir_process_program.hpp"
+#include "simir_signal_storage.hpp"
+#include <bit>
+#include <chrono>
+#include <iomanip>
+#include <numeric>
 #include <sstream>
+#include <array>
+#include <cstdint>
+#include <exception>
+#include <filesystem>
+#include <functional>
+#include <optional>
+#include <set>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <type_traits>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace fsim::runtime::simir {
 
@@ -164,6 +197,12 @@ void Interpreter::set_class_property_container_hook(
     impl_->class_property_container_hook = std::move(hook);
 }
 
+void Interpreter::set_class_container_watched_hook(
+    ClassContainerWatchedHook hook)
+{
+    impl_->class_container_watched_hook = std::move(hook);
+}
+
 void Interpreter::set_class_method_call_context_hook(
     ClassMethodCallContextHook hook)
 {
@@ -240,8 +279,15 @@ SignalId Interpreter::Impl::push_signal_late(Signal signal)
                 && (signal.systemverilog_scalar
                         == SystemVerilogScalarKind::Chandle
                     || (classification && classification.finite));
+        // A real net of a user-defined nettype resolves with its function
+        // (IEEE 1800-2023 6.6.7).
+        const bool nettype_resolved
+            = signal.resolution == ResolutionKind::user_function
+            && signal.vhdl_resolver
+            && signal.vhdl_resolver->systemverilog_nettype;
         if (!valid_value
-            || signal.resolution != ResolutionKind::none
+            || (signal.resolution != ResolutionKind::none
+                && !nettype_resolved)
             || signal.implicit_driver || signal.charge_strength
             || signal.charge_decay) {
             throw std::invalid_argument {
@@ -563,6 +609,16 @@ ContainerObjectId Interpreter::add_container_object(
     return id;
 }
 
+std::optional<SignalId> Interpreter::container_bridge_signal(
+    const ContainerObjectId object) const
+{
+    if (object >= impl_->container_signal_aliases.size()
+        || !impl_->container_signal_aliases[object]) {
+        return std::nullopt;
+    }
+    return impl_->container_signal_aliases[object]->signal;
+}
+
 void Interpreter::add_container_signal_alias(
     const ContainerSignalAlias alias)
 {
@@ -690,7 +746,12 @@ void Interpreter::add_container_aggregate_signal_alias(
     const auto width = container_signal_bridge_width(type);
     if (object.slice_alias || !type.fixed || type.dimensions.empty()
         || type.element_kind != ContainerElementKind::Packed
-        || type.element_width == 0U || type.two_state
+        || type.element_width == 0U
+        // The elements of an array of nets of a two-state user-defined
+        // nettype (IEEE 1800-2023 6.6.7) are nets too.
+        || (type.two_state
+            && impl_->signals[alias.signal].resolution
+                != ResolutionKind::user_function)
         || !width || *width != impl_->signals[alias.signal].initial_value.width()
         || impl_->signals[alias.signal].initial_value.is_logic9()
         || impl_->signals[alias.signal].value_kind != ValueKind::logic4
@@ -1674,7 +1735,9 @@ ProcessId Interpreter::Impl::add_process_program_impl(
                 || !process.static_sensitivity().empty()
                 || process.operations().empty()
                 || (package_static_initializer
-                    && process.driver_regions().empty())
+                    && process.driver_regions().empty()
+                    && process.startup_writable_string_object_ids().empty()
+                    && process.startup_writable_container_object_ids().empty())
                 || process.observed() || process.reactive()
                 || process.postponed() || process.program_owner()
                 || process.switch_source() || process.switch_target()
@@ -1737,11 +1800,17 @@ ProcessId Interpreter::Impl::add_process_program_impl(
                     };
                 }
                 operation_container_writes.push_back(container_write->object);
-            } else if (operation_holds<WriteContainerObjectElement>(
-                           operation)) {
-                throw std::invalid_argument {
-                    "SimIR package startup cannot use direct container-element writes"
-                };
+            } else if (const auto* element_write
+                = operation_get_if<WriteContainerObjectElement>(
+                    &operation)) {
+                // At once, as a write of the whole object's new value.
+                if (element_write->nonblocking
+                    || element_write->transaction_signal) {
+                    throw std::invalid_argument {
+                        "SimIR package startup cannot defer a container element write"
+                    };
+                }
+                operation_container_writes.push_back(element_write->object);
             }
         }
         const auto canonicalize_ids = [](auto& values) {
@@ -2003,7 +2072,12 @@ ProcessId Interpreter::Impl::add_process_program_impl(
             }
         }
         for (const auto& slot : process.call_results()) {
-            if (slot.name.empty() || slot.register_id >= process.register_count()) {
+            const auto count = slot.storage == DebugLocalStorage::string
+                ? process.string_register_count()
+                : slot.storage == DebugLocalStorage::container
+                ? process.container_register_count()
+                : process.register_count();
+            if (slot.name.empty() || slot.register_id >= count) {
                 throw std::invalid_argument {
                     "invalid SimIR call-result metadata"
                 };
@@ -2013,6 +2087,20 @@ ProcessId Interpreter::Impl::add_process_program_impl(
             if (slot.name.empty() || slot.register_id >= process.register_count()) {
                 throw std::invalid_argument {
                     "invalid SimIR frame-local metadata"
+                };
+            }
+        }
+        for (const auto& binding : process.call_frames().locals) {
+            const auto count = binding.frame_table
+                ? process.frame_locals().size()
+                : binding.storage == FrameLocalStorage::string
+                ? process.debug_string_locals().size()
+                : binding.storage == FrameLocalStorage::container
+                ? process.debug_container_locals().size()
+                : process.debug_locals().size();
+            if (binding.index >= count) {
+                throw std::invalid_argument {
+                    "invalid SimIR call-frame metadata"
                 };
             }
         }
@@ -3884,6 +3972,11 @@ void Interpreter::start_for_restore()
     impl_->start_restoring = false;
 }
 
+void Interpreter::set_start_of_simulation_hook(std::function<void()> hook)
+{
+    impl_->start_of_simulation_hook = std::move(hook);
+}
+
 void Interpreter::start()
 {
     if (impl_->validation_only) {
@@ -3891,6 +3984,24 @@ void Interpreter::start()
             "cannot start a validation-only SimIR interpreter");
     }
     if (impl_->started) {
+        if (impl_->hold_time_zero && !impl_->start_in_progress) {
+            // The held time-zero processes start now.
+            impl_->hold_time_zero = false;
+            if (impl_->static_kernel) {
+                impl_->static_kernel->release_time_zero_hold();
+            }
+            queue_time_zero_processes(impl_->held_prearmed_static_waits);
+            impl_->held_prearmed_static_waits.clear();
+            if (impl_->static_kernel) {
+                // The members the release started run in the kernel's next
+                // activation.
+                for (ProcessId id = 0U; id < impl_->processes.size(); ++id) {
+                    if (impl_->static_kernel->is_host(id)) {
+                        impl_->queue_at(id, impl_->scheduler.now(), true);
+                    }
+                }
+            }
+        }
         return;
     }
     if (impl_->start_in_progress) {
@@ -4053,6 +4164,11 @@ void Interpreter::start()
             };
         }
     }
+    // Static initialization is complete: the start of simulation is the
+    // beginning of the time-zero cycle (IEEE 1800-2023 38.36.3, 6.21, 10.5).
+    if (!impl_->start_restoring && impl_->start_of_simulation_hook) {
+        impl_->start_of_simulation_hook();
+    }
     // The startup assignments above establish the simulation baseline. Build
     // active runtime inventories and sampled defaults only after that baseline
     // is final, before ordinary time-zero processes are prearmed or queued.
@@ -4159,7 +4275,7 @@ void Interpreter::start()
     // initialization delta (S25a). Under the debugger the first activation
     // is likewise queued, so it runs where the debugger can stop it.
     const bool kernel_runs_after_hosted_start = [&] {
-        if (!impl_->static_kernel) {
+        if (!impl_->static_kernel || impl_->hold_time_zero) {
             return false;
         }
         // A reset's twin runs nothing at its start (D.8: every initial
@@ -4232,6 +4348,46 @@ void Interpreter::start()
         impl_->execute(*kernel_host);
         prearmed_static_waits[*kernel_host] = true;
     }
+    if (impl_->hold_time_zero) {
+        // The next start() queues the time-zero processes. The kernel's own
+        // first activation is queued now: it initializes the kernel, arms
+        // the service members and runs the hosted ones, and starts none of
+        // the design's members (release_time_zero_hold).
+        if (impl_->static_kernel) {
+            for (ProcessId id = 0U; id < impl_->processes.size(); ++id) {
+                if (impl_->static_kernel->is_host(id)
+                    && !prearmed_static_waits[id]) {
+                    impl_->queue_at(id, impl_->scheduler.now(), true);
+                }
+            }
+        }
+        impl_->held_prearmed_static_waits = std::move(prearmed_static_waits);
+        return;
+    }
+    queue_time_zero_processes(prearmed_static_waits);
+}
+
+void Interpreter::start_holding_time_zero()
+{
+    if (impl_->started) {
+        return;
+    }
+    impl_->hold_time_zero = true;
+    if (impl_->static_kernel) {
+        impl_->static_kernel->hold_time_zero();
+    }
+    start();
+}
+
+void Interpreter::queue_time_zero_processes(
+    const std::vector<bool>& prearmed_static_waits)
+{
+    // Inert static kernel members are never initialized on the host.
+    const auto inert = [&](const ProcessId id) {
+        return impl_->static_kernel
+            && id < impl_->fusion_dormant_process.size()
+            && impl_->fusion_dormant_process[id] == 1U;
+    };
     // A SystemVerilog process that waits only on time and reads a settling
     // signal starts one delta after the other processes, so time-zero
     // continuous assignments and event controls settle before it reads them
@@ -4363,6 +4519,22 @@ RunResult Interpreter::run(std::optional<SimulationTick> until)
     return ordinary;
 }
 
+RunResult Interpreter::run_host_activation()
+{
+    if (!impl_->finals_ran) {
+        return impl_->scheduler.run(impl_->scheduler.now());
+    }
+    // A final activation: the stop a $finish or $stop left is lifted for it
+    // and requested again after it.
+    const bool stopped = impl_->scheduler.stop_requested();
+    impl_->scheduler.clear_stop();
+    auto result = impl_->scheduler.run(impl_->scheduler.now());
+    if (stopped) {
+        impl_->scheduler.request_stop();
+    }
+    return result;
+}
+
 RunResult Interpreter::finish()
 {
     start();
@@ -4466,32 +4638,44 @@ std::vector<DriverTransaction> Interpreter::driver_transactions(
     const auto kernel_bits = impl_->static_kernel
         ? impl_->static_kernel->projected_pending(process, signal)
         : std::vector<std::vector<StaticKernelProjectedPending>> { };
+    // Each pending transaction of a scalar: its time, its value and whether
+    // it is a null transaction (a guarded driver's disconnection).
+    struct Pending {
+        SimulationTick time { };
+        Logic9 value { Logic9::x };
+        bool null { };
+    };
     const auto pending_of = [&](const std::size_t bit) {
-        std::vector<std::pair<SimulationTick, Logic9>> pending;
+        std::vector<Pending> pending;
         const auto found = impl_->projected_drivers.find(
             Impl::ProjectedDriverKey { process, signal,
                 static_cast<std::uint32_t>(offset + bit) });
         if (found != impl_->projected_drivers.end()) {
             for (const auto& transaction : found->second.transactions) {
-                pending.emplace_back(transaction.time, transaction.value);
+                pending.push_back({ transaction.time, transaction.value,
+                    transaction.null != 0U });
             }
         }
         if (offset + bit < kernel_bits.size()) {
             for (const auto& transaction : kernel_bits[offset + bit]) {
-                pending.emplace_back(transaction.time, transaction.value);
+                pending.push_back(
+                    { transaction.time, transaction.value, transaction.null });
             }
         }
         return pending;
     };
-    // The times of the pending transactions of the range's scalars.
+    // The times of the pending transactions of the range's scalars, and the
+    // null transactions of the driver (a disconnection of a guarded signal).
     std::set<SimulationTick> times;
+    std::set<SimulationTick> nulls;
     for (std::size_t bit = 0U; bit < width; ++bit) {
         for (const auto& transaction : pending_of(bit)) {
-            times.insert(transaction.first);
+            times.insert(transaction.time);
+            if (transaction.null) {
+                nulls.insert(transaction.time);
+            }
         }
     }
-    // Null transactions of the driver (a disconnection of a guarded signal).
-    std::set<SimulationTick> nulls;
     if (const auto found = impl_->vhdl_pending_disconnects.find(
             std::pair { signal, process });
         found != impl_->vhdl_pending_disconnects.end()) {
@@ -4519,8 +4703,9 @@ std::vector<DriverTransaction> Interpreter::driver_transactions(
             // The latest transaction of the bit at or before this time.
             std::optional<Logic9> latest;
             for (const auto& pending : pending_of(bit)) {
-                if (pending.first <= time) {
-                    latest = pending.second;
+                if (pending.time <= time) {
+                    latest = pending.null ? std::nullopt
+                                          : std::optional { pending.value };
                 }
             }
             if (!latest) {
@@ -5132,9 +5317,12 @@ void Interpreter::deposit_string_object(
         return;
     }
     storage = value;
-    // Its waiters wait on its change signal (IEEE 1800-2023 38.34).
+    // Its waiters wait on its change signal (IEEE 1800-2023 38.34). A
+    // kernel-owned change signal's value is the kernel's: the host's stored
+    // copy is not kept, so toggling it would write the same value again.
     if (const auto signal = impl_->string_objects[object].change_signal) {
-        auto toggled = impl_->get_signal(*signal).initial_value;
+        auto toggled = kernel_signal_value(*signal).value_or(
+            impl_->get_signal(*signal).initial_value);
         toggled.set(0U,
             toggled.get(0U) == Logic4::one ? Logic4::zero : Logic4::one);
         if (!impl_->deposit_kernel_owned(*signal, toggled)) {
@@ -5266,6 +5454,11 @@ PackedLogic4 Interpreter::driver_value(
     if (process >= impl_->processes.size()) {
         throw std::out_of_range("invalid SimIR process ID");
     }
+    if (impl_->static_kernel && impl_->started) {
+        if (auto value = impl_->static_kernel->driver_value(process, signal)) {
+            return std::move(*value);
+        }
+    }
     // A driver of a signal the v4 kernel owns holds its value in the kernel
     // until an observation barrier commits it (S19).
     impl_->prepare_signal_observation(signal);
@@ -5299,6 +5492,38 @@ PackedLogic4 Interpreter::driver_value(
     return impl_->underlying_driver_value(process, signal);
 }
 
+bool Interpreter::driver_disconnected(const ProcessId process,
+    const SignalId signal, const std::uint32_t offset,
+    const std::uint32_t width) const
+{
+    if (width == 0U) {
+        return false;
+    }
+    if (impl_->static_kernel && impl_->started) {
+        if (const auto off = impl_->static_kernel->driver_disconnected(
+                process, signal, offset, width)) {
+            return *off;
+        }
+    }
+    // The elements a null transaction disconnected, by signal and process
+    // (vhdl_null_elements), or a whole driver (vhdl_disconnected_drivers).
+    if (impl_->vhdl_disconnected_drivers.contains({ signal, process })) {
+        return true;
+    }
+    const auto drivers = impl_->vhdl_null_elements.find(signal);
+    if (drivers == impl_->vhdl_null_elements.end()) {
+        return false;
+    }
+    const auto elements = drivers->second.find(process);
+    if (elements == drivers->second.end()
+        || elements->second.size() < std::size_t { offset } + width) {
+        return false;
+    }
+    return std::all_of(elements->second.begin() + offset,
+        elements->second.begin() + offset + width,
+        [](const std::uint8_t element) { return element != 0U; });
+}
+
 ProcessId Interpreter::design_process(const ProcessId process) const
 {
     // A fork child of a kernel thread (its output names it).
@@ -5312,6 +5537,22 @@ ProcessId Interpreter::design_process(const ProcessId process) const
         return process;
     }
     return impl_->get_process(process).cold().design_process;
+}
+
+std::optional<SignalId> Interpreter::nettype_resolution_signal(
+    const ProcessId process) const
+{
+    for (const auto& [signal, resolver] : impl_->vhdl_resolvers) {
+        if (resolver.systemverilog_nettype
+            && (resolver.process == process
+                || std::ranges::any_of(resolver.variants,
+                    [&](const VhdlResolverVariant& variant) {
+                        return variant.process == process;
+                    }))) {
+            return signal;
+        }
+    }
+    return std::nullopt;
 }
 
 const Process& Interpreter::process_program(const ProcessId process) const
@@ -5606,7 +5847,9 @@ PackedLogic4 Interpreter::read_local_register(
     const auto& local = locals[local_index];
     if (kernel_member) {
         return impl_->static_kernel->debug_register(*kernel_owner,
-            local.register_id, local.width, newer_activations);
+            local.register_id, local.width, newer_activations,
+            table == LocalTable::call_result
+                && is_system_call_value_slot(local));
     }
     auto& state = impl_->get_process(process);
     if (newer_activations != 0U) {
@@ -5645,7 +5888,8 @@ PackedLogic4 Interpreter::read_local_register(
 }
 
 void Interpreter::write_debug_local(const ProcessId process,
-    const std::size_t local_index, const PackedLogic4& value)
+    const std::size_t local_index, const PackedLogic4& value,
+    const std::size_t newer_activations)
 {
     const auto kernel_owner = impl_->static_kernel
         ? impl_->static_kernel->debug_owner(process) : std::nullopt;
@@ -5661,6 +5905,46 @@ void Interpreter::write_debug_local(const ProcessId process,
     if (value.width() != local.width) {
         throw std::invalid_argument { "invalid SimIR debug-local payload" };
     }
+    const auto owner = kernel_owner.value_or(process);
+    if (newer_activations != 0U) {
+        // The variable of an outer activation of a recursive callable
+        // (IEEE 1076-2019 22.5.2) is in the registers the newer activation
+        // saved on entry (push_callable_frame, CallableFramePush), which the
+        // activation gets back when that call returns.
+        if (kernel_owner) {
+            impl_->static_kernel->debug_write_saved_register(*kernel_owner,
+                local.register_id, value, newer_activations);
+            return;
+        }
+        auto& frames = impl_->get_process(process).cold().callable_frames;
+        auto remaining = newer_activations;
+        for (auto frame = frames.rbegin(); frame != frames.rend(); ++frame) {
+            const auto saved = std::ranges::find(frame->packed_ids, local.register_id);
+            if (saved == frame->packed_ids.end() || --remaining != 0U) {
+                continue;
+            }
+            frame->packed[static_cast<std::size_t>(saved - frame->packed_ids.begin())]
+                = value;
+            return;
+        }
+        throw std::logic_error { "SimIR debug local has no outer activation" };
+    }
+    if (!impl_->debug_local_hooks.empty()) {
+        // A deposit leaves the forced bits as they are (IEEE 1076-2019
+        // 22.5.2) and is a change a watcher sees (21.3.2.2).
+        auto deposited = value;
+        (void)impl_->apply_debug_local_forces(
+            owner, local.register_id, deposited);
+        if (kernel_owner) {
+            impl_->static_kernel->debug_write_register(
+                *kernel_owner, local.register_id, deposited);
+        } else {
+            impl_->write_process_register(impl_->get_process(process),
+                local.register_id, deposited);
+        }
+        impl_->report_debug_local_value(owner, local.register_id, deposited);
+        return;
+    }
     if (kernel_owner) {
         impl_->static_kernel->debug_write_register(
             *kernel_owner, local.register_id, value);
@@ -5668,6 +5952,238 @@ void Interpreter::write_debug_local(const ProcessId process,
     }
     auto& state = impl_->get_process(process);
     impl_->write_process_register(state, local.register_id, value);
+}
+
+namespace {
+
+// The register of a debug local and the process that holds it (a kernel
+// member's process on v4), as write_debug_local finds them.
+struct DebugLocalTarget {
+    ProcessId owner { };
+    RegisterId reg { };
+    std::size_t width { };
+};
+
+template <typename ImplT>
+DebugLocalTarget debug_local_target(const ImplT& impl,
+    const ProcessId process, const std::size_t local_index)
+{
+    const auto kernel_owner = impl.static_kernel
+        ? impl.static_kernel->debug_owner(process) : std::nullopt;
+    const auto* const kernel_original = kernel_owner
+        ? impl.static_kernel->debug_program(*kernel_owner) : nullptr;
+    const auto program = kernel_original != nullptr
+        ? ProcessProgramView { *kernel_original }
+        : impl.processes.program_view(kernel_owner.value_or(process));
+    if (local_index >= program.debug_locals().size()) {
+        throw std::out_of_range { "invalid SimIR debug-local index" };
+    }
+    const auto& local = program.debug_locals()[local_index];
+    return { kernel_owner.value_or(process), local.register_id, local.width };
+}
+
+// The register's value, written without the hooks.
+template <typename ImplT>
+void write_debug_local_register(ImplT& impl,
+    const DebugLocalTarget& target, const PackedLogic4& value)
+{
+    if (impl.static_kernel && impl.static_kernel->debug_owner(target.owner)) {
+        impl.static_kernel->debug_write_register(
+            target.owner, target.reg, value);
+        return;
+    }
+    impl.write_process_register(
+        impl.get_process(target.owner), target.reg, value);
+}
+
+template <typename ImplT>
+void refresh_debug_local_hooked(ImplT& impl)
+{
+    // Empty while nothing is hooked: the evaluator tests only that.
+    impl.debug_local_hooked.clear();
+    for (const auto& hook : impl.debug_local_hooks) {
+        if (impl.debug_local_hooked.size() <= hook.owner) {
+            impl.debug_local_hooked.resize(hook.owner + 1U, 0U);
+        }
+        impl.debug_local_hooked[hook.owner] = 1U;
+    }
+    if (impl.static_kernel) {
+        impl.static_kernel->debug_local_hooks_changed();
+    }
+}
+
+template <typename ImplT>
+auto& debug_local_hook(ImplT& impl,
+    const DebugLocalTarget& target, const ProcessId process,
+    const std::size_t local_index)
+{
+    for (auto& hook : impl.debug_local_hooks) {
+        if (hook.owner == target.owner && hook.reg == target.reg) {
+            return hook;
+        }
+    }
+    auto& hook = impl.debug_local_hooks.emplace_back();
+    hook.owner = target.owner;
+    hook.reg = target.reg;
+    hook.process = process;
+    hook.local = local_index;
+    hook.forced = PackedLogic4(target.width, Logic4::x);
+    refresh_debug_local_hooked(impl);
+    return impl.debug_local_hooks.back();
+}
+
+template <typename ImplT>
+void drop_idle_debug_local_hooks(ImplT& impl)
+{
+    const auto erased = std::erase_if(impl.debug_local_hooks,
+        [](const auto& hook) {
+            return hook.forced_ranges.empty() && hook.watchers == 0U;
+        });
+    if (erased != 0U) {
+        refresh_debug_local_hooked(impl);
+    }
+}
+
+// Removes [offset, offset + width) from a list of bit ranges.
+void subtract_range(std::vector<std::pair<std::size_t, std::size_t>>& ranges,
+    const std::size_t offset, const std::size_t width)
+{
+    std::vector<std::pair<std::size_t, std::size_t>> kept;
+    const auto end = offset + width;
+    for (const auto& [low, count] : ranges) {
+        const auto high = low + count;
+        if (high <= offset || end <= low) {
+            kept.emplace_back(low, count);
+            continue;
+        }
+        if (low < offset) {
+            kept.emplace_back(low, offset - low);
+        }
+        if (end < high) {
+            kept.emplace_back(end, high - end);
+        }
+    }
+    ranges = std::move(kept);
+}
+
+} // namespace
+
+bool Interpreter::Impl::apply_debug_local_forces(const ProcessId owner,
+    const RegisterId reg, PackedLogic4& value)
+{
+    bool changed = false;
+    for (const auto& hook : debug_local_hooks) {
+        if (hook.owner != owner || hook.reg != reg
+            || hook.forced_ranges.empty()
+            || value.width() != hook.forced.width()) {
+            continue;
+        }
+        for (const auto& [offset, width] : hook.forced_ranges) {
+            auto bits = hook.forced.extract_bits(offset, width);
+            if (value.extract_bits(offset, width) != bits) {
+                value.insert_bits(bits, offset);
+                changed = true;
+            }
+        }
+    }
+    return changed;
+}
+
+void Interpreter::Impl::report_debug_local_value(const ProcessId owner,
+    const RegisterId reg, const PackedLogic4& value)
+{
+    for (std::size_t index = 0U; index < debug_local_hooks.size(); ++index) {
+        auto& hook = debug_local_hooks[index];
+        if (hook.owner != owner || hook.reg != reg || hook.watchers == 0U
+            || (hook.seen && *hook.seen == value)) {
+            continue;
+        }
+        hook.seen = value;
+        if (debug_local_change_hook) {
+            // The hook may add or drop entries: report by value.
+            const auto process = hook.process;
+            const auto local = hook.local;
+            debug_local_change_hook(process, local);
+        }
+    }
+}
+
+void Interpreter::force_debug_local(const ProcessId process,
+    const std::size_t local_index, const PackedLogic4& value,
+    const std::size_t offset, const std::size_t width)
+{
+    const auto target = debug_local_target(*impl_, process, local_index);
+    if (value.width() != target.width || offset > target.width
+        || width > target.width - offset || width == 0U) {
+        throw std::invalid_argument { "invalid SimIR debug-local force" };
+    }
+    auto current = read_debug_local(process, local_index);
+    auto& hook = debug_local_hook(*impl_, target, process, local_index);
+    // A variable that is forced is updated with the value (IEEE 1076-2019
+    // 22.5.2); a later force of the same bits replaces it.
+    hook.forced.insert_bits(value.extract_bits(offset, width), offset);
+    subtract_range(hook.forced_ranges, offset, width);
+    hook.forced_ranges.emplace_back(offset, width);
+    current.insert_bits(value.extract_bits(offset, width), offset);
+    write_debug_local_register(*impl_, target, current);
+    impl_->report_debug_local_value(target.owner, target.reg, current);
+}
+
+void Interpreter::release_debug_local(const ProcessId process,
+    const std::size_t local_index, const std::size_t offset,
+    const std::size_t width)
+{
+    const auto target = debug_local_target(*impl_, process, local_index);
+    for (auto& hook : impl_->debug_local_hooks) {
+        if (hook.owner == target.owner && hook.reg == target.reg) {
+            subtract_range(hook.forced_ranges, offset, width);
+        }
+    }
+    drop_idle_debug_local_hooks(*impl_);
+}
+
+bool Interpreter::debug_local_forced(const ProcessId process,
+    const std::size_t local_index, const std::size_t offset,
+    const std::size_t width) const
+{
+    const auto target = debug_local_target(*impl_, process, local_index);
+    for (const auto& hook : impl_->debug_local_hooks) {
+        if (hook.owner != target.owner || hook.reg != target.reg) {
+            continue;
+        }
+        for (const auto& [low, count] : hook.forced_ranges) {
+            if (low < offset + width && offset < low + count) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+void Interpreter::watch_debug_local(const ProcessId process,
+    const std::size_t local_index, const bool watched)
+{
+    const auto target = debug_local_target(*impl_, process, local_index);
+    if (watched) {
+        auto& hook = debug_local_hook(*impl_, target, process, local_index);
+        if (hook.watchers++ == 0U) {
+            try {
+                hook.seen = read_debug_local(process, local_index);
+            } catch (const std::logic_error&) {
+                hook.seen.reset();
+            }
+        }
+        return;
+    }
+    // Each watch is released once: the changes are reported until the last
+    // one ends.
+    for (auto& hook : impl_->debug_local_hooks) {
+        if (hook.owner == target.owner && hook.reg == target.reg
+            && hook.watchers != 0U && --hook.watchers == 0U) {
+            hook.seen.reset();
+        }
+    }
+    drop_idle_debug_local_hooks(*impl_);
 }
 
 SystemVerilogScalarValue Interpreter::read_debug_scalar_local(
@@ -5731,7 +6247,8 @@ void Interpreter::write_debug_scalar_local(
 
 std::string Interpreter::read_debug_string_local(
     const ProcessId process,
-    const std::size_t local_index) const
+    const std::size_t local_index,
+    const std::size_t newer_activations) const
 {
     // A kernel thread member, or a fork child of one, owns its registers.
     const auto kernel_owner = impl_->static_kernel
@@ -5748,9 +6265,25 @@ std::string Interpreter::read_debug_string_local(
     const auto& local = program.debug_string_locals()[local_index];
     if (kernel_member) {
         return impl_->static_kernel->debug_string_register(
-            *kernel_owner, local.register_id);
+            *kernel_owner, local.register_id, newer_activations);
     }
     auto& state = impl_->get_process(process);
+    if (newer_activations != 0U) {
+        // Entering an automatic callable again saves the strings of the
+        // activation it shadows (push_callable_frame), newest last.
+        auto remaining = newer_activations;
+        const auto& frames = state.cold().callable_frames;
+        for (auto frame = frames.rbegin(); frame != frames.rend(); ++frame) {
+            const auto saved = std::ranges::find(
+                frame->string_ids, local.register_id);
+            if (saved == frame->string_ids.end() || --remaining != 0U) {
+                continue;
+            }
+            return frame->strings[static_cast<std::size_t>(
+                saved - frame->string_ids.begin())];
+        }
+        throw std::logic_error { "SimIR debug string local has no outer activation" };
+    }
     if (state.executor) {
         return state.executor->read_string_register(local.register_id);
     }
@@ -5759,7 +6292,8 @@ std::string Interpreter::read_debug_string_local(
 }
 
 void Interpreter::write_debug_string_local(const ProcessId process,
-    const std::size_t local_index, const std::string_view value)
+    const std::size_t local_index, const std::string_view value,
+    const std::size_t newer_activations)
 {
     const auto kernel_owner = impl_->static_kernel
         ? impl_->static_kernel->debug_owner(process) : std::nullopt;
@@ -5774,10 +6308,25 @@ void Interpreter::write_debug_string_local(const ProcessId process,
     const auto& local = program.debug_string_locals()[local_index];
     if (kernel_owner) {
         impl_->static_kernel->debug_write_string_register(
-            *kernel_owner, local.register_id, value);
+            *kernel_owner, local.register_id, value, newer_activations);
         return;
     }
     auto& state = impl_->get_process(process);
+    if (newer_activations != 0U) {
+        auto remaining = newer_activations;
+        auto& frames = state.cold().callable_frames;
+        for (auto frame = frames.rbegin(); frame != frames.rend(); ++frame) {
+            const auto saved = std::ranges::find(
+                frame->string_ids, local.register_id);
+            if (saved == frame->string_ids.end() || --remaining != 0U) {
+                continue;
+            }
+            frame->strings[static_cast<std::size_t>(
+                saved - frame->string_ids.begin())] = std::string { value };
+            return;
+        }
+        throw std::logic_error { "SimIR debug string local has no outer activation" };
+    }
     if (state.executor) {
         state.executor->write_string_register(local.register_id, value);
         return;
@@ -5818,6 +6367,58 @@ void Interpreter::write_debug_container_local(const ProcessId process,
     (void)impl_->ensure_process_frame(state);
     impl_->set_container_register_storage(
         state, local.register_id, std::make_shared<ContainerValue>(value));
+}
+
+std::string Interpreter::read_call_result_string(
+    const ProcessId process, const std::size_t slot) const
+{
+    const auto kernel_owner = impl_->static_kernel
+        ? impl_->static_kernel->debug_owner(process) : std::nullopt;
+    const auto* const kernel_original = kernel_owner
+        ? impl_->static_kernel->debug_program(*kernel_owner) : nullptr;
+    const auto program = kernel_original != nullptr
+        ? ProcessProgramView { *kernel_original }
+        : impl_->processes.program_view(kernel_owner.value_or(process));
+    if (slot >= program.call_results().size()
+        || program.call_results()[slot].storage != DebugLocalStorage::string) {
+        throw std::out_of_range { "invalid SimIR string call-result slot" };
+    }
+    const auto reg = program.call_results()[slot].register_id;
+    if (kernel_owner) {
+        return impl_->static_kernel->debug_string_register(*kernel_owner, reg);
+    }
+    auto& state = impl_->get_process(process);
+    if (state.executor) {
+        return state.executor->read_string_register(reg);
+    }
+    return impl_->ensure_process_frame(state).string_registers.at(reg);
+}
+
+ContainerValue Interpreter::read_call_result_container(
+    const ProcessId process, const std::size_t slot) const
+{
+    const auto kernel_owner = impl_->static_kernel
+        ? impl_->static_kernel->debug_owner(process) : std::nullopt;
+    const auto* const kernel_original = kernel_owner
+        ? impl_->static_kernel->debug_program(*kernel_owner) : nullptr;
+    const auto program = kernel_original != nullptr
+        ? ProcessProgramView { *kernel_original }
+        : impl_->processes.program_view(kernel_owner.value_or(process));
+    if (slot >= program.call_results().size()
+        || program.call_results()[slot].storage
+            != DebugLocalStorage::container) {
+        throw std::out_of_range { "invalid SimIR container call-result slot" };
+    }
+    const auto reg = program.call_results()[slot].register_id;
+    if (kernel_owner) {
+        return impl_->static_kernel->debug_container_register(*kernel_owner, reg);
+    }
+    auto& state = impl_->get_process(process);
+    if (state.executor) {
+        return state.executor->read_container_register(reg);
+    }
+    (void)impl_->ensure_process_frame(state);
+    return impl_->read_container_register(state, reg);
 }
 
 ContainerValue Interpreter::read_debug_container_local(
@@ -5924,6 +6525,11 @@ void Interpreter::set_signal_transaction_hook(SignalTransactionHook hook)
 void Interpreter::set_driver_transaction_hook(DriverTransactionHook hook)
 {
     impl_->driver_transaction_hook = std::move(hook);
+}
+
+void Interpreter::set_debug_local_change_hook(DebugLocalChangeHook hook)
+{
+    impl_->debug_local_change_hook = std::move(hook);
 }
 
 void Interpreter::set_container_object_change_hook(

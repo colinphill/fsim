@@ -4,13 +4,11 @@
 #include "fsim/diagnostic/diagnostic.hpp"
 #include "fsim/project/project.hpp"
 #include "fsim/systemc/hierarchy.hpp"
-#include "fsim/systemc/scv.hpp"
 
 #include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <optional>
-#include <span>
 #include <string>
 #include <string_view>
 #include <vector>

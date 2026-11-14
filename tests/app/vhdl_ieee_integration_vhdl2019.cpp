@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fsim/app/application.hpp"
-#include "fsim/app/artifact_phase.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/semantic/vhdl_hir.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/frontend/design.hpp"
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/frontend/parser.hpp"
 #include "fsim/support/environment.hpp"
@@ -15,7 +18,6 @@
 #include <fstream>
 #include <iostream>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <tuple>
 #include <utility>

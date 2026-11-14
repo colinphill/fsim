@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "frontend_test_support.hpp"
-#include "fsim/frontend/frontend.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/diagnostic.hpp"
+#include "fsim/frontend/parser.hpp"
+#include "fsim/frontend/source.hpp"
+#include "fsim/frontend/token.hpp"
 
 #include "../allocation_hook_forwarding.hpp"
 
@@ -14,6 +18,8 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <exception>
+#include <vector>
 
 namespace {
 

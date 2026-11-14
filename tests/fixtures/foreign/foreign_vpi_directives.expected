@@ -1,0 +1,8 @@
+#c top decay=-1
+#c top disable iff: none
+#c top.u_dis decay=100
+#c top.u_dis disable iff: type=36 name=rst value=1
+#c top.u_real decay=3
+#c top.u_real disable iff: none
+#c top.u_inf decay=-1
+#c top.u_inf disable iff: none

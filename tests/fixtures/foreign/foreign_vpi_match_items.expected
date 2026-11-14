@@ -1,0 +1,32 @@
+#c sequence top.s_mi
+#c   op 54
+#c     op 54
+#c       item vpiAssignment op=82 lhs=v rhs=vpiIntVar
+#c       item vpiOperation op=62 operand=v
+#c       item vpiSysTaskCall name=$display
+#c       vpiReg a
+#c       vpiReg b
+#c       vpiConstant none
+#c     op 14
+#c       vpiIntVar d
+#c       vpiRefObj v
+#c     vpiConstant none
+#c cover top.c1
+#c   op 26
+#c     item vpiSysTaskCall name=$display
+#c     vpiReg a
+#c     vpiReg b
+#c sequence top.s_pn
+#c   op 54
+#c     op 54
+#c       vpiRefObj a actual=vpiReg a
+#c         item vpiAssignment op=82 lhs=w rhs=vpiIntVar
+#c       vpiConstant none
+#c         item vpiOperation op=62 operand=w
+#c       vpiConstant none
+#c     op 26
+#c       vpiReg b
+#c       op 14
+#c         vpiRefObj w actual=vpiIntVar w
+#c         vpiConstant none
+#c     vpiConstant none

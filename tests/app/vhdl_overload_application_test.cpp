@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/semantic/vhdl_hir.hpp"
+#include "fsim/runtime/simir.hpp"
 #include "fsim/runtime/vcd_writer.hpp"
 #include "path_test_support.hpp"
 
@@ -717,7 +720,7 @@ end package body;
   {
     std::ofstream output(top, std::ios::binary);
     output << R"(
-entity overload_app is
+library ieee; use ieee.std_logic_1164.all; entity overload_app is
 end entity;
 use work.overload_pkg.all;
 architecture rtl of overload_app is

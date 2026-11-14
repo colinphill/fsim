@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fsim/api.h"
+#include "fsim/elaboration/elaborator.hpp"
 #include "fsim/app/sdf_control.hpp"
 #include "fsim/cli/driver.hpp"
 #include "../api/api_workspace_support.hpp"

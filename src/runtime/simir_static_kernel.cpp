@@ -23,7 +23,9 @@
 #include "simir_static_kernel_state.hpp"
 #include "simir_container_helpers.hpp"
 #include "fsim/runtime/simir_coverage.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 #include "fsim/runtime/simir_shared_body_scan.hpp"
+#include "fsim/runtime/vhdl_resolution_error.hpp"
 #include "fsim/support/parallel_for.hpp"
 #include "fsim/frontend/design_core.hpp"
 
@@ -425,6 +427,7 @@ Interpreter::Impl::StaticKernel::StaticKernel(
     if (const char* skip = std::getenv("FSIM_KERNEL_WRITE_SKIP");
         vhdl_ && (skip == nullptr || std::string_view { skip } != "0")) {
         write_marks_.assign(slots_.size(), 0U);
+        mark_transaction_slots();
     }
     stage("schedule");
     for (const auto signal : spec.unwritten_inputs) {
@@ -539,7 +542,8 @@ Interpreter::Impl::StaticKernel::StaticKernel(
                         host_written = host_written || op.wake_signal.has_value();
                     } else if constexpr (std::is_same_v<T, MonitorInstall>
                         || std::is_same_v<T, MonitorControl>
-                        || std::is_same_v<T, EventTriggered>) {
+                        || std::is_same_v<T, EventTriggered>
+                        || std::is_same_v<T, EventArrayElement>) {
                         // The host's monitor prints in the host's time steps
                         // (IEEE 1800-2023 21.2.3), and an event's triggered
                         // state is of the host's time step (15.5.3): no time
@@ -584,6 +588,9 @@ Interpreter::Impl::StaticKernel::StaticKernel(
                             || (!member.vhdl
                                 && (op.object >= container_of_object_.size()
                                     || container_of_object_[op.object] == no_container));
+                    } else if constexpr (std::is_same_v<T, WriteContainerObjectString>) {
+                        // A string element write of a host object.
+                        host_written = host_written || !member.vhdl;
                     } else if constexpr (std::is_same_v<T, WriteContainerObject>) {
                         // A host object written from a reference-format register.
                         host_written = host_written
@@ -634,6 +641,26 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         [](const Member& member) { return member.assertion; });
     closed_ = !host_boundary_ && !has_hosted_ && !host_written && !assertions
         && !vhdl_host_cycles_ && impl_.processes.size() == members_.size();
+    // A user-resolved signal starts at the resolution of its drivers'
+    // initial values (IEEE 1076-2019 14.7.5.2): one pass of its resolver,
+    // in both blocks.
+    // A net of a user-defined nettype instead holds its data type's
+    // default; its function's time-zero call is an update of the net
+    // (IEEE 1800-2023 6.7.3), which initialize queues.
+    for (std::uint32_t index = 0U; index < slots_.size(); ++index) {
+        if (slots_[index].user && !nettype_slot(index)) {
+            resolve_user_slot(index);
+            const auto& slot = slots_[index];
+            std::copy_n(arena_.data() + slot.offset,
+                std::size_t { slot.planes } * slot.words,
+                arena_.data() + slot.offset + net_block_words(slot));
+            slots_[index].edge_seen = slot_edge_bit(index);
+        }
+    }
+    if (has_source_wires_ || !split_programs_.empty() || has_convert_wires_
+        || has_native_splits_) {
+        settle_splits();
+    }
     if (!conversion_members_.empty()) {
         settle_conversions();
     }
@@ -677,6 +704,46 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
                 if (const auto* write = operation_get_if<WriteNetDelay>(&operation);
                     write != nullptr && write->signal < signal_count) {
                     net_delayed[write->signal] = 1U;
+                }
+            });
+        }
+    }
+    // The signals a VHDL member gives null transactions (IEEE 1076-2019
+    // 10.5.2.2): guarded signals, whose drivers a null transaction turns off.
+    // A std_logic one is resolved over its drivers even with one driver, so
+    // each driver keeps its off state (set_net_null) apart from its value.
+    std::vector<std::uint8_t> null_written(signal_count, 0U);
+    if (spec.vhdl) {
+        const auto has_null = [](const std::vector<ProjectedWaveformElement>& elements) {
+            return std::ranges::any_of(elements,
+                [](const ProjectedWaveformElement& element) { return element.null != 0U; });
+        };
+        SharedBodyOperationScan scan { [](const Operation& operation) {
+            return operation_holds<WriteProjectedWaveform>(operation)
+                || operation_holds<WriteProjectedWaveformSlice>(operation)
+                || operation_holds<WriteProjectedWaveformDynamicSlice>(operation);
+        } };
+        for (const auto& member_spec : spec.members) {
+            if (!member_spec.vhdl || member_spec.process == spec.host) {
+                continue;
+            }
+            const auto program = impl_.processes.program_view(member_spec.process);
+            scan.visit(program.operations(),
+                [&](const std::size_t, const Operation& operation) {
+                const auto mark = [&](const SignalId signal,
+                                      const std::vector<ProjectedWaveformElement>& elements) {
+                    if (signal < signal_count && has_null(elements)) {
+                        null_written[signal] = 1U;
+                    }
+                };
+                if (const auto* write = operation_get_if<WriteProjectedWaveform>(&operation)) {
+                    mark(write->signal, write->elements);
+                } else if (const auto* slice
+                           = operation_get_if<WriteProjectedWaveformSlice>(&operation)) {
+                    mark(slice->signal, slice->elements);
+                } else if (const auto* dynamic
+                           = operation_get_if<WriteProjectedWaveformDynamicSlice>(&operation)) {
+                    mark(dynamic->signal, dynamic->elements);
                 }
             });
         }
@@ -747,11 +814,45 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
         }
         // A std_logic signal with several drivers over common elements keeps
         // nine states (Slot::nine): the std_logic_1164 resolution.
-        const bool nine = spec.vhdl && !resolved && driven_over[signal] != 0U
+        const bool nine = spec.vhdl && !resolved
+            && (driven_over[signal] != 0U || null_written[signal] != 0U)
             && impl_.get_signal(signal).value_kind == ValueKind::logic9
             && impl_.get_signal(signal).resolution == ResolutionKind::std_logic;
-        resolved = resolved || nine;
-        const bool logic9 = spec.vhdl && (nine || !resolved)
+        // A signal with a resolution function of the design's own
+        // (plan_static_kernel owns one of two planes or nine states whose
+        // drivers are all members): a source for each driver (Slot::user).
+        // So does a net of a user-defined nettype, whose drivers are
+        // SystemVerilog members (IEEE 1800-2023 6.6.7).
+        const VhdlSignalResolver* user = nullptr;
+        const auto nettype_resolver = impl_.vhdl_resolvers.find(signal);
+        const bool nettype = nettype_resolver != impl_.vhdl_resolvers.end()
+            && nettype_resolver->second.systemverilog_nettype;
+        if ((spec.vhdl || nettype) && !resolved && !nine
+            && impl_.get_signal(signal).resolution
+                == ResolutionKind::user_function) {
+            const auto found = impl_.vhdl_resolvers.find(signal);
+            const auto kind = impl_.get_signal(signal).value_kind;
+            // An inout formal that takes its effective value from its actual
+            // (driving_mirror): the function resolves its own drivers into
+            // the mirror (resolve_user_slot); with none it has no sources.
+            const bool split = found != impl_.vhdl_resolvers.end()
+                && found->second.driving_mirror;
+            // A nettype net nothing drives has no sources: its function
+            // runs for no drivers (IEEE 1800-2023 6.6.7).
+            if (found == impl_.vhdl_resolvers.end()
+                || (found->second.drivers.empty() && !split && !nettype)
+                || (kind != ValueKind::logic4 && kind != ValueKind::logic9)) {
+                throw std::invalid_argument(
+                    "static kernel owns a user-resolved signal it cannot resolve");
+            }
+            if (!split || !found->second.driving_drivers.empty()) {
+                user = &found->second;
+            }
+        }
+        resolved = resolved || nine || user != nullptr;
+        // A user-resolved signal of nine states keeps them: its function
+        // reads the drivers' STD_ULOGIC values (IEEE 1076-2019 14.7.3.2).
+        const bool logic9 = spec.vhdl && (nine || user != nullptr || !resolved)
             && impl_.get_signal(signal).value_kind == ValueKind::logic9;
         const auto initial = Impl::coerce_value_kind(
             impl_.get_signal(signal).initial_value,
@@ -773,7 +874,39 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
             }
         }
         slot.edge_seen = edge_bit(initial);
-        if (resolved) {
+        slot.user = user != nullptr;
+        if (user != nullptr) {
+            // Each driver's source starts at the drivers' initial value
+            // (IEEE 1076-2019 14.7.5.2), in the resolver's order.
+            const auto found = impl_.vhdl_driver_initial_values.find(signal);
+            const auto codes = Impl::coerce_value_kind(
+                found != impl_.vhdl_driver_initial_values.end()
+                    ? found->second
+                    : impl_.get_signal(signal).initial_value,
+                ValueKind::logic9);
+            for (const auto process : user->driving_mirror
+                    ? user->driving_drivers : user->drivers) {
+                slot.net_processes.push_back(process);
+                const auto base = arena_.size();
+                arena_.resize(base + 4U * slot.words, 0U);
+                // A nettype's driver starts at the value the host holds for
+                // it.
+                const auto* record = nettype
+                    ? impl_.driver_values.at(signal).find(process)
+                    : nullptr;
+                const auto driver_codes = record != nullptr
+                    ? Impl::coerce_value_kind(record->value, ValueKind::logic9)
+                    : codes;
+                for (std::uint32_t plane = 0U; plane < 4U; ++plane) {
+                    copy_bits(arena_.data() + base + plane * slot.words, 0U,
+                        driver_codes.logic9_plane_words(plane), slot.width);
+                }
+            }
+            const auto block = arena_.size() - slot.offset;
+            arena_.resize(slot.offset + 2U * block + 1U, 0U);
+            std::copy_n(arena_.data() + slot.offset, block,
+                arena_.data() + slot.offset + block);
+        } else if (resolved) {
             // The sources follow the slot's planes (Slot::net_processes), at
             // the host's driver values: a VHDL port's driver at the port's
             // default, the net's own drivers at z.
@@ -1065,6 +1198,9 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
         resolver_processes.insert(resolver.process);
         for (const auto& variant : resolver.variants) {
             resolver_processes.insert(variant.process);
+        }
+        if (resolver.driving_resolver) {
+            resolver_processes.insert(resolver.driving_resolver->process);
         }
     }
     for (const auto& [signal, drivers] : impl_.vhdl_conversion_drivers) {
@@ -1381,10 +1517,8 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
                         slot_waitable_[leaf.slot] = 1U;
                     }
                 } else if (const auto slot = slot_of_signal_[signal]; slot != no_slot) {
-                    if (edge == EdgeKind::transaction) {
-                        throw std::invalid_argument(
-                            "static kernel transaction wait on a kernel signal");
-                    }
+                    // A transaction wait is woken by the slot's history
+                    // (build_histories, history_transaction).
                     slot_waitable_.resize(slots_.size(), 0U);
                     slot_waitable_[slot] = 1U;
                 } else {
@@ -1405,6 +1539,13 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
                     for (std::size_t entry = 0U; entry < wait->signals.size(); ++entry) {
                         waitable(wait->signals[entry], wait->edges.empty()
                             ? EdgeKind::any : wait->edges[entry]);
+                    }
+                } else if (const auto* element
+                           = operation_get_if<EventArrayElement>(&operation);
+                           element != nullptr
+                           && element->operation == EventArrayOperation::wait) {
+                    for (const auto signal : element->elements) {
+                        waitable(signal, EdgeKind::any);
                     }
                 }
             }
@@ -1889,6 +2030,8 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
                   << " members=" << spec.members.size() << '\n';
     }
     stage("levels");
+    // The histories, and 'LAST_VALUE as a read, before the members compile.
+    build_histories();
     if (std::getenv("FSIM_STATIC_KERNEL_GENERIC") == nullptr) {
         restored_specializations_ = std::move(spec.specializations);
         recorded_specializations_ = std::move(spec.record_specializations);
@@ -2122,6 +2265,15 @@ void Interpreter::Impl::StaticKernel::plan_conversions_and_wires(
             impl_.vhdl_resolvers.erase(target);
         }
     }
+    // The driving-value mirrors of the split inout formals (their resolvers
+    // lose the link as they are wired below).
+    std::unordered_set<SignalId> mirrors;
+    for (const auto& [formal, resolver] : impl_.vhdl_resolvers) {
+        static_cast<void>(formal);
+        if (resolver.driving_mirror) {
+            mirrors.insert(*resolver.driving_mirror);
+        }
+    }
     // Wired formals: an owned signal whose host resolver is a pure-routing
     // program over an owned source (static_kernel_wiring) is driven by the
     // kernel from now on; the host does not resolve it again.
@@ -2130,33 +2282,103 @@ void Interpreter::Impl::StaticKernel::plan_conversions_and_wires(
         if (resolver == impl_.vhdl_resolvers.end()
             || resolver->second.sources.size() != 1U
             || !resolver->second.drivers.empty()
-            || !resolver->second.variants.empty()
-            || resolver->second.driving_mirror
+            || (!resolver->second.driving_mirror
+                && !resolver->second.variants.empty())
+            || (resolver->second.driving_mirror
+                && (*resolver->second.driving_mirror >= signal_count
+                    || slot_of_signal_[*resolver->second.driving_mirror]
+                        == no_slot))
             || resolver->second.process >= impl_.processes.size()) {
             continue;
         }
         const auto source = resolver->second.sources.front();
+        // A program that is not pure routing, run by the kernel as a
+        // resolver member, is a conversion function or type conversion of
+        // the source (IEEE 1076-2019 6.5.7.1): the wire carries its result.
         const auto wire = static_kernel_wiring(
             impl_.processes.program_view(resolver->second.process).operations(),
             resolver->second.output, [&](const SignalId id) {
                 return static_cast<std::uint64_t>(
                     impl_.get_signal(id).initial_value.width());
             });
-        if (!wire || wire->source != source || source >= signal_count
-            || slot_of_signal_[source] == no_slot) {
+        const bool convert = !wire && resolver_members_.contains(resolver->second.process)
+            && (resolver->second.driving_mirror || mirrors.contains(source));
+        if ((!convert && (!wire || wire->source != source))
+            || source >= signal_count || slot_of_signal_[source] == no_slot) {
             continue;
         }
         const auto& from = slots_[slot_of_signal_[source]];
         const auto& to = slots_[slot_of_signal_[signal]];
-        if (from.planes != to.planes || to.width != wire->width
-            || wire->offset + wire->width > from.width) {
+        if (convert ? false
+                    : (from.planes != to.planes || to.width != wire->width
+                          || wire->offset + wire->width > from.width)) {
             throw std::invalid_argument(
-                "static kernel wiring does not fit its signals");
+                "static kernel wiring does not fit its signals (a resolved "
+                "formal's wire: planes " + std::to_string(from.planes) + "/"
+                + std::to_string(to.planes) + ", width "
+                + std::to_string(wire->width) + "/"
+                + std::to_string(to.width) + ")");
         }
-        wires_.push_back({ slot_of_signal_[source], slot_of_signal_[signal],
-            wire->offset, wire->width, 0U });
+        if (convert) {
+            wires_.push_back({ slot_of_signal_[source], slot_of_signal_[signal],
+                0U, to.width, 0U, std::numeric_limits<std::uint32_t>::max(),
+                resolver->second.process, resolver->second.output });
+        } else {
+            wires_.push_back({ slot_of_signal_[source], slot_of_signal_[signal],
+                wire->offset, wire->width, 0U });
+        }
         auto& dependents = impl_.vhdl_conversion_dependents[source];
-        std::erase(dependents, signal);
+        if (!resolver->second.driving_mirror) {
+            std::erase(dependents, signal);
+        }
+        if (const auto mirror = resolver->second.driving_mirror) {
+            // An inout formal split into its effective value (this wire)
+            // and its driving value, which its own drivers give the mirror
+            // (IEEE 1076-2019 14.7.3.2, 14.7.3.3).
+            auto& formal = slots_[slot_of_signal_[signal]];
+            formal.driving_slot = slot_of_signal_[*mirror];
+            slots_[formal.driving_slot].split_mirror = true;
+            // The update phase resolves a split formal's drivers into its
+            // mirror and follows what the mirror feeds (commit_round).
+            has_source_wires_ = true;
+            // The host's copy of the formal has the wiring's program as its
+            // one driver (its effective value is the actual's).
+            formal.writers.assign(1U,
+                WriterRegion { resolver->second.process, 0U, formal.width });
+            formal.disjoint_writers = true;
+            if (resolver->second.driving_resolver
+                && !resolver->second.driving_drivers.empty()) {
+                split_programs_.emplace(slot_of_signal_[signal],
+                    *resolver->second.driving_resolver);
+            } else if (!resolver->second.driving_drivers.empty()) {
+                // A std_logic formal: the kernel resolves its sources
+                // natively (resolve_user_slot).
+                has_native_splits_ = true;
+            } else {
+                // No driver: the driving value is the formal's default
+                // (IEEE 1076-2019 6.5.2, 14.7.3.2).
+                const auto found = impl_.vhdl_driver_initial_values.find(signal);
+                store_slot_bits(formal.driving_slot,
+                    Impl::coerce_value_kind(
+                        found != impl_.vhdl_driver_initial_values.end()
+                            ? found->second
+                            : impl_.get_signal(signal).initial_value,
+                        slots_[formal.driving_slot].planes == 4U
+                            ? ValueKind::logic9 : ValueKind::logic4),
+                    0U);
+            }
+        }
+        if (resolver->second.driving_mirror) {
+            // The host's copy of the formal holds its effective value only,
+            // the conversion of its actual's host copy in the host's update
+            // commit (the kernel publishes the actual, not the formal); the
+            // kernel's resolution of its drivers is the mirror's.
+            impl_.signals[signal].resolution = ResolutionKind::none;
+            // (driving_resolver stays: its program is a kernel resolver
+            // member, and the formal's mirror is the kernel's.)
+            resolver->second.driving_mirror.reset();
+            continue;
+        }
         impl_.vhdl_resolvers.erase(resolver);
     }
     // Wired actual parts: an owned signal whose conversion drivers are
@@ -2169,7 +2391,10 @@ void Interpreter::Impl::StaticKernel::plan_conversions_and_wires(
             continue;
         }
         for (const auto& driver : found->second) {
-            const auto wire = driver.sources.size() == 1U
+            // A driver program the kernel runs as a resolver member is a
+            // conversion of its one source (IEEE 1076-2019 6.5.7.1): the
+            // part of the actual it drives is its stub's driver region.
+            std::optional<StaticKernelWiring> wire = driver.sources.size() == 1U
                     && driver.program < impl_.processes.size()
                 ? static_kernel_wiring(
                       impl_.processes.program_view(driver.program).operations(),
@@ -2178,25 +2403,88 @@ void Interpreter::Impl::StaticKernel::plan_conversions_and_wires(
                               impl_.get_signal(id).initial_value.width());
                       })
                 : std::nullopt;
+            // The target takes the converted value as the source of the
+            // conversion driver's process: a user-resolved actual, or a
+            // std_logic one the kernel resolves over several sources.
+            const bool row_target = slot_of_signal_[signal] != no_slot
+                && ((slots_[slot_of_signal_[signal]].user
+                        && impl_.vhdl_resolvers.contains(signal))
+                    || (slots_[slot_of_signal_[signal]].resolved
+                        && slots_[slot_of_signal_[signal]].nine()
+                        && !impl_.vhdl_resolvers.contains(signal)));
+            // A std_logic actual the kernel resolves natively takes the
+            // conversion's result whatever its number of sources, as the
+            // planner owns it (native_feed): with this one source alone its
+            // slot keeps no rows, and the result is its value.
+            const auto& target_signal = impl_.get_signal(signal);
+            const bool native_target = slot_of_signal_[signal] != no_slot
+                && !impl_.vhdl_resolvers.contains(signal)
+                && target_signal.resolution == ResolutionKind::std_logic
+                && target_signal.value_kind == ValueKind::logic9;
+            const bool convert = !wire && driver.sources.size() == 1U
+                && driver.program < impl_.processes.size()
+                && resolver_members_.contains(driver.program)
+                && (row_target || native_target
+                    || mirrors.contains(driver.sources.front()));
+            if (convert) {
+                std::uint32_t width = static_cast<std::uint32_t>(
+                    impl_.get_signal(signal).initial_value.width());
+                if (driver.offset && driver.stub < impl_.processes.size()) {
+                    for (const auto& region : impl_.processes
+                             .program_view(driver.stub).driver_regions()) {
+                        if (region.signal == signal && !region.whole
+                            && region.offset == *driver.offset) {
+                            width = region.width;
+                        }
+                    }
+                }
+                wire = StaticKernelWiring { driver.sources.front(), 0U, width };
+            }
             const auto source = wire ? wire->source : SignalId { };
             const auto target_offset = driver.offset.value_or(0U);
-            if (!wire || source != driver.sources.front()
-                || source >= signal_count || slot_of_signal_[source] == no_slot
-                || impl_.vhdl_resolvers.contains(signal)) {
+            // A user-resolved actual takes the converted value as the source
+            // of the conversion driver's process (Wire::target_source); so
+            // does a std_logic actual the kernel resolves over several
+            // sources.
+            const bool source_row = row_target;
+            const char* const unfit = !wire ? "its program is not a wiring"
+                : source != driver.sources.front()
+                    ? "its program reads another signal"
+                : source >= signal_count || slot_of_signal_[source] == no_slot
+                    ? "its source is not a kernel signal"
+                : impl_.vhdl_resolvers.contains(signal) && !source_row
+                    ? "the actual's resolution is the host's"
+                    : nullptr;
+            if (unfit != nullptr) {
                 throw std::invalid_argument(
-                    "static kernel wiring does not fit its signals");
+                    std::string { "static kernel wiring does not fit its "
+                                  "signals (an actual part's driver: " }
+                    + unfit + ")");
             }
             const auto& from = slots_[slot_of_signal_[source]];
             const auto& to = slots_[slot_of_signal_[signal]];
-            if (from.planes != to.planes || wire->offset + wire->width > from.width
+            if ((!convert && (from.planes != to.planes
+                                 || wire->offset + wire->width > from.width))
                 || target_offset + wire->width > to.width
                 || (!driver.offset && wire->width != to.width)) {
                 throw std::invalid_argument(
-                    "static kernel wiring does not fit its signals");
+                    "static kernel wiring does not fit its signals (an actual "
+                    "part: planes " + std::to_string(from.planes) + "/"
+                    + std::to_string(to.planes) + ", width "
+                    + std::to_string(wire->width) + " at "
+                    + std::to_string(target_offset) + "/"
+                    + std::to_string(to.width) + ", converted "
+                    + std::to_string(convert ? 1 : 0) + ")");
             }
             wires_.push_back({ slot_of_signal_[source], slot_of_signal_[signal],
                 wire->offset, wire->width,
-                static_cast<std::uint32_t>(target_offset) });
+                static_cast<std::uint32_t>(target_offset),
+                source_row
+                    ? net_source_index(slot_of_signal_[signal], driver.stub)
+                    : std::numeric_limits<std::uint32_t>::max(),
+                convert ? driver.program : std::numeric_limits<ProcessId>::max(),
+                convert ? driver.output : RegisterId { } });
+            has_source_wires_ = has_source_wires_ || source_row;
             std::erase(impl_.vhdl_conversion_dependents[source], signal);
         }
         impl_.vhdl_conversion_drivers.erase(found);
@@ -2211,14 +2499,43 @@ void Interpreter::Impl::StaticKernel::plan_conversions_and_wires(
         slot_wires_[wires_[index].source] = { index, end };
         index = end;
     }
+    // The depth of each split formal below the slot of the actual that is
+    // resolved (a formal's actual may itself be a split formal), by its
+    // effective-value wire: the update phase resolves the deeper first.
+    for (bool again = true; again;) {
+        again = false;
+        for (const auto& wire : wires_) {
+            if (wire.target_source == std::numeric_limits<std::uint32_t>::max()
+                && slots_[wire.target].driving_slot != no_slot
+                && slots_[wire.target].level != slots_[wire.source].level + 1U) {
+                slots_[wire.target].level = slots_[wire.source].level + 1U;
+                again = true;
+            }
+        }
+    }
+    // A mirror takes the level of its formal (the order its changes reach
+    // the host in).
+    for (const auto& slot : slots_) {
+        if (slot.driving_slot != no_slot) {
+            slots_[slot.driving_slot].level = slot.level;
+        }
+    }
     // A wired formal starts at its source's initial value (IEEE 1076-2008
     // 14.7.5.2); wires chain, so repeat until the values settle. This runs
     // before any activation, so a value deposited on the formal before the
     // first cycle (a VHPI start-of-simulation callback) is kept.
+    // A conversion wire runs its program, which the kernel's own start
+    // (settle_splits) does once the members are built.
+    for (const auto& wire : wires_) {
+        has_convert_wires_ = has_convert_wires_
+            || wire.convert != std::numeric_limits<ProcessId>::max();
+    }
     for (std::size_t pass = 0U; pass <= wires_.size(); ++pass) {
         bool changed = false;
         for (const auto& wire : wires_) {
-            changed = copy_wire(wire) || changed;
+            if (wire.convert == std::numeric_limits<ProcessId>::max()) {
+                changed = copy_wire(wire) || changed;
+            }
         }
         if (!changed) {
             break;
@@ -2430,6 +2747,10 @@ Interpreter::Impl::StaticKernel::~StaticKernel()
         for (const auto& [reason, count] : verify_skipped_members_) {
             std::cerr << "fsim-kernel: verify_skipped reason=" << reason
                       << " members=" << count << '\n';
+        }
+        if (verify_hooked_runs_ != 0U) {
+            std::cerr << "fsim-kernel: verify_skipped reason=variable_hooks runs="
+                      << verify_hooked_runs_ << '\n';
         }
     }
     {
@@ -2925,9 +3246,25 @@ void Interpreter::Impl::StaticKernel::slot_changed(const std::uint32_t slot_inde
 {
     if (shadow_ != nullptr && shadow_->reference) {
         // FSIM_KERNEL_VERIFY's reference replay: the change is recorded, no
-        // reader is scheduled.
+        // reader is scheduled. A force or assign keeps its held bits, as in
+        // the compiled run (slot_changed_general), since the replay's state
+        // is the one the run goes on with; the compiled run already gave the
+        // host the driver's value, so it is not published again.
+        if (overrides_active_ != 0U && slot_override_[slot_index] != 0U) {
+            struct PublishedScope {
+                bool& flag;
+                const bool saved;
+                ~PublishedScope() { flag = saved; }
+            } const published { impl_.static_kernel_publishing,
+                std::exchange(impl_.static_kernel_publishing, true) };
+            (void)restore_override(slot_index, changed_mask, field_offset, before);
+        }
         shadow_->changed.push_back(slot_index);
         return;
+    }
+    if (worker_lane_ == nullptr && slot_index < slot_history_.size()
+        && slot_history_[slot_index] != no_slot) {
+        history_event(slot_index, before);
     }
     if (auto* const lane = worker_lane_) {
         if (lane->domain == no_slot) {
@@ -3000,9 +3337,7 @@ std::uint64_t Interpreter::Impl::StaticKernel::restore_override(
     // IEEE 1076-2019 14.7.3.2). Only an output slot has a host copy.
     if (slot.output && initialized_ && !impl_.static_kernel_publishing) {
         // Under a debugger plan the earlier writes land first.
-        if (debug_points_) {
-            flush_debug_writes();
-        }
+        flush_debug_writes();
         publish_slot(slot_index, true, false);
     }
     const auto held = Impl::coerce_value_kind(
@@ -3047,9 +3382,7 @@ std::uint64_t Interpreter::Impl::StaticKernel::restore_override_field(
     // held bits of the ones it has, are not taken for written values. Only
     // an output slot has a host copy.
     if (slot.output && initialized_ && !impl_.static_kernel_publishing) {
-        if (debug_points_) {
-            flush_debug_writes();
-        }
+        flush_debug_writes();
         publish_slot_field(slot_index, field_offset, end - field_offset);
     }
     // Only the field's overridden bits take the held value back.
@@ -3286,7 +3619,8 @@ void Interpreter::Impl::StaticKernel::slot_changed_general(
         // complete (flush_debug_writes): the field stores of one wide write
         // are one change. The host's own commits and a foreign put are not
         // the kernel's writes.
-        if (debug_points_ && activating_ && !impl_.static_kernel_publishing) {
+        if ((debug_points_ || watch_writes_) && activating_
+            && !impl_.static_kernel_publishing) {
             note_debug_write(slot_index);
         }
     }
@@ -3562,6 +3896,24 @@ void Interpreter::Impl::StaticKernel::write_slot_immediate(
     }
 }
 
+void Interpreter::Impl::StaticKernel::write_slot_null(const std::uint32_t slot_index,
+    const std::uint32_t offset, const std::uint32_t width, const std::uint8_t kind,
+    const std::uint32_t member)
+{
+    auto& slot = slots_[slot_index];
+    if (offset > slot.width || width > slot.width - offset || width == 0U) {
+        fail(member, 0U, "static kernel null transaction is outside its signal");
+    }
+    last_writer_[slot_index] = member_process_[member];
+    const WordSnapshot before(
+        arena_.data() + slot.offset, slot.planes * slot.words);
+    set_net_null(slot_index, member_process_[member], offset, width, kind);
+    if (!std::equal(before.begin(), before.end(),
+            arena_.begin() + slot.offset)) {
+        slot_changed(slot_index, 0U, before.data());
+    }
+}
+
 void Interpreter::Impl::StaticKernel::store_slot_word(
     const std::uint32_t slot_index, const Word value, const std::uint32_t offset,
     const std::uint32_t width, const std::uint64_t unknown,
@@ -3727,6 +4079,40 @@ void Interpreter::Impl::StaticKernel::set_net_value(const std::uint32_t slot_ind
     }
 }
 
+void Interpreter::Impl::StaticKernel::set_net_null(const std::uint32_t slot_index,
+    const ProcessId process, const std::uint32_t offset, const std::uint32_t width,
+    const std::uint8_t kind, const bool vhdl)
+{
+    if (width == 0U) {
+        return;
+    }
+    const auto& slot = slots_[slot_index];
+    const auto words = slot.words;
+    const auto source_row
+        = (slot.planes + 4U * net_source_index(slot_index, process)) * words;
+    // Planes 0 to 3 of 1110 (bus) or 1101 (register).
+    const std::array<bool, 4> set { kind != 1U, kind == 1U, true, true };
+    const std::vector<std::uint64_t> ones((width + 63U) / 64U, ~std::uint64_t { 0 });
+    const std::vector<std::uint64_t> zeros(ones.size(), 0U);
+    if (vhdl) {
+        begin_net_pending(slot);
+    }
+    const auto put = [&](const bool next) {
+        auto* source = arena_.data() + slot.offset
+            + (next ? net_block_words(slot) : 0U) + source_row;
+        for (std::uint32_t plane = 0U; plane < 4U; ++plane) {
+            copy_bits(source + plane * words, offset, set[plane] ? ones : zeros, width);
+        }
+        resolve_net_words(slot_index, offset / 64U, (offset + width - 1U) / 64U, next);
+    };
+    if (!vhdl) {
+        put(false);
+    }
+    if (vhdl || net_pending(slot) != 0U) {
+        put(true);
+    }
+}
+
 void Interpreter::Impl::StaticKernel::resolve_nine_word(std::uint64_t* const value,
     const std::uint32_t words, const std::uint32_t rows, const std::uint32_t count,
     const std::uint32_t word, const std::uint32_t width)
@@ -3739,8 +4125,12 @@ void Interpreter::Impl::StaticKernel::resolve_nine_word(std::uint64_t* const val
     // 'H' give 'W', and the rest give 'L', 'H' or 'Z'. Generated code
     // resolves the same way (static_kernel_codegen, emit_net_resolve_word).
     // Codes: U 0000, X 0001, 0 0010, 1 0011, Z 0100, W 0101, L 0110, H 0111,
-    // - 1000; 1111 is an element the source has no driver for.
+    // - 1000; 1111 is an element the source has no driver for, 1110 and 1101
+    // one a null transaction disconnected from a bus or register driver
+    // (IEEE 1076-2019 10.5.2.2, set_net_null): none of the three is a
+    // source.
     std::uint64_t seen = 0U;
+    std::uint64_t bus_null = 0U;
     std::uint64_t many = 0U;
     std::uint64_t any_u = 0U;
     std::uint64_t any_x = 0U;
@@ -3754,7 +4144,8 @@ void Interpreter::Impl::StaticKernel::resolve_nine_word(std::uint64_t* const val
         const auto* planes = value + (rows + 4U * source) * words + word;
         const std::array<std::uint64_t, 4> p { planes[0], planes[words],
             planes[2U * words], planes[3U * words] };
-        const auto present = ~(p[0] & p[1] & p[2] & p[3]);
+        const auto present = ~(p[3] & p[2] & (p[1] | p[0]));
+        bus_null |= p[3] & p[2] & p[1] & ~p[0];
         many |= seen & present;
         seen |= present;
         for (std::uint32_t plane = 0U; plane < 4U; ++plane) {
@@ -3785,9 +4176,18 @@ void Interpreter::Impl::StaticKernel::resolve_nine_word(std::uint64_t* const val
     };
     const auto bits = width - 64U * word;
     const auto m = bits >= 64U ? ~std::uint64_t { 0 } : kernel_word::mask(bits);
+    // An element without a source is 'Z' (0100) when a bus driver of it is
+    // disconnected, the resolution of a null array; otherwise it keeps its
+    // value: a register's, or the default of one no process drives
+    // (14.7.3.2).
+    const auto empty_bus = ~seen & bus_null;
+    const auto keep = ~seen & ~bus_null;
     for (std::uint32_t plane = 0U; plane < 4U; ++plane) {
-        value[plane * words + word]
-            = ((many & codes[plane]) | (~many & single[plane])) & m;
+        auto& target = value[plane * words + word];
+        target = ((seen & ((many & codes[plane]) | (~many & single[plane])))
+                     | (plane == 2U ? empty_bus : std::uint64_t { 0 })
+                     | (keep & target))
+            & m;
     }
 }
 
@@ -3795,6 +4195,18 @@ void Interpreter::Impl::StaticKernel::resolve_net_words(const std::uint32_t slot
     const std::uint32_t first, const std::uint32_t last, const bool next)
 {
     const auto& slot = slots_[slot_index];
+    if (slot.user) {
+        if (!next) {
+            if (slot.driving_slot != no_slot) {
+                resolve_split_now(slot_index);
+            } else if (nettype_slot(slot_index)) {
+                queue_nettype_resolution(slot_index);
+            } else {
+                resolve_user_slot(slot_index);
+            }
+        }
+        return;
+    }
     const auto words = slot.words;
     const auto count = static_cast<std::uint32_t>(slot.net_processes.size());
     auto* const value = arena_.data() + slot.offset
@@ -3842,37 +4254,349 @@ void Interpreter::Impl::StaticKernel::resolve_net_words(const std::uint32_t slot
     }
 }
 
+void Interpreter::Impl::StaticKernel::resolve_user_slot(const std::uint32_t slot_index)
+{
+    const auto& slot = slots_[slot_index];
+    // A split formal's own drivers resolve into its mirror (Slot::driving_slot)
+    // by the function over all of them (IEEE 1076-2019 14.7.3.2).
+    const bool split = slot.driving_slot != no_slot;
+    const auto& resolver = impl_.vhdl_resolvers.at(slot.signal);
+    const auto target_slot = split ? slot.driving_slot : slot_index;
+    const auto words = slot.words;
+    const auto width = slot.width;
+    // A source a null transaction disconnected (1110 from a bus driver,
+    // 1101 from a register's; set_net_null) is no source (IEEE 1076-2019
+    // 14.7.3.2); a guarded signal's driver is disconnected as a whole.
+    std::vector<std::size_t> connected;
+    connected.reserve(slot.net_processes.size());
+    for (std::size_t source = 0U; source < slot.net_processes.size(); ++source) {
+        const auto* planes = arena_.data() + slot.offset
+            + (slot.planes + 4U * source) * words;
+        // The elements the source's null transaction made null; a source
+        // with only some of them null is an error (14.7.3.2).
+        std::size_t nulls { };
+        for (std::uint32_t word = 0U; word < words; ++word) {
+            const auto bits = width - 64U * word;
+            const auto null = planes[3U * words + word] & planes[2U * words + word]
+                & (planes[words + word] ^ planes[word])
+                & (bits >= 64U ? ~std::uint64_t { 0 } : kernel_word::mask(bits));
+            nulls += static_cast<std::size_t>(std::popcount(null));
+        }
+        if (nulls == 0U) {
+            connected.push_back(source);
+        } else if (nulls != width) {
+            throw VhdlPartialNullSourceError(impl_.get_signal_cold(slot.signal).name);
+        }
+    }
+    // A split formal of a std_logic subtype has no program of its own: its
+    // sources resolve as std_logic_1164's function does (resolve_nine_word)
+    // into the mirror, which keeps its value where no source drives an
+    // element, a bus's null array giving 'Z' (IEEE 1076-2019 14.7.3.2).
+    if (split && !split_programs_.contains(slot_index) && slot.planes != 4U) {
+        // An unresolved formal of two planes has one driver: its value is
+        // the formal's driving value (14.7.3.2).
+        if (!connected.empty()) {
+            const auto* planes = arena_.data() + slot.offset
+                + (slot.planes + 4U * connected.front()) * words;
+            const auto plane = [&](const std::uint32_t index) {
+                return std::span<const std::uint64_t> { planes + index * words, words };
+            };
+            store_slot_bits(target_slot,
+                Impl::coerce_value_kind(
+                    PackedLogic4::from_logic9_word_planes(
+                        width, plane(0U), plane(1U), plane(2U), plane(3U)),
+                    ValueKind::logic4),
+                0U);
+        }
+        return;
+    }
+    if (split && !split_programs_.contains(slot_index)) {
+        const auto& mirror = slots_[target_slot];
+        const auto sources = static_cast<std::uint32_t>(slot.net_processes.size());
+        const std::size_t block
+            = (std::size_t { slot.planes } + 4U * sources) * words;
+        std::vector<std::uint64_t> scratch(arena_.begin() + slot.offset,
+            arena_.begin() + slot.offset + static_cast<std::ptrdiff_t>(block));
+        std::copy_n(arena_.data() + mirror.offset,
+            std::size_t { mirror.planes } * words, scratch.data());
+        for (std::uint32_t word = 0U; word < words; ++word) {
+            resolve_nine_word(scratch.data(), words, slot.planes, sources, word, width);
+        }
+        std::copy_n(scratch.data(), std::size_t { mirror.planes } * words,
+            arena_.data() + mirror.offset);
+        return;
+    }
+    const auto count = connected.size();
+    auto program = split ? split_programs_.at(slot_index)
+                         : VhdlResolverVariant { resolver.process, resolver.input,
+                               resolver.output };
+    if (count != slot.net_processes.size()) {
+        // With no connected driver a bus takes the function's result for a
+        // null array (null_value) and a register keeps its value; otherwise
+        // the program for the connected count runs (the host's
+        // run_vhdl_resolver).
+        if (count == 0U) {
+            if (resolver.guarded_kind == 1U && resolver.null_value) {
+                store_slot_bits(target_slot,
+                    Impl::coerce_value_kind(*resolver.null_value,
+                        slot.planes == 4U ? ValueKind::logic9 : ValueKind::logic4),
+                    0U);
+            }
+            return;
+        }
+        if (count >= resolver.variants.size()) {
+            throw std::invalid_argument { "VHDL resolved signal has no resolver "
+                                          "for its connected drivers" };
+        }
+        program = resolver.variants[count];
+    }
+    // A slot of nine states passes the drivers' STD_ULOGIC values, as the
+    // host's run_vhdl_resolver does.
+    const auto kind = slot.planes == 4U ? ValueKind::logic9 : ValueKind::logic4;
+    PackedLogic4 driving { width * count, Logic4::x };
+    if (kind == ValueKind::logic9) {
+        driving.fill(Logic9::u);
+    }
+    for (std::size_t index = 0U; index < count; ++index) {
+        const auto source = connected[index];
+        const auto* planes = arena_.data() + slot.offset
+            + (slot.planes + 4U * source) * words;
+        const auto plane = [&](const std::uint32_t index) {
+            return std::span<const std::uint64_t> { planes + index * words, words };
+        };
+        driving.insert_bits(Impl::coerce_value_kind(
+                                PackedLogic4::from_logic9_word_planes(width,
+                                    plane(0U), plane(1U), plane(2U), plane(3U)),
+                                kind),
+            (count - 1U - index) * width);
+    }
+    auto value = Impl::coerce_value_kind(
+        run_resolver(program.process, std::move(driving), program.input,
+            program.output, std::nullopt),
+        kind);
+    if (value.width() != width) {
+        throw std::runtime_error("VHDL resolution function result width "
+            + std::to_string(value.width()) + " does not match its signal ("
+            + std::to_string(width) + ")");
+    }
+    store_slot_bits(target_slot, value, 0U);
+}
+
+PackedLogic4 Interpreter::Impl::StaticKernel::net_source_value(
+    const std::uint32_t slot_index, const std::uint32_t source) const
+{
+    const auto& slot = slots_[slot_index];
+    const auto words = slot.words;
+    const auto* planes
+        = arena_.data() + slot.offset + (slot.planes + 4U * source) * words;
+    std::vector<std::uint64_t> driven;
+    if (slot.nine()) {
+        // An element the process has no driver for reads 'Z' in the
+        // driver's public value (1111 is no driver, Slot::net_processes),
+        // and so does one a null transaction disconnected (1110 from a bus,
+        // 1101 from a register; set_net_null).
+        driven.assign(planes, planes + 4U * words);
+        for (std::uint32_t word = 0U; word < words; ++word) {
+            const auto p0 = driven[word];
+            const auto p1 = driven[words + word];
+            const auto p2 = driven[2U * words + word];
+            const auto p3 = driven[3U * words + word];
+            const auto absent = p3 & p2 & (p1 | p0);
+            driven[word] &= ~absent;
+            driven[words + word] &= ~absent;
+            driven[3U * words + word] &= ~absent;
+        }
+        planes = driven.data();
+    }
+    const auto plane = [&](const std::uint32_t index) {
+        return std::span<const std::uint64_t> { planes + index * words, words };
+    };
+    return PackedLogic4::from_logic9_word_planes(
+        slot.width, plane(0U), plane(1U), plane(2U), plane(3U));
+}
+
+std::optional<PackedLogic4> Interpreter::Impl::StaticKernel::driver_value(
+    const ProcessId process, const SignalId signal) const
+{
+    // The source of a member on a resolved slot the kernel owns is its
+    // driver: its current value is in the arena, whatever the host's copy
+    // of the net (IEEE 1076-2019 14.7.2).
+    if (signal >= slot_of_signal_.size()) {
+        return std::nullopt;
+    }
+    const auto slot_index = slot_of_signal_[signal];
+    if (slot_index == no_slot) {
+        return std::nullopt;
+    }
+    const auto& slot = slots_[slot_index];
+    if (!slot.resolved) {
+        // One source per element: a member's driver of the bits it writes
+        // holds the slot's value (14.7.3.2), unless a force or assignment
+        // of the host overrides it (the host's driver then) or a lazy
+        // writer has not run (materialize refreshes it).
+        if (!slot.disjoint_writers || !slot.lazy_writers.empty()
+            || (slot_index < slot_override_.size()
+                && slot_override_[slot_index] != 0U)
+            || std::ranges::none_of(slot.writers,
+                [&](const WriterRegion& writer) {
+                    return writer.process == process;
+                })) {
+            return std::nullopt;
+        }
+        return slot_value(slot_index);
+    }
+    const auto& sources = slot.net_processes;
+    for (std::uint32_t source = 0U; source < sources.size(); ++source) {
+        if (sources[source] == process) {
+            return net_source_value(slot_index, source);
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<bool> Interpreter::Impl::StaticKernel::driver_disconnected(
+    const ProcessId process, const SignalId signal, const std::uint32_t offset,
+    const std::uint32_t width) const
+{
+    if (signal >= slot_of_signal_.size() || slot_of_signal_[signal] == no_slot) {
+        return std::nullopt;
+    }
+    const auto slot_index = slot_of_signal_[signal];
+    const auto& slot = slots_[slot_index];
+    if (!slot.resolved || !slot.nine()) {
+        return std::nullopt;
+    }
+    if (offset > slot.width || width > slot.width - offset) {
+        return false;
+    }
+    const auto& sources = slot.net_processes;
+    for (std::uint32_t source = 0U; source < sources.size(); ++source) {
+        if (sources[source] != process) {
+            continue;
+        }
+        // A disconnected element's code is 1110 (bus) or 1101 (register).
+        const auto words = slot.words;
+        const auto* planes
+            = arena_.data() + slot.offset + (slot.planes + 4U * source) * words;
+        for (std::uint32_t bit = offset; bit < offset + width; ++bit) {
+            const auto code = [&](const std::uint32_t plane) {
+                return (planes[plane * words + bit / 64U] >> (bit % 64U)) & 1U;
+            };
+            if (!(code(3U) && code(2U) && (code(1U) != code(0U)))) {
+                return false;
+            }
+        }
+        return true;
+    }
+    return false;
+}
+
 void Interpreter::Impl::StaticKernel::publish_net_sources(
     const std::uint32_t slot_index, const std::optional<SignalUpdateDomain> domain)
 {
     const auto& slot = slots_[slot_index];
     const auto words = slot.words;
+    if (slot.driving_slot != no_slot) {
+        // A split formal's drivers resolve into its mirror (Slot::driving_slot);
+        // the host's copy holds its effective value only.
+        return;
+    }
+    std::optional<PackedLogic4> kept;
     for (std::uint32_t source = 0U; source < slot.net_processes.size(); ++source) {
         const auto* planes
             = arena_.data() + slot.offset + (slot.planes + 4U * source) * words;
         const auto plane = [&](const std::uint32_t index) {
             return std::span<const std::uint64_t> { planes + index * words, words };
         };
-        std::vector<std::uint64_t> driven;
-        if (slot.nine()) {
-            // An element the process has no driver for reads 'Z' in the
-            // driver's public value (1111 is no driver, Slot::net_processes).
-            driven.assign(planes, planes + 4U * words);
-            for (std::uint32_t word = 0U; word < words; ++word) {
-                const auto absent = driven[word] & driven[words + word]
-                    & driven[2U * words + word] & driven[3U * words + word];
-                driven[word] &= ~absent;
-                driven[words + word] &= ~absent;
-                driven[3U * words + word] &= ~absent;
-            }
-            planes = driven.data();
-        }
         const auto process = slot.net_processes[source];
         // A dormant source has no driver yet (Interpreter::add_host_driver
         // registers it): nothing of it reaches the host.
         if (!impl_.dormant_driver_regions.empty()
             && impl_.dormant_driver_regions.contains({ process, slot.signal })) {
             continue;
+        }
+        if (slot.user) {
+            // The elements of a user-resolved signal's driver a null
+            // transaction made null (resolve_user_slot): the host learns
+            // them (vhdl_null_elements); a value reconnects them. A driver
+            // with all of them null is no source and has no value to
+            // stage; the host resolves the signal again from its connected
+            // drivers (run_vhdl_resolver).
+            std::vector<std::uint8_t> kinds;
+            std::size_t nulls { };
+            for (std::uint32_t word = 0U; word < words; ++word) {
+                const auto bus = planes[3U * words + word] & planes[2U * words + word]
+                    & planes[words + word] & ~planes[word];
+                const auto reg = planes[3U * words + word] & planes[2U * words + word]
+                    & ~planes[words + word] & planes[word];
+                if ((bus | reg) == 0U) {
+                    continue;
+                }
+                kinds.resize(slot.width, 0U);
+                for (std::uint32_t bit = 0U; bit < 64U && 64U * word + bit < slot.width;
+                     ++bit) {
+                    if (((bus >> bit) & 1U) != 0U) {
+                        kinds[64U * word + bit] = 1U;
+                        ++nulls;
+                    } else if (((reg >> bit) & 1U) != 0U) {
+                        kinds[64U * word + bit] = 2U;
+                        ++nulls;
+                    }
+                }
+            }
+            const bool wholly = nulls == slot.width;
+            if (!kinds.empty() || impl_.vhdl_null_elements.contains(slot.signal)) {
+                impl_.publish_vhdl_null_elements(process, slot.signal,
+                    std::move(kinds), PackedLogic4 { });
+            }
+            if (wholly) {
+                continue;
+            }
+        }
+        std::vector<std::uint64_t> driven;
+        if (slot.nine()) {
+            // An element the process has no driver for reads 'Z' in the
+            // driver's public value (1111 is no driver, Slot::net_processes),
+            // and so does one a null transaction disconnected (1110 from a
+            // bus, 1101 from a register; set_net_null), which the host
+            // learns as such (vhdl_null_elements).
+            driven.assign(planes, planes + 4U * words);
+            std::vector<std::uint8_t> kinds;
+            for (std::uint32_t word = 0U; word < words; ++word) {
+                const auto p0 = driven[word];
+                const auto p1 = driven[words + word];
+                const auto p2 = driven[2U * words + word];
+                const auto p3 = driven[3U * words + word];
+                const auto bus = p3 & p2 & p1 & ~p0;
+                const auto reg = p3 & p2 & ~p1 & p0;
+                const auto absent = (p3 & p2 & p1 & p0) | bus | reg;
+                driven[word] &= ~absent;
+                driven[words + word] &= ~absent;
+                driven[3U * words + word] &= ~absent;
+                if ((bus | reg) == 0U) {
+                    continue;
+                }
+                kinds.resize(slot.width, 0U);
+                for (std::uint32_t bit = 0U; bit < 64U && 64U * word + bit < slot.width;
+                     ++bit) {
+                    if (((bus >> bit) & 1U) != 0U) {
+                        kinds[64U * word + bit] = 1U;
+                    } else if (((reg >> bit) & 1U) != 0U) {
+                        kinds[64U * word + bit] = 2U;
+                    }
+                }
+            }
+            if (!slot.user
+                && (!kinds.empty()
+                    || impl_.vhdl_null_elements.contains(slot.signal))) {
+                if (!kept) {
+                    kept = Impl::coerce_value_kind(slot_value(slot_index),
+                        ValueKind::logic9);
+                }
+                impl_.publish_vhdl_null_elements(process, slot.signal,
+                    std::move(kinds), *kept);
+            }
+            planes = driven.data();
         }
         auto value = PackedLogic4::from_logic9_word_planes(
             slot.width, plane(0U), plane(1U), plane(2U), plane(3U));
@@ -3884,10 +4608,244 @@ void Interpreter::Impl::StaticKernel::publish_net_sources(
     }
 }
 
+void Interpreter::Impl::StaticKernel::feed_source_wire(
+    const Wire& wire, const bool now)
+{
+    const auto value = wire_value(wire);
+    set_net_value(wire.target, slots_[wire.target].net_processes[wire.target_source],
+        wire.target_offset, value, !now);
+}
+
+void Interpreter::Impl::StaticKernel::resolve_split_now(const std::uint32_t slot_index)
+{
+    // A write that lands at once (a matured transaction, a deposit) changes
+    // the formal's driving value outside the update commit: the mirror's
+    // readers, the sources it feeds and the actuals they resolve follow in
+    // the same step, as a wired formal's do (follow_slot_update). The
+    // transactions that mature in one time step are resolved together, the
+    // formals deepest first (flush_split_updates).
+    if (defer_splits_ && !settling_splits_) {
+        if (std::ranges::find(pending_splits_, slot_index) == pending_splits_.end()) {
+            pending_splits_.push_back(slot_index);
+        }
+        return;
+    }
+    propagate_split(slot_index);
+}
+
+void Interpreter::Impl::StaticKernel::propagate_split(const std::uint32_t slot_index)
+{
+    const auto mirror = slots_[slot_index].driving_slot;
+    const auto& held = slots_[mirror];
+    const WordSnapshot before(
+        arena_.data() + held.offset, static_cast<std::size_t>(held.planes) * held.words);
+    resolve_user_slot(slot_index);
+    if (settling_splits_
+        || std::equal(before.begin(), before.end(), arena_.begin() + held.offset)) {
+        return;
+    }
+    slot_changed(mirror, 0U, before.data());
+    const auto [begin, end] = slot_wires_[mirror];
+    for (auto index = begin; index < end; ++index) {
+        const auto& wire = wires_[index];
+        if (wire.target_source == std::numeric_limits<std::uint32_t>::max()) {
+            // An unresolved actual converted from the mirror (a conversion
+            // wire, IEEE 1076-2019 6.5.7.1) takes the new driving value in
+            // the same step.
+            const auto& target = slots_[wire.target];
+            const WordSnapshot target_before(arena_.data() + target.offset,
+                static_cast<std::size_t>(target.planes) * target.words);
+            if (!copy_wire(wire)) {
+                continue;
+            }
+            if (!defer_splits_) {
+                slot_changed(wire.target, 0U, target_before.data());
+                follow_slot_update(wire.target);
+            } else if (std::ranges::none_of(changed_actuals_,
+                           [&](const auto& entry) { return entry.first == wire.target; })) {
+                changed_actuals_.emplace_back(wire.target,
+                    std::vector<std::uint64_t>(
+                        target_before.begin(), target_before.end()));
+            }
+            continue;
+        }
+        const auto& actual = slots_[wire.target];
+        const WordSnapshot actual_before(arena_.data() + actual.offset,
+            static_cast<std::size_t>(actual.planes) * actual.words);
+        feed_source_wire(wire, true);
+        if (std::equal(actual_before.begin(), actual_before.end(),
+                arena_.begin() + actual.offset)) {
+            continue;
+        }
+        if (!defer_splits_) {
+            slot_changed(wire.target, 0U, actual_before.data());
+            follow_slot_update(wire.target);
+        } else if (std::ranges::none_of(changed_actuals_,
+                       [&](const auto& entry) { return entry.first == wire.target; })) {
+            changed_actuals_.emplace_back(wire.target,
+                std::vector<std::uint64_t>(actual_before.begin(), actual_before.end()));
+        }
+    }
+}
+
+void Interpreter::Impl::StaticKernel::flush_split_updates()
+{
+    // The formals resolve deepest first, whichever chain they belong to, and
+    // the actuals they changed then follow in declaration order: the host's
+    // update commit does the same (drain_vhdl_resolutions).
+    defer_splits_ = true;
+    while (!pending_splits_.empty()) {
+        auto pick = pending_splits_.begin();
+        for (auto at = pending_splits_.begin(); at != pending_splits_.end(); ++at) {
+            if (slots_[*at].level > slots_[*pick].level
+                || (slots_[*at].level == slots_[*pick].level && *at < *pick)) {
+                pick = at;
+            }
+        }
+        const auto slot = *pick;
+        pending_splits_.erase(pick);
+        propagate_split(slot);
+    }
+    defer_splits_ = false;
+    std::ranges::sort(changed_actuals_, {}, &decltype(changed_actuals_)::value_type::first);
+    auto changed = std::move(changed_actuals_);
+    changed_actuals_.clear();
+    for (const auto& [slot, before] : changed) {
+        slot_changed(slot, 0U, before.data());
+        follow_slot_update(slot);
+    }
+}
+
+bool Interpreter::Impl::StaticKernel::resolve_split(const std::uint32_t slot_index)
+{
+    // The formal's own drivers give its driving value, which the mirror holds
+    // (IEEE 1076-2019 14.7.3.2).
+    const auto& mirror = slots_[slots_[slot_index].driving_slot];
+    const auto words = static_cast<std::size_t>(mirror.planes) * mirror.words;
+    const std::vector<std::uint64_t> before(arena_.begin() + mirror.offset,
+        arena_.begin() + mirror.offset + static_cast<std::ptrdiff_t>(words));
+    resolve_user_slot(slot_index);
+    return !std::equal(before.begin(), before.end(), arena_.begin() + mirror.offset);
+}
+
+void Interpreter::Impl::StaticKernel::settle_splits()
+{
+    // Initialization (IEEE 1076-2019 14.7.5.2) is the update commit's order
+    // once: the driving values bottom-up (a formal's own drivers into its
+    // mirror, which feeds the source of its actual, the formals deepest
+    // first; Slot::level), then the effective values top-down (each actual's
+    // value to its formals, shallowest first, and the wires that follow).
+    // The levels follow the instance tree, so there is no cycle.
+    quiet_commit_ = true;
+    settling_splits_ = true;
+    std::vector<std::uint32_t> formals;
+    for (std::uint32_t index = 0U; index < slots_.size(); ++index) {
+        if (slots_[index].driving_slot != no_slot) {
+            formals.push_back(index);
+        }
+    }
+    std::ranges::stable_sort(formals, {}, [&](const std::uint32_t slot) {
+        return slots_[slot].level;
+    });
+    const auto none = std::numeric_limits<std::uint32_t>::max();
+    for (auto formal = formals.rbegin(); formal != formals.rend(); ++formal) {
+        if (slots_[*formal].user) {
+            resolve_split(*formal);
+        }
+        const auto [begin, end] = slot_wires_[slots_[*formal].driving_slot];
+        for (auto index = begin; index < end; ++index) {
+            const auto& wire = wires_[index];
+            if (wire.target_source == none) {
+                continue;
+            }
+            feed_source_wire(wire, true);
+            // The next block follows the current one.
+            const auto& target = slots_[wire.target];
+            std::copy_n(arena_.data() + target.offset,
+                std::size_t { target.planes } * target.words,
+                arena_.data() + target.offset + net_block_words(target));
+        }
+    }
+    // The wires that follow a slot's new value, chained.
+    const auto follow = [&](const std::uint32_t slot_index) {
+        std::vector<std::uint32_t> updated { slot_index };
+        for (std::size_t at = 0U; at < updated.size(); ++at) {
+            if (at > wires_.size()) {
+                throw std::logic_error("static kernel wiring has a cycle");
+            }
+            const auto [begin, end] = slot_wires_[updated[at]];
+            for (auto index = begin; index < end; ++index) {
+                if (wires_[index].target_source == none) {
+                    copy_wire(wires_[index]);
+                    updated.push_back(wires_[index].target);
+                }
+            }
+        }
+    };
+    for (const auto& wire : wires_) {
+        if (wire.target_source != none) {
+            follow(wire.target);
+        }
+    }
+    for (const auto formal : formals) {
+        for (const auto& wire : wires_) {
+            if (wire.target == formal && wire.target_source == none) {
+                copy_wire(wire);
+            }
+        }
+        follow(formal);
+    }
+    // The conversions of ordinary signals and of mirrors, chained: repeat
+    // until the values settle (IEEE 1076-2019 14.7.5.2).
+    for (std::size_t pass = 0U; has_convert_wires_ && pass <= wires_.size(); ++pass) {
+        bool changed = false;
+        for (const auto& wire : wires_) {
+            if (wire.target_source == none) {
+                changed = copy_wire(wire) || changed;
+            }
+        }
+        if (!changed) {
+            break;
+        }
+    }
+    quiet_commit_ = false;
+    settling_splits_ = false;
+}
+
+PackedLogic4 Interpreter::Impl::StaticKernel::wire_value(const Wire& wire)
+{
+    if (wire.convert == std::numeric_limits<ProcessId>::max()) {
+        return slot_value(wire.source).extract_bits(wire.offset, wire.width);
+    }
+    // The conversion function or type conversion of the source's current
+    // value (IEEE 1076-2019 6.5.7.1): one pass of its program, which the
+    // kernel runs as it runs a resolution function (run_resolver).
+    const auto& to = slots_[wire.target];
+    auto value = Impl::coerce_value_kind(
+        run_resolver(wire.convert, std::nullopt, 0U, wire.convert_output,
+            std::nullopt),
+        to.planes == 4U ? ValueKind::logic9 : ValueKind::logic4);
+    if (value.width() != wire.width) {
+        throw std::runtime_error("VHDL conversion result width "
+            + std::to_string(value.width()) + " does not match its target ("
+            + std::to_string(wire.width) + ")");
+    }
+    return value;
+}
+
 bool Interpreter::Impl::StaticKernel::copy_wire(const Wire& wire)
 {
+    if (wire.target_source != std::numeric_limits<std::uint32_t>::max()) {
+        return false;
+    }
     const auto& from = slots_[wire.source];
     const auto& to = slots_[wire.target];
+    if (wire.convert != std::numeric_limits<ProcessId>::max()) {
+        const WordSnapshot before(arena_.data() + to.offset,
+            static_cast<std::size_t>(to.planes) * to.words);
+        store_slot_bits(wire.target, wire_value(wire), wire.target_offset);
+        return !std::equal(before.begin(), before.end(), arena_.begin() + to.offset);
+    }
     bool changed = false;
     for (std::uint32_t plane = 0U; plane < to.planes; ++plane) {
         const auto* source = arena_.data() + from.offset + plane * from.words;
@@ -3916,6 +4874,9 @@ void Interpreter::Impl::StaticKernel::commit_round()
     // phase runs in it. The kernel's own time: a warped step is past the
     // scheduler's.
     collapsing_ = collapse_enabled_ && kernel_now() != 0U;
+    // A new update cycle: the events and transactions of the previous one
+    // are past (IEEE 1076-2019 16.2.4).
+    history_new_cycle();
     if (collapsing_ && !guard_groups_.empty()) {
         ++guard_commit_;
         if (const auto now = kernel_now(); now != guard_time_) {
@@ -3928,6 +4889,437 @@ void Interpreter::Impl::StaticKernel::commit_round()
         run_collapsed();
     }
     collapsing_ = false;
+}
+
+void Interpreter::Impl::StaticKernel::build_histories()
+{
+    // The histories a member queries (IEEE 1076-2019 16.2.4). A history slot
+    // is notified on the general path of every change, never silent, and
+    // handed to the leader by a domain lane: the same needs as a slot a
+    // thread waits on.
+    slot_history_.assign(slots_.size(), no_slot);
+    slot_history_end_.assign(slots_.size(), no_slot);
+    histories_.clear();
+    history_words_.clear();
+    history_current_.clear();
+    history_slots_.clear();
+    std::vector<SlotHistory> keys;
+    const auto note_transaction_wait = [&](const SignalId signal) {
+        if (signal >= slot_of_signal_.size()
+            || slot_of_signal_[signal] == no_slot) {
+            return;
+        }
+        SlotHistory key;
+        key.slot = slot_of_signal_[signal];
+        key.whole = true;
+        key.width = slots_[key.slot].width;
+        keys.push_back(key);
+    };
+    for (const auto& member : members_) {
+        // A wait on a kernel signal's transactions (S'TRANSACTION, IEEE
+        // 1076-2019 16.2.4) needs its transactions recorded and wakes on them.
+        for (const auto& entry : member.wait_sensitivity) {
+            if (entry.edge == EdgeKind::transaction && entry.width == 0U) {
+                note_transaction_wait(entry.signal);
+            }
+        }
+        for (const auto& operation : member.operations()) {
+            if (const auto* wait = operation_get_if<WaitOn>(&operation)) {
+                for (std::size_t at = 0U; at < wait->edges.size()
+                     && at < wait->signals.size(); ++at) {
+                    if (wait->edges[at] == EdgeKind::transaction) {
+                        note_transaction_wait(wait->signals[at]);
+                    }
+                }
+            }
+            visit_operation([&](const auto& op) {
+                using T = std::decay_t<decltype(op)>;
+                if constexpr (std::is_same_v<T, SignalEvent>
+                    || std::is_same_v<T, SignalActive>
+                    || std::is_same_v<T, SignalLastValue>
+                    || std::is_same_v<T, SignalLastEvent>
+                    || std::is_same_v<T, SignalLastActive>) {
+                    if (op.signal >= slot_of_signal_.size()
+                        || slot_of_signal_[op.signal] == no_slot) {
+                        return;
+                    }
+                    SlotHistory key;
+                    key.slot = slot_of_signal_[op.signal];
+                    const auto& state = slots_[key.slot];
+                    key.whole = !op.selection;
+                    key.offset = op.selection ? op.selection->offset : 0U;
+                    key.width = op.selection ? op.selection->width : state.width;
+                    key.element = op.selection && op.selection->composite_element;
+                    if (key.width != 0U && key.offset <= state.width
+                        && key.width <= state.width - key.offset) {
+                        keys.push_back(key);
+                    }
+                }
+            }, operation);
+        }
+    }
+    const auto order = [](const SlotHistory& left, const SlotHistory& right) {
+        return std::tuple { left.slot, !left.whole, left.offset, left.width,
+                   left.element }
+            < std::tuple { right.slot, !right.whole, right.offset, right.width,
+                  right.element };
+    };
+    std::ranges::sort(keys, order);
+    const auto [dup_begin, dup_end] = std::ranges::unique(keys,
+        [&](const SlotHistory& left, const SlotHistory& right) {
+            return !order(left, right) && !order(right, left);
+        });
+    keys.erase(dup_begin, dup_end);
+    if (keys.empty()) {
+        return;
+    }
+    history_words_.assign(2U + 8U * keys.size(), 0U);
+    slot_waitable_.resize(slots_.size(), 0U);
+    history_current_.resize(slots_.size());
+    // The hidden signal of each history's value before its latest event: a
+    // signal of the history's shape the host never reads, held in a slot the
+    // kernel writes when the history sees an event, which 'LAST_VALUE reads
+    // as it reads any signal.
+    for (auto key : keys) {
+        const auto slot_index = key.slot;
+        const auto planes = slots_[slot_index].planes;
+        const auto words = words_for(key.width);
+        if (history_current_[slot_index].empty()) {
+            history_slots_.push_back(slot_index);
+            slot_waitable_[slot_index] = 1U;
+            slot_history_[slot_index]
+                = static_cast<std::uint32_t>(histories_.size());
+            const auto total = static_cast<std::size_t>(planes)
+                * slots_[slot_index].words;
+            history_current_[slot_index].assign(
+                arena_.begin() + slots_[slot_index].offset,
+                arena_.begin() + slots_[slot_index].offset
+                    + static_cast<std::ptrdiff_t>(total));
+        }
+        const auto id = push_history_signal(key);
+        Slot copy;
+        copy.signal = id;
+        copy.width = key.width;
+        copy.words = words;
+        copy.planes = planes;
+        copy.edge_seen = slots_[slot_index].edge_seen;
+        copy.silent = true;
+        copy.offset = static_cast<std::uint32_t>(arena_.size());
+        arena_.resize(arena_.size() + static_cast<std::size_t>(planes) * words, 0U);
+        const auto& source = history_current_[slot_index];
+        for (std::uint32_t plane = 0U; plane < planes; ++plane) {
+            for (std::uint32_t done = 0U; done < key.width; done += 64U) {
+                const auto chunk = std::min(64U, key.width - done);
+                const auto bits = read_plane_bits(
+                    source.data() + plane * slots_[slot_index].words,
+                    slots_[slot_index].words, key.offset + done, chunk);
+                const std::uint64_t pieces[1] = { bits };
+                copy_bits(arena_.data() + copy.offset + plane * words, done,
+                    std::span<const std::uint64_t> { pieces, 1U }, chunk);
+            }
+        }
+        key.last_value_slot = static_cast<std::uint32_t>(slots_.size());
+        slot_of_signal_[id] = key.last_value_slot;
+        slot_history_end_[slot_index]
+            = static_cast<std::uint32_t>(histories_.size()) + 1U;
+        histories_.push_back(key);
+        slots_.push_back(std::move(copy));
+    }
+    slot_history_.resize(slots_.size(), no_slot);
+    slot_history_end_.resize(slots_.size(), no_slot);
+    slot_waitable_.resize(slots_.size(), 0U);
+    history_current_.resize(slots_.size());
+    rewrite_last_value_reads();
+}
+
+SignalId Interpreter::Impl::StaticKernel::push_history_signal(
+    const SlotHistory& history)
+{
+    // A signal of the history's shape the host never reads: the value before
+    // the history's latest event, which 'LAST_VALUE reads as it reads any
+    // signal.
+    const auto source_signal = slots_[history.slot].signal;
+    auto initial = impl_.get_signal(source_signal).initial_value;
+    if (!history.whole) {
+        initial = initial.extract_bits(history.offset, history.width);
+    }
+    Signal hidden { impl_.get_signal_cold(source_signal).name + "'last_value",
+        std::move(initial), ResolutionKind::none,
+        impl_.get_signal(source_signal).value_kind };
+    const auto id = impl_.push_signal_late(std::move(hidden));
+    slot_of_signal_.resize(impl_.signals.size(), no_slot);
+    family_of_signal_.resize(impl_.signals.size(), no_slot);
+    input_of_signal_.resize(impl_.signals.size(), no_slot);
+    mirror_of_signal_.resize(impl_.signals.size(), no_slot);
+    return id;
+}
+
+void Interpreter::Impl::StaticKernel::rewrite_last_value_reads()
+{
+    // 'LAST_VALUE of a history reads its hidden signal, one operation for
+    // one (the operation numbering does not move).
+    for (auto& member : members_) {
+        for (auto& operation : member.operations()) {
+            const auto* last = operation_get_if<SignalLastValue>(&operation);
+            if (last == nullptr) {
+                continue;
+            }
+            const auto index = history_index(last->signal, last->selection);
+            if (index == no_slot) {
+                continue;
+            }
+            const ReadSignal read { last->destination,
+                slots_[histories_[index].last_value_slot].signal };
+            operation = Operation { read };
+        }
+    }
+}
+
+std::uint32_t Interpreter::Impl::StaticKernel::history_index(
+    const SignalId signal, const std::optional<SignalSelection>& selection) const
+{
+    if (signal >= slot_of_signal_.size()) {
+        return no_slot;
+    }
+    const auto slot = slot_of_signal_[signal];
+    if (slot == no_slot || slot >= slot_history_.size()
+        || slot_history_[slot] == no_slot) {
+        return no_slot;
+    }
+    const auto offset = selection ? selection->offset : 0U;
+    const auto width = selection ? selection->width : slots_[slot].width;
+    const bool element = selection && selection->composite_element;
+    for (auto at = slot_history_[slot]; at < slot_history_end_[slot]; ++at) {
+        const auto& history = histories_[at];
+        if (history.whole == !selection && history.offset == offset
+            && history.width == width && history.element == element) {
+            return at;
+        }
+    }
+    return no_slot;
+}
+
+void Interpreter::Impl::StaticKernel::history_event(
+    const std::uint32_t slot, const std::uint64_t* const before)
+{
+    auto& current = history_current_[slot];
+    const auto& state = slots_[slot];
+    const auto total = static_cast<std::size_t>(state.planes) * state.words;
+    const auto* const now_words = arena_.data() + state.offset;
+    if (std::equal(current.begin(), current.end(), now_words)) {
+        // A notice of a value the histories already hold: no event.
+        return;
+    }
+    const auto* const old_words = before != nullptr ? before : current.data();
+    // The old words may be the shadow itself, which is replaced below.
+    const std::vector<std::uint64_t> old(old_words, old_words + total);
+    if (trace_) {
+        std::cerr << "fsim-kernel-trace: history event "
+                  << impl_.get_signal_cold(state.signal).name << " old=";
+        for (const auto word : old) {
+            std::cerr << std::hex << word << ' ';
+        }
+        std::cerr << "new=";
+        for (std::size_t word = 0U; word < total; ++word) {
+            std::cerr << std::hex << now_words[word] << ' ';
+        }
+        std::cerr << std::dec << '\n';
+    }
+    const auto now_cycle = history_words_[0];
+    const auto now = static_cast<std::uint64_t>(kernel_now());
+    for (auto at = slot_history_[slot]; at < slot_history_end_[slot]; ++at) {
+        const auto& history = histories_[at];
+        auto* const record = history_words_.data() + 2U + 8U * at;
+        const bool changed = history.whole
+            || word_range_changed(old.data(), now_words, state.words,
+                state.planes, history.offset, history.width);
+        // An event on the signal updates the last value of the element it
+        // assigns, changed or not (16.2.4).
+        const bool assigned = history.element && (record[0] & 2U) != 0U
+            && record[3] == now && record[4] == now_cycle;
+        if (changed) {
+            record[0] |= 1U;
+            record[1] = now;
+            record[2] = now_cycle;
+        }
+        if (changed || assigned) {
+            const auto& hidden = slots_[history.last_value_slot];
+            for (std::uint32_t plane = 0U; plane < state.planes; ++plane) {
+                for (std::uint32_t done = 0U; done < history.width; done += 64U) {
+                    const auto chunk = std::min(64U, history.width - done);
+                    const auto bits = read_plane_bits(
+                        old.data() + plane * state.words, state.words,
+                        history.offset + done, chunk);
+                    const std::uint64_t pieces[1] = { bits };
+                    copy_bits(arena_.data() + hidden.offset + plane * hidden.words,
+                        done, std::span<const std::uint64_t> { pieces, 1U }, chunk);
+                }
+            }
+        }
+    }
+    current.assign(now_words, now_words + total);
+    if (trace_) {
+        for (auto at = slot_history_[slot]; at < slot_history_end_[slot]; ++at) {
+            const auto& hidden = slots_[histories_[at].last_value_slot];
+            std::cerr << "fsim-kernel-trace: history " << at << " last_value slot="
+                      << histories_[at].last_value_slot << " offset=" << hidden.offset
+                      << " words=";
+            for (std::size_t word = 0U; word < total; ++word) {
+                std::cerr << std::hex << arena_[hidden.offset + word] << ' ';
+            }
+            std::cerr << std::dec << '\n';
+        }
+    }
+}
+
+void Interpreter::Impl::StaticKernel::history_sync(const std::uint32_t slot)
+{
+    auto& current = history_current_[slot];
+    const auto& state = slots_[slot];
+    const auto total = static_cast<std::size_t>(state.planes) * state.words;
+    current.assign(arena_.begin() + state.offset,
+        arena_.begin() + state.offset + static_cast<std::ptrdiff_t>(total));
+    for (auto at = slot_history_[slot]; at < slot_history_end_[slot]; ++at) {
+        const auto& history = histories_[at];
+        const auto& hidden = slots_[history.last_value_slot];
+        for (std::uint32_t plane = 0U; plane < state.planes; ++plane) {
+            for (std::uint32_t done = 0U; done < history.width; done += 64U) {
+                const auto chunk = std::min(64U, history.width - done);
+                const auto bits = read_plane_bits(
+                    current.data() + plane * state.words, state.words,
+                    history.offset + done, chunk);
+                const std::uint64_t pieces[1] = { bits };
+                copy_bits(arena_.data() + hidden.offset + plane * hidden.words,
+                    done, std::span<const std::uint64_t> { pieces, 1U }, chunk);
+            }
+        }
+    }
+}
+
+void Interpreter::Impl::StaticKernel::history_transaction(
+    const std::uint32_t slot, const std::uint32_t offset,
+    const std::uint32_t width)
+{
+    // A slot without a history of its own still passes the transaction on
+    // to what reads its activity (a conversion, a waiter, a wired formal).
+    const bool recorded
+        = slot < slot_history_.size() && slot_history_[slot] != no_slot;
+    const auto now = static_cast<std::uint64_t>(kernel_now());
+    for (auto at = recorded ? slot_history_[slot] : 0U;
+         recorded && at < slot_history_end_[slot]; ++at) {
+        const auto& history = histories_[at];
+        if (!history.whole
+            && (offset >= history.offset + history.width
+                || history.offset >= offset + width)) {
+            continue;
+        }
+        auto* const record = history_words_.data() + 2U + 8U * at;
+        record[0] |= 2U;
+        record[3] = now;
+        record[4] = history_words_[0];
+    }
+    // A conversion that reads the slot's S'ACTIVE (S'QUIET, IEEE 1076-2019
+    // 14.7.4) runs in this update phase, as one that reads its events runs
+    // when the value changes.
+    if (slot < slot_conversions_.size()) {
+        for (const auto member : slot_conversions_[slot]) {
+            if (conversion_queued_[member] == 0U) {
+                conversion_queued_[member] = 1U;
+                conversion_queue_.push_back(member);
+            }
+        }
+    }
+    // A thread waiting on the slot's transactions resumes whether or not the
+    // value changed (an event wakes it from slot_changed_general).
+    if (slot < slot_waiters_.size() && !slot_waiters_[slot].empty()) {
+        auto& waiters = slot_waiters_[slot];
+        std::size_t kept = 0U;
+        for (std::size_t at = 0U; at < waiters.size(); ++at) {
+            const auto waiter = waiters[at];
+            const auto& thread = threads_[waiter.thread];
+            if (!thread.alive || thread.queued || thread.epoch != waiter.epoch) {
+                continue;
+            }
+            if (waiter.edge == EdgeKind::transaction) {
+                ready_thread(waiter.thread);
+                continue;
+            }
+            waiters[kept++] = waiter;
+        }
+        waiters.resize(kept);
+    }
+    // A formal wired to the slot takes its effective value from it in the
+    // same update phase, so it is active when its source part is (IEEE
+    // 1076-2019 14.7.3.3).
+    if (slot < slot_wires_.size()) {
+        const auto [begin, end] = slot_wires_[slot];
+        for (auto index = begin; index < end; ++index) {
+            const auto& wire = wires_[index];
+            if (wire.target_source != std::numeric_limits<std::uint32_t>::max()) {
+                continue;
+            }
+            const auto low = std::max(offset, wire.offset);
+            const auto high = std::min(offset + width, wire.offset + wire.width);
+            if (low < high) {
+                history_transaction(wire.target,
+                    wire.target_offset + (low - wire.offset), high - low);
+            }
+        }
+    }
+}
+
+void Interpreter::Impl::StaticKernel::note_history_transactions(
+    const std::uint32_t count)
+{
+    // Each assignment of the round is a transaction on its signal in this
+    // update phase, changed or not (IEEE 1076-2019 14.7.3.1). (Read before
+    // the commit moves the generic assignments' values.)
+    for (std::uint32_t index = 0U; index < count; ++index) {
+        const auto& item = writes_.data[index];
+        if (item.kind == 0U || item.kind == 3U || item.kind == 4U) {
+            history_transaction(item.slot, item.offset, item.width);
+            continue;
+        }
+        const auto& entry = pending_generic_[item.member];
+        if (host_pending(entry.kind)) {
+            continue;
+        }
+        const auto slot_index = slot_of_signal_[entry.target];
+        const bool slice = entry.kind == PendingKind::slice;
+        history_transaction(slot_index, slice ? entry.offset : 0U,
+            slice ? static_cast<std::uint32_t>(entry.value.width())
+                  : slots_[slot_index].width);
+    }
+}
+
+bool Interpreter::Impl::StaticKernel::history_event_now(
+    const std::uint32_t history) const
+{
+    const auto* const record = history_words_.data() + 2U + 8U * history;
+    return (record[0] & 1U) != 0U
+        && record[1] == static_cast<std::uint64_t>(kernel_now())
+        && record[2] == history_words_[0];
+}
+
+bool Interpreter::Impl::StaticKernel::history_active_now(
+    const std::uint32_t history) const
+{
+    const auto* const record = history_words_.data() + 2U + 8U * history;
+    return (record[0] & 2U) != 0U
+        && record[3] == static_cast<std::uint64_t>(kernel_now())
+        && record[4] == history_words_[0];
+}
+
+SimulationTick Interpreter::Impl::StaticKernel::history_elapsed(
+    const std::uint32_t history, const bool active) const
+{
+    const auto* const record = history_words_.data() + 2U + 8U * history;
+    if ((record[0] & (active ? 2U : 1U)) == 0U) {
+        // TIME'HIGH (IEEE 1076-2019 16.2.4).
+        return static_cast<SimulationTick>(
+            std::numeric_limits<std::int64_t>::max());
+    }
+    return kernel_now() - static_cast<SimulationTick>(record[active ? 3U : 1U]);
 }
 
 void Interpreter::Impl::StaticKernel::run_collapsed()
@@ -4195,15 +5587,71 @@ bool Interpreter::Impl::StaticKernel::open_guard(const std::uint32_t index)
     return group.open;
 }
 
+void Interpreter::Impl::report_driver_transaction(
+    const ProcessId process, const SignalId signal,
+    const std::uint32_t offset, const std::uint32_t width)
+{
+    if (!driver_transaction_hook || width == 0U) {
+        return;
+    }
+    // A driver of a signal the v4 kernel holds is reported by the kernel
+    // when its transaction matures; the host only sees its republication.
+    if (static_kernel && static_kernel->reports_driver(process, signal)) {
+        return;
+    }
+    driver_transaction_hook(process, signal, offset, width);
+}
+
+bool Interpreter::Impl::StaticKernel::reports_driver(
+    const ProcessId process, const SignalId signal)
+{
+    if (signal >= slot_of_signal_.size()
+        || slot_of_signal_[signal] == static_kernel_detail::no_slot) {
+        return false;
+    }
+    if (member_of_process_.empty()) {
+        member_of_process_.reserve(members_.size());
+        for (std::uint32_t member = 0U; member < members_.size(); ++member) {
+            member_of_process_.emplace_back(members_[member].process, member);
+        }
+        std::ranges::sort(member_of_process_);
+    }
+    const auto found = std::ranges::lower_bound(member_of_process_,
+        std::pair { process, std::uint32_t { 0U } });
+    return found != member_of_process_.end() && found->first == process;
+}
+
+void Interpreter::Impl::StaticKernel::report_driver_writes(
+    const std::uint32_t count)
+{
+    for (std::uint32_t index = 0U; index < count; ++index) {
+        const auto& item = writes_.data[index];
+        if (item.kind == 0U || item.kind == 3U || item.kind == 4U) {
+            impl_.driver_transaction_hook(member_process_[item.member],
+                slots_[item.slot].signal, item.offset, item.width);
+            continue;
+        }
+        const auto& entry = pending_generic_[item.member];
+        if (host_pending(entry.kind)) {
+            // The host's commit reports it.
+            continue;
+        }
+        const auto& slot = slots_[slot_of_signal_[entry.target]];
+        const bool slice = entry.kind == PendingKind::slice;
+        impl_.driver_transaction_hook(member_process_[entry.member], slot.signal,
+            slice ? entry.offset : 0U,
+            slice ? static_cast<std::uint32_t>(entry.value.width()) : slot.width);
+    }
+}
+
 void Interpreter::Impl::StaticKernel::note_unchanged_transactions(
     const std::uint32_t count)
 {
     // A watched signal is published when its value changes, and the host's
     // commit makes that a transaction; an assignment of the value it holds
     // is a transaction too (IEEE 1076-2019 14.7.3.1), which only the kernel
-    // sees. Each writing driver is active as well.
+    // sees. (The writing drivers are reported by report_driver_writes.)
     std::vector<std::uint32_t> noted;
-    std::vector<std::pair<ProcessId, SignalId>> drivers;
     for (std::uint32_t index = 0U; index < count; ++index) {
         const auto& item = writes_.data[index];
         if (item.kind == 1U && host_pending(pending_generic_[item.member].kind)) {
@@ -4225,16 +5673,6 @@ void Interpreter::Impl::StaticKernel::note_unchanged_transactions(
                 arena_.data() + commit.offset)) {
             continue;
         }
-        const auto signal = slots_[slot_index].signal;
-        // A queued generic write names its Pending (which holds the writing
-        // member); the others name the member.
-        const auto writer = item.kind == 0U || item.kind == 3U || item.kind == 4U
-            ? item.member
-            : pending_generic_[item.member].member;
-        const std::pair driver { member_process_[writer], signal };
-        if (std::ranges::find(drivers, driver) == drivers.end()) {
-            drivers.push_back(driver);
-        }
         if (std::ranges::find(noted, slot_index) == noted.end()) {
             noted.push_back(slot_index);
         }
@@ -4243,11 +5681,6 @@ void Interpreter::Impl::StaticKernel::note_unchanged_transactions(
         impl_.note_signal_transaction(slots_[slot_index].signal, false,
             SignalChangeOrigin { ProcessSchedulingDomain::generic,
                 SchedulerPhase::active });
-    }
-    if (impl_.driver_transaction_hook) {
-        for (const auto& [process, signal] : drivers) {
-            impl_.driver_transaction_hook(process, signal);
-        }
     }
 }
 
@@ -4285,6 +5718,12 @@ void Interpreter::Impl::StaticKernel::commit_writes()
         return slot;
     };
     const auto count = writes_.count;
+    if (impl_.driver_transaction_hook) {
+        report_driver_writes(count);
+    }
+    if (!histories_.empty() && !quiet_commit_) {
+        note_history_transactions(count);
+    }
     const bool weak_design = weak_possible_.value_or(false);
     // The round's slots are scattered across the arena: fetch a write's
     // commit slot eight writes ahead and its value four ahead, so the loads
@@ -4450,9 +5889,85 @@ void Interpreter::Impl::StaticKernel::commit_writes()
     // A resolved slot assigned in VHDL resolved the round's assignments into
     // its next block as they were made; the update phase makes it the
     // slot's value.
-    for (const auto slot_index : touched_) {
-        if (commit_slots_[slot_index].resolved) {
+    if (!has_source_wires_) {
+        for (const auto slot_index : touched_) {
+            if (commit_slots_[slot_index].resolved) {
+                commit_net_pending(slots_[slot_index]);
+                if (slots_[slot_index].user) {
+                    // The function resolves the round's sources once.
+                    resolve_user_slot(slot_index);
+                }
+            }
+        }
+    } else {
+        // Split formals (Slot::driving_slot): a formal's own drivers resolve
+        // into its mirror, which feeds a source of its actual's resolution,
+        // so the slots resolve deepest first (Slot::level); the actual
+        // resolves once with all its sources new (IEEE 1076-2019 14.7.3.2).
+        const auto level = [&](const std::uint32_t slot) {
+            return slots_[slot].level;
+        };
+        // The sources of the conversion drivers of a resolved actual that
+        // changed feed the actual's rows before it resolves (the mirror of a
+        // split formal feeds them below, after its drivers resolve).
+        for (std::size_t at = 0U; at < touched_.size(); ++at) {
+            const auto source_slot = touched_[at];
+            if (slots_[source_slot].split_mirror || source_slot >= slot_wires_.size()) {
+                continue;
+            }
+            const auto [begin, end] = slot_wires_[source_slot];
+            for (auto index = begin; index < end; ++index) {
+                const auto& wire = wires_[index];
+                if (wire.target_source
+                    != std::numeric_limits<std::uint32_t>::max()) {
+                    touch(wire.target);
+                    feed_source_wire(wire, false);
+                }
+            }
+        }
+        resolve_work_.clear();
+        for (const auto slot_index : touched_) {
+            if (commit_slots_[slot_index].resolved) {
+                resolve_work_.push_back(slot_index);
+            }
+        }
+        std::ranges::stable_sort(resolve_work_, std::greater<> { }, level);
+        for (std::size_t at = 0U; at < resolve_work_.size(); ++at) {
+            const auto slot_index = resolve_work_[at];
             commit_net_pending(slots_[slot_index]);
+            if (!slots_[slot_index].user) {
+                continue;
+            }
+            const auto mirror = slots_[slot_index].driving_slot;
+            if (mirror == no_slot) {
+                resolve_user_slot(slot_index);
+                continue;
+            }
+            touch(mirror);
+            if (!resolve_split(slot_index)) {
+                continue;
+            }
+            const auto [begin, end] = slot_wires_[mirror];
+            for (auto index = begin; index < end; ++index) {
+                const auto& wire = wires_[index];
+                if (wire.target_source
+                    == std::numeric_limits<std::uint32_t>::max()) {
+                    continue;
+                }
+                touch(wire.target);
+                feed_source_wire(wire, false);
+                if (std::ranges::find(resolve_work_.begin() + static_cast<std::ptrdiff_t>(at + 1U),
+                        resolve_work_.end(), wire.target)
+                    == resolve_work_.end()) {
+                    resolve_work_.insert(
+                        std::upper_bound(resolve_work_.begin() + static_cast<std::ptrdiff_t>(at + 1U),
+                            resolve_work_.end(), level(wire.target),
+                            [&](const std::uint32_t value, const std::uint32_t slot) {
+                                return value > level(slot);
+                            }),
+                        wire.target);
+                }
+            }
         }
     }
     // Wired formals follow their sources' new values in this update phase.
@@ -4460,9 +5975,32 @@ void Interpreter::Impl::StaticKernel::commit_writes()
     for (std::size_t at = 0U; !wires_.empty() && at < touched_.size(); ++at) {
         const auto [begin, end] = slot_wires_[touched_[at]];
         for (auto index = begin; index < end; ++index) {
+            if (wires_[index].target_source
+                != std::numeric_limits<std::uint32_t>::max()) {
+                continue;
+            }
             touch(wires_[index].target);
             copy_wire(wires_[index]);
         }
+    }
+    if (has_source_wires_) {
+        // The changes are reported as the host's update commit reports them:
+        // the mirrors first (deepest formal first), then the other slots,
+        // then the formals, whose values follow their actuals' (shallowest
+        // first).
+        const auto rest = std::ranges::stable_partition(touched_,
+            [&](const std::uint32_t slot) { return slots_[slot].split_mirror; });
+        std::stable_sort(touched_.begin(), rest.begin(),
+            [&](const std::uint32_t left, const std::uint32_t right) {
+                return slots_[left].level > slots_[right].level;
+            });
+        const auto split = std::ranges::stable_partition(rest,
+            [&](const std::uint32_t slot) {
+                return slots_[slot].driving_slot == no_slot;
+            });
+        std::ranges::stable_sort(split, {}, [&](const std::uint32_t slot) {
+            return slots_[slot].level;
+        });
     }
     for (const auto slot_index : touched_) {
         auto& slot = commit_slots_[slot_index];
@@ -4477,6 +6015,12 @@ void Interpreter::Impl::StaticKernel::commit_writes()
         if (!same) {
             if (quiet_commit_) {
                 ++quiet_changes_;
+                if (slot_index < slot_history_.size()
+                    && slot_history_[slot_index] != no_slot) {
+                    // A settling change is no event: the histories take the
+                    // value as their own.
+                    history_sync(slot_index);
+                }
                 continue;
             }
             if (trace_) {
@@ -4883,11 +6427,25 @@ bool Interpreter::Impl::StaticKernel::deliver_host_write(const std::uint32_t mem
             mirrored_now = true;
         }
     }
+    // The Active update events of one activation are performed in the order
+    // their statements executed (one key, the scheduler's insertion
+    // sequence), as the reference performs a process's update before that
+    // process runs again: a member that runs twice in one activation, its
+    // first update still pending, does not have both updates applied ahead
+    // of an earlier member's (IEEE 1800-2023 4.9.1, 4.7). Two continuous
+    // assignments of one net evaluated at time zero and again after an
+    // initial block's write would otherwise resolve the net through the
+    // values x, z, x, z rather than x, z.
+    const auto active_order
+        = domain == SignalUpdateDomain::systemverilog_active
+        ? StableOrder { host_process_ }
+        : order;
     if (offset) {
         impl_.stage_update_slice(process, signal, std::move(value), *offset,
-            domain, order);
+            domain, active_order);
     } else {
-        impl_.stage_update(process, signal, std::move(value), domain, order);
+        impl_.stage_update(process, signal, std::move(value), domain,
+            active_order);
     }
     return mirrored_now;
 }
@@ -5297,8 +6855,15 @@ void Interpreter::Impl::StaticKernel::push_generic_pending(Pending pending)
                         + std::to_string(slot.width) + ", value width "
                         + std::to_string(width) + ")");
             }
-            set_net_value(slot_index, member_process_[pending.member],
-                pending.kind == PendingKind::slice ? pending.offset : 0U, value, true);
+            if (pending.null != 0U) {
+                set_net_null(slot_index, member_process_[pending.member],
+                    pending.kind == PendingKind::slice ? pending.offset : 0U, width,
+                    pending.null, true);
+            } else {
+                set_net_value(slot_index, member_process_[pending.member],
+                    pending.kind == PendingKind::slice ? pending.offset : 0U, value,
+                    true);
+            }
         }
     }
     pending_generic_.push_back(std::move(pending));
@@ -5390,7 +6955,7 @@ void Interpreter::Impl::StaticKernel::commit_host_update(Pending& entry)
     // earlier writes too.
     if (!output_queue_.empty()) {
         publish(true);
-    } else if (debug_points_) {
+    } else {
         flush_debug_writes();
     }
     if (entry.kind == PendingKind::host_task) {
@@ -5421,7 +6986,9 @@ void Interpreter::Impl::StaticKernel::commit_host_update(Pending& entry)
     const bool slice = entry.kind == PendingKind::host_slice;
     const auto input = signal < input_of_signal_.size() ? input_of_signal_[signal]
                                                         : no_slot;
-    if (in_host_nonblocking_region_) {
+    // The first simulation cycle's update phase (schedule_initial_update)
+    // commits the initialization's transactions there too.
+    if (in_host_nonblocking_region_ || initial_update_running_) {
         // The host's NBA region: the outputs above committed at once, and so
         // does this update, as the host's own NBA update would
         // (dispatch_systemverilog_update). The kernel's readers of the signal
@@ -6414,7 +7981,12 @@ void Interpreter::Impl::StaticKernel::run_member(const std::uint32_t member_inde
         if (profile_) {
             profile_compiled_runs_ += 1U;
         }
-        if (verify_ && member.vhdl) {
+        // FSIM_KERNEL_VERIFY replays every compiled member on the reference
+        // evaluator, SystemVerilog as well as VHDL; a debugger plan stops
+        // SystemVerilog members at statements, outside the replay.
+        if (verify_
+            && (member.vhdl || verify_thread_skip_reason(member_index) == nullptr)
+            && !verify_variable_hooked(member_index)) {
             verify_run(member_index);
             return;
         }
@@ -6505,7 +8077,12 @@ Interpreter::Impl::StaticKernel::verify_writes(const std::size_t first)
             case PendingKind::whole:
             case PendingKind::slice:
                 out.emplace_back(slot_of_signal_[pending.target], pending.offset,
-                    pending.value.promoted_to_logic9().to_msb_string());
+                    pending.null != 0U
+                        ? std::string(pending.value.width(),
+                              static_cast<char>(pending.null == 1U
+                                      ? projected_null_bus
+                                      : projected_null_register))
+                        : pending.value.promoted_to_logic9().to_msb_string());
                 break;
             case PendingKind::element:
             case PendingKind::element_part:
@@ -6735,6 +8312,22 @@ std::string Interpreter::Impl::StaticKernel::verify_effect_mismatch(
     return mismatch;
 }
 
+const std::vector<std::uint64_t>&
+Interpreter::Impl::StaticKernel::verify_operation_liveness(
+    const std::uint32_t member_index)
+{
+    verify_operation_live_.resize(members_.size());
+    auto& entry = verify_operation_live_[member_index];
+    if (!entry) {
+        std::vector<std::uint8_t> skip(
+            members_[member_index].operations().size(), 0U);
+        std::vector<std::uint64_t> live;
+        prune_operations(member_index, skip, live);
+        entry = std::move(live);
+    }
+    return *entry;
+}
+
 void Interpreter::Impl::StaticKernel::verify_run(const std::uint32_t member_index)
 {
     auto& member = members_[member_index];
@@ -6751,10 +8344,13 @@ void Interpreter::Impl::StaticKernel::verify_run(const std::uint32_t member_inde
     // outside the slots); the replay below records its own and does not make
     // them (VerifyShadow).
     VerifyShadow verify_shadow;
+    // A member that runs inside another member's verified run (a call
+    // the replay makes) gives the outer run its shadow back.
     struct ShadowReset {
         VerifyShadow*& pointer;
-        ~ShadowReset() { pointer = nullptr; }
-    } const shadow_reset { shadow_ };
+        VerifyShadow* const saved;
+        ~ShadowReset() { pointer = saved; }
+    } const shadow_reset { shadow_, shadow_ };
     shadow_ = &verify_shadow;
     run_compiled(member_index);
     verify_activation_mirrors(verify_shadow.compiled_host);
@@ -6794,6 +8390,7 @@ void Interpreter::Impl::StaticKernel::verify_run(const std::uint32_t member_inde
                 body.registers[reg].b),
             kind);
     }
+    std::string replay_mismatch;
     {
         // The compiled run emitted the run's reports; the replay's are the
         // same messages (a difference shows in the writes or registers).
@@ -6801,7 +8398,43 @@ void Interpreter::Impl::StaticKernel::verify_run(const std::uint32_t member_inde
         replaying_ = true;
         verify_shadow.reference = true;
         try {
-            run_generic_from(member_index, member.body_begin);
+            if (member.vhdl) {
+                run_generic_from(member_index, member.body_begin);
+            } else {
+                // A SystemVerilog member's generic-bridge operations ran
+                // once in the compiled run (its output, files, strings,
+                // foreign calls): the replay takes their recorded results,
+                // as a thread's replay does; one that runs only while a
+                // library binds the attempt-start callback is skipped
+                // without a record.
+                std::vector<std::uint8_t> optional_generic(
+                    member.operations().size(), 0U);
+                for (const auto& inst : body.code) {
+                    if (inst.op == KOp::generic && inst.aux == 2U
+                        && inst.x < optional_generic.size()) {
+                        optional_generic[inst.x] = 1U;
+                    }
+                }
+                std::uint32_t pc = member.body_begin;
+                std::size_t steps = 0U;
+                while (pc != member.body_end && replay_mismatch.empty()) {
+                    if (++steps > run_step_limit) {
+                        fail(member_index, pc,
+                            "static kernel member did not terminate");
+                    }
+                    if (pc >= member.operations().size()) {
+                        fail(member_index, pc,
+                            "static kernel member left its operation stream");
+                    }
+                    if (replay_generic_record(member_index, pc, replay_mismatch)) {
+                        ++pc;
+                    } else if (optional_generic[pc] != 0U) {
+                        ++pc;
+                    } else {
+                        pc = step_generic(member_index, pc);
+                    }
+                }
+            }
         } catch (...) {
             replaying_ = false;
             verify_shadow.reference = false;
@@ -6811,8 +8444,14 @@ void Interpreter::Impl::StaticKernel::verify_run(const std::uint32_t member_inde
         verify_shadow.reference = false;
     }
     const auto reference_writes = verify_writes(nba_size);
-    std::string mismatch = verify_effect_mismatch(
-        compiled_writes, reference_writes, marks);
+    std::string mismatch = !replay_mismatch.empty() ? replay_mismatch
+        : verify_effect_mismatch(compiled_writes, reference_writes, marks);
+    if (mismatch.empty() && !member.vhdl
+        && verify_shadow.consumed != verify_shadow.generic.size()) {
+        mismatch = "generic operations: compiled ran "
+            + std::to_string(verify_shadow.generic.size())
+            + " reference reached " + std::to_string(verify_shadow.consumed);
+    }
     if (mismatch.empty()
         && verify_shadow.compiled_host != verify_shadow.reference_host) {
         mismatch = "host or projected writes: compiled "
@@ -6842,12 +8481,21 @@ void Interpreter::Impl::StaticKernel::verify_run(const std::uint32_t member_inde
             }
         }
     }
+    // Compiled SystemVerilog bodies keep no liveness (live_at_entry is
+    // VHDL's): the operations' register liveness decides which registers
+    // carry a value into the next activation; the others are temporaries
+    // the compiled code may keep anywhere.
+    const std::vector<std::uint64_t>* operation_live = member.vhdl
+        ? nullptr : &verify_operation_liveness(member_index);
     for (std::size_t reg = 0U; reg < member.registers.size() && mismatch.empty();
          ++reg) {
         const auto width = body.register_widths[reg];
-        const bool live = body.live_at_entry.empty()
-            || (reg / 64U < body.live_at_entry.size()
-                && (body.live_at_entry[reg / 64U] >> (reg % 64U) & 1U) != 0U);
+        const bool live = operation_live != nullptr
+            ? reg / 64U < operation_live->size()
+                && ((*operation_live)[reg / 64U] >> (reg % 64U) & 1U) != 0U
+            : body.live_at_entry.empty()
+                || (reg / 64U < body.live_at_entry.size()
+                    && (body.live_at_entry[reg / 64U] >> (reg % 64U) & 1U) != 0U);
         if (width == 0U || compiled_registers[reg].empty() || !live) {
             continue;
         }
@@ -7012,17 +8660,35 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_generic(
     }
     ++interpreted_operations_;
     ++interpreted_by_cause_[static_cast<std::size_t>(interpreting_)];
-    return visit_operation([&](const auto& op) {
+    // The writes of the statements before reach a watching observer
+    // (CompiledBody::statement_starts).
+    if (debug_write_flag_ != 0U && members_[member_index].statement_start(pc))
+        [[unlikely]] {
+        flush_debug_writes();
+    }
+    const auto next = visit_operation([&](const auto& op) {
         return step_operation(member_index, pc, op);
     }, members_[member_index].operations()[pc]);
+    if (variable_hooks_active_) [[unlikely]] {
+        note_reference_store(member_index, pc);
+    }
+    return next;
 }
 
 template <typename Op>
 std::uint32_t Interpreter::Impl::StaticKernel::step_operation_at(
     const std::uint32_t member_index, const std::uint32_t pc)
 {
-    return step_operation(member_index, pc,
+    if (debug_write_flag_ != 0U && members_[member_index].statement_start(pc))
+        [[unlikely]] {
+        flush_debug_writes();
+    }
+    const auto next = step_operation(member_index, pc,
         operation_get<Op>(members_[member_index].operations()[pc]));
+    if (variable_hooks_active_) [[unlikely]] {
+        note_reference_store(member_index, pc);
+    }
+    return next;
 }
 
 const std::array<Interpreter::Impl::StaticKernel::OperationStep,
@@ -7403,33 +9069,54 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_operation(
                 // cycles (vhdl_host_cycles_), so the current one is the
                 // host's (IEEE 1076-2019 16.2.4).
                 if (owned(op.signal)) {
-                    fail(member_index, pc,
-                        "static kernel attribute of a kernel signal");
-                }
-                try {
+                    // A kernel signal's history is the kernel's (build_histories).
+                    const auto history = history_index(op.signal, op.selection);
+                    if (history == no_slot) {
+                        fail(member_index, pc,
+                            "static kernel attribute of a kernel signal");
+                    }
                     if constexpr (std::is_same_v<T, SignalEvent>
                         || std::is_same_v<T, SignalActive>) {
                         const auto value = std::is_same_v<T, SignalEvent>
-                            ? impl_.signal_event_attribute(op.signal, op.selection)
-                            : impl_.signal_active_attribute(op.signal, op.selection);
+                            ? history_event_now(history) : history_active_now(history);
                         reg(op.destination, pc) = PackedLogic4(
                             1, value ? Logic4::one : Logic4::zero);
                     } else if constexpr (std::is_same_v<T, SignalLastValue>) {
-                        reg(op.destination, pc) = Impl::coerce_value_kind(
-                            impl_.signal_last_value_attribute(
-                                op.signal, op.selection),
-                            kind_of(op.destination));
+                        // build_histories rewrote it to a read.
+                        fail(member_index, pc,
+                            "static kernel attribute of a kernel signal");
                     } else {
-                        const auto elapsed = std::is_same_v<T, SignalLastEvent>
-                            ? impl_.signal_last_event_attribute(
-                                  op.signal, op.selection)
-                            : impl_.signal_last_active_attribute(
-                                  op.signal, op.selection);
-                        reg(op.destination, pc)
-                            = PackedLogic4::from_aval_bval(64, elapsed, 0);
+                        reg(op.destination, pc) = PackedLogic4::from_aval_bval(
+                            64, history_elapsed(history,
+                                    std::is_same_v<T, SignalLastActive>),
+                            0);
                     }
-                } catch (const std::invalid_argument& error) {
-                    fail(member_index, pc, error.what());
+                } else {
+                    try {
+                        if constexpr (std::is_same_v<T, SignalEvent>
+                            || std::is_same_v<T, SignalActive>) {
+                            const auto value = std::is_same_v<T, SignalEvent>
+                                ? impl_.signal_event_attribute(op.signal, op.selection)
+                                : impl_.signal_active_attribute(op.signal, op.selection);
+                            reg(op.destination, pc) = PackedLogic4(
+                                1, value ? Logic4::one : Logic4::zero);
+                        } else if constexpr (std::is_same_v<T, SignalLastValue>) {
+                            reg(op.destination, pc) = Impl::coerce_value_kind(
+                                impl_.signal_last_value_attribute(
+                                    op.signal, op.selection),
+                                kind_of(op.destination));
+                        } else {
+                            const auto elapsed = std::is_same_v<T, SignalLastEvent>
+                                ? impl_.signal_last_event_attribute(
+                                      op.signal, op.selection)
+                                : impl_.signal_last_active_attribute(
+                                      op.signal, op.selection);
+                            reg(op.destination, pc)
+                                = PackedLogic4::from_aval_bval(64, elapsed, 0);
+                        }
+                    } catch (const std::invalid_argument& error) {
+                        fail(member_index, pc, error.what());
+                    }
                 }
             } else if constexpr (std::is_same_v<T, SignalDriving>
                 || std::is_same_v<T, SignalDrivingValue>) {
@@ -7871,6 +9558,10 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_operation(
                 } else {
                     write_element(pending);
                 }
+            } else if constexpr (std::is_same_v<T, WriteNetDelay>) {
+                // An interconnect delay (IEEE 1364-2005 16.2.4), as the
+                // compiled body makes it.
+                net_delay_write(member_index, pc, op, reg(op.source, pc));
             } else {
                 fail(member_index, pc,
                     "static kernel member contains an unsupported operation");
@@ -7880,7 +9571,91 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_operation(
     }
 }
 
+bool Interpreter::Impl::StaticKernel::nettype_slot(
+    const std::uint32_t slot_index) const
+{
+    if (!slots_[slot_index].user) {
+        return false;
+    }
+    const auto found = impl_.vhdl_resolvers.find(slots_[slot_index].signal);
+    return found != impl_.vhdl_resolvers.end()
+        && found->second.systemverilog_nettype;
+}
+
+void Interpreter::Impl::StaticKernel::queue_nettype_resolution(
+    const std::uint32_t slot_index)
+{
+    // Members of a parallel batch may drive nettype nets.
+    const std::lock_guard lock { nettype_mutex_ };
+    if (nettype_queued_.size() != slots_.size()) {
+        nettype_queued_.assign(slots_.size(), 0U);
+    }
+    if (nettype_queued_[slot_index] == 0U) {
+        nettype_queued_[slot_index] = 1U;
+        nettype_pending_.push_back(slot_index);
+    }
+}
+
+bool Interpreter::Impl::StaticKernel::drain_nettype_resolutions()
+{
+    std::vector<std::uint32_t> pending;
+    {
+        const std::lock_guard lock { nettype_mutex_ };
+        if (nettype_pending_.empty()) {
+            return false;
+        }
+        pending.swap(nettype_pending_);
+        for (const auto slot : pending) {
+            nettype_queued_[slot] = 0U;
+        }
+    }
+    // One canonical order for what IEEE 1800-2023 4.7 leaves unspecified.
+    std::ranges::sort(pending);
+    for (const auto slot_index : pending) {
+        const auto& slot = slots_[slot_index];
+        const WordSnapshot before(
+            arena_.data() + slot.offset, slot.planes * slot.words);
+        resolve_user_slot(slot_index);
+        // A forced net keeps its forced bits: the resolution reaches the
+        // host's stored layer and the held bits come back before any
+        // reader hears of a change (IEEE 1800-2023 10.6.2).
+        if (overrides_active_ != 0U && slot_index < slot_override_.size()
+            && slot_override_[slot_index] != 0U) {
+            (void)restore_override(slot_index, 0U, 0U, before.data());
+        }
+        if (!std::equal(before.begin(), before.end(),
+                arena_.begin() + slot.offset)) {
+            slot_changed(slot_index, 0U, before.data());
+        }
+    }
+    return true;
+}
+
 void Interpreter::Impl::StaticKernel::settle()
+{
+    // The nettype nets' updates follow the Active region's ready threads,
+    // as the reference's update commit follows its processes (IEEE
+    // 1800-2023 4.7, 6.6.7): a procedure that starts at time zero waits on
+    // the net before its first resolution (finish_nettype_resolutions).
+    settle_members();
+    while ((!behavioral_ || ready_threads_.empty())
+        && drain_nettype_resolutions()) {
+        settle_members();
+    }
+}
+
+bool Interpreter::Impl::StaticKernel::finish_nettype_resolutions()
+{
+    // The Active region would end: the resolutions the ready threads left
+    // pending run now, and what they wake runs in the region.
+    if (!drain_nettype_resolutions()) {
+        return false;
+    }
+    settle_members();
+    return true;
+}
+
+void Interpreter::Impl::StaticKernel::settle_members()
 {
     const MtPhaseTimer timer { mt_stats_, 0U };
     std::size_t evaluations = 0U;
@@ -8043,9 +9818,7 @@ void Interpreter::Impl::StaticKernel::commit_pending()
     // heard as x, y, x. A batch that changes each output once publishes
     // nothing here.
     const auto publish_earlier = [&](const std::uint32_t slot_index) {
-        if (debug_points_) {
-            flush_debug_writes();
-        }
+        flush_debug_writes();
         if (slot_index != no_slot && slots_[slot_index].output
             && slots_[slot_index].output_pending) {
             publish(true);
@@ -8102,9 +9875,7 @@ void Interpreter::Impl::StaticKernel::commit_pending()
         }
     }
     // The region's last update.
-    if (debug_points_) {
-        flush_debug_writes();
-    }
+    flush_debug_writes();
 }
 
 void Interpreter::Impl::StaticKernel::publish_pending_outputs()
@@ -8124,10 +9895,12 @@ void Interpreter::Impl::StaticKernel::note_debug_write(
         == 0U) {
         debug_writes_.push_back(slot_index);
     }
+    debug_write_flag_ = 1U;
 }
 
 void Interpreter::Impl::StaticKernel::flush_debug_writes()
 {
+    debug_write_flag_ = 0U;
     if (debug_writes_.empty()) {
         return;
     }
@@ -8204,10 +9977,14 @@ void Interpreter::Impl::StaticKernel::publish_slot(
     // processes that start after it observe the value (IEEE 1800-2023
     // 6.8 and 10.5: declaration initializers take effect before any
     // initial or always procedure starts).
-    const bool commit_now = immediate
-        && (ending || domain == SignalUpdateDomain::systemverilog_active);
-    if (slot.resolved) {
-        // Each source as its driver: the host resolves the same value.
+    const bool commit_now = slot.split_mirror
+        || (immediate
+            && (ending || domain == SignalUpdateDomain::systemverilog_active));
+    if (slot.resolved && slot.driving_slot == no_slot) {
+        // Each source as its driver: the host resolves the same value, or
+        // takes this one for a nettype net (published_nettype_value).
+        std::copy_n(arena_.begin() + slot.offset, slot.planes * slot.words,
+            published_.begin() + slot.published);
         publish_net_sources(slot_index,
             commit_now ? std::nullopt : std::optional { domain });
     } else if (slot.disjoint_writers && !slot.writers.empty()) {
@@ -8241,6 +10018,13 @@ void Interpreter::Impl::StaticKernel::publish_slot(
 void Interpreter::Impl::StaticKernel::initialize()
 {
     initialized_ = true;
+    // The guaranteed time-zero call of each nettype's resolution function
+    // (IEEE 1800-2023 6.7.3) runs with the first round's resolutions.
+    for (std::uint32_t index = 0U; index < slots_.size(); ++index) {
+        if (slots_[index].user && nettype_slot(index)) {
+            queue_nettype_resolution(index);
+        }
+    }
     // From now on the host lists the inputs whose revision changes.
     impl_.static_kernel_input_marks.assign(
         impl_.signal_value_revisions.size(), 0U);
@@ -8256,9 +10040,37 @@ void Interpreter::Impl::StaticKernel::initialize()
                              : Impl::coerce_value_kind(value, ValueKind::logic4);
         write_mirror(input);
     }
+    // The mirrors of split formals follow the other outputs, the innermost
+    // formal's first (the order the update commit computes them in).
+    std::vector<std::uint32_t> initial_order;
+    initial_order.reserve(slots_.size());
     for (std::uint32_t index = 0U; index < slots_.size(); ++index) {
+        if (!slots_[index].split_mirror) {
+            initial_order.push_back(index);
+        }
+    }
+    const auto plain = initial_order.size();
+    for (std::uint32_t index = 0U; index < slots_.size(); ++index) {
+        if (slots_[index].split_mirror) {
+            initial_order.push_back(index);
+        }
+    }
+    std::stable_sort(initial_order.begin() + static_cast<std::ptrdiff_t>(plain),
+        initial_order.end(), [&](const std::uint32_t left, const std::uint32_t right) {
+            return slots_[left].level > slots_[right].level;
+        });
+    for (const auto index : initial_order) {
         auto& slot = slots_[index];
         if (!slot.output) {
+            continue;
+        }
+        if (slot.split_mirror) {
+            // The host's copy of a mirror keeps its default until the
+            // mirror first changes (the host's own initial publication of
+            // the formal's driving value is no event): what the kernel
+            // settled is the published value.
+            std::copy_n(arena_.begin() + slot.offset, slot.planes * slot.words,
+                published_.begin() + slot.published);
             continue;
         }
         // Publish whatever differs from the scheduler's initial value.
@@ -8433,6 +10245,38 @@ bool Interpreter::Impl::StaticKernel::scan_inputs(const bool all)
     return changed;
 }
 
+Interpreter::Impl::StaticKernel::HostWakeScope::HostWakeScope(
+    StaticKernel& kernel, const SignalId signal)
+    : kernel_ { kernel }
+{
+    // An event the previous delta's update phase made, or SystemVerilog work
+    // of this delta (stamped for this one), wakes VHDL work in this delta.
+    const auto& impl = kernel.impl_;
+    const auto event = signal < impl.signal_events.size()
+        ? impl.signal_events[signal]
+        : std::nullopt;
+    const auto now = impl.scheduler.now();
+    const auto delta = impl.scheduler.delta();
+    hold_ = kernel.mixed_ && kernel.host_boundary_ && event
+        && *event == std::pair { now, delta + 1U };
+    members_ = kernel.next_round_.size();
+    threads_ = kernel.vhdl_ready_threads_.size();
+    const bool systemverilog = kernel.mixed_ && event
+        && *event == std::pair { now, delta }
+        && impl.signal_event_scheduling_stamps[signal].origin.process_domain
+            == ProcessSchedulingDomain::systemverilog;
+    draining_ = std::exchange(kernel.sv_draining_,
+        kernel.sv_draining_ || systemverilog);
+}
+
+Interpreter::Impl::StaticKernel::HostWakeScope::~HostWakeScope()
+{
+    kernel_.sv_draining_ = draining_;
+    if (hold_) {
+        kernel_.hold_woken(members_, threads_);
+    }
+}
+
 bool Interpreter::Impl::StaticKernel::deposited_now(const Input& input) const
 {
     return input.deposited
@@ -8513,43 +10357,7 @@ bool Interpreter::Impl::StaticKernel::refresh_input_from_host(Input& input)
     input.revision = revision;
     const auto seen = std::exchange(
         input.event_seen, impl_.signal_events[input.signal]);
-    // An event this delta's update phase made (stamped for the next delta)
-    // wakes VHDL processes in the next delta (IEEE 1076-2019 14.7.5.3); one
-    // the previous delta's update phase made, or SystemVerilog work of this
-    // delta (stamped for this one, S16), wakes them in this one.
-    const bool next_delta = mixed_ && host_boundary_ && input.event_seen
-        && *input.event_seen
-            == std::pair { impl_.scheduler.now(), impl_.scheduler.delta() + 1U };
-    const auto members = next_round_.size();
-    const auto threads = vhdl_ready_threads_.size();
-    struct HoldWoken {
-        StaticKernel& kernel;
-        bool hold;
-        std::size_t members;
-        std::size_t threads;
-        ~HoldWoken()
-        {
-            if (hold) {
-                kernel.hold_woken(members, threads);
-            }
-        }
-    } hold_woken_scope { *this, next_delta, members, threads };
-    // A change SystemVerilog work made in this delta (a VPI put, a hosted
-    // process's write) wakes VHDL work in the next drain's Active region,
-    // with the SystemVerilog members it wakes (S16).
-    struct SystemVerilogWake {
-        bool& flag;
-        bool previous;
-        ~SystemVerilogWake() { flag = previous; }
-    } systemverilog_wake { sv_draining_,
-        std::exchange(sv_draining_,
-            sv_draining_
-                || (mixed_ && input.event_seen
-                    && *input.event_seen
-                        == std::pair { impl_.scheduler.now(), impl_.scheduler.delta() }
-                    && impl_.signal_event_scheduling_stamps[input.signal]
-                            .origin.process_domain
-                        == ProcessSchedulingDomain::systemverilog)) };
+    const HostWakeScope wakes { *this, input.signal };
     if (bumped && current == input.cached && !vhdl_
         && impl_.get_signal(input.signal).event_variable) {
         // A trigger of a named event the kernel waits on (its value stays
@@ -8705,6 +10513,7 @@ bool Interpreter::Impl::StaticKernel::activate()
     // Watches asked for inside the last activation (a foreign callback that a
     // member's host operation ran) take effect before anything runs.
     apply_watches();
+    pin_members();
     // Hosted wakes during this activation wait for its drain loop instead of
     // waking the host process again.
     struct HostedActivation {
@@ -8742,6 +10551,16 @@ bool Interpreter::Impl::StaticKernel::activate()
     }
     const bool first_activation = !initialized_;
     if (first_activation) {
+        initialization_round_ = vhdl_;
+        if (vhdl_) {
+            // An assignment of a value a signal holds is a transaction of the
+            // first simulation cycle too (IEEE 1076-2019 14.7.3.1, 14.7.5.2):
+            // a library registers for it before that cycle's update phase,
+            // after this round has run, so the round queues every write.
+            for (std::uint32_t slot = 0U; slot < slots_.size(); ++slot) {
+                mark_write(slot);
+            }
+        }
         if (has_hosted_) {
             run_hosted_initializers();
         }
@@ -8761,12 +10580,16 @@ bool Interpreter::Impl::StaticKernel::activate()
         }
     }
     if (late_start_armed_
-        && (late_start_due_ || (!first_activation && (mixed_ || vhdl_)))) {
+        && (late_start_due_
+            || (!first_activation && !initial_update_running_
+                && (mixed_ || vhdl_)))) {
         // The delta after time zero: continuous assignments and event
         // controls of time zero have settled (see start_behavioral).
         start_late_members();
     }
     activate_step();
+    // An initialization that assigned nothing has no update to wait for.
+    initialization_round_ = false;
     // A closed kernel (no host process, output or host-written input) whose
     // next event is its own timer, with nothing else pending on the host up
     // to that time, runs its next time steps itself instead of handing each
@@ -8787,6 +10610,7 @@ bool Interpreter::Impl::StaticKernel::activate()
          && !observed && behavioral_
          && !vhdl_threads_ && !stopped_ && !nonblocking_deferred_
          && !yield_requested_ && !late_start_armed_
+         && !initial_update_pending_ && !initial_update_running_
          && !host_active_staged_
          && !(host_nba_staged_ && host_nba_time_ == impl_.scheduler.now())
          && step < max_warp_steps; ++step) {
@@ -8831,7 +10655,10 @@ bool Interpreter::Impl::StaticKernel::activate()
     // In the host's NBA region (the deferred commit) the kernel's updates
     // belong to that region and apply with the host's own (IEEE 1800-2023
     // 4.5), before the processes they wake run.
-    publish((first_activation && !warp_time_) || in_host_nonblocking_region_);
+    // The first cycle's update phase (schedule_initial_update) commits the
+    // initialization's updates there, at once.
+    publish((first_activation && !warp_time_) || initial_update_running_
+        || in_host_nonblocking_region_);
     if (has_hosted_) {
         // After the publication: its commits may wake hosted processes.
         finish_hosted();
@@ -8866,6 +10693,20 @@ void Interpreter::Impl::StaticKernel::activate_step()
         }
         settle();
         check_owned_edges();
+        if (vhdl_ && std::exchange(initial_commit_due_, false)) {
+            // The first simulation cycle's update phase: the
+            // initialization's assignments update their signals before any
+            // process of the cycle resumes (IEEE 1076-2019 14.7.5.2,
+            // 14.7.5.3); the processes run in the next activation.
+            commit_round();
+            if (yield_requested_ || queued_count_ != 0U || !triggered_.empty()
+                || !trigger_queue_.empty() || !vhdl_ready_threads_.empty()
+                || !hosted_active_.empty()) {
+                yield_requested_ = true;
+                break;
+            }
+            continue;
+        }
         if (vhdl_) {
             if (!triggered_.empty() || writes_.count != 0U
                 || !vhdl_ready_threads_.empty() || !hosted_active_.empty()) {
@@ -8884,6 +10725,12 @@ void Interpreter::Impl::StaticKernel::activate_step()
                     }
                 }
                 if (stopped_) {
+                    break;
+                }
+                if (std::exchange(initialization_round_, false)) {
+                    // The initialization phase ends here; the first
+                    // simulation cycle's update phase commits the round.
+                    schedule_initial_update();
                     break;
                 }
                 commit_round();
@@ -8989,7 +10836,7 @@ void Interpreter::Impl::StaticKernel::activate_step()
             }
             // The Active region drains (combinational settling included)
             // before #0 resumptions (Inactive) and before the NBA region.
-            if (active) {
+            if (active || finish_nettype_resolutions()) {
                 continue;
             }
             if (!inactive_threads_.empty() || !hosted_inactive_.empty()) {
@@ -9227,6 +11074,191 @@ bool Interpreter::Impl::StaticKernel::vhdl_update_waits_for_host() const
             || impl_.scheduler.systemverilog_work_pending());
 }
 
+void Interpreter::Impl::StaticKernel::schedule_initial_update()
+{
+    // The update phase of the first simulation cycle is the host's update
+    // commit (interp.update_commit, one task per delta), which runs
+    // run_initial_update ahead of the host's own updates, as a round's
+    // commit is in later cycles.
+    initial_update_pending_ = true;
+    impl_.schedule_update_commit();
+}
+
+void Interpreter::Impl::StaticKernel::run_initial_update()
+{
+    if (!std::exchange(initial_update_pending_, false)) {
+        return;
+    }
+    initial_update_running_ = true;
+    initial_commit_due_ = true;
+    bool yielded { };
+    try {
+        yielded = activate();
+    } catch (...) {
+        initial_update_running_ = false;
+        throw;
+    }
+    initial_update_running_ = false;
+    if (yielded) {
+        impl_.queue_next_delta(host_process_);
+    }
+}
+
+void Interpreter::Impl::StaticKernel::debug_local_hooks_changed()
+{
+    // The members whose variables the debug interface forces or watches
+    // (IEEE 1076-2019 22.5.2, 21.3.2.2): their executors report variable
+    // stores (note_variable_store).
+    variable_hook_members_.assign(members_.size(), 0U);
+    variable_hooks_active_ = false;
+    member_pinned_.resize(members_.size(), 0U);
+    for (const auto& hook : impl_.debug_local_hooks) {
+        for (std::uint32_t member = 0U; member < members_.size(); ++member) {
+            if (members_[member].process == hook.owner) {
+                variable_hook_members_[member] = 1U;
+                variable_hooks_active_ = true;
+                if (member_pinned_[member] == 0U) {
+                    pending_pins_.push_back(member);
+                }
+            }
+        }
+    }
+    // Between activations at once, otherwise when the running one ends.
+    if (!activating_) {
+        pin_members();
+    }
+}
+
+void Interpreter::Impl::StaticKernel::write_exact_register(CompiledBody& body,
+    Word* registers, const RegisterId reg, const PackedLogic4& value)
+{
+    if (registers == nullptr) {
+        registers = body.registers.data();
+    }
+    const auto width
+        = reg < body.register_widths.size() ? body.register_widths[reg] : 0U;
+    if (width == 0U || value.width() != width) {
+        return;
+    }
+    if (width > 64U) {
+        if (reg < body.wide_base.size() && body.wide_base[reg] != 0U) {
+            set_wide_value(body, registers, reg, value);
+        } else if (reg < body.wide_registers.size()) {
+            body.wide_registers[reg] = value;
+        }
+        return;
+    }
+    const auto uword = exact_uword(value);
+    if (!uword) {
+        return;
+    }
+    registers[reg] = uword->value;
+    if (body.shadow_base != 0U && reg < body.tracked.size()
+        && body.tracked[reg] != 0U) {
+        registers[body.shadow_base + reg]
+            = { uword->unknown, body.weak != 0U ? uword->weak : 0U };
+    }
+}
+
+bool Interpreter::Impl::StaticKernel::note_variable_store(
+    const std::uint32_t member_index, const RegisterId reg, Word* registers)
+{
+    if (member_index >= variable_hook_members_.size()
+        || variable_hook_members_[member_index] == 0U) {
+        return false;
+    }
+    auto& member = members_[member_index];
+    const auto owner = member.process;
+    std::size_t width { };
+    bool hooked { };
+    for (const auto& hook : impl_.debug_local_hooks) {
+        if (hook.owner == owner && hook.reg == reg) {
+            width = hook.forced.width();
+            hooked = true;
+            break;
+        }
+    }
+    if (!hooked) {
+        return false;
+    }
+    auto* const body = registers != nullptr && member.compiled
+        ? &*member.compiled : nullptr;
+    std::optional<PackedLogic4> value;
+    if (body != nullptr) {
+        value = exact_register(*body, member_index, reg, registers);
+    } else if (reg < member.registers.size()) {
+        value = member.registers[reg];
+    }
+    if (!value || value->width() != width) {
+        return false;
+    }
+    // An assignment does not update the forced elements (22.5.2): the
+    // store put back their forced values.
+    if (impl_.apply_debug_local_forces(owner, reg, *value)) {
+        if (body != nullptr) {
+            write_exact_register(*body, registers, reg, *value);
+            // Two-state code assumes known registers; recheck before using
+            // it.
+            member.registers_known = false;
+        } else {
+            member.registers[reg] = Impl::coerce_value_kind(*value,
+                reg < member.register_kinds.size() ? member.register_kinds[reg]
+                                                   : ValueKind::logic4);
+        }
+    }
+    bool unknown { };
+    if (body != nullptr && width <= 64U) {
+        const auto word = exact_uword(*value);
+        unknown = word && (word->unknown | word->value.b) != 0U;
+    }
+    impl_.report_debug_local_value(owner, reg, *value);
+    return unknown;
+}
+
+void Interpreter::Impl::StaticKernel::note_reference_store(
+    const std::uint32_t member_index, const std::uint32_t pc)
+{
+    static_cast<void>(pc);
+    if (member_index >= variable_hook_members_.size()
+        || variable_hook_members_[member_index] == 0U) {
+        return;
+    }
+    // Every hooked variable of the member: the operation stored at most
+    // one of them, and the others are unchanged (their report is none).
+    const auto owner = members_[member_index].process;
+    for (std::size_t index = 0U; index < impl_.debug_local_hooks.size(); ++index) {
+        if (impl_.debug_local_hooks[index].owner == owner) {
+            (void)note_variable_store(
+                member_index, impl_.debug_local_hooks[index].reg, nullptr);
+        }
+    }
+}
+
+void Interpreter::Impl::StaticKernel::native_flush_writes(
+    StaticKernelNativeFrame* frame)
+{
+    auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
+    try {
+        kernel.flush_debug_writes();
+    } catch (...) {
+        kernel.scratch().native_exception = std::current_exception();
+        frame->status = 1U;
+    }
+}
+
+std::uint32_t Interpreter::Impl::StaticKernel::native_variable_store(
+    StaticKernelNativeFrame* frame, Word* registers, const std::uint32_t reg)
+{
+    auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
+    try {
+        return kernel.note_variable_store(frame->member, reg, registers) ? 1U : 0U;
+    } catch (...) {
+        kernel.scratch().native_exception = std::current_exception();
+        frame->status = 1U;
+        return 0U;
+    }
+}
+
 void Interpreter::Impl::StaticKernel::defer_vhdl_round()
 {
     if (std::exchange(vhdl_round_deferred_, true)) {
@@ -9375,6 +11407,9 @@ void Interpreter::Impl::StaticKernel::sv_drain()
             if (active) {
                 continue;
             }
+        }
+        if (finish_nettype_resolutions()) {
+            continue;
         }
         if (run_sv_woken_vhdl()) {
             if (stopped_) {
@@ -9547,7 +11582,13 @@ void Interpreter::Impl::StaticKernel::activate_mixed()
         if (stopped_) {
             break;
         }
-        if (hosted_inactive_deferred_ || vhdl_update_waits_for_host()) {
+        // The initialization phase ends with the first round: its update
+        // phase follows all of the delta's SystemVerilog regions, in the
+        // delta's generic phase after the library callbacks that open the
+        // simulation (IEEE 1076-2019 14.7.5.2, 14.7.5.3, 21.3.7.5, 21.3.7.6).
+        const bool initialization = std::exchange(initialization_round_, false);
+        if (initialization || hosted_inactive_deferred_
+            || vhdl_update_waits_for_host()) {
             // The delta's SystemVerilog Inactive work waits for the host's
             // Active work (sv_drain), or host SystemVerilog work of the
             // delta is pending (the round ran ahead of it in the generic
@@ -9679,12 +11720,21 @@ void Interpreter::Impl::StaticKernel::materialize(const SignalId signal)
         refresh_lazy(slot_index);
     }
     const auto value = slot_value(slot_index);
-    if (slot.resolved) {
+    if (slot.resolved && slot.driving_slot == no_slot) {
         // The host holds the nine-value net; its sources resolve to it.
         if (Impl::coerce_value_kind(impl_.logical_signal_value(signal),
                 slot.nine() ? ValueKind::logic9 : ValueKind::logic4)
             != value) {
             publish_net_sources(slot_index, std::nullopt);
+            if (slot.user) {
+                // The host runs a user resolution function only in its
+                // update phase (drain_vhdl_resolutions), so an observer
+                // between two would read the last one. The kernel's value
+                // is that function over the same sources (IEEE 1076-2019
+                // 14.7.3.2).
+                impl_.vhdl_resolved_values.insert_or_assign(signal, value);
+                impl_.commit(signal, impl_.apply_force(signal, value));
+            }
         }
         return;
     }
@@ -10164,6 +12214,12 @@ void Interpreter::Impl::StaticKernel::apply_watches()
         return;
     }
     const auto requested = std::exchange(pending_watches_, { });
+    if (!requested.empty() && !std::exchange(watch_writes_, true)) {
+        // An observer hears each write of an output (note_debug_write); a
+        // worker lane's writes reach the leader only as the value its batch
+        // leaves, so every unit runs on the leader from now on.
+        std::ranges::fill(unit_parallel_, std::uint8_t { 0U });
+    }
     std::vector<std::uint32_t> watched;
     for (const auto signal : requested) {
         if (signal >= slot_of_signal_.size()) {
@@ -10174,7 +12230,23 @@ void Interpreter::Impl::StaticKernel::apply_watches()
                 watched.push_back(leaf.slot);
             }
         } else if (slot_of_signal_[signal] != no_slot) {
-            watched.push_back(slot_of_signal_[signal]);
+            auto slot = slot_of_signal_[signal];
+            // A split formal's host copy follows its actual's: the actual is
+            // watched (a chain of formals leads back to the resolved one).
+            for (bool followed = true; followed
+                 && slots_[slot].driving_slot != no_slot;) {
+                followed = false;
+                for (const auto& wire : wires_) {
+                    if (wire.target == slot
+                        && wire.target_source
+                            == std::numeric_limits<std::uint32_t>::max()) {
+                        slot = wire.source;
+                        followed = true;
+                        break;
+                    }
+                }
+            }
+            watched.push_back(slot);
         }
     }
     std::erase_if(watched, [&](const std::uint32_t slot) { return slots_[slot].output; });
@@ -10374,6 +12446,18 @@ std::uint32_t Interpreter::Impl::StaticKernel::sole_owned_slot(
     return slot_index;
 }
 
+void Interpreter::Impl::StaticKernel::note_host_transaction(const SignalId signal)
+{
+    if (!initialized_ || quiet_commit_ || signal >= slot_of_signal_.size()) {
+        return;
+    }
+    const auto slot = slot_of_signal_[signal];
+    if (slot != no_slot && slot < slot_history_.size()
+        && slot_history_[slot] != no_slot) {
+        history_transaction(slot, 0U, slots_[slot].width);
+    }
+}
+
 bool Interpreter::Impl::StaticKernel::deposit_owned(
     const SignalId signal, const PackedLogic4& value)
 {
@@ -10387,6 +12471,9 @@ bool Interpreter::Impl::StaticKernel::deposit_owned(
     pending_revivals_.push_back(slot_index);
     dissolve_writers(slot_index);
     open_boundary();
+    // A deposit makes the signal active, whether or not it changes the value
+    // (IEEE 1076-2019 14.7.3.1), before the event it may cause.
+    note_host_transaction(signal);
     if (!store_slot(slot_index, value)) {
         return true;
     }
@@ -10415,6 +12502,30 @@ bool Interpreter::Impl::StaticKernel::deposit_owned(
                 SchedulerPhase::active });
     }
     return true;
+}
+
+std::optional<PackedLogic4>
+Interpreter::Impl::StaticKernel::published_nettype_value(
+    const SignalId signal) const
+{
+    if (signal >= slot_of_signal_.size() || slot_of_signal_[signal] == no_slot) {
+        return std::nullopt;
+    }
+    const auto& slot = slots_[slot_of_signal_[signal]];
+    if (!slot.output || slot.published == no_slot
+        || !nettype_slot(slot_of_signal_[signal])) {
+        return std::nullopt;
+    }
+    const auto plane = [&](const std::uint32_t index) {
+        return std::span<const std::uint64_t> {
+            published_.data() + slot.published + index * slot.words, slot.words
+        };
+    };
+    if (slot.planes == 4U) {
+        return PackedLogic4::from_logic9_word_planes(slot.width, plane(0U),
+            plane(1U), plane(2U), plane(3U));
+    }
+    return PackedLogic4::from_word_planes(slot.width, plane(0U), plane(1U));
 }
 
 std::optional<PackedLogic4> Interpreter::Impl::StaticKernel::owned_value(
@@ -10455,7 +12566,13 @@ void Interpreter::Impl::StaticKernel::import_host_write(
                   << " import " << impl_.get_signal_cold(signal).name << " "
                   << impl_.logical_signal_value(signal).to_msb_string() << '\n';
     }
-    slot_changed(slot_index, 0U, import_before_.data());
+    {
+        // Its VHDL readers wake as an input's do (refresh_input_from_host):
+        // a VPI put of a port nothing in the design drives (owned since it
+        // is undriven) wakes them before the delta's nonblocking updates.
+        const HostWakeScope wakes { *this, signal };
+        slot_changed(slot_index, 0U, import_before_.data());
+    }
     if (in_activation_) {
         // A hosted process wrote it inside an activation: the running loop
         // settles the members it wakes.
@@ -10515,6 +12632,25 @@ void Interpreter::Impl::watch_static_kernel_signals(
     if (static_kernel) {
         static_kernel->watch(watched);
     }
+    // Kept for a reset's twin (replay_plan_onto): only the signals not
+    // watched before, since a watch lasts for the rest of the run. Every
+    // watch is kept, the one a public value reference makes too
+    // (expose_signal_value_reference): a watch opens the kernel's host
+    // boundary, which the twin's plan has to share, or the restored kernel
+    // would run closed under the run's observers.
+    if (!replaying_plan) {
+        PlanStep step;
+        step.kind = PlanStep::Kind::watch_changes;
+        step.after_start = started;
+        for (const auto signal : watched) {
+            if (plan_watched.insert(signal).second) {
+                step.signals.push_back(signal);
+            }
+        }
+        if (!step.signals.empty()) {
+            plan_journal.push_back(std::move(step));
+        }
+    }
 }
 
 void Interpreter::watch_signal_changes(const std::span<const SignalId> signals)
@@ -10523,21 +12659,6 @@ void Interpreter::watch_signal_changes(const std::span<const SignalId> signals)
         (void)impl_->get_signal(signal);
     }
     impl_->watch_static_kernel_signals(signals);
-    // Kept for a reset's twin (replay_plan_onto): only the signals not
-    // watched before, since a watch lasts for the rest of the run.
-    if (!impl_->replaying_plan) {
-        Impl::PlanStep step;
-        step.kind = Impl::PlanStep::Kind::watch_changes;
-        step.after_start = impl_->started;
-        for (const auto signal : signals) {
-            if (impl_->plan_watched.insert(signal).second) {
-                step.signals.push_back(signal);
-            }
-        }
-        if (!step.signals.empty()) {
-            impl_->plan_journal.push_back(std::move(step));
-        }
-    }
 }
 
 void Interpreter::watch_container_object_changes(
@@ -11545,6 +13666,9 @@ ReplanResult Interpreter::Impl::StaticKernel::graft_net_delay(const NetDelayGraf
         slots_.push_back(std::move(slot));
     }
     const auto slot_total = slots_.size();
+    if (!slot_history_.empty()) {
+        slot_history_.resize(slot_total, no_slot);
+    }
     if (!slot_waitable_.empty()) {
         slot_waitable_.resize(slot_total, 0U);
     }

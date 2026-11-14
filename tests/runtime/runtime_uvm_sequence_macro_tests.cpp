@@ -234,8 +234,8 @@ void test_systemverilog_uvm_sequence_macros() {
           && exact_result.status == SystemVerilogUvmSequenceMacroStatus::Queued
           && exact_result.request
           && service.request_snapshot(*exact_result.request).item == request_item
-          && fixture.heap.property(request_object, "payload").packed == packed(7)
-          && fixture.heap.random_state(request_object, "payload").revision == 1,
+          && fixture.heap.property(request_object, property_identity(kRequestType)).packed == packed(7)
+          && fixture.heap.random_state(request_object, property_identity(kRequestType)).revision == 1,
       "random-send must solve inline constraints before retaining the request");
   service.cancel_request(*exact_result.request);
 
@@ -247,21 +247,21 @@ void test_systemverilog_uvm_sequence_macros() {
   require(replay_first.request.has_value(),
           "first deterministic macro replay must queue");
   const auto first_value =
-      fixture.heap.property(request_object, "payload").packed;
+      fixture.heap.property(request_object, property_identity(kRequestType)).packed;
   service.cancel_request(*replay_first.request);
   fixture.heap.reseed_random(request_object, 0x1610'4004ULL);
   const auto replay_second = service.macro_random_send(request_item, replay);
   require(
       replay_second.request
-          && fixture.heap.property(request_object, "payload").packed
+          && fixture.heap.property(request_object, property_identity(kRequestType)).packed
               == first_value,
       "equal object seed and call identity must replay macro randomization");
   service.cancel_request(*replay_second.request);
 
   const auto before_failed_value =
-      fixture.heap.property(request_object, "payload").packed;
+      fixture.heap.property(request_object, property_identity(kRequestType)).packed;
   const auto before_failed_state =
-      fixture.heap.random_state(request_object, "payload");
+      fixture.heap.random_state(request_object, property_identity(kRequestType));
   const auto before_failed_mutations = service.mutation_count();
   auto impossible = constrained_request(
       property_identity(kRequestType), 1,
@@ -279,9 +279,9 @@ void test_systemverilog_uvm_sequence_macros() {
               == SystemVerilogConstraintSolveStatus::Unsatisfiable
           && service.requests(sequencer).empty()
           && service.mutation_count() == before_failed_mutations
-          && fixture.heap.property(request_object, "payload").packed
+          && fixture.heap.property(request_object, property_identity(kRequestType)).packed
               == before_failed_value
-          && fixture.heap.random_state(request_object, "payload").revision
+          && fixture.heap.random_state(request_object, property_identity(kRequestType)).revision
               == before_failed_state.revision,
       "unsatisfiable macro randomization must roll back queue and object state");
 
@@ -295,7 +295,7 @@ void test_systemverilog_uvm_sequence_macros() {
           && exhausted_result.randomization.status
               == SystemVerilogConstraintSolveStatus::ResourceExhausted
           && service.requests(sequencer).empty()
-          && fixture.heap.property(request_object, "payload").packed
+          && fixture.heap.property(request_object, property_identity(kRequestType)).packed
               == before_failed_value,
       "resource exhaustion must roll back a provisional macro request");
 
@@ -313,7 +313,7 @@ void test_systemverilog_uvm_sequence_macros() {
   require(
       threw && service.requests(sequencer).empty()
           && service.mutation_count() == before_failed_mutations
-          && fixture.heap.property(request_object, "payload").packed
+          && fixture.heap.property(request_object, property_identity(kRequestType)).packed
               == before_failed_value,
       "constraint-construction exceptions must roll back the macro queue");
 
@@ -335,7 +335,7 @@ void test_systemverilog_uvm_sequence_macros() {
           && start_result.status == SystemVerilogUvmSequenceMacroStatus::Started
           && start_result.execution && start_result.execution->success()
           && body_calls == 1
-          && fixture.heap.property(started_object, "payload").packed == packed(5),
+          && fixture.heap.property(started_object, property_identity(kSequenceType)).packed == packed(5),
       "sequence do/start macro must randomize and execute exact lifecycle hooks");
   auto failed_start = constrained_request(
       property_identity(kSequenceType), 3,

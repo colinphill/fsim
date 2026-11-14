@@ -23,19 +23,17 @@ else()
   endif()
 endif()
 
-string(JSON FSIM_TEST_COUNT LENGTH "${FSIM_CTEST_JSON}" tests)
+include("${CMAKE_CURRENT_LIST_DIR}/CTestMetadata.cmake")
+fsim_ctest_test_objects("${FSIM_CTEST_JSON}" FSIM_TEST_COUNT FSIM_CTEST_OBJECT)
 if(FSIM_TEST_COUNT LESS 1)
   message(FATAL_ERROR "generated CTest metadata contains no tests")
 endif()
 math(EXPR FSIM_LAST_TEST "${FSIM_TEST_COUNT} - 1")
 set(FSIM_RESOLVED_COMMAND_COUNT 0)
 set(FSIM_UNRESOLVED_COMMAND_COUNT 0)
-# string(JSON) parses its whole input on every call, so each test's object is
-# taken out of the document once and read from there (the document is
-# megabytes; one test is a few hundred bytes).
+# Each test is read from its own object (CTestMetadata.cmake).
 foreach(FSIM_TEST_INDEX RANGE 0 ${FSIM_LAST_TEST})
-  string(JSON FSIM_TEST
-    GET "${FSIM_CTEST_JSON}" tests ${FSIM_TEST_INDEX})
+  set(FSIM_TEST "${FSIM_CTEST_OBJECT_${FSIM_TEST_INDEX}}")
   string(JSON FSIM_TEST_NAME GET "${FSIM_TEST}" name)
   set("FSIM_CTEST_TEST_${FSIM_TEST_NAME}" "${FSIM_TEST}")
   string(JSON FSIM_COMMAND_COUNT

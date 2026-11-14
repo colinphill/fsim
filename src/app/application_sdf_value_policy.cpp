@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fsim/app/sdf_value_policy.hpp"
+#include "fsim/frontend/diagnostic.hpp"
+#include "fsim/frontend/sdf.hpp"
+#include "fsim/frontend/source.hpp"
 
-#include <boost/multiprecision/cpp_int.hpp>
 
 #include <array>
 #include <limits>
@@ -10,6 +12,9 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <cstddef>
+#include <cstdint>
+#include <boost/multiprecision/cpp_int.hpp>
 
 namespace fsim::app {
 namespace {

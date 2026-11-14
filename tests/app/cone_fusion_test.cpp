@@ -6,6 +6,7 @@
 // transcript fused and unfused, and hidden internal nets must read back their
 // exact current values after observation materializes them.
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
 
 #include <chrono>
 #include <cstdlib>
@@ -15,7 +16,6 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include <tuple>
 #include <vector>
 
 namespace {

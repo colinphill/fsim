@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "api_abi_contract.h"
 
+#include "fsim/api.h"
 #include <assert.h>
 #include <stddef.h>
 #include <stdint.h>

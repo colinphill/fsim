@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/runtime/simir.hpp"
 #include "path_test_support.hpp"
 
 #include "fsim/runtime/vcd_writer.hpp"
@@ -847,7 +849,7 @@ int main() {
       [&](const std::string_view revision) {
         std::ofstream output{package_source};
         output << "-- " << revision << R"(
-package Array_Types is
+library ieee; use ieee.std_logic_1164.all; package Array_Types is
   constant Byte_Width : positive := 8;
   constant First_Index : natural := 0;
   type Logic_Array_T is array (natural range <>) of std_logic;
@@ -980,7 +982,7 @@ end architecture;
     std::ofstream output{top_source};
     output << R"(
 use work.array_types.all;
-entity Array_Top is
+library ieee; use ieee.std_logic_1164.all; entity Array_Top is
 end entity;
 
 use work.array_types.all;
@@ -1492,7 +1494,7 @@ end architecture;
   {
     std::ofstream output{failure_source};
     output << R"(
-entity Dynamic_Failure is
+library ieee; use ieee.std_logic_1164.all; entity Dynamic_Failure is
 end entity;
 
 architecture rtl of Dynamic_Failure is
@@ -1534,11 +1536,11 @@ end architecture;
     const auto reference = run_expected_dynamic_failure(
         config,
         fsim::app::SimulationEngine::interpreter,
-        "dynamic packed index is outside the declared range");
+        "VHDL integer subtype range check failed");
     const auto compiled = run_expected_dynamic_failure(
         config,
         fsim::app::SimulationEngine::compiled,
-        "dynamic packed index is outside the declared range");
+        "VHDL integer subtype range check failed");
     // Native checks preserve the process, instruction, and governed reason;
     // the reference interpreter may append operand-specific detail.
     assert(reference.starts_with(compiled));
@@ -1748,7 +1750,7 @@ end architecture;
   {
     std::ofstream output{slice_failure_source};
     output << R"(
-entity Dynamic_Slice_Failure is
+library ieee; use ieee.std_logic_1164.all; entity Dynamic_Slice_Failure is
 end entity;
 
 architecture rtl of Dynamic_Slice_Failure is

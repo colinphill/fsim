@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include "fsim/frontend/design_core.hpp"
 #include "fsim/semantic/compiled_design_specialization.hpp"
 #include "fsim/semantic/systemverilog_hir.hpp"
 

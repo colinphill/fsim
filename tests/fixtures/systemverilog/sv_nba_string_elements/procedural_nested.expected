@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+sns loc assoc-queue same-step 1 2
+sns loc assoc-queue next-step 10 20 3
+sns loc assoc-queue sampled 7 8 6 6
+sns loc queue-queue same-step 1 1
+sns loc queue-queue delayed 1 1
+sns loc queue-queue final 4 5
+sns loc cont same-step 0
+sns loc cont next-step 0 2 6
+sns loc num same-step 1
+sns loc num next-step 9
+sns loc member same-step 0
+sns loc member next-step 2 9 tag=1
+sns loc task same-step 1 1
+sns loc task next-step 8 7

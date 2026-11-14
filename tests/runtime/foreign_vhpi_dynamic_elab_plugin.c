@@ -131,6 +131,37 @@ static void deposit_variable(vhpiHandleT call, const char* name, int new_value)
     }
 }
 
+// Forces and then releases the variable `name` of a running call (IEEE
+// 1076-2019 14.6 b, 22.5.2): the force lasts as long as the activation, and
+// the release leaves the value until the next assignment.
+static void force_variable(vhpiHandleT call, const char* name)
+{
+    vhpiHandleT iterator = vhpi_iterator(vhpiVarDecls, call);
+    vhpiHandleT declaration;
+    while (iterator != NULL && (declaration = vhpi_scan(iterator)) != NULL) {
+        vhpiValueT value;
+        const char* text = (const char*)vhpi_get_str(vhpiNameP, declaration);
+        size_t index;
+        for (index = 0U; text != NULL && name[index] != 0
+             && tolower((unsigned char)text[index]) == name[index];
+             ++index) {
+        }
+        if (text == NULL || name[index] != 0 || text[index] != 0) {
+            continue;
+        }
+        memset(&value, 0, sizeof value);
+        value.format = vhpiIntVal;
+        value.value.intg = 77;
+        printf("#c   force %s %s\n", name,
+            vhpi_put_value(declaration, &value, vhpiForce) != 0 ? "refused"
+                                                                  : "accepted");
+        printf("#c   release %s %s\n", name,
+            vhpi_put_value(declaration, NULL, vhpiRelease) != 0 ? "refused"
+                                                                  : "accepted");
+        return;
+    }
+}
+
 // The frame of a running call, its level and the levels above it.
 static void describe(const char* label, vhpiHandleT call, int with_variables)
 {
@@ -169,6 +200,7 @@ static void report(const vhpiCbDataT* data)
         // line is the one without the deposit.
         if (++probes == 3) {
             deposit_variable(inner_call, "depth", 55);
+            force_variable(inner_call, "depth");
         }
     } else if (strcmp(label, "leaf.return") == 0) {
         describe("leaf", leaf_call, 0);

@@ -18,9 +18,10 @@ foreach(FSIM_REQUIRED IN ITEMS FSIM_EXECUTABLE FSIM_STEPS FSIM_SOURCE_DIR
   endif()
 endforeach()
 
-# The workspace is a fixed directory of the build tree; recompiling replaces
-# its managed objects.
-file(MAKE_DIRECTORY "${FSIM_WORK_DIR}")
+include("${CMAKE_CURRENT_LIST_DIR}/FsimTestWorkspace.cmake")
+# FSIM_WORK_DIR names the case; each run works in a new folder of its own,
+# removed when the case passes.
+fsim_test_case_workspace(FSIM_WORK_DIR "${FSIM_WORK_DIR}")
 
 string(REPLACE "|" ";" FSIM_STEP_LIST "${FSIM_STEPS}")
 list(LENGTH FSIM_STEP_LIST FSIM_STEP_COUNT)
@@ -57,6 +58,7 @@ foreach(FSIM_STEP IN LISTS FSIM_STEP_LIST)
       message(FATAL_ERROR
         "compile of ${FSIM_FILE} did not report \"${FSIM_FAIL_MESSAGE}\":\n${FSIM_OUTPUT}${FSIM_ERROR}")
     endif()
+    fsim_test_workspace_cleanup()
     return()
   endif()
   if(NOT FSIM_RESULT EQUAL 0)
@@ -104,3 +106,4 @@ if(NOT FSIM_TRACE STREQUAL "${FSIM_EXPECTED}\n")
   message(FATAL_ERROR
     "output differs\n--- actual\n${FSIM_TRACE}--- expected\n${FSIM_EXPECTED}\n")
 endif()
+fsim_test_workspace_cleanup()

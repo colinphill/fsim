@@ -46,7 +46,7 @@ fsim_expect_rejection(
   CheckAbiSchemaEvidenceMatrix.cmake
   "-DFSIM_ABI_SCHEMA_TEST_MATRIX=${FSIM_BAD_ABI_PATH}")
 
-file(READ "${FSIM_SOURCE_DIR}/include/fsim/app/application.hpp"
+file(READ "${FSIM_SOURCE_DIR}/include/fsim/app/built_project.hpp"
   FSIM_APPLICATION_HEADER)
 set(FSIM_BAD_HEADER_PATH "${FSIM_TEST_WORK_DIR}/bad-application.hpp")
 file(WRITE "${FSIM_BAD_HEADER_PATH}"

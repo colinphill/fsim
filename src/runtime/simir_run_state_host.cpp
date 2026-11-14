@@ -18,6 +18,7 @@
 #include "simir_run_state.hpp"
 #include "simir_static_kernel_state.hpp"
 
+#include "fsim/runtime/simir_interpreter.hpp"
 #include "fsim/support/native_filesystem.hpp"
 
 #include <algorithm>
@@ -193,6 +194,8 @@ void signals_io(RunStateArchive& ar, Impl& impl)
     FSIM_RS_IO("interp.impl", driven_values, ar, impl);
     FSIM_RS_SAME("interp.impl", vhdl_conversion_drivers, ar, impl);
     FSIM_RS_IO("interp.impl", vhdl_disconnected_drivers, ar, impl);
+    FSIM_RS_IO("interp.impl", vhdl_null_elements, ar, impl);
+    FSIM_RS_IO("interp.impl", vhdl_null_kept, ar, impl);
     FSIM_RS_SAME("interp.impl", vhdl_created_drivers, ar, impl);
     FSIM_RS_IO("interp.impl", vhdl_resolved_values, ar, impl);
     FSIM_RS_IO("interp.impl", vhdl_next_cycle_resolutions, ar, impl);
@@ -252,6 +255,7 @@ void signals_io(RunStateArchive& ar, Impl& impl)
     }
     FSIM_RS_IO("interp.impl", forced_values, ar, impl);
     FSIM_RS_IO("interp.impl", forced_masks, ar, impl);
+    FSIM_RS_IO("interp.impl", debug_local_hooks, ar, impl);
     FSIM_RS_IO("interp.impl", port_force_layers, ar, impl);
     FSIM_RS_IO("interp.impl", assign_layers, ar, impl);
     FSIM_RS_IO("interp.impl", event_states, ar, impl);
@@ -503,6 +507,25 @@ void rebuild_container_projections(Impl& impl)
 void rebuild_derived(Impl& impl)
 {
     rebuild_container_projections(impl);
+    // The forces of the debug interface on VHDL variables (IEEE 1076-2019
+    // 22.5.2) are run state: the variable stays forced until released. The
+    // watches (21.3.2.2) belong to the callbacks of the saving run, which a
+    // restart drops.
+    std::erase_if(impl.debug_local_hooks, [](auto& hook) {
+        hook.watchers = 0U;
+        hook.seen.reset();
+        return hook.forced_ranges.empty();
+    });
+    impl.debug_local_hooked.clear();
+    for (const auto& hook : impl.debug_local_hooks) {
+        if (impl.debug_local_hooked.size() <= hook.owner) {
+            impl.debug_local_hooked.resize(hook.owner + 1U, 0U);
+        }
+        impl.debug_local_hooked[hook.owner] = 1U;
+    }
+    if (impl.static_kernel) {
+        impl.static_kernel->debug_local_hooks_changed();
+    }
     for (SignalId id = 0U; id < impl.signals.size(); ++id) {
         if (id < impl.direct_signal_aval.size()
             && id < impl.signal_last_values.size()
@@ -527,6 +550,9 @@ void audit_host(const Impl& impl, const Findings& findings)
     busy(!impl.pending_updates.empty(), "the staged signal updates");
     FSIM_RS_IDLE("interp.impl", pending_update_values);
     busy(!impl.pending_update_values.empty(), "the staged update values");
+    FSIM_RS_IDLE("interp.impl", staged_driver_transactions);
+    busy(!impl.staged_driver_transactions.empty(),
+        "the staged driver transactions");
     FSIM_RS_IDLE("interp.impl", driver_update_signals);
     busy(!impl.driver_update_signals.empty(), "the driver update list");
     FSIM_RS_IDLE("interp.impl", resolved_update_signals);

@@ -8,10 +8,8 @@
 // foreign_vpi_mipd_split_early.expected derives. Lines starting with "#c "
 // form the checked trace.
 #include "fsim/runtime/vpi_abi.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 
-#include <stdio.h>
 #include <string.h>
 
 static vpiHandle input_port(void)

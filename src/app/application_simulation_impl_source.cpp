@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_simulation_internal.hpp"
-#include "fsim/support/uvm_identity.hpp"
+#include "fsim/support/uvm_api_methods.hpp"
 
 #include <charconv>
 #include <set>
@@ -21,22 +21,74 @@ namespace fsim::app {
     // The built-in randomization methods, called from a method body (IEEE
     // 1800-2017 18.6, 18.8).
     if (canonical_identity == "@builtin-randomize") {
-        return invoke_source_randomize(handle, actual_names, actuals, { });
+        return invoke_source_randomize(
+            handle, actual_names, actuals, { }, report_process);
     }
     if (canonical_identity.starts_with("@builtin-rand-mode:")
         || canonical_identity.starts_with("@builtin-constraint-mode:")) {
         return invoke_source_randomization_mode(
             handle, canonical_identity, actuals);
     }
-    const auto method_separator = canonical_identity.rfind("::");
-    const auto method_name = method_separator == std::string_view::npos
-        ? canonical_identity
-        : canonical_identity.substr(method_separator + 2U);
+    // A lowered constructor chain has reached the UVM library's constructor:
+    // the simulation's UVM services make the base state it would, from its
+    // actuals (IEEE 1800.2-2020 5.3.2, 13.1.2).
+    if (canonical_identity == "@uvm-construct-base") {
+        const auto pending = uvm_pending_constructions.find(handle);
+        // A TLM port (no uvm_object) is allocated as any class: its chain
+        // reaches uvm_port_base::new, whose actuals (name, parent, port
+        // type) make its state (IEEE 1800.2-2020 5.5.2.1).
+        if (pending == uvm_pending_constructions.end()) {
+            const auto& specialization = class_specialization(
+                class_heap.object(handle).specialization_identity);
+            if (is_systemverilog_uvm_type(
+                    built.compiled_systemverilog_class_specializations,
+                    specialization, support::UvmRole::port_base)) {
+                UvmBaseConstruction state;
+                construct_uvm_base(specialization, handle, actuals,
+                    string_actuals, actual_names, { }, { }, state);
+            }
+        }
+        if (pending != uvm_pending_constructions.end()) {
+            const auto request = std::move(pending->second);
+            uvm_pending_constructions.erase(pending);
+            if (request.base_made) {
+                return runtime::PackedLogic4::from_aval_bval(1, 0, 0);
+            }
+            const auto& specialization = class_specialization(
+                class_heap.object(handle).specialization_identity);
+            UvmBaseConstruction state;
+            state.component = is_systemverilog_uvm_type(
+                    built.compiled_systemverilog_class_specializations,
+                    specialization, support::UvmRole::component)
+                && !is_systemverilog_uvm_type(
+                    built.compiled_systemverilog_class_specializations,
+                    specialization, support::UvmRole::root);
+            try {
+                construct_uvm_base(specialization, handle, actuals,
+                    string_actuals, actual_names, request.allocation_scope,
+                    request.requested_root, state);
+            } catch (...) {
+                // The object an API request constructs is rejected (a
+                // duplicate name): the request's caller raises the error
+                // once the dispatch process has finished the request.
+                if (uvm_api_request.kind != support::uvm_api_construct_kind
+                    || uvm_api_request.receiver != handle) {
+                    throw;
+                }
+                uvm_api_request.error = std::current_exception();
+            }
+        }
+        return runtime::PackedLogic4::from_aval_bval(1, 0, 0);
+    }
+    // The library method the call names, by its recorded role.
+    using support::UvmRole;
+    const auto called = uvm_method_role(canonical_identity);
+    const auto method_name = called.role;
+    const bool library_method = support::uvm_library(called.role);
     // The methods of the object `uvm_root::get()` and `uvm_top` hold are the
     // native hierarchy's (IEEE 1800.2-2020 13.2): the library's bodies would
     // run on an object without the state its constructor makes.
-    if (support::is_uvm_library_identity(canonical_identity)
-        && is_uvm_root_handle(handle)) {
+    if (library_method && is_uvm_root_handle(handle)) {
         if (auto result = invoke_uvm_root_method(
                 method_name, actuals, string_actuals, actual_names)) {
             return std::move(*result);
@@ -47,33 +99,31 @@ namespace fsim::app {
     // the simulation's UVM phase services perform; their bodies are not run.
     // The same holds for the overrides in the library's component classes
     // (uvm_driver, uvm_sequencer_base and the like).
-    if (support::is_uvm_library_identity(canonical_identity)
-        && method_name.ends_with("_phase")
-        && (canonical_identity.find("uvm_pkg::uvm_component::")
-                != std::string_view::npos
+    if (library_method && method_name >= UvmRole::build_phase
+        && method_name <= UvmRole::post_shutdown_phase
+        && (called.owner == UvmRole::component
             || uvm_components.contains(handle))) {
         return runtime::PackedLogic4 { };
     }
     // A UVM object's name and path come from the native object and component
     // services, which its construction initialized (IEEE 1800.2-2020 5.3.4,
     // 13.1.3); the library constructors that would set them do not run.
-    if ((method_name == "get_name" || method_name == "get_full_name")
-        && support::is_uvm_library_identity(canonical_identity)
+    if ((method_name == UvmRole::get_name
+            || method_name == UvmRole::get_full_name)
         && !actual_names.empty() && actual_names.back() == "@result-string"
         && !string_actuals.empty()
         && (uvm_components.contains(handle) || uvm_objects.contains(handle))) {
         string_actuals.back() = uvm_components.contains(handle)
-            ? (method_name == "get_name"
+            ? (method_name == UvmRole::get_name
                     ? uvm_components.snapshot(handle).name
                     : uvm_components.full_name(handle))
-            : (method_name == "get_name"
+            : (method_name == UvmRole::get_name
                     ? std::string { uvm_objects.name(handle) }
                     : uvm_objects.full_name(handle));
         return runtime::PackedLogic4::from_aval_bval(1, 0, 0);
     }
     // A method of a phase object the native run passes to a phase callback.
-    if (canonical_identity.find("uvm_pkg::uvm_phase::") != std::string_view::npos
-        && support::is_uvm_library_identity(canonical_identity)) {
+    if (called.owner == UvmRole::phase) {
         if (auto result = invoke_uvm_phase_method(
                 handle, method_name, actuals, string_actuals)) {
             return std::move(*result);
@@ -81,8 +131,7 @@ namespace fsim::app {
     }
     // `port.connect(provider)` records an analysis connection that the
     // port's write follows (IEEE 1800.2-2020 5.4.2.1, 12.2.10.1).
-    if (method_name == "connect"
-        && support::is_uvm_library_identity(canonical_identity)
+    if (method_name == UvmRole::port_connect
         && uvm_tlm_owners.contains(handle) && !actuals.empty()
         && actuals[0].low_word().bval == 0U && actuals[0].low_word().aval != 0U) {
         uvm_analysis_connections[handle].push_back(actuals[0].low_word().aval);
@@ -99,16 +148,14 @@ namespace fsim::app {
                   actuals[index].low_word().aval }
             : runtime::SystemVerilogClassHandle { };
     };
-    if (support::is_uvm_library_identity(canonical_identity)
-        && canonical_identity.find("::uvm_sequence_base::")
-            != std::string_view::npos
-        && (method_name == "start" || method_name == "start_item"
-            || method_name == "finish_item")) {
-        if (method_name == "start" && handle_actual(0U) != 0U) {
+    if (method_name == UvmRole::sequence_start
+        || method_name == UvmRole::sequence_start_item
+        || method_name == UvmRole::sequence_finish_item) {
+        if (method_name == UvmRole::sequence_start && handle_actual(0U) != 0U) {
             uvm_sequence_sequencers[handle] = handle_actual(0U);
         }
         const auto sequencer = uvm_sequence_sequencers.find(handle);
-        if (method_name == "finish_item" && handle_actual(0U) != 0U
+        if (method_name == UvmRole::sequence_finish_item && handle_actual(0U) != 0U
             && sequencer != uvm_sequence_sequencers.end()) {
             uvm_sequencer_items[sequencer->second].push_back(
                 handle_actual(0U));
@@ -117,31 +164,33 @@ namespace fsim::app {
         }
         return runtime::PackedLogic4::from_aval_bval(1, 0, 0);
     }
-    if (support::is_uvm_library_identity(canonical_identity)
-        && canonical_identity.find("::uvm_seq_item_pull_")
-            != std::string_view::npos) {
+    if (called.owner == UvmRole::seq_item_pull_port
+        || called.owner == UvmRole::seq_item_pull_imp
+        || called.owner == UvmRole::seq_item_pull_export) {
         const auto sequencer = uvm_pull_sequencer(handle);
         auto& items = uvm_sequencer_items[sequencer];
-        if ((method_name == "get" || method_name == "get_next_item"
-                || method_name == "try_next_item" || method_name == "peek")
+        if ((method_name == UvmRole::pull_get
+                || method_name == UvmRole::pull_get_next_item
+                || method_name == UvmRole::pull_try_next_item
+                || method_name == UvmRole::pull_peek)
             && !actuals.empty()) {
             runtime::SystemVerilogClassHandle item { };
             if (!items.empty()) {
                 item = items.front();
-                if (method_name != "peek") {
+                if (method_name != UvmRole::pull_peek) {
                     items.erase(items.begin());
                 }
-                if (method_name == "get") {
+                if (method_name == UvmRole::pull_get) {
                     uvm_pending_items.erase(item);
                     toggle_class_heap_change();
-                } else if (method_name != "peek") {
+                } else if (method_name != UvmRole::pull_peek) {
                     uvm_sequencer_current[sequencer] = item;
                 }
             }
             actuals[0] = runtime::PackedLogic4::from_aval_bval(64U, item, 0U);
             return runtime::PackedLogic4::from_aval_bval(1, 0, 0);
         }
-        if (method_name == "item_done") {
+        if (method_name == UvmRole::pull_item_done) {
             const auto current = uvm_sequencer_current.find(sequencer);
             if (current != uvm_sequencer_current.end()) {
                 uvm_pending_items.erase(current->second);
@@ -153,14 +202,12 @@ namespace fsim::app {
     }
     // The report-object queries that `uvm_report_enabled` and the report
     // macros make answer from the simulation's report policy.
-    if (canonical_identity.find("uvm_report_object::")
-            != std::string_view::npos
-        && support::is_uvm_library_identity(canonical_identity)
-        && (method_name == "get_report_verbosity_level"
-            || method_name == "get_report_action"
-            || method_name == "uvm_report_enabled"
-            || method_name == "uvm_get_report_object")) {
-        if (method_name == "uvm_get_report_object") {
+    if (called.owner == UvmRole::report_object
+        && (method_name == UvmRole::report_get_verbosity_level
+            || method_name == UvmRole::report_get_action
+            || method_name == UvmRole::report_enabled
+            || method_name == UvmRole::get_report_object)) {
+        if (method_name == UvmRole::get_report_object) {
             return runtime::PackedLogic4::from_aval_bval(64, handle, 0);
         }
         const auto word = [&](const std::size_t index,
@@ -181,7 +228,7 @@ namespace fsim::app {
                 ? static_cast<runtime::SystemVerilogUvmReportSeverity>(value)
                 : runtime::SystemVerilogUvmReportSeverity::Info;
         };
-        if (method_name == "uvm_report_enabled") {
+        if (method_name == UvmRole::report_enabled) {
             return runtime::PackedLogic4::from_aval_bval(1U,
                 uvm_reports.enabled(handle,
                     static_cast<std::int32_t>(word(0U, 200)),
@@ -193,22 +240,21 @@ namespace fsim::app {
         const auto policy = uvm_reports.policy(
             handle, severity(word(0U, 0)), text(1U));
         return runtime::PackedLogic4::from_aval_bval(32U,
-            method_name == "get_report_action"
+            method_name == UvmRole::report_get_action
                 ? static_cast<std::uint32_t>(policy.action)
                 : static_cast<std::uint32_t>(policy.verbosity),
             0U);
     }
-    const auto report_severity = method_name == "uvm_report_info"
+    const auto report_severity = method_name == UvmRole::report_info
         ? std::optional { runtime::SystemVerilogUvmReportSeverity::Info }
-        : method_name == "uvm_report_warning"
+        : method_name == UvmRole::report_warning
         ? std::optional { runtime::SystemVerilogUvmReportSeverity::Warning }
-        : method_name == "uvm_report_error"
+        : method_name == UvmRole::report_error
         ? std::optional { runtime::SystemVerilogUvmReportSeverity::Error }
-        : method_name == "uvm_report_fatal"
+        : method_name == UvmRole::report_fatal
         ? std::optional { runtime::SystemVerilogUvmReportSeverity::Fatal }
         : std::nullopt;
-    if (report_severity && support::is_uvm_library_identity(canonical_identity)
-        && actuals.size() >= 3U && string_actuals.size() >= 3U) {
+    if (report_severity && actuals.size() >= 3U && string_actuals.size() >= 3U) {
         runtime::SystemVerilogUvmReportRequest request;
         request.report_object = handle;
         request.severity = *report_severity;
@@ -236,24 +282,23 @@ namespace fsim::app {
             class_heap, uvm_factory, handle, canonical_identity, actuals)) {
         return std::move(*factory_result);
     }
-    const auto uvm_base_method
-        = canonical_identity.find("::uvm_object::") != std::string_view::npos;
+    const auto uvm_base_method = called.owner == UvmRole::object;
     if (uvm_base_method && uvm_objects.contains(handle)) {
-        if (method_name == "get_inst_id" && actuals.empty()) {
+        if (method_name == UvmRole::object_get_inst_id && actuals.empty()) {
             return runtime::PackedLogic4::from_aval_bval(
                 32, uvm_objects.instance_id(handle), 0);
         }
-        if (method_name == "clone" && actuals.empty()) {
+        if (method_name == UvmRole::object_clone && actuals.empty()) {
             if (uvm_components.contains(handle))
                 return runtime::PackedLogic4::from_aval_bval(64, 0, 0);
             return runtime::PackedLogic4::from_aval_bval(
                 64, uvm_objects.clone(handle), 0);
         }
-        if (method_name == "copy" && actuals.size() == 1U) {
+        if (method_name == UvmRole::object_copy && actuals.size() == 1U) {
             uvm_objects.copy(handle, actuals.front().low_word().aval);
             return runtime::PackedLogic4::from_aval_bval(1, 0, 0);
         }
-        if (method_name == "compare" && !actuals.empty()) {
+        if (method_name == UvmRole::object_compare && !actuals.empty()) {
             return runtime::PackedLogic4::from_aval_bval(
                 1,
                 uvm_objects.compare(handle, actuals.front().low_word().aval)
@@ -261,30 +306,32 @@ namespace fsim::app {
                     : 0U,
                 0);
         }
-        if (method_name == "print") {
+        if (method_name == UvmRole::object_print) {
             (void)uvm_objects.print(handle);
             return runtime::PackedLogic4::from_aval_bval(1, 0, 0);
         }
-        if (method_name == "record") {
+        if (method_name == UvmRole::object_record) {
             (void)uvm_objects.record(handle);
             return runtime::PackedLogic4::from_aval_bval(1, 0, 0);
         }
     }
-    const auto uvm_component_base_method
-        = canonical_identity.find("::uvm_component::")
-        != std::string_view::npos;
+    const auto uvm_component_base_method = called.owner == UvmRole::component;
     if (uvm_component_base_method && uvm_components.contains(handle)) {
-        if (method_name == "get_parent" && actuals.empty()) {
+        if (method_name == UvmRole::component_get_parent && actuals.empty()) {
             return runtime::PackedLogic4::from_aval_bval(
                 64, uvm_components.parent(handle), 0);
         }
-        if (method_name == "get_num_children" && actuals.empty()) {
+        if (method_name == UvmRole::component_get_num_children && actuals.empty()) {
             return runtime::PackedLogic4::from_aval_bval(
                 32, uvm_components.children(handle).size(), 0);
         }
     }
-    if (uvm_objects.contains(handle)
-        && method_name == "get_object_type" && actuals.empty()) {
+    // get_object_type of the library's uvm_object or a method overriding it
+    // (the registration macros', IEEE 1800.2-2020 B.2.1).
+    if (uvm_objects.contains(handle) && actuals.empty()
+        && (method_name == UvmRole::object_get_object_type
+            || (called.virtual_slot
+                && called.virtual_slot == uvm_object_get_object_type_slot()))) {
         const auto wrapper = uvm_registry.wrapper_by_specialization(
             class_heap.object(handle).specialization_identity);
         if (wrapper != 0)
@@ -340,56 +387,255 @@ Simulation::Impl::invoke_source_static_function(
     constexpr std::string_view registry_create_prefix {
         "@uvm-registry-create:"
     };
+    constexpr std::string_view registry_get_prefix { "@uvm-registry-get:" };
+    // The type wrapper of the class `declaration` a registry call's type
+    // expression denotes: the specialization the call names, or, for the
+    // bare class name, the default one (IEEE 1800-2023 8.25, 6.22.1). A
+    // specialization nothing registered is no factory type.
+    const auto registry_wrapper = [&](const std::string_view declaration) {
+        if (!static_specialization.empty()
+            && class_specialization(static_specialization)
+                    .declaration_identity == declaration) {
+            return uvm_registry.wrapper_by_specialization(
+                static_specialization);
+        }
+        for (const auto& type : uvm_registry.types()) {
+            if (type.declaration_identity == declaration
+                && class_specialization(type.specialization_identity)
+                       .default_specialization) {
+                return type.wrapper;
+            }
+        }
+        return runtime::SystemVerilogUvmTypeHandle { };
+    };
+    // The type wrapper of the class the type parameter of the registry
+    // specialization the call names selects (`uvm_object_registry#(C)`).
+    const auto registry_parameter_wrapper = [&] {
+        const auto& registry = class_specialization(static_specialization);
+        const auto parameter = std::ranges::find_if(registry.parameters,
+            [](const semantic::sv::SpecializedClassParameter& item) {
+                return item.type_parameter && item.type.has_value();
+            });
+        const auto named = parameter == registry.parameters.end()
+            ? std::optional<std::string> { }
+            : class_type_specialization(
+                  *parameter->type, static_specialization);
+        return named ? uvm_registry.wrapper_by_specialization(*named)
+                     : runtime::SystemVerilogUvmTypeHandle { };
+    };
+    // The generated UVM dispatch process reads its request here.
+    if (canonical_identity == "@uvm-api-request") {
+        return runtime::PackedLogic4::from_aval_bval(
+            32U, uvm_api_request.kind, 0U);
+    }
+    if (canonical_identity == "@uvm-api-receiver") {
+        uvm_api_request.taken = true;
+        return runtime::PackedLogic4::from_aval_bval(
+            64U, uvm_api_request.receiver, 0U);
+    }
+    if (canonical_identity == "@uvm-api-phase") {
+        return runtime::PackedLogic4::from_aval_bval(
+            64U, uvm_api_request.phase, 0U);
+    }
+    // The name and parent an object waiting for its constructor chain was
+    // allocated with (IEEE 1800.2-2020 5.3.2, 13.1.2).
+    if (canonical_identity == "@uvm-pending-parent"
+        || canonical_identity == "@uvm-pending-name") {
+        const auto object = actuals.empty()
+                || actuals[0].low_word().bval != 0U
+            ? runtime::SystemVerilogClassHandle { }
+            : runtime::SystemVerilogClassHandle { actuals[0].low_word().aval };
+        const auto pending = uvm_pending_constructions.find(object);
+        if (pending == uvm_pending_constructions.end()) {
+            throw std::logic_error {
+                "UVM pending construction query names an object that does "
+                "not wait for its constructor"
+            };
+        }
+        if (canonical_identity == "@uvm-pending-name") {
+            string_actuals.at(1U) = pending->second.name;
+            return runtime::PackedLogic4::from_aval_bval(1U, 1U, 0U);
+        }
+        return runtime::PackedLogic4::from_aval_bval(
+            64U, pending->second.parent, 0U);
+    }
+    // The oldest object waiting for its constructor chain, zero without one.
+    if (canonical_identity == "@uvm-pending-next") {
+        return runtime::PackedLogic4::from_aval_bval(64U,
+            uvm_pending_constructions.empty()
+                ? runtime::SystemVerilogClassHandle { }
+                : uvm_pending_constructions.begin()->first,
+            0U);
+    }
+    // A chain generated code ran has taken the object off the list; one that
+    // is still waiting belongs to a class whose constructor chain does not
+    // lower to generated code, which the simulation never runs itself.
+    if (canonical_identity == "@uvm-pending-check") {
+        const auto object = actuals.empty()
+                || actuals[0].low_word().bval != 0U
+            ? runtime::SystemVerilogClassHandle { }
+            : runtime::SystemVerilogClassHandle { actuals[0].low_word().aval };
+        if (uvm_pending_constructions.contains(object)) {
+            throw std::runtime_error {
+                "the constructor chain of class '"
+                + class_heap.object(object).specialization_identity
+                + "' does not lower to generated code"
+            };
+        }
+        return runtime::PackedLogic4::from_aval_bval(1U, 1U, 0U);
+    }
+    // `clone()` of a uvm_object in a design process: the copy is allocated
+    // without being constructed (its chain runs in the calling process),
+    // then receives the original's fields (IEEE 1800.2-2020 5.3.8).
+    if (canonical_identity == "@uvm-clone-allocate") {
+        const auto source = actuals.size() == 1U
+                && actuals[0].low_word().bval == 0U
+            ? runtime::SystemVerilogClassHandle { actuals[0].low_word().aval }
+            : runtime::SystemVerilogClassHandle { };
+        if (source == 0U || !uvm_objects.contains(source)
+            || uvm_components.contains(source)) {
+            return runtime::PackedLogic4::from_aval_bval(64U, 0U, 0U);
+        }
+        const auto& original = class_heap.object(source);
+        const auto copy = construct_class(
+            "@service-construct:" + original.specialization_identity,
+            original.declared_type,
+            std::span<const runtime::PackedLogic4> { },
+            std::span<const std::string> { },
+            std::span<const std::string> { }, "$uvm-clone");
+        return runtime::PackedLogic4::from_aval_bval(64U, copy, 0U);
+    }
+    if (canonical_identity == "@uvm-clone-finish") {
+        if (actuals.size() == 2U && actuals[0].low_word().bval == 0U
+            && actuals[0].low_word().aval != 0U) {
+            const auto copy = actuals[0].low_word().aval;
+            uvm_objects.set_name(copy,
+                std::string { uvm_objects.name(actuals[1].low_word().aval) });
+            uvm_objects.copy(copy, actuals[1].low_word().aval);
+        }
+        return runtime::PackedLogic4::from_aval_bval(1U, 1U, 0U);
+    }
+    if (canonical_identity == "@uvm-api-done") {
+        uvm_api_request.kind = 0U;
+        return runtime::PackedLogic4::from_aval_bval(1U, 1U, 0U);
+    }
+    // Whether the object a lowered create allocated for one of its
+    // constructor chains is of class `specialization` and waits for it.
+    if (constexpr std::string_view pending_prefix {
+            "@uvm-pending-construction:" };
+        canonical_identity.starts_with(pending_prefix)) {
+        const auto object = actuals.size() == 1U
+                && actuals[0].low_word().bval == 0U
+            ? runtime::SystemVerilogClassHandle { actuals[0].low_word().aval }
+            : runtime::SystemVerilogClassHandle { };
+        const bool waiting = object != 0U
+            && uvm_pending_constructions.contains(object)
+            && class_heap.object(object).specialization_identity
+                == canonical_identity.substr(pending_prefix.size());
+        return runtime::PackedLogic4::from_aval_bval(1U, waiting ? 1U : 0U, 0U);
+    }
+    // `C::type_id::get()`: the registry's one object, which is the class's
+    // type wrapper, as `get_type()` answers (IEEE 1800.2-2020 8.2.4.2.1,
+    // B.2.1). A call naming the registry itself runs in the registry
+    // specialization (`uvm_object_registry#(C)::get()`, `type_id::get()`).
+    if (canonical_identity.starts_with(registry_get_prefix)) {
+        const auto registry = !static_specialization.empty()
+            && (class_specialization(static_specialization).uvm_role
+                    == support::UvmRole::object_registry
+                || class_specialization(static_specialization).uvm_role
+                    == support::UvmRole::component_registry);
+        const auto wrapper = registry
+            ? registry_parameter_wrapper()
+            : registry_wrapper(
+                  canonical_identity.substr(registry_get_prefix.size()));
+        if (wrapper == 0) {
+            throw std::invalid_argument {
+                "UVM registry get selected an unknown object type"
+            };
+        }
+        return runtime::PackedLogic4::from_aval_bval(64, wrapper, 0);
+    }
     if (canonical_identity.starts_with(registry_create_prefix)) {
+        // A lowered create names the classes whose constructor chains the
+        // process runs after this call.
+        std::optional<std::string> lowered;
+        if (!actual_names.empty()
+            && actual_names.back() == "@lowered-constructors"
+            && string_actuals.size() == actual_names.size()) {
+            lowered = string_actuals.back();
+        }
+        if (actuals.empty() && string_actuals.empty()) {
+            // `type_id::create()`: every formal takes its default, the name
+            // "" and no parent (IEEE 1800.2-2020 8.2.4.2.1, the
+            // uvm_config_db implementation's get_type, C.4.2.3).
+            actuals.push_back(runtime::PackedLogic4::from_aval_bval(1U, 0U, 0U));
+            string_actuals.emplace_back();
+        }
         if (actuals.empty() || string_actuals.empty()) {
             throw std::invalid_argument {
                 "UVM registry create requires a string name actual"
             };
         }
-        // A parameterized class registers each specialization; the one the
-        // design names explicitly is created when the bare declaration is
-        // ambiguous.
-        const auto declaration
-            = canonical_identity.substr(registry_create_prefix.size());
-        runtime::SystemVerilogUvmTypeHandle wrapper { };
-        std::vector<runtime::SystemVerilogUvmTypeHandle> named;
-        std::size_t registered { };
-        for (const auto& type : uvm_registry.types()) {
-            if (type.declaration_identity != declaration) {
-                continue;
-            }
-            ++registered;
-            wrapper = type.wrapper;
-            if (!class_specialization(type.specialization_identity)
-                     .default_specialization) {
-                named.push_back(type.wrapper);
-            }
-        }
-        if (registered > 1U) {
-            if (named.size() != 1U) {
-                throw std::invalid_argument {
-                    "UVM declaration has multiple registered specializations"
-                };
-            }
-            wrapper = named.front();
-        }
+        // A parameterized class registers each of its specializations; the
+        // create makes the one its type expression denotes.
+        auto wrapper = registry_wrapper(
+            canonical_identity.substr(registry_create_prefix.size()));
         if (wrapper == 0) {
             throw std::invalid_argument {
                 "UVM registry create selected an unknown object type"
             };
+        }
+        // The factory's overrides for the instance path the create names
+        // select the class it makes (IEEE 1800.2-2020 8.2.4.2, 8.3.1.4.1):
+        // the context, or the parent's full name without one, then the name.
+        {
+            const auto written = actuals.size() - (lowered ? 1U : 0U);
+            const auto parent_handle = written > 1U
+                    && actuals[1].low_word().bval == 0U
+                ? runtime::SystemVerilogClassHandle {
+                      actuals[1].low_word().aval }
+                : runtime::SystemVerilogClassHandle { };
+            std::string context = written > 2U && string_actuals.size() > 2U
+                ? string_actuals[2]
+                : std::string { };
+            if (context.empty() && parent_handle != 0U
+                && uvm_components.contains(parent_handle)) {
+                context = uvm_components.full_name(parent_handle);
+            }
+            const auto& name = string_actuals.front();
+            const auto path = context.empty() ? name
+                : name.empty()                ? context
+                                              : context + "." + name;
+            wrapper = uvm_factory.resolve_by_type(wrapper, path).resolved;
         }
         // A component is created under its parent (IEEE 1800.2-2020
         // 8.2.4.2); without one it joins the run_test hierarchy.
         if (uvm_registry.snapshot(wrapper).kind
             == runtime::SystemVerilogUvmRegisteredKind::Component) {
             const auto parent = actuals.size() > 1U
+                    && !(lowered && actual_names.size() == 2U)
                 ? actuals[1].low_word().aval : std::uint64_t { };
+            if (lowered) {
+                if (const auto object = allocate_uvm_lowered(wrapper,
+                        *lowered,
+                        parent == 0 ? component_root("$simulation")
+                                    : runtime::SystemVerilogUvmRootHandle { });
+                    object != 0U) {
+                    return runtime::PackedLogic4::from_aval_bval(64, object, 0);
+                }
+            }
             return runtime::PackedLogic4::from_aval_bval(64,
                 uvm_registry.create_component_by_type(wrapper,
                     string_actuals.front(), parent,
                     parent == 0 ? component_root("$simulation")
                                 : runtime::SystemVerilogUvmRootHandle { }),
                 0);
+        }
+        if (lowered) {
+            if (const auto object = allocate_uvm_lowered(wrapper, *lowered, 0);
+                object != 0U) {
+                return runtime::PackedLogic4::from_aval_bval(64, object, 0);
+            }
         }
         return runtime::PackedLogic4::from_aval_bval(
             64,
@@ -445,10 +691,12 @@ Simulation::Impl::invoke_source_static_function(
             }
             const auto owner = uvm_tlm_owners.find(current);
             if (owner != uvm_tlm_owners.end()
-                && class_specialization(
-                       class_heap.object(current).specialization_identity)
-                           .declaration_identity.find("uvm_analysis_imp")
-                    != std::string::npos) {
+                && (uvm_tlm_implementations.contains(current)
+                    || is_systemverilog_uvm_type(
+                        built.compiled_systemverilog_class_specializations,
+                        class_specialization(
+                            class_heap.object(current).specialization_identity),
+                        support::UvmRole::analysis_imp))) {
                 targets.push_back(owner->second);
             }
         }
@@ -631,36 +879,66 @@ Simulation::Impl::invoke_source_static_function(
         }
         return runtime::PackedLogic4::from_aval_bval(1, 1, 0);
     }
+    // `get_type()`: the library's uvm_object::get_type or a static method
+    // hiding it (the registration macros', IEEE 1800.2-2020 B.2.1).
     const auto method_separator = canonical_identity.rfind("::");
     const auto method_name = method_separator == std::string_view::npos
         ? canonical_identity
         : canonical_identity.substr(method_separator + 2U);
-    if (method_name == "get_type" && actuals.empty()
-        && method_separator != std::string_view::npos) {
+    const auto hides_get_type = [&] {
+        if (static_specialization.empty())
+            return false;
+        // The library's uvm_object of the class's base chain: the static
+        // method of the class hides its get_type in the class's own list.
+        const auto* current = &class_specialization(static_specialization);
+        while (current->uvm_role != support::UvmRole::object) {
+            if (!current->base)
+                return false;
+            current = &class_specialization(
+                current->base->specialization_identity);
+        }
+        const auto& methods = current->methods;
+        const auto library = std::ranges::find(methods,
+            support::UvmRole::object_get_type,
+            &semantic::sv::SpecializedClassMethod::uvm_role);
+        return library != methods.end() && library->name == method_name;
+    };
+    if (actuals.empty() && method_separator != std::string_view::npos
+        && (uvm_method_role(canonical_identity).role
+                == support::UvmRole::object_get_type
+            || hides_get_type())) {
         // `C#(4)::get_type()` is the type of that specialization (IEEE
         // 1800-2023 8.25.1); a class registers each one.
-        auto wrapper = static_specialization.empty()
-            ? runtime::SystemVerilogUvmTypeHandle { }
-            : uvm_registry.wrapper_by_specialization(static_specialization);
-        if (wrapper == 0) {
-            wrapper = uvm_registry.unique_wrapper_by_declaration(
-                canonical_identity.substr(0, method_separator));
-        }
+        const auto wrapper
+            = uvm_registry.wrapper_by_specialization(static_specialization);
         if (wrapper != 0)
             return runtime::PackedLogic4::from_aval_bval(64, wrapper, 0);
     }
+    // The registry's `get` the class executor calls on the registry
+    // itself: the type wrapper of the class its type parameter names (IEEE
+    // 1800.2-2020 8.2.4.2.1).
+    if (actuals.empty() && !static_specialization.empty()
+        && uvm_method_role(canonical_identity).role
+            == support::UvmRole::registry_get) {
+        const auto wrapper = registry_parameter_wrapper();
+        if (wrapper == 0) {
+            throw std::invalid_argument {
+                "UVM registry get of '" + std::string { static_specialization }
+                + "' names no registered object type"
+            };
+        }
+        return runtime::PackedLogic4::from_aval_bval(64, wrapper, 0);
+    }
     // A static method runs in the specialization the call names, which
     // has static properties of its own (IEEE 1800-2023 8.25.1); its entry
-    // there carries the method as that specialization sees it.
+    // there carries the method as that specialization sees it. Every call
+    // names one: the lowered call and the class executor's alike.
     const auto* method = static_specialization.empty()
         ? nullptr
         : class_hir_execution.specialization_method(
             static_specialization, canonical_identity);
     if (method != nullptr && (!method->static_method || method->pure)) {
         method = nullptr;
-    }
-    if (method == nullptr) {
-        method = class_hir_execution.static_method(canonical_identity);
     }
     if (method != nullptr) {
         // The member lives in the specialization of the class declaring
@@ -691,6 +969,10 @@ Simulation::Impl::invoke_source_static_function(
     throw std::invalid_argument {
         "compiled HIR class static method '"
         + std::string { canonical_identity } + "' is not executable"
+        + (static_specialization.empty()
+                  ? std::string { " (the call names no specialization)" }
+                  : " in specialization '"
+                      + std::string { static_specialization } + "'")
     };
 }
 
@@ -709,8 +991,7 @@ void Simulation::Impl::invoke_source_constructor(
     // the complete reference scheduler into each source allocation. The host
     // services initialize the corresponding object/component state after the
     // user-derived constructor returns.
-    if (support::is_uvm_library_identity(
-            specialization.declaration_identity)) {
+    if (support::uvm_library(specialization.uvm_role)) {
         return;
     }
     const bool outermost = source_function_dispatch_depth == 0U;

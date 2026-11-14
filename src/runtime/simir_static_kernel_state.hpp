@@ -15,6 +15,7 @@
 #include "simir_static_kernel_native.hpp"
 #include "simir_static_kernel_pool.hpp"
 #include "simir_static_kernel.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 
 #include <algorithm>
 #include <array>
@@ -23,6 +24,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <tuple>
 #include <limits>
 #include <optional>
@@ -220,13 +222,14 @@ struct WriterRegion {
         width);
 }
 
-/// The debug points a debugger plan executes: all but the block markers
-/// (the reference evaluator raises no execution point for those either).
+/// The debug points a debugger plan executes: all but the block entry
+/// markers. A block exit marker is a probe point that tells the foreign
+/// observers a thread left a disable target (IEEE 1800-2023 38.36.1), as the
+/// reference evaluator raises it; the debugger never sees it.
 [[nodiscard]] constexpr bool debug_point_executable(
     const DebugPointKind kind) noexcept
 {
-    return kind != DebugPointKind::block_entry
-        && kind != DebugPointKind::block_exit;
+    return kind != DebugPointKind::block_entry;
 }
 
 /// The debug points only the execution probes use (frame entry and exit,
@@ -240,7 +243,8 @@ struct WriterRegion {
             || point->kind == DebugPointKind::frame_exit
             || point->kind == DebugPointKind::class_constructed
             || point->kind == DebugPointKind::assertion_pass
-            || point->kind == DebugPointKind::assertion_fail);
+            || point->kind == DebugPointKind::assertion_fail
+            || point->kind == DebugPointKind::call_value);
 }
 
 /// Where operation `pc` of a program lies once the probe points are
@@ -394,6 +398,8 @@ struct NodeLevels {
 struct StaticKernelProjectedPending {
     SimulationTick time { };
     Logic9 value { Logic9::x };
+    /// A null transaction (a guarded driver's disconnection).
+    bool null { };
 };
 
 class Interpreter::Impl::StaticKernel {
@@ -476,9 +482,16 @@ public:
     /// signal run again, so it returns to its drivers' value (IEEE 1800-2023
     /// 10.6.2); a released variable keeps the forced value.
     void rerun_writers(SignalId signal);
+    /// The host committed a transaction on `signal` (note_signal_transaction):
+    /// its history, when the kernel holds it, takes it.
+    void note_host_transaction(SignalId signal);
     /// Interpreter::deposit_kernel_signal and kernel_signal_value.
     [[nodiscard]] bool deposit_owned(SignalId signal, const PackedLogic4& value);
     [[nodiscard]] std::optional<PackedLogic4> owned_value(SignalId signal);
+    /// The resolution of an owned nettype net the kernel last published
+    /// (Interpreter::Impl::queue_vhdl_conversion).
+    [[nodiscard]] std::optional<PackedLogic4> published_nettype_value(
+        SignalId signal) const;
     /// The slot of an owned signal whose value only the kernel holds.
     [[nodiscard]] std::uint32_t sole_owned_slot(SignalId signal) const;
     /// Runs the lazy writers of a slot, their lazy inputs' writers first.
@@ -498,6 +511,23 @@ public:
     /// commit_writes: the transactions of watched signals whose value the
     /// round left as it was.
     void note_unchanged_transactions(std::uint32_t count);
+    /// Reports each queued write of this round to the host's driver
+    /// transaction hook: the member's drivers of the bits it writes are
+    /// active in this update phase (IEEE 1076-2019 14.7.2, 14.7.3.1).
+    void report_driver_writes(std::uint32_t count);
+    /// Whether the kernel reports the transactions of `process`'s drivers
+    /// of `signal`: a member's drivers of a signal the kernel owns.
+    [[nodiscard]] bool reports_driver(ProcessId process, SignalId signal);
+    /// Whether null transactions turned off `process`'s driver of every bit
+    /// of [offset, offset + width) of `signal`, a resolved nine-state slot
+    /// (its source codes 1110 or 1101, set_net_null); nullopt for a signal
+    /// the kernel does not resolve.
+    [[nodiscard]] std::optional<bool> driver_disconnected(ProcessId process,
+        SignalId signal, std::uint32_t offset, std::uint32_t width) const;
+    /// The current value of `process`'s driver of `signal` when it is a
+    /// source of a resolved slot the kernel owns; nullopt otherwise.
+    [[nodiscard]] std::optional<PackedLogic4> driver_value(ProcessId process,
+        SignalId signal) const;
     /// Zero-delay logic that never settles: the scheduler's delta-cycle
     /// limit error, as each of its evaluations is a delta cycle of the
     /// reference (S19). `member` names the loop in a trace.
@@ -619,6 +649,13 @@ public:
     /// (queue_late_start) at that process's place among the late starters.
     [[nodiscard]] std::optional<ProcessId> first_late_process() const;
     void queue_late_start(ProcessId order);
+    /// The members' time-zero starts are held (the first activation
+    /// initializes the kernel but spawns no behavioral thread) until
+    /// release_time_zero_hold(); a host runs a generated service member
+    /// meanwhile (Interpreter::start_holding_time_zero).
+    void hold_time_zero() noexcept { hold_time_zero_ = true; }
+    /// Starts the held members as the first activation would have.
+    void release_time_zero_hold();
     void start_late_members();
     /// Debugger: whether `process` is a native (thread) member, and the
     /// values of its registers. The registers are shared by the member's
@@ -653,17 +690,27 @@ public:
     }
     [[nodiscard]] const Process* debug_program(ProcessId process) const noexcept
     {
-        return host_original_ && process == host_process_ ? &*host_original_
-                                                          : nullptr;
+        // The host member's scheduler program is the kernel stub, which has
+        // no debug locals: its locals are the original program's, with or
+        // without debug points.
+        if (process != host_process_) {
+            return nullptr;
+        }
+        return host_original_ ? &*host_original_
+            : host_program_ ? &*host_program_ : nullptr;
     }
     /// `newer_activations` reads the register as an outer activation of its
     /// automatic callable held it: the value saved when the callable was
     /// entered again that many activations deeper.
     [[nodiscard]] PackedLogic4 debug_register(ProcessId process,
         RegisterId reg, std::size_t width,
-        std::size_t newer_activations = 0U) const;
-    [[nodiscard]] std::string debug_string_register(
-        ProcessId process, StringRegisterId reg) const;
+        std::size_t newer_activations = 0U, bool written_here = false) const;
+    /// Writes the register as an outer activation of its callable saved it
+    /// (debug_register with `newer_activations`).
+    void debug_write_saved_register(ProcessId process, RegisterId reg,
+        const PackedLogic4& value, std::size_t newer_activations);
+    [[nodiscard]] std::string debug_string_register(ProcessId process,
+        StringRegisterId reg, std::size_t newer_activations = 0U) const;
     [[nodiscard]] ContainerValue debug_container_register(
         ProcessId process, ContainerRegisterId reg) const;
     /// Replaces a dynamic array, queue or associative array register of a
@@ -673,8 +720,8 @@ public:
         ProcessId process, ContainerRegisterId reg, const ContainerValue& value);
     /// Writes a string register of a thread member (a frame's automatic
     /// string, IEEE 1800-2023 37.43 with vpi_put_value, 38.34).
-    void debug_write_string_register(
-        ProcessId process, StringRegisterId reg, std::string_view value);
+    void debug_write_string_register(ProcessId process, StringRegisterId reg,
+        std::string_view value, std::size_t newer_activations = 0U);
     /// A design container object the kernel holds in its own element
     /// storage (a protected type's variable of a shared variable, an array
     /// no signal aliases) is current only there: a host read copies its
@@ -691,6 +738,22 @@ public:
         ProcessId process) const noexcept;
     /// Writes a register of a thread member (a debugger local); throws
     /// std::invalid_argument when the width differs from the register's.
+    /// The debug interface changed its variable forces or watches
+    /// (Impl::debug_local_hooks): the members it names report their stores.
+    void debug_local_hooks_changed();
+    /// The members that have a hook on one of their variables are
+    /// re-specialized with their variables pinned (specialize_member keeps
+    /// every store to a debug local, and no copy or folded value stands in
+    /// for its register): a deposit of the library lands in a register no
+    /// compiled read bypasses. Members with no hook keep the folded body.
+    /// A member stays pinned for the rest of the run, also once its last hook
+    /// is released (until a restart rebuilds the kernel).
+    void pin_members();
+    void pin_member(std::uint32_t member_index);
+    /// The host's update commit of a delta (events::UpdateCommit): the
+    /// first simulation cycle's update phase commits the initialization's
+    /// assignments first (schedule_initial_update).
+    void run_initial_update();
     void debug_write_register(
         ProcessId process, RegisterId reg, const PackedLogic4& value);
 
@@ -948,6 +1011,14 @@ private:
         /// Without the debug plan, the operations that stand for the program
         /// operations left out (copy_member_operations); empty otherwise.
         std::vector<InstructionIndex> stripped_origin;
+        /// Whether operation `pc` begins a statement: a debug point (every
+        /// statement has one), which a kernel without the debug plan runs
+        /// as a no-op.
+        [[nodiscard]] bool statement_start(const InstructionIndex pc) const
+        {
+            const auto& ops = operations();
+            return pc < ops.size() && operation_holds<DebugPoint>(ops[pc]);
+        }
         /// The program operation operation `pc` stands for.
         [[nodiscard]] InstructionIndex original_instruction(
             const InstructionIndex pc) const noexcept
@@ -961,6 +1032,11 @@ private:
         /// of the member reached, and the registers that may have been
         /// written before it (debug_register_defined).
         std::uint32_t debug_pc { static_kernel_detail::no_slot };
+        /// The operation of the last debug point of any kind a thread of the
+        /// member reached, a frame's entry included: where the registers that
+        /// may have been written are taken (a frame's formals and locals are
+        /// written before its entry point, IEEE 1800-2023 37.43).
+        std::uint32_t debug_reached_pc { static_kernel_detail::no_slot };
         /// The debug points (by operation) some thread of the member has
         /// reached.
         std::vector<std::uint8_t> debug_hit;
@@ -1076,6 +1152,28 @@ private:
         /// nine-value slot), the std_logic_1164 resolution of the values of
         /// the sources that drive each element.
         bool resolved { };
+        /// A resolved VHDL signal of two planes whose resolution function
+        /// is the design's own (IEEE 1076-2019 4.6): its sources are its
+        /// drivers in the resolver's order (VhdlSignalResolver::drivers),
+        /// and the update phase runs the function over them
+        /// (resolve_user_slot).
+        bool user { };
+        /// An inout formal that takes its effective value from its actual
+        /// (a wire) and gives the actual its driving value (IEEE 1076-2019
+        /// 14.7.3.2, 14.7.3.3): the slot of its driving-value mirror, which
+        /// the resolution of this slot's sources (the formal's own drivers)
+        /// writes instead of this slot's value (resolve_user_slot). The
+        /// maximum for any other slot.
+        std::uint32_t driving_slot { std::numeric_limits<std::uint32_t>::max() };
+        /// The position of this slot in the chain of split formals: the
+        /// depth below the slot that holds the resolved actual (zero for
+        /// any other slot). The update phase resolves the deeper ones first.
+        std::uint32_t level { };
+        /// The driving-value mirror of a split formal (driving_slot of
+        /// another slot): the host's copy takes each value at once, in the
+        /// order the kernel computes them (the formals' order, innermost
+        /// first), as the host's own drain commits them.
+        bool split_mirror { };
         /// A resolved slot of nine states (a std_logic signal).
         [[nodiscard]] bool nine() const noexcept
         {
@@ -1191,6 +1289,9 @@ private:
         /// The host_task writes a host object the kernel's inputs may read:
         /// they are scanned again once it has (host_object_written).
         bool host_object { };
+        /// A VHDL null transaction of a resolved slot's driver (1 bus, 2
+        /// register; set_net_null); `value` only gives its width.
+        std::uint8_t null { };
     };
 
     /// One deferred nonblocking write, in program order. Narrow slot and
@@ -1354,6 +1455,10 @@ private:
     void write_slot_immediate(std::uint32_t slot, PackedLogic4 value,
         std::optional<std::uint32_t> offset, std::uint32_t member,
         InstructionIndex instruction);
+    /// write_slot_immediate of a null transaction of a resolved slot
+    /// (set_net_null).
+    void write_slot_null(std::uint32_t slot, std::uint32_t offset,
+        std::uint32_t width, std::uint8_t kind, std::uint32_t member);
     /// Stores a Logic4 word into any slot (Logic9 slots get its codes, with
     /// 'U' for the `unknown` elements and 'H', 'L', 'W', '-' for the `weak`
     /// ones; Logic4 slots read 'U', 'W' and '-' as X).
@@ -1372,6 +1477,17 @@ private:
     std::uint32_t run_generic_from(std::uint32_t member, std::uint32_t pc,
         std::uint32_t until = static_kernel_detail::no_slot);
     void verify_run(std::uint32_t member);
+    // FSIM_KERNEL_VERIFY: the reference replay at `pc` takes the result the
+    // compiled run recorded for its generic-bridge operation there, when
+    // the next record is that operation's; a differing operand sets
+    // `mismatch`.
+    [[nodiscard]] bool replay_generic_record(std::uint32_t member,
+        std::uint32_t pc, std::string& mismatch);
+    // FSIM_KERNEL_VERIFY: the registers of a compiled SystemVerilog member
+    // read before written in an activation (its operations' liveness), by
+    // member, computed once.
+    [[nodiscard]] const std::vector<std::uint64_t>& verify_operation_liveness(
+        std::uint32_t member);
     /// An element write of a kernel memory as its commit applies it
     /// (resolve_element_write): the element, the bits it sets (offset and
     /// Logic9 image; none for a part-select outside the element), or the
@@ -1904,6 +2020,9 @@ private:
         std::uint32_t slot, std::uint64_t changed, std::uint32_t field_offset);
     static std::uint32_t native_member_due(
         StaticKernelNativeFrame* frame, std::uint32_t position);
+    static std::uint32_t native_variable_store(StaticKernelNativeFrame* frame,
+        Word* registers, std::uint32_t reg);
+    static void native_flush_writes(StaticKernelNativeFrame* frame);
     void move_wide(const static_kernel_detail::CompiledBody& body,
         const static_kernel_detail::KInst& inst, std::uint32_t at,
         std::uint32_t member_index, std::uint32_t source_slot, Word base,
@@ -2038,7 +2157,25 @@ private:
     bool family_generic_ { };
     std::vector<std::uint32_t> family_widths_;
     std::vector<std::uint8_t> family_in_place_;
+    /// Runs the queued members until none is queued, then the queued
+    /// resolutions of nets of user-defined nettypes (drain_nettype_
+    /// resolutions), whose changes may queue members again.
     void settle();
+    void settle_members();
+    /// Whether slot `slot` is a net of a user-defined nettype (IEEE
+    /// 1800-2023 6.6.7): a user-resolved slot whose drivers are
+    /// SystemVerilog members.
+    [[nodiscard]] bool nettype_slot(std::uint32_t slot) const;
+    /// A driver of nettype slot `slot` changed: its resolution function
+    /// runs once the members of the round settle, as the host drains its
+    /// resolutions after the round's updates (an update event of the net,
+    /// IEEE 1800-2023 6.6.7).
+    void queue_nettype_resolution(std::uint32_t slot);
+    /// Resolves the queued nettype slots, in slot order, and reports each
+    /// that changed; false when none was queued.
+    bool drain_nettype_resolutions();
+    /// Drains pending nettype resolutions at the end of an Active round.
+    bool finish_nettype_resolutions();
     void check_owned_edges();
     void commit_pending();
     /// `immediate` commits Active-region values at once. `ending` (the end
@@ -2049,7 +2186,8 @@ private:
     /// One output slot of publish: hands its value to the host unless the
     /// host already holds it (or `ending`).
     void publish_slot(std::uint32_t slot_index, bool immediate, bool ending);
-    /// Debugger plan: a write of an activation changed an output slot. The
+    /// Debugger plan, or a watched signal (watch_writes_): a write of an
+    /// activation changed an output slot. The
     /// value reaches the host when the write is complete (flush_debug_writes):
     /// a wide write lands as several field stores, each notifying its own
     /// bits, and the observers hear one change of the whole value.
@@ -2057,8 +2195,9 @@ private:
     /// Hand the outputs that completed writes changed to the host, in the
     /// order of their first write since the last flush. The flush points are
     /// the boundaries of a write: the next debug point of the thread (every
-    /// statement has one), its suspension, each NBA update, and the end of
-    /// the activation.
+    /// statement has one, and while watch_writes_ a kernel without the
+    /// debug plan stops there too, Member::statement_start), its
+    /// suspension, each NBA update, and the end of the activation.
     void flush_debug_writes();
     void initialize();
     [[nodiscard]] bool scan_inputs(bool all = true);
@@ -2170,6 +2309,7 @@ private:
         sva_table_.rings = impl_.sampled_ring_words.data();
         sva_table_.sampled = impl_.sampled_value_words.data();
         sva_table_.controls = impl_.assertion_controls.data();
+        sva_table_.history = history_words_.data();
         sva_now_ = static_cast<std::int64_t>(kernel_now());
     }
     /// Gives generated code the write marks where its writes go to writes_
@@ -2180,6 +2320,9 @@ private:
         // member runs on the leader).
         frame.assertion_starts = impl_.assertion_starts_bound ? 1U : 0U;
         frame.assertion_filter = impl_.fork_spawn_filter ? 1U : 0U;
+        frame.variable_hooks
+            = variable_hooks_active_ ? variable_hook_members_.data() : nullptr;
+        frame.watch_writes = watch_writes_ ? &debug_write_flag_ : nullptr;
         if (sva_table_used_) {
             refresh_sva_table();
             frame.sva = &sva_table_;
@@ -2193,6 +2336,82 @@ private:
     /// pool. Every write queued in the leader's writes_ marks its slot.
     std::vector<std::uint32_t> write_marks_;
     std::uint32_t write_round_ { 1U };
+    /// VHDL signal history of kernel-owned slots (IEEE 1076-2019 16.2.4):
+    /// the signals, and the selections of them, that a member queries with
+    /// 'EVENT, 'ACTIVE, 'LAST_VALUE, 'LAST_EVENT or 'LAST_ACTIVE. Each
+    /// history keeps the time and update cycle of its latest event and
+    /// transaction (history_words_) and the value before the latest event
+    /// (a hidden slot, which 'LAST_VALUE reads as an ordinary signal); the
+    /// slot keeps the value its histories last saw (history_current_), which
+    /// tells an event from a repeated notice. slot_changed records the
+    /// events (the update phase's commit, projected-waveform maturation,
+    /// wiring copies, imports of host writes: every path reports its change
+    /// there), commit_writes and projected_mature the transactions.
+    struct SlotHistory {
+        std::uint32_t slot { };
+        /// The bit range of the slot; `whole` for the signal itself (a
+        /// selection of its full width is a history of its own).
+        std::uint32_t offset { };
+        std::uint32_t width { };
+        bool whole { };
+        /// SignalSelection::composite_element: an event on the signal
+        /// updates the last value of the element it assigns, changed or not
+        /// (16.2.4).
+        bool element { };
+        /// The hidden slot of the value before the latest event.
+        std::uint32_t last_value_slot { };
+    };
+    /// Grouped by slot: the histories of slot s are histories_[
+    /// slot_history_[s], slot_history_end_[s]) (no_slot: none).
+    std::vector<SlotHistory> histories_;
+    std::vector<std::uint32_t> slot_history_;
+    std::vector<std::uint32_t> slot_history_end_;
+    /// The slots with histories, ascending (mark_transaction_slots).
+    std::vector<std::uint32_t> history_slots_;
+    /// Per slot with histories, the value they last saw.
+    std::vector<std::vector<std::uint64_t>> history_current_;
+    /// Generated code's view of the stamps (StaticKernelSvaTable::history):
+    /// word 0 counts the update cycles that have begun (commit_round, and
+    /// the update phase of a time step that releases VHDL timers), then
+    /// eight words per history: flags (bit 0 an event happened, bit 1 a
+    /// transaction did), the time and cycle of the latest event, the time
+    /// and cycle of the latest transaction. A stamp with the current time
+    /// and cycle is of the cycle the running processes belong to.
+    std::vector<std::uint64_t> history_words_;
+    /// Builds histories_ from the attribute operations of the members and
+    /// gives 'LAST_VALUE its hidden signal.
+    void build_histories();
+    /// The hidden signal of a history's value before its latest event (a
+    /// late signal of the host, which the kernel's image restores too).
+    [[nodiscard]] SignalId push_history_signal(const SlotHistory& history);
+    /// Rewrites each member's 'LAST_VALUE of a history as a read of its
+    /// hidden signal.
+    void rewrite_last_value_reads();
+    /// The history a query names, or no_slot.
+    [[nodiscard]] std::uint32_t history_index(SignalId signal,
+        const std::optional<SignalSelection>& selection) const;
+    /// A new update cycle begins.
+    void history_new_cycle() noexcept
+    {
+        if (!history_words_.empty()) {
+            ++history_words_[0];
+        }
+    }
+    /// A change of a history slot (slot_changed); `before` is the slot's
+    /// planes of words before the change, when the caller has them.
+    void history_event(std::uint32_t slot, const std::uint64_t* before);
+    /// A settling change that is no event: the histories take the value.
+    void history_sync(std::uint32_t slot);
+    /// The transactions of the round's assignments (commit_writes), and of
+    /// one matured transaction on bits [offset, offset + width) of a slot.
+    void note_history_transactions(std::uint32_t count);
+    void history_transaction(std::uint32_t slot, std::uint32_t offset,
+        std::uint32_t width);
+    /// The reads of a history (16.2.4), for the operation step.
+    [[nodiscard]] bool history_event_now(std::uint32_t history) const;
+    [[nodiscard]] bool history_active_now(std::uint32_t history) const;
+    [[nodiscard]] SimulationTick history_elapsed(std::uint32_t history, bool active) const;
+    [[nodiscard]] PackedLogic4 history_last_value(std::uint32_t slot) const;
     /// watch_transactions' slots, sorted.
     std::vector<std::uint32_t> transaction_slots_;
     /// Marks transaction_slots_ queued in this round, so that the
@@ -2200,6 +2419,11 @@ private:
     void mark_transaction_slots() noexcept
     {
         for (const auto slot : transaction_slots_) {
+            mark_write(slot);
+        }
+        // An assignment that leaves a history slot's value is a transaction
+        // on it too (IEEE 1076-2019 14.7.3.1, 16.2.4).
+        for (const auto slot : history_slots_) {
             mark_write(slot);
         }
     }
@@ -2472,6 +2696,11 @@ private:
         SimulationTick time { };
         std::uint8_t code { };
     };
+    /// The code of a null transaction (10.5.2.2) of a resolved slot's bus
+    /// driver, and of any register driver: no value. A plain slot's bus
+    /// null is the value 'Z', the resolution of no sources.
+    static constexpr std::uint8_t projected_null_bus = 'N';
+    static constexpr std::uint8_t projected_null_register = 'R';
     /// The projected output waveforms of one member's driver of one kernel
     /// slot, a list per bit (every bit is a scalar element, a multi-bit VHDL
     /// scalar keeps and rejects its transactions together, 10.5.2.2).
@@ -2515,6 +2744,11 @@ private:
         const std::vector<ProjectedWaveformValue>& elements,
         std::optional<std::uint32_t> offset, SimulationTick rejection,
         ProjectedDelayMode mode);
+    /// The zero-delay first element of a projected assignment: a Pending
+    /// update of this round (a null element's too, Pending::null).
+    void push_projected_pending(std::uint32_t member, std::uint32_t pc,
+        SignalId signal, std::optional<std::uint32_t> offset,
+        const ProjectedWaveformValue& element);
     /// The transactions of site `site` that reach their time: the driver's
     /// new values, written in this update phase.
     void projected_mature(std::uint32_t site, SimulationTick now);
@@ -2893,11 +3127,16 @@ private:
     /// The reason a member's activations are not replayed (named under
     /// FSIM_PROFILE_KERNEL), or null when they are.
     [[nodiscard]] const char* verify_thread_skip_reason(std::uint32_t member);
+    /// Whether the member's variables have debug-interface hooks now (an
+    /// activation that is then not replayed, counted in verify_hooked_runs_).
+    [[nodiscard]] bool verify_variable_hooked(std::uint32_t member);
+    std::uint64_t verify_hooked_runs_ { };
     void verify_thread_activation(std::uint32_t member, std::uint32_t start,
         std::uint32_t stopped, const VerifyThreadState& before);
     /// Per member: the decided skip reason (null: replayed) and whether it
     /// is decided.
     std::vector<const char*> verify_thread_reason_;
+    std::vector<std::optional<std::vector<std::uint64_t>>> verify_operation_live_;
     std::vector<std::uint8_t> verify_thread_decided_;
     /// Per member: the registers that are live across its suspensions (read
     /// before written after some resume point), the only ones whose values
@@ -3057,6 +3296,10 @@ private:
     [[nodiscard]] std::optional<PackedLogic4> exact_register(
         const CompiledBody& body, std::uint32_t member, RegisterId reg,
         const Word* registers = nullptr) const;
+    /// Whether a save keeps the member's compiled register file as its
+    /// reference registers (save_thread_registers), and a restore puts them
+    /// back (restore_thread_registers).
+    [[nodiscard]] bool saves_compiled_registers(const Member& member) const noexcept;
     void save_thread_registers();
     void restore_thread_registers();
     void prepare_behavioral();
@@ -3711,10 +3954,24 @@ private:
         bool vhdl = false);
     void set_net_value(std::uint32_t slot, ProcessId process, std::uint32_t offset,
         const PackedLogic4& value, bool vhdl = false);
+    /// A null transaction of `process`'s driver of bits [offset, offset +
+    /// width) of a resolved nine-state slot (IEEE 1076-2019 10.5.2.2): its
+    /// source codes become the null code of a bus (kind 1, 1110) or a
+    /// register (kind 2, 1101), no source of the resolution
+    /// (resolve_nine_word); landed like set_net_value.
+    void set_net_null(std::uint32_t slot, ProcessId process, std::uint32_t offset,
+        std::uint32_t width, std::uint8_t kind, bool vhdl = false);
     /// Resolves words [first, last] of a resolved slot's current or next
-    /// block over that block's sources.
+    /// block over that block's sources. A user-resolved slot (Slot::user)
+    /// resolves its whole current block (resolve_user_slot); its next block
+    /// waits for the update phase.
     void resolve_net_words(std::uint32_t slot, std::uint32_t first,
         std::uint32_t last, bool next = false);
+    /// The value of a user-resolved slot's current block: one pass of the
+    /// signal's resolver member (run_resolver) over the block's sources, the
+    /// first in the leftmost (most significant) position (IEEE 1076-2019
+    /// 14.7.3.2).
+    void resolve_user_slot(std::uint32_t slot);
     /// Word `word` of the value planes at `value` (`words` words per plane)
     /// of a resolved slot of nine states, resolved over its `count` sources,
     /// whose planes follow the `rows` value planes (Slot::net_processes).
@@ -3740,6 +3997,11 @@ private:
     /// its process's driver value, so the host resolves the slot's value.
     void publish_net_sources(std::uint32_t slot,
         std::optional<SignalUpdateDomain> domain);
+    /// The public driver value of source `source` of a resolved slot, from
+    /// the current block ('Z' where it has no driver).
+    [[nodiscard]] PackedLogic4 net_source_value(std::uint32_t slot,
+        std::uint32_t source) const;
+
     /// Kernel wiring (static_kernel_wiring): the update phase that changes
     /// `source` copies its bits [offset, offset + width) into `target` at
     /// `target_offset` in the same delta cycle, so an input formal
@@ -3752,12 +4014,67 @@ private:
         std::uint32_t offset { };
         std::uint32_t width { };
         std::uint32_t target_offset { };
+        /// Not the maximum: the target is a resolved slot and the wire
+        /// feeds the source of the process at this index of
+        /// Slot::net_processes with the copied bits, a conversion driver of
+        /// the target's (the driving value of a split formal, IEEE 1076-2019
+        /// 14.7.3.2). Such a wire runs in the resolving part of the update
+        /// phase (feed_source_wire), not with the value wires.
+        std::uint32_t target_source { std::numeric_limits<std::uint32_t>::max() };
+        /// Not the maximum: a port association's conversion function or
+        /// type conversion (IEEE 1076-2019 6.5.7.1). The wire's value is the
+        /// result register `convert_output` of this resolver member, run
+        /// over the source (a pure program of its source signal), not a
+        /// copy of the source's bits; `width` is the target part's width.
+        ProcessId convert { std::numeric_limits<ProcessId>::max() };
+        RegisterId convert_output { };
     };
+    /// The value a wire carries: the source's bit range, or the result of
+    /// its conversion program.
+    [[nodiscard]] PackedLogic4 wire_value(const Wire& wire);
     /// Sorted by source slot; `slot_wires_` holds each slot's [begin, end).
     std::vector<Wire> wires_;
     std::vector<std::pair<std::uint32_t, std::uint32_t>> slot_wires_;
-    /// Copies the wire's bit range; true when the target changed.
+    /// Copies the wire's bit range; true when the target changed. A wire
+    /// that feeds a source row (Wire::target_source) is not copied here.
     bool copy_wire(const Wire& wire);
+    /// Lands the bits of a source-feeding wire in the target's next block
+    /// (the update phase resolves the target after); `now` writes the
+    /// current block too (time zero).
+    void feed_source_wire(const Wire& wire, bool now);
+    /// Resolves a split formal's own drivers into its mirror; true when the
+    /// mirror changed.
+    bool resolve_split(std::uint32_t slot);
+    /// As resolve_split for a write that landed at once: the changed mirror
+    /// and what it feeds follow (resolve_net_words).
+    void resolve_split_now(std::uint32_t slot);
+    /// The body of resolve_split_now: the mirror, what it feeds and the
+    /// actuals that change.
+    void propagate_split(std::uint32_t slot);
+    /// Resolves the formals that transactions maturing in one time step
+    /// changed, deepest first, then reports their actuals' changes.
+    void flush_split_updates();
+    bool defer_splits_{ };
+    std::vector<std::uint32_t> pending_splits_;
+    std::vector<std::pair<std::uint32_t, std::vector<std::uint64_t>>> changed_actuals_;
+    bool settling_splits_{ };
+    /// Time zero: the split formals' mirrors, the actuals' resolution and
+    /// the formals' effective values, repeated until none changes (IEEE
+    /// 1076-2019 14.7.5.2).
+    void settle_splits();
+    /// Whether any wire feeds a source row.
+    bool has_source_wires_{ };
+    /// Whether any wire carries a conversion program (Wire::convert).
+    bool has_convert_wires_{ };
+    /// Whether any split formal is a std_logic one, whose sources resolve
+    /// natively into its mirror.
+    bool has_native_splits_{ };
+    /// The slots the update phase resolves, deepest split formal first.
+    std::vector<std::uint32_t> resolve_work_;
+    /// The program of each split formal's driving value, by its slot
+    /// (Slot::driving_slot): the resolver variant over its drivers, absent
+    /// when the formal has none (the mirror then holds its default).
+    std::unordered_map<std::uint32_t, VhdlResolverVariant> split_programs_;
     std::vector<std::uint32_t> slot_of_signal_;
     std::vector<std::uint32_t> family_of_signal_;
     std::vector<Family> families_;
@@ -3806,6 +4123,13 @@ private:
     std::vector<std::uint32_t> debug_writes_;
     std::vector<std::uint32_t> debug_writes_spare_;
     std::vector<std::uint8_t> debug_write_pending_;
+    /// Nonzero while debug_writes_ holds a slot (generated code tests it
+    /// after each store: StaticKernelNativeFrame::watch_writes).
+    std::uint8_t debug_write_flag_ { };
+    /// Set once an observer watches a signal (apply_watches): every
+    /// blocking write of an output is its own change, as under a debugger
+    /// plan (note_debug_write), and the units run on the leader.
+    bool watch_writes_ { };
     /// Sequential SystemVerilog members with one edge-sensitivity set and no
     /// other wake-up (build_dispatch_groups). An edge schedules the group
     /// once, and the group runs its members in index order, as the sorted
@@ -4105,6 +4429,7 @@ private:
     void shuffle_items(std::uint32_t count);
     void resume_domain(std::uint32_t domain, std::size_t limit);
     bool initialized_ { };
+    bool hold_time_zero_ { };
     /// Mixed kernels with a host boundary: a round's VHDL work, or only
     /// its update phase when the round ran in a task of a generic queue,
     /// waits for the delta's SystemVerilog work in its generic Active
@@ -4117,6 +4442,48 @@ private:
     [[nodiscard]] bool vhdl_round_waits_for_host() const;
     [[nodiscard]] bool vhdl_update_waits_for_host() const;
     void defer_vhdl_round();
+    /// A VHDL kernel's first activation is the initialization phase: its
+    /// members run until they suspend and their assignments wait for the
+    /// first simulation cycle's update phase, after the host's end of
+    /// initialization (IEEE 1076-2019 14.7.5.2, 20.5, 21.3.7.5), where a
+    /// task of the delta's update phase commits them
+    /// (schedule_initial_update, run_initial_update).
+    /// initial_update_running_: that commit's activation.
+    bool initialization_round_ { };
+    bool initial_update_pending_ { };
+    bool initial_update_running_ { };
+    bool initial_commit_due_ { };
+    void schedule_initial_update();
+    /// The debug interface hooks a VHDL variable of a kernel member (force
+    /// or value-change callback, IEEE 1076-2019 22.5.2, 21.3.2.2): the
+    /// executors report its stores (note_variable_store).
+    bool variable_hooks_active_ { };
+    /// Per member, nonzero once its variables are pinned (pin_member); the
+    /// size of its original operations when specialize_member gave it a
+    /// specialized body (0 otherwise); the members whose pinning waits for
+    /// the end of the activation.
+    std::vector<std::uint8_t> member_pinned_;
+    std::vector<std::uint32_t> specialized_size_;
+    std::vector<std::uint32_t> pending_pins_;
+    /// Per member, nonzero while a hook names one of its variables
+    /// (StaticKernelNativeFrame::variable_hooks).
+    std::vector<std::uint8_t> variable_hook_members_;
+    /// A store of variable register `reg` of a member whose variables are
+    /// hooked, by any executor: the forced bits of the register are put
+    /// back (an assignment does not update them, 22.5.2) and a watcher sees
+    /// the new value (21.3.2.2). `registers` is the compiled register file
+    /// the executor runs on, null for the member's reference registers.
+    /// True when the compiled register now holds unknown bits (two-state
+    /// code continues in its full code).
+    bool note_variable_store(std::uint32_t member_index, RegisterId reg,
+        Word* registers);
+    /// The same after operation `pc` of the member ran on its reference
+    /// registers (step_operation, behavioral_operation).
+    void note_reference_store(std::uint32_t member_index, std::uint32_t pc);
+    /// Writes `value` to compiled register `reg` of `registers` (a register
+    /// file of `body`) with its 'U' and weak masks.
+    void write_exact_register(static_kernel_detail::CompiledBody& body,
+        Word* registers, RegisterId reg, const PackedLogic4& value);
     bool nonblocking_committed_ { };
     /// This activation staged an Active update to a host signal: #0
     /// threads (Inactive region) resume only after the host applies it.
@@ -4252,6 +4619,18 @@ private:
     std::vector<StartupMember> startup_members_;
     /// The resolver members' processes and member indices (run_resolver).
     std::unordered_map<ProcessId, std::uint32_t> resolver_members_;
+    /// The nettype slots whose drivers changed since the last drain
+    /// (queue_nettype_resolution), and whether each slot is queued. Run
+    /// state only: the kernel image is taken between rounds, with none
+    /// queued.
+    std::vector<std::uint32_t> nettype_pending_;
+    std::vector<std::uint8_t> nettype_queued_;
+    std::mutex nettype_mutex_;
+    /// The input register of each resolution program that takes a fixed
+    /// number of drivers, and its width: the drivers' values side by side
+    /// (Impl::run_vhdl_resolver). Built when the first resolver compiles.
+    std::optional<std::unordered_map<ProcessId,
+        std::pair<RegisterId, std::uint32_t>>> resolver_inputs_;
     /// A SystemVerilog member makes delayed writes (after, delayed and
     /// inertial updates), which the host matures at the writer's order.
     bool host_delayed_writes_ { };
@@ -4263,6 +4642,27 @@ private:
     /// Runs one round of the hosted Active region; false when none was ready.
     [[nodiscard]] bool run_hosted_active();
     void hold_woken(std::size_t members, std::size_t threads);
+    /// Where the VHDL work a host change of a signal wakes runs, for the
+    /// scope's wakes (refresh_input_from_host, import_host_write): a change
+    /// this delta's update phase made (its event stamped for the next delta)
+    /// wakes it in the next delta (IEEE 1076-2019 14.7.5.3); one SystemVerilog
+    /// work of this delta made (a VPI put, a hosted process's write) wakes it
+    /// in the drain's Active region, before the delta's nonblocking updates,
+    /// with the SystemVerilog members it wakes (S16).
+    class HostWakeScope {
+    public:
+        HostWakeScope(StaticKernel& kernel, SignalId signal);
+        ~HostWakeScope();
+        HostWakeScope(const HostWakeScope&) = delete;
+        HostWakeScope& operator=(const HostWakeScope&) = delete;
+
+    private:
+        StaticKernel& kernel_;
+        bool hold_ { };
+        std::size_t members_ { };
+        std::size_t threads_ { };
+        bool draining_ { };
+    };
     /// Mixed kernels: the hosted processes of one scheduling domain.
     [[nodiscard]] bool run_hosted_active_domain(bool systemverilog);
     [[nodiscard]] bool yield_to_host_active();

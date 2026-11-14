@@ -587,7 +587,7 @@ SystemVerilogVpiObjectRegistry::capabilities() noexcept
     return {
         2023U,
         static_cast<std::uint32_t>(
-            SystemVerilogVpiObjectKind::AttributeSpecification) + 1U,
+            SystemVerilogVpiObjectKind::NamedEventArray) + 1U,
         static_cast<std::uint32_t>(
             SystemVerilogVpiRelationshipKind::Coverage) + 1U,
         static_cast<std::uint32_t>(
@@ -604,7 +604,7 @@ bool SystemVerilogVpiObjectRegistry::supports(
 {
     return static_cast<std::uint32_t>(kind)
         <= static_cast<std::uint32_t>(
-            SystemVerilogVpiObjectKind::AttributeSpecification);
+            SystemVerilogVpiObjectKind::NamedEventArray);
 }
 bool SystemVerilogVpiObjectRegistry::supports(
     const SystemVerilogVpiRelationshipKind relationship) noexcept
@@ -773,6 +773,7 @@ SystemVerilogVpiObjectResult SystemVerilogVpiObjectRegistry::create(
         std::nullopt,
         default_type(kind),
         std::nullopt,
+        { },
     });
 }
 
@@ -856,8 +857,18 @@ SystemVerilogVpiObjectResult SystemVerilogVpiObjectRegistry::create(
     // (IEEE 1800-2023 3.13, 37.10).
     const bool package_scope = top_level
         && descriptor.kind == SystemVerilogVpiObjectKind::Package;
+    const auto& prefix = descriptor.name_prefix;
+    if (!prefix.empty()
+        && (top_level || prefix.size() > maximum_name_size
+            || prefix.front() == '.' || prefix.back() == '.'
+            || prefix.find("..") != std::string::npos
+            || prefix.find('\0') != std::string::npos)) {
+        return { { }, SystemVerilogVpiObjectError::InvalidName };
+    }
     auto key = sibling_key(descriptor.parent,
-        package_scope ? normalized_name + "::" : normalized_name);
+        package_scope ? normalized_name + "::"
+            : prefix.empty() ? normalized_name
+                             : prefix + "." + normalized_name);
     if (siblings_.contains(key)) {
         return { { }, SystemVerilogVpiObjectError::DuplicateName };
     }
@@ -877,6 +888,10 @@ SystemVerilogVpiObjectResult SystemVerilogVpiObjectRegistry::create(
             && normalized_name.starts_with('[')
             && normalized_name.ends_with(']');
         if (!indexed_child && !full_name.ends_with("::")) {
+            full_name.push_back('.');
+        }
+        if (!prefix.empty()) {
+            full_name.append(prefix);
             full_name.push_back('.');
         }
         full_name.append(hierarchy_segment);
@@ -916,6 +931,7 @@ SystemVerilogVpiObjectResult SystemVerilogVpiObjectRegistry::create(
         record.value.reset();
         record.initial_value.reset();
         record.live_value = false;
+        record.name_prefix = std::move(descriptor.name_prefix);
     } else {
         if (records_.size() >= slot_mask) {
             return { { }, SystemVerilogVpiObjectError::ResourceLimit };
@@ -938,6 +954,7 @@ SystemVerilogVpiObjectResult SystemVerilogVpiObjectRegistry::create(
             std::nullopt,
             false,
             { },
+            std::move(descriptor.name_prefix),
         });
     }
 
@@ -2083,7 +2100,9 @@ SystemVerilogVpiObjectError SystemVerilogVpiObjectRegistry::release(
         return SystemVerilogVpiObjectError::HasChildren;
     }
 
-    siblings_.erase(sibling_key(record.parent, record.name));
+    siblings_.erase(sibling_key(record.parent,
+        record.name_prefix.empty() ? record.name
+                                   : record.name_prefix + "." + record.name));
     record.value.reset();
     record.forced_value.reset();
     record.initial_value.reset();

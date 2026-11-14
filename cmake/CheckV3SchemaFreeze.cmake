@@ -132,14 +132,14 @@ fsim_require_schema_tokens(include/fsim/artifact/object.hpp
 fsim_require_schema_tokens(include/fsim/library/artifact.hpp
   "kFormatVersion = 8"
   "kPortableSchemaVersion = 16"
-  "kCompiledHirSchemaVersion = 3")
+  "kCompiledHirSchemaVersion = 6")
 fsim_require_schema_tokens(include/fsim/artifact/design.hpp
   "kDesignFormatVersion = 18")
 fsim_require_schema_tokens(include/fsim/app/design_artifact.hpp
   "kRuntimeStateSchema = 92"
   "kSemanticStateSchema = 4"
   "kDesignIrStateSchema = 7"
-  "kCompiledHirBundleSchema = 3"
+  "kCompiledHirBundleSchema = 6"
   "kSystemVerilogConstraintHirStateSchema = 19"
   "kSystemVerilogCoverageStateSchema = 7"
   "kSystemVerilogUvmStateSchema = 3"

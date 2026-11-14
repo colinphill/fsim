@@ -4,7 +4,6 @@
 // Lines starting with "#c " form the checked trace.
 #include "fsim/runtime/vhpi_abi.h"
 #include "fsim/runtime/vpi_abi.h"
-#include "vhpi_user.h"
 #include "vpi_user.h"
 
 FSIM_VPI_EXPORT void (*vlog_startup_routines[])(void) = { 0 };

@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_vhdl_hir_internal.hpp"
+#include "application_internal.hpp"
+#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/semantic/model.hpp"
+#include "fsim/semantic/vhdl_hir.hpp"
 
-#include <functional>
 
 namespace fsim::app::application_detail {
 namespace vh = semantic::vhdl;

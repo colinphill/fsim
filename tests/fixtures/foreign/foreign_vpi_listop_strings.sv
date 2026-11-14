@@ -3,7 +3,13 @@
 // array (IEEE 1800-2023 37.11 detail 1), parameters of a generate scope
 // declared with a typedef (37.28, 37.85), and value-change watches on a
 // string element of an unpacked array and on a string class property
-// (38.36.1).
+// (38.36.1); unpacked structure parameters whose type is spelled in place
+// or declared in a package (37.28, owner decision 2026-11-05).
+package lp_pkg;
+  typedef struct { int a; logic [7:0] b; } prec_t;
+  localparam prec_t PK = '{a: 9, b: 8'h21};
+endpackage
+
 module leaf(input logic [3:0] a, output logic y);
   assign y = ^a;
 endmodule
@@ -22,6 +28,9 @@ module top;
     localparam gint_t GP = 5;
     localparam int BP = 7;
   end
+
+  localparam struct { int a; logic [3:0] b; } RI = '{a: 4, b: 4'h6};
+  localparam int PKA = lp_pkg::PK.a;
 
   class Item;
     string label;

@@ -405,6 +405,11 @@ struct KInst {
 /// nine values (std_logic resolution: its value holds the four code planes,
 /// not the two of a SystemVerilog net).
 inline constexpr std::uint32_t net_nine_bit = 0x80000000U;
+/// The source count carries net_user_bit when the slot is a VHDL signal
+/// with a resolution function of the design's own (Slot::user): a VHDL
+/// assignment stores its source only, and the update phase runs the
+/// function over the sources (StaticKernel::resolve_user_slot).
+inline constexpr std::uint32_t net_user_bit = 0x40000000U;
 
 struct NetShape {
     std::uint32_t sources { };
@@ -413,6 +418,9 @@ struct NetShape {
     /// The resolved value has nine states (four code planes), resolved by
     /// the std_logic_1164 table over the sources that drive each element.
     bool nine { };
+    /// The slot is resolved by a resolution function of the design's own
+    /// (net_user_bit): generated code never resolves it.
+    bool user { };
 
     /// The planes of the slot's value, before its sources' planes.
     [[nodiscard]] std::uint32_t rows() const noexcept
@@ -421,13 +429,14 @@ struct NetShape {
     }
 };
 
-/// The shape of an immediate's source count (with net_nine_bit), the
+/// The shape of an immediate's source count (with net_nine_bit and
+/// net_user_bit), the
 /// member's source and the slot's width.
 [[nodiscard]] constexpr NetShape make_net_shape(const std::uint32_t counted,
     const std::uint32_t own, const std::uint32_t width) noexcept
 {
-    return NetShape { counted & ~net_nine_bit, own, width,
-        (counted & net_nine_bit) != 0U };
+    return NetShape { counted & ~(net_nine_bit | net_user_bit), own, width,
+        (counted & net_nine_bit) != 0U, (counted & net_user_bit) != 0U };
 }
 
 [[nodiscard]] inline std::optional<NetShape> net_shape(const KInst& inst) noexcept
@@ -512,6 +521,9 @@ struct SvaNativeProperty {
     bool overlapped { };
     /// sync_accept_on / sync_reject_on.
     bool synchronous { };
+    /// s_nexttime, s_always, s_eventually, s_until (16.12): a strong
+    /// operator, which a recursive plan's weak nexttime alone forwards past.
+    bool strong { };
     /// A multiclocked plan (16.13): the clock that flows into the property
     /// (semantic::sva::Property::clock).
     std::uint32_t clock { };
@@ -571,6 +583,8 @@ struct SvaNativePlan {
     friend bool operator==(const SvaNativePlan&, const SvaNativePlan&) = default;
 };
 
+inline constexpr std::uint32_t no_variable_store = 0xffffffffU;
+
 struct CompiledBody {
     std::vector<KInst> code;
     std::vector<kernel_word::Word> registers;
@@ -597,6 +611,23 @@ struct CompiledBody {
     /// VHDL: registers live at the entry (one bit each); only these must
     /// carry exact values from one activation to the next.
     std::vector<std::uint64_t> live_at_entry;
+    /// By instruction: the register of the VHDL variable (a debug local of
+    /// the member's program) it stores, or no_variable_store; empty in a
+    /// body that stores none. While the debug interface forces or watches a
+    /// variable of the member (StaticKernel::variable_hook_members_), every
+    /// executor reports these stores (StaticKernel::note_variable_store,
+    /// IEEE 1076-2019 22.5.2, 21.3.2.2).
+    std::vector<std::uint32_t> variable_stores;
+    /// By instruction: nonzero where a statement of a SystemVerilog member
+    /// begins (a debug point of the program, a no-op without the debug
+    /// plan) that may follow a store: its code-order predecessor stores a
+    /// signal or calls, or a jump enters it; empty in a body without any.
+    /// While an observer watches a signal, the writes of the statements
+    /// before reach the host there (StaticKernel::flush_debug_writes), so
+    /// each blocking assignment is its own value change, as the reference
+    /// reports it, and the stores of one continuous assignment's update one
+    /// change (IEEE 1800-2023 38.36.1).
+    std::vector<std::uint8_t> statement_starts;
     /// VHDL 'U' and weak tracking. A tracked register r has a shadow word at
     /// register shadow_base + r whose `a` marks its 'U' elements and, in a
     /// design with weak elements (`weak`), `b` its weak ones ('H', 'L', 'W',

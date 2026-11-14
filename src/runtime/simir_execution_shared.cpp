@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "simir_execution_shared.hpp"
 
-#include "fsim/runtime/systemverilog_string.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 
@@ -187,6 +186,13 @@ namespace fsim::runtime::simir {
         || operation_holds<TimeFormatControl>(operation)
         || operation_holds<EventTriggered>(operation)
         || operation_holds<EventAlias>(operation)
+        || [&] {
+               // A trigger or triggered state continues the process; a wait
+               // suspends it.
+               const auto* element = operation_get_if<EventArrayElement>(&operation);
+               return element != nullptr
+                   && element->operation != EventArrayOperation::wait;
+           }()
         || operation_holds<DisableBlock>(operation);
 }
 

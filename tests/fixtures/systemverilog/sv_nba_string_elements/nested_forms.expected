@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+sns start nested=n00,n01,n10 fx_of_q=f00,f10,f11 sl=s0,s1 as=kay
+sns same-step nested=n00,n01,n10 fx_of_q=f00,f10,f11 sl=s0,s1 as=kay
+sns next-step nested=n00,N01-x,N10 fx_of_q=f00,f10,F11 sl=s0,S1 as=kay
+sns members 2 1 i0,I1 K0
+sns direct i0,I1 K0 A0 c0
+sns after-delay nested=n00,N01-x,N10 fx_of_q=f00,f10,F11 sl=s0,S1 as=late

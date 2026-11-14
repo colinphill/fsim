@@ -1,13 +1,22 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "fsim/frontend/frontend.hpp"
 
+#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/diagnostic.hpp"
+#include "fsim/frontend/parser.hpp"
+#include "fsim/frontend/preprocessor.hpp"
+#include "fsim/frontend/source.hpp"
+#include "fsim/frontend/systemverilog_scalars.hpp"
+#include "fsim/frontend/token.hpp"
 #include <algorithm>
 #include <optional>
-#include <ranges>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
+#include <cstddef>
+#include <cstdint>
+#include <utility>
 
 namespace fsim::tests::frontend {
 
@@ -167,7 +176,7 @@ endmodule : \module
     const auto* leaf = parsed.design.find(
         UnitKind::VerilogModule, "conformance_leaf");
     const auto* escaped = parsed.design.find(
-        UnitKind::VerilogModule, "\\module");
+        UnitKind::VerilogModule, "\\module ");
     require(
         package != nullptr
             && package->parameters.size() == 3
@@ -203,7 +212,9 @@ endmodule : \module
     require(
         escaped != nullptr
             && escaped->ports.size() == 1
-            && escaped->ports.front().name == "\\wire"
+            // The escaped keyword keeps its backslash and one
+            // terminating space (IEEE 1800-2023 5.6.1).
+            && escaped->ports.front().name == "\\wire "
             && escaped->systemverilog_imports.size() == 1
             && escaped->instances.size() == 2,
         "CF-SV-DECL-001 escaped keyword identifiers retain exact spelling");
@@ -889,7 +900,13 @@ endmodule
     const auto recurrence_in_2009 = parse_verilog(
         SourceText {
             "recurrence-in-2009.sv",
-            "module recurrence_in_2009; logic clock; logic value; property p; @(posedge clock) eventually value; endproperty endmodule\n" },
+            "module recurrence_in_2009; logic clock; logic value; property p; @(posedge clock) s_eventually value; endproperty endmodule\n" },
+        StandardRevision::SystemVerilog2009);
+    // The weak eventually takes a bounded range (IEEE 1800-2023 16.12.13).
+    const auto unranged_eventually_2009 = parse_verilog(
+        SourceText {
+            "unranged-eventually-2009.sv",
+            "module unranged_eventually_2009; logic clock; logic value; property p; @(posedge clock) eventually value; endproperty endmodule\n" },
         StandardRevision::SystemVerilog2009);
     require(
         identifier_property_2005.ok(),
@@ -901,6 +918,10 @@ endmodule
     require(
         recurrence_in_2009.ok(),
         "SystemVerilog-2009 property operators do not consume same-spelled 2005 identifiers");
+    require(
+        !unranged_eventually_2009.ok()
+            && has_code(unranged_eventually_2009, "FSIM-SV-PARSE-305"),
+        "SystemVerilog-2009 rejects a weak eventually without a bounded range");
 
     const auto soft_identifier_2009 = parse_verilog(
         SourceText {

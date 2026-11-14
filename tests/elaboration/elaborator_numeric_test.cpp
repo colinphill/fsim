@@ -1,5 +1,22 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_test_support.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
+#include "fsim/elaboration/elaborator.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/parser.hpp"
+#include "fsim/frontend/token.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir.hpp"
+#include <algorithm>
+#include <array>
+#include <cassert>
+#include <cstddef>
+#include <iostream>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
 
 namespace fsim::tests::elaboration {
 
@@ -676,6 +693,40 @@ end architecture;
                 && diagnostic.message.find("later_port_t")
                     != std::string::npos;
         }));
+
+    // STD_LOGIC_VECTOR is a type of IEEE.STD_LOGIC_1164 (16.7): without a
+    // use clause that makes it visible the name denotes nothing (12.3,
+    // 12.4), whatever its spelling.
+    const auto invisible_ieee_type =
+        fsim::frontend::parse_text(
+            "invisible_ieee_type.vhd",
+            R"(
+entity invisible_ieee_type is
+end entity;
+
+architecture rtl of invisible_ieee_type is
+  subtype Word_T is std_logic_vector(3 downto 0);
+  signal word : Word_T;
+begin
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(invisible_ieee_type.ok());
+    const auto rejected_invisible_ieee_type =
+        compile_and_elaborate(
+            invisible_ieee_type.design,
+            "vhdl:work.invisible_ieee_type(rtl)");
+    assert(!rejected_invisible_ieee_type.ok());
+    if (!has_diagnostic(
+            rejected_invisible_ieee_type, "FSIM-ELAB-VHTYPE-001")) {
+      for (const auto& diagnostic :
+           rejected_invisible_ieee_type.diagnostics) {
+        std::cerr << diagnostic.code << ": "
+                  << diagnostic.message << '\n';
+      }
+    }
+    assert(has_diagnostic(
+        rejected_invisible_ieee_type, "FSIM-ELAB-VHTYPE-001"));
 
     const auto vhdl_enumeration_source =
         fsim::frontend::parse_text(

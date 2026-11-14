@@ -9,7 +9,6 @@
 #include <cstring>
 #include <iostream>
 #include <map>
-#include <ranges>
 #include <string>
 
 namespace {

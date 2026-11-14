@@ -1,0 +1,9 @@
+#c internal scopes iterator
+#c   [top.g[0]] type 134
+#c   [top.g[1]] type 134
+#c regs iterator
+#c   [top.plain] type 48
+#c   [top.\(.*|regex) ] type 48
+#c variables iterator
+#c   [top.plain] type 48
+#c   [top.\(.*|regex) ] type 48

@@ -2,7 +2,6 @@
 #include "fsim/frontend/coverage_limits.hpp"
 
 #include <algorithm>
-#include <ranges>
 #include <limits>
 #include <string>
 #include <utility>

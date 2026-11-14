@@ -2,6 +2,10 @@
 #include "fsim/systemc/kernel_backend_inventory.hpp"
 #include "fsim/systemc/kernel_backend_inventory_accellera.hpp"
 #include "sc_main_export.hpp"
+#include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/semantic/hierarchy_path.hpp"
+#include "fsim/systemc/kernel_backend_protocol.hpp"
+#include "fsim/systemc/kernel_backend_value_codec.hpp"
 
 #include <systemc>
 
@@ -9,7 +13,6 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
-#include <ranges>
 #include <string>
 #include <string_view>
 #include <utility>

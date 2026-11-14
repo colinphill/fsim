@@ -1,0 +1,90 @@
+#c line 31
+#c   type=39 op=67 name=- full=-
+#c   cast typespec=nib_t kind=641
+#c    value=0101
+#c     type=48 op=-1 name=a full=top.a size=8
+#c    value=11000101
+#c line 32
+#c   type=39 op=67 name=- full=-
+#c   cast typespec=e_t kind=633
+#c    value=01
+#c     type=7 op=-1 name=- full=- size=2
+#c    value=01
+#c line 33
+#c   type=39 op=67 name=- full=-
+#c   cast typespec=pair_t kind=638
+#c    value=11000101
+#c     type=48 op=-1 name=a full=top.a size=8
+#c    value=11000101
+#c line 34
+#c   type=39 op=67 name=- full=-
+#c   cast typespec=sb_t kind=640
+#c    value=10000101
+#c     type=48 op=-1 name=ax full=top.ax size=8
+#c    value=10x0z101
+#c line 35
+#c   type=48 op=-1 name=hi full=top.p.hi size=4
+#c    value=1100
+#c line 36
+#c   type=48 op=-1 name=y full=top.u.y size=4
+#c    value=1001
+#c line 37
+#c   type=39 op=62 name=- full=-
+#c    value=00000000000000000000000000000101
+#c     type=612 op=-1 name=i full=top.i size=32
+#c    value=00000000000000000000000000000101
+#c line 38
+#c   type=39 op=63 name=- full=-
+#c    value=00000000000000000000000000000110
+#c     type=612 op=-1 name=i full=top.i size=32
+#c    value=00000000000000000000000000000101
+#c line 39
+#c   type=39 op=64 name=- full=-
+#c    value=00000000000000000000000000000101
+#c     type=612 op=-1 name=i full=top.i size=32
+#c    value=00000000000000000000000000000101
+#c line 40
+#c   type=39 op=65 name=- full=-
+#c    value=00000000000000000000000000000100
+#c     type=612 op=-1 name=i full=top.i size=32
+#c    value=00000000000000000000000000000101
+#c line 41
+#c   type=39 op=71 name=- full=-
+#c    value=11000101
+#c     type=7 op=-1 name=- full=- size=32
+#c    value=00000000000000000000000000000001
+#c     type=48 op=-1 name=a full=top.a size=8
+#c    value=11000101
+#c line 42
+#c   type=39 op=72 name=- full=-
+#c    value=01011100
+#c     type=7 op=-1 name=- full=- size=32
+#c    value=00000000000000000000000000000100
+#c     type=48 op=-1 name=a full=top.a size=8
+#c    value=11000101
+#c line 43
+#c   type=39 op=72 name=- full=-
+#c    value=10100011
+#c     type=7 op=-1 name=- full=- size=32
+#c    value=00000000000000000000000000000001
+#c     type=48 op=-1 name=a full=top.a size=8
+#c    value=11000101
+#c line 44
+#c   type=39 op=72 name=- full=-
+#c    value=10x0z10111000101
+#c     type=7 op=-1 name=- full=- size=32
+#c    value=00000000000000000000000000001000
+#c     type=48 op=-1 name=a full=top.a size=8
+#c    value=11000101
+#c     type=48 op=-1 name=ax full=top.ax size=8
+#c    value=10x0z101
+#c alias type=646 line=24 lhs=top.n1 rhs=top.n3 parent=top
+#c alias type=646 line=24 lhs=top.n2 rhs=top.n3 parent=top
+#c formal v size=4 signed=0
+#c formal m size=4 signed=0
+#c term 0 dir=2
+#c   term value=0
+#c term 1 dir=1
+#c   term value=1
+#c term 2 dir=1
+#c   term value=0

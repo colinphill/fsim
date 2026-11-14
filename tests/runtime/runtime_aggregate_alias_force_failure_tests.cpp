@@ -2,6 +2,7 @@
 
 #include "../../src/runtime/simir_internal.hpp"
 #include "runtime_fused_staging_failure_support.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 
 #include <algorithm>
 #include <array>
@@ -12,7 +13,6 @@
 #include <new>
 #include <optional>
 #include <stdexcept>
-#include <utility>
 #include <vector>
 
 namespace fsim::runtime::simir {

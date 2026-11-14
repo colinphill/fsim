@@ -652,6 +652,14 @@ void VerilogParser::resolve_implicit_nets(DesignUnit& unit) {
   for (const auto& block : unit.systemverilog_clocking_blocks) {
     known.insert(block.name);
   }
+  // A concurrent assertion's label names it in the module scope: an
+  // assertion control task's list item (`$assertoff(0, a1)`, IEEE 1800-2023
+  // 20.11) names the assertion, not an implicit net (6.10).
+  for (const auto& assertion : unit.systemverilog_concurrent_assertions) {
+    if (!assertion.label.empty()) {
+      known.insert(assertion.label);
+    }
+  }
   // A type or callable name used as an operand (`$bits(word_t)`) is not
   // an implicit net (IEEE 1800-2017 6.10).
   for (const auto& alias : unit.type_aliases) {
@@ -1167,6 +1175,7 @@ DesignUnit VerilogParser::parse_module(
     active_package_imports_ = unit.systemverilog_imports;
     unit_package_import_count_ = active_package_imports_.size();
     unit.default_nettype = current_default_nettype_;
+    unit.default_decay_time = current_default_decay_time_;
     unit.is_cell = current_cell_define_;
     unit.systemverilog_extern = extern_declaration;
     if (language_ == Language::SystemVerilog2017) {
@@ -1438,6 +1447,13 @@ DesignUnit VerilogParser::parse_module(
             if (at(TokenKind::Identifier) && current().text == "disable") {
                 parse_default_disable(
                     unit.systemverilog_default_disable_tokens, default_start);
+                {
+                    const auto saved = diagnostics_.size();
+                    unit.systemverilog_default_disable_condition
+                        = assertion_expression(
+                            unit.systemverilog_default_disable_tokens);
+                    diagnostics_.resize(saved);
+                }
             } else if (!match_keyword("clocking")) {
                 error(
                     default_start,
@@ -1483,13 +1499,26 @@ DesignUnit VerilogParser::parse_module(
                 ? SystemVerilogAssertionDeclarationKind::Property
                 : SystemVerilogAssertionDeclarationKind::Checker;
             auto declaration = parse_assertion_declaration(declaration_start, assertion_kind);
-            const auto duplicate = std::ranges::any_of(
+            const auto existing = std::ranges::find_if(
                 unit.systemverilog_assertion_declarations,
-                [&](const SystemVerilogAssertionDeclaration& existing) {
+                [&](const SystemVerilogAssertionDeclaration& entry) {
                     return !declaration.name.empty()
-                        && existing.name == declaration.name;
+                        && entry.name == declaration.name;
                 });
-            if (duplicate) {
+            // A declaration of the design element hides one of the
+            // compilation unit with its name (3.12.1, 3.13).
+            const auto compilation_unit_copy
+                = existing != unit.systemverilog_assertion_declarations.end()
+                && std::ranges::any_of(compilation_unit_checkers_,
+                    [&](const SystemVerilogAssertionDeclaration& outer) {
+                        return outer.kind == existing->kind
+                            && outer.name == existing->name
+                            && outer.name_span == existing->name_span;
+                    });
+            if (compilation_unit_copy) {
+                *existing = std::move(declaration);
+            } else if (existing
+                != unit.systemverilog_assertion_declarations.end()) {
                 error(
                     declaration_start,
                     "FSIM-SV-SEM-192",
@@ -2086,6 +2115,7 @@ DesignUnit VerilogParser::parse_module(
         parameter.name = specparam.name;
         parameter.type = Type { ValueDomain::Integer, "implicit",
                                 std::nullopt, true };
+        parameter.type.implicit_type = true;
         parameter.default_value = specparam.value;
         parameter.local = true;
         parameter.span = specparam.span;

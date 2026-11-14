@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "simir_internal.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 
 #include <algorithm>
 #include <limits>
-#include <ranges>
 #include <utility>
 
 namespace fsim::runtime::simir {
@@ -21,7 +21,8 @@ namespace {
         && left.integer_upper == right.integer_upper
         && left.value_kind == right.value_kind
         && left.enumeration_literals == right.enumeration_literals
-        && left.systemverilog_scalar == right.systemverilog_scalar;
+        && left.systemverilog_scalar == right.systemverilog_scalar
+        && left.storage == right.storage;
 }
 
 [[nodiscard]] bool same_debug_string_local(
@@ -65,6 +66,7 @@ ProcessProgramTemplate::ProcessProgramTemplate(
     , debug_locals { process.debug_locals() }
     , call_results { process.call_results() }
     , frame_locals { process.frame_locals() }
+    , call_frames { process.call_frames() }
     , debug_string_locals { process.debug_string_locals() }
     , debug_container_locals { process.debug_container_locals() }
     , container_register_types { process.container_register_types() }
@@ -94,6 +96,7 @@ bool ProcessProgramTemplate::matches(
             call_results, process.call_results(), same_debug_local)
         && ranges_equal(
             frame_locals, process.frame_locals(), same_debug_local)
+        && call_frames == process.call_frames()
         && ranges_equal(debug_string_locals,
             process.debug_string_locals(), same_debug_string_local)
         && ranges_equal(debug_container_locals,
@@ -495,6 +498,11 @@ const std::vector<DebugLocal>& ProcessProgramView::frame_locals() const noexcept
     return facade_ != nullptr ? facade_->frame_locals : common_->frame_locals;
 }
 
+const CallFrameMap& ProcessProgramView::call_frames() const noexcept
+{
+    return facade_ != nullptr ? facade_->call_frames : common_->call_frames;
+}
+
 const std::vector<DebugStringLocal>&
 ProcessProgramView::debug_string_locals() const noexcept
 {
@@ -738,6 +746,7 @@ Process ProcessProgramView::materialize_impl(
     process.debug_locals = debug_locals();
     process.call_results = call_results();
     process.frame_locals = frame_locals();
+    process.call_frames = call_frames();
     process.debug_string_locals = debug_string_locals();
     process.debug_container_locals = debug_container_locals();
     process.container_register_types = container_register_types();
@@ -932,7 +941,9 @@ bool InterpreterProgramAccess::vhdl_resolver_program(
     return conversion || std::ranges::any_of(interpreter.impl_->vhdl_resolvers,
         [&](const auto& entry) {
             const auto& resolver = entry.second;
-            if (resolver.process == process) {
+            if (resolver.process == process
+                || (resolver.driving_resolver
+                    && resolver.driving_resolver->process == process)) {
                 return true;
             }
             return std::ranges::any_of(

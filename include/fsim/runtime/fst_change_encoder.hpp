@@ -5,7 +5,6 @@
 #include "fsim/runtime/trace_model.hpp"
 
 #include <cstddef>
-#include <cstdint>
 #include <memory>
 #include <span>
 

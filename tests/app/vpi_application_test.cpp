@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/vpi_control.hpp"
 #include "../../src/app/application_direct_read_map_cache.hpp"
 #include "fsim/artifact/coverage_database_codec.hpp"
 #include "fsim/frontend/coverage_point_identity.hpp"
@@ -476,16 +479,30 @@ endmodule
         && published_word_read.required_words == published_word.size()
         && published_word[0] == 0xc3U
         && published_word[1] == 0U);
+    // A word of a net array is a net (IEEE 1800-2023 37.17): a force holds
+    // its value, and the release returns it to the undriven net's deposited
+    // value (10.6.2, 38.34).
     fsim::runtime::SystemVerilogVpiStoredValue forced_word;
     forced_word.payload
         = fsim::runtime::PackedLogic4::from_msb_string("10100101");
+    const auto forced_value
+        = std::get<fsim::runtime::PackedLogic4>(forced_word.payload);
     assert(values.apply(word_two.value->handle,
                fsim::runtime::SystemVerilogVpiWriteKind::Force,
                forced_word)
-            == fsim::runtime::SystemVerilogVpiValueError::ReadOnly
-        && values.apply(word_two.value->handle,
+        == fsim::runtime::SystemVerilogVpiValueError::None);
+    std::array<std::uint64_t, 2U> forced_read { };
+    const auto forced_word_read = registry.read_value(
+        word_two.value->handle,
+        fsim::runtime::SystemVerilogVpiValueFormat::Logic4Vector,
+        { forced_read, { } });
+    assert(forced_word_read && forced_read[0] == 0xa5U
+        && forced_read[1] == 0U
+        && simulation.read_container_object(*object).elements.at(1U)
+            == forced_value);
+    assert(values.apply(word_two.value->handle,
                fsim::runtime::SystemVerilogVpiWriteKind::Release)
-            == fsim::runtime::SystemVerilogVpiValueError::NotForced
+            == fsim::runtime::SystemVerilogVpiValueError::None
         && simulation.read_container_object(*object).elements.at(1U)
             == deposited_value);
 

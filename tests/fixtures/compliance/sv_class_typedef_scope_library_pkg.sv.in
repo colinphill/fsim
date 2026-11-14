@@ -1,0 +1,22 @@
+// SPDX-License-Identifier: Apache-2.0
+// Compiled on its own before sv_class_typedef_scope_library.sv.
+package tsl_p;
+  class item;
+    int id;
+    function new(int i); id = i; endfunction
+  endclass
+  class registry #(int W = 4, type T = item);
+    static int count;
+    static logic [W-1:0] last;
+    static function void add(T obj, logic [W-1:0] tag);
+      count += obj.id;
+      last = tag;
+    endfunction
+    static function int width();
+      return W;
+    endfunction
+  endclass
+  typedef registry plain_registry;
+  typedef registry #(8) wide_registry;
+  typedef registry #(2, item) narrow_registry;
+endpackage

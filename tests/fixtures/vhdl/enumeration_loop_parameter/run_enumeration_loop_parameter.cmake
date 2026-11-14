@@ -10,6 +10,8 @@
 # compared) must equal enumeration_loop_parameter.expected, in several
 # workspace directories.
 
+include("${CMAKE_CURRENT_LIST_DIR}/../../../cmake/FsimTestWorkspace.cmake")
+
 if(NOT DEFINED FSIM_EXECUTABLE OR NOT EXISTS "${FSIM_EXECUTABLE}")
   message(FATAL_ERROR "FSIM_EXECUTABLE must name the built fsim command")
 endif()
@@ -49,7 +51,7 @@ foreach(workspace IN ITEMS a bb ccc dddd)
   string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef workspace_id)
   set(case_dir
     "${CMAKE_CURRENT_BINARY_DIR}/fsim-enumeration-loop-${workspace}-${workspace_id}")
-  file(MAKE_DIRECTORY "${case_dir}")
+  fsim_test_workspace("${case_dir}")
   configure_file("${FSIM_FIXTURE_DIR}/enumeration_loop_parameter.vhd"
     "${case_dir}/enumeration_loop_parameter.vhd" COPYONLY)
   run_fsim_step("${case_dir}" compile
@@ -70,3 +72,6 @@ foreach(workspace IN ITEMS a bb ccc dddd)
     endif()
   endforeach()
 endforeach()
+
+# Passed: remove this run's workspaces (a failure above keeps them).
+fsim_test_workspace_cleanup()

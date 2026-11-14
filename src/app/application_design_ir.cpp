@@ -27,7 +27,7 @@ namespace di = semantic::design;
 // An escaped identifier may contain the hierarchy separator, so a path with
 // one cannot be split at its last period (IEEE 1800-2023 5.6.1, 23.6). The
 // split is the end of the longest enclosing instance path, then the last
-// escaped component, then the plain rule.
+// separator outside an escaped component.
 [[nodiscard]] std::size_t escaped_leaf_start(
     const std::string_view path,
     const std::set<std::string, std::less<>>& instance_paths) {
@@ -38,15 +38,20 @@ namespace di = semantic::design;
       return end + 1U;
     }
   }
-  const auto escaped = path.rfind(".\\");
-  if (escaped != std::string_view::npos) {
-    return escaped + 1U;
+  // An escaped component runs to its terminating space (5.6.1), which the
+  // elaborated names keep; a period outside one separates components.
+  std::size_t start = 0U;
+  for (std::size_t at = 0U; at < path.size(); ++at) {
+    if (path[at] == '\\') {
+      at = path.find(' ', at);
+      if (at == std::string_view::npos) {
+        break;
+      }
+    } else if (path[at] == '.' || path[at] == '/') {
+      start = at + 1U;
+    }
   }
-  if (path.starts_with('\\')) {
-    return 0U;
-  }
-  const auto separator = path.find_last_of("./");
-  return separator == std::string_view::npos ? 0U : separator + 1U;
+  return start;
 }
 
 [[nodiscard]] bool owns_path(
@@ -1320,6 +1325,16 @@ class DesignIrBuilder final {
       output.id = id;
       output.specialization = specialization;
       output.source_process = source_id;
+      // An assertion process carries the identity of the concurrent
+      // assertion statement it was built from (IEEE 1800-2023 37.49).
+      if (source_id
+          && result_.specializations()[specialization.value()].language
+              == semantic::Language::system_verilog) {
+        if (const auto* const hir_process = semantic::find_by_id(
+                checked_.systemverilog_hir.processes(), *source_id)) {
+          output.assertion = hir_process->assertion;
+        }
+      }
       output.name = input.name();
       output.runtime_index = runtime_id;
       output.initialize = input.initialize();

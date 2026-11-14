@@ -5,6 +5,11 @@
 #include <utility>
 
 #if defined(_WIN32)
+// GetCurrentThreadStackLimits is declared for Windows 8 (0x0602) and later.
+#if !defined(_WIN32_WINNT) || _WIN32_WINNT < 0x0602
+#undef _WIN32_WINNT
+#define _WIN32_WINNT 0x0602
+#endif
 #include <windows.h>
 #else
 #include <pthread.h>

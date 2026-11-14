@@ -9,7 +9,6 @@
 #include <chrono>
 #include <limits>
 #include <optional>
-#include <stdexcept>
 
 namespace fsim::systemc {
 namespace {

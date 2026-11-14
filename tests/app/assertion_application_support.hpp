@@ -2,6 +2,9 @@
 #pragma once
 
 #include "fsim/app/application.hpp"
+#include "fsim/project/project.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir.hpp"
 
 #include <cstddef>
 #include <cstdint>

@@ -1,0 +1,30 @@
+#c t=0 cb pkg::pv actual=top.s16
+#c t=1 cb pkg::pl 165
+#c t=1 cb pkg::pu 42
+#c t=1 mid pl type=vpiReg full=pkg::pl scope=pkg:: size=8 typespec=vpiLogicTypespec value=165
+#c t=1 mid pm type=vpiEnumVar full=pkg::pm scope=pkg:: size=2 typespec=vpiEnumTypespec value=2
+#c t=1 mid pp type=vpiStructVar full=pkg::pp scope=pkg:: size=8 typespec=vpiStructTypespec value=60
+#c t=1 mid pr type=vpiRealVar full=pkg::pr scope=pkg:: size=64 typespec=vpiRealTypespec value=0
+#c t=1 mid pu type=vpiIntVar full=pkg::pu scope=pkg:: size=32 typespec=vpiIntTypespec value=42
+#c t=1 mid pv type=vpiVirtualInterfaceVar full=pkg::pv scope=pkg:: size=64 typespec=vpiInterfaceTypespec value=actual=top.s16
+#c t=1 mid pw type=vpiLongIntVar full=pkg::pw scope=pkg:: size=64 typespec=vpiLongIntTypespec value=4294967297
+#c t=1 mid px type=vpiIntVar full=pkg::px scope=pkg:: size=32 typespec=vpiIntTypespec value=3
+#c t=1 mid pa type=vpiRegArray full=pkg::pa scope=pkg:: size=2 typespec=vpiArrayTypespec value=array
+#c t=1 mid pq type=vpiRegArray full=pkg::pq scope=pkg:: size=1 typespec=vpiArrayTypespec value=array
+#c t=1 mid ps type=vpiStringVar full=pkg::ps scope=pkg:: size=0 typespec=vpiStringTypespec value=""
+#c t=1 vi pv type=vpiVirtualInterfaceVar full=pkg::pv scope=pkg:: size=64 typespec=vpiInterfaceTypespec value=actual=top.s16
+#c t=1 word pa[1] type=vpiBitVar full=pkg::pa[1] scope=pkg::pa size=32 typespec=vpiIntTypespec value=7
+#c t=2 cb pkg::px 9
+#c t=3 end pl type=vpiReg full=pkg::pl scope=pkg:: size=8 typespec=vpiLogicTypespec value=165
+#c t=3 end pm type=vpiEnumVar full=pkg::pm scope=pkg:: size=2 typespec=vpiEnumTypespec value=2
+#c t=3 end pp type=vpiStructVar full=pkg::pp scope=pkg:: size=8 typespec=vpiStructTypespec value=60
+#c t=3 end pr type=vpiRealVar full=pkg::pr scope=pkg:: size=64 typespec=vpiRealTypespec value=0
+#c t=3 end pu type=vpiIntVar full=pkg::pu scope=pkg:: size=32 typespec=vpiIntTypespec value=42
+#c t=3 end pv type=vpiVirtualInterfaceVar full=pkg::pv scope=pkg:: size=64 typespec=vpiInterfaceTypespec value=actual=top.s16
+#c t=3 end pw type=vpiLongIntVar full=pkg::pw scope=pkg:: size=64 typespec=vpiLongIntTypespec value=4294967297
+#c t=3 end px type=vpiIntVar full=pkg::px scope=pkg:: size=32 typespec=vpiIntTypespec value=9
+#c t=3 end pa type=vpiRegArray full=pkg::pa scope=pkg:: size=2 typespec=vpiArrayTypespec value=array
+#c t=3 end pq type=vpiRegArray full=pkg::pq scope=pkg:: size=1 typespec=vpiArrayTypespec value=array
+#c t=3 end ps type=vpiStringVar full=pkg::ps scope=pkg:: size=0 typespec=vpiStringTypespec value=""
+#c t=3 vi pv type=vpiVirtualInterfaceVar full=pkg::pv scope=pkg:: size=64 typespec=vpiInterfaceTypespec value=actual=top.s16
+#c t=3 word pa[1] type=vpiBitVar full=pkg::pa[1] scope=pkg::pa size=32 typespec=vpiIntTypespec value=7

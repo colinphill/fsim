@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "../../src/app/application_internal.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/semantic/systemverilog_hir.hpp"
+#include "fsim/semantic/compiled_design.hpp"
+#include "fsim/elaboration/elaborator.hpp"
 #include "../../src/app/application_workspace_internal.hpp"
 
 #include "fsim/app/design_artifact.hpp"

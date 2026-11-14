@@ -1,5 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "verilog_parser_internal.hpp"
+#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/token.hpp"
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace fsim::frontend {
 
@@ -58,8 +68,53 @@ std::vector<Sensitivity> VerilogParser::parse_sensitivity() {
            "FSIM-SV-PARSE-015");
     return sensitivities;
   }
+  // `( event_expression )` (IEEE 1800-2023 A.6.5): a parenthesized
+  // operand is an event expression, not an expression, when it starts
+  // with an edge or holds a top-level `or`, `,` or `iff`.
+  const auto parenthesized_event = [&](std::size_t lookahead) {
+    if (!at(TokenKind::LeftParen, lookahead)) {
+      return false;
+    }
+    std::size_t depth { };
+    for (auto index = lookahead + 1U;; ++index) {
+      const auto& token = current(index);
+      if (token.kind == TokenKind::EndOfFile) {
+        return false;
+      }
+      if (depth == 0U && index == lookahead + 1U
+          && (keyword("posedge", index) || keyword("negedge", index)
+              || keyword("edge", index))) {
+        return true;
+      }
+      if (token.kind == TokenKind::LeftParen
+          || token.kind == TokenKind::LeftBracket
+          || token.kind == TokenKind::LeftBrace) {
+        ++depth;
+        continue;
+      }
+      if (token.kind == TokenKind::RightParen
+          || token.kind == TokenKind::RightBracket
+          || token.kind == TokenKind::RightBrace) {
+        if (depth == 0U) {
+          return false;
+        }
+        --depth;
+        continue;
+      }
+      if (depth == 0U
+          && (token.kind == TokenKind::Comma || keyword("or", index)
+              || keyword("iff", index))) {
+        return true;
+      }
+    }
+  };
   std::size_t terms { };
+  std::size_t nesting { };
   while (!at_end() && !at(TokenKind::RightParen)) {
+    while (parenthesized_event(0U)) {
+      advance();
+      ++nesting;
+    }
     EdgeKind edge = EdgeKind::Any;
     // `edge e` is `posedge e or negedge e` (IEEE 1800-2017 9.4.2).
     bool both_edges = false;
@@ -71,6 +126,64 @@ std::vector<Sensitivity> VerilogParser::parse_sensitivity() {
         && match_keyword("edge")) {
       edge = EdgeKind::Positive;
       both_edges = true;
+    }
+    // `@(s(actuals))` waits for an end point of a sequence instance (IEEE
+    // 1800-2023 9.4.2.4); its actuals may be event expressions or
+    // sequences (16.8), which no function call takes. Keep the instance's
+    // tokens for the end-point resolution; a term whose actuals are not
+    // expressions is a sequence instance, the others parse as calls first.
+    if (const auto order = systemverilog_source_order();
+        order != 0U && edge == EdgeKind::Any
+        && at(TokenKind::Identifier) && at(TokenKind::LeftParen, 1)) {
+      std::size_t depth { };
+      std::size_t close { 1U };
+      bool sequence_only { };
+      for (;; ++close) {
+        const auto& token = current(close);
+        if (token.kind == TokenKind::EndOfFile) {
+          break;
+        }
+        if (token.kind == TokenKind::LeftParen) {
+          ++depth;
+        } else if (token.kind == TokenKind::RightParen && --depth == 0U) {
+          break;
+        } else if (keyword("posedge", close) || keyword("negedge", close)
+            || keyword("edge", close) || keyword("iff", close)
+            || keyword("or", close) || keyword("and", close)
+            || keyword("intersect", close) || keyword("within", close)
+            || keyword("throughout", close) || keyword("first_match", close)
+            || token.kind == TokenKind::Hash) {
+          sequence_only = true;
+        }
+      }
+      if (current(close).kind == TokenKind::RightParen) {
+        std::vector<Token> instance;
+        for (std::size_t index = 0; index <= close; ++index) {
+          instance.push_back(current(index));
+        }
+        if (sequence_only) {
+          Sensitivity sensitivity;
+          sensitivity.span = instance.front().span;
+          sensitivity.span.end = instance.back().span.end;
+          sensitivity.signal = instance.front().text;
+          sensitivity.systemverilog_source_order = order;
+          for (std::size_t index = 0; index <= close; ++index) {
+            advance();
+          }
+          sensitivity.guard = parse_guard();
+          ++terms;
+          sva_event_instances_[order] = { std::move(instance), true };
+          sensitivities.push_back(std::move(sensitivity));
+          while (nesting > 0U && match(TokenKind::RightParen)) {
+            --nesting;
+          }
+          if (match(TokenKind::Comma) || match_keyword("or")) {
+            continue;
+          }
+          break;
+        }
+        sva_event_instances_[order] = { std::move(instance), false };
+      }
     }
     auto expression = parse_expression();
     auto guard = parse_guard();
@@ -93,6 +206,9 @@ std::vector<Sensitivity> VerilogParser::parse_sensitivity() {
       }
       sensitivities.push_back(std::move(rising));
       sensitivities.push_back(std::move(falling));
+      while (nesting > 0U && match(TokenKind::RightParen)) {
+        --nesting;
+      }
       if (match(TokenKind::Comma) || match_keyword("or")) {
         continue;
       }
@@ -126,10 +242,17 @@ std::vector<Sensitivity> VerilogParser::parse_sensitivity() {
       sensitivity.expression = std::move(expression);
     }
     sensitivities.push_back(std::move(sensitivity));
+    while (nesting > 0U && match(TokenKind::RightParen)) {
+      --nesting;
+    }
     if (match(TokenKind::Comma) || match_keyword("or")) {
       continue;
     }
     break;
+  }
+  for (; nesting > 0U; --nesting) {
+    expect(TokenKind::RightParen, "')' after a parenthesized event expression",
+           "FSIM-SV-PARSE-016");
   }
   expect(TokenKind::RightParen, "')' after sensitivity list",
          "FSIM-SV-PARSE-016");

@@ -1,13 +1,26 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_test_support.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
+#include "fsim/elaboration/elaborator.hpp"
+#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/parser.hpp"
+#include "fsim/frontend/token.hpp"
+#include "fsim/runtime/logic.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_ids.hpp"
 
 #include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <optional>
 #include <string>
-#include <variant>
 #include <vector>
+#include <cassert>
+#include <cstdint>
+#include <string_view>
+#include <utility>
 
 namespace fsim::tests::elaboration {
 
@@ -2242,7 +2255,6 @@ module container_invalid_lowering;
         fixed.find(entry) with (entry == entry.index);
     result = fixed.find() with (item);
     fixed.find() with (identity(item) > 0);
-    lookup[0] <= 1;
     dynamic.delete(0);
     dynamic.insert(0, 1);
     fixed.delete();
@@ -2312,8 +2324,6 @@ endmodule
     assert(has_diagnostic(
         rejected, "FSIM-ELAB-SVCONTAINER-019"));
     assert(has_diagnostic(
-        rejected, "FSIM-ELAB-SVCONTAINER-009"));
-    assert(has_diagnostic(
         rejected, "FSIM-ELAB-SVCONTAINER-020"));
     assert(has_diagnostic(
         rejected, "FSIM-ELAB-SVCONTAINER-021"));
@@ -2342,6 +2352,53 @@ endmodule
         oversized_parsed.design, "oversized_predicate");
     // A predicate beyond the bounded graph runs as an element loop.
     assert(oversized_rejected.ok());
+
+    // A nonblocking assignment to an element of an associative array lowers
+    // (IEEE 1800-2023 7.8, 10.4.2).
+    const auto associative_nonblocking = fsim::frontend::parse_text(
+        "associative-nonblocking.sv",
+        R"(
+module associative_nonblocking;
+  int lookup[int];
+  initial begin
+    lookup[0] <= 1;
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(associative_nonblocking.ok());
+    const auto associative_nonblocking_elaborated = compile_and_elaborate(
+        associative_nonblocking.design, "associative_nonblocking");
+    assert(associative_nonblocking_elaborated.ok());
+
+    // So does one to a numeric element of a string-keyed associative array
+    // and one to a whole structure or container element (7.2, 7.5, 10.4.2).
+    const auto element_nonblocking = fsim::frontend::parse_text(
+        "element-nonblocking.sv",
+        R"(
+module element_nonblocking;
+  typedef struct { int a; int b; } pair_t;
+  int keyed[string];
+  pair_t pairs[$];
+  pair_t other;
+  int rows[][];
+  int lists[int][$];
+  int items[$];
+  initial begin
+    keyed["k"] <= 1;
+    keyed["j"] <= #1 2;
+    pairs[0] <= '{a:1, b:2};
+    pairs[1] <= other;
+    rows[0] <= '{1, 2, 3};
+    lists[2] <= items;
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(element_nonblocking.ok());
+    const auto element_nonblocking_elaborated = compile_and_elaborate(
+        element_nonblocking.design, "element_nonblocking");
+    assert(element_nonblocking_elaborated.ok());
 
     const auto invalid_slices = fsim::frontend::parse_text(
         "static-slice-invalid.sv",

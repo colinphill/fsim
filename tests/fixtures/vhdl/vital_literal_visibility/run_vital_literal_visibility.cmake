@@ -10,6 +10,8 @@
 # VITAL_MEMORY use clause, and must give the same reports. A literal that fits
 # two overloads (`?? '1'`: BIT's and STD_ULOGIC's) is ambiguous (12.5).
 
+include("${CMAKE_CURRENT_LIST_DIR}/../../../cmake/FsimTestWorkspace.cmake")
+
 if(NOT DEFINED FSIM_EXECUTABLE OR NOT EXISTS "${FSIM_EXECUTABLE}")
   message(FATAL_ERROR "FSIM_EXECUTABLE must name the built fsim command")
 endif()
@@ -48,7 +50,7 @@ endfunction()
 function(check_variant VARIANT SOURCE)
   string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef workspace_id)
   set(case_dir "${CMAKE_CURRENT_BINARY_DIR}/fsim-vital-literals-${VARIANT}-${workspace_id}")
-  file(MAKE_DIRECTORY "${case_dir}")
+  fsim_test_workspace("${case_dir}")
   file(WRITE "${case_dir}/vital_literal_visibility.vhd" "${SOURCE}")
   run_fsim_step("${case_dir}" compile compile -q --standard 2008 vital_literal_visibility.vhd)
   run_fsim_step("${case_dir}" elaborate elaborate -q work.top --no-aot)
@@ -87,7 +89,7 @@ check_variant(without_vital "${without_vital}")
 function(expect_ambiguous NAME USE_CLAUSES BODY)
   string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef workspace_id)
   set(case_dir "${CMAKE_CURRENT_BINARY_DIR}/fsim-vital-literals-${NAME}-${workspace_id}")
-  file(MAKE_DIRECTORY "${case_dir}")
+  fsim_test_workspace("${case_dir}")
   file(WRITE "${case_dir}/ambiguous.vhd" "library ieee;
 use ieee.std_logic_1164.all;
 ${USE_CLAUSES}
@@ -129,3 +131,6 @@ expect_ambiguous(condition_plain "" "b := ?? '1';")
 expect_ambiguous(to_x01_vital "use ieee.vital_memory.all;"
   "report to_string(to_x01('1'));")
 expect_ambiguous(to_x01_plain "" "report to_string(to_x01('1'));")
+
+# Passed: remove this run's workspaces (a failure above keeps them).
+fsim_test_workspace_cleanup()

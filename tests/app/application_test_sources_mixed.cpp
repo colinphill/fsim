@@ -27,7 +27,7 @@ assertion_source = directory / "assertion.vhd";
 {
   std::ofstream output(assertion_source);
   output << R"(
-entity assertion_test is
+library ieee; use ieee.std_logic_1164.all; entity assertion_test is
 end entity;
 architecture rtl of assertion_test is
   signal trigger : std_logic;
@@ -116,7 +116,7 @@ mixed_actual_vhdl_top_source =
 {
   std::ofstream output(mixed_actual_vhdl_top_source);
   output << R"(
-entity mixed_actual_vhdl_top is
+library ieee; use ieee.numeric_std.all; entity mixed_actual_vhdl_top is
 end entity;
 
 architecture rtl of mixed_actual_vhdl_top is
@@ -275,7 +275,7 @@ package generated_math is
   constant selected_value : natural := bias + 1;
 end package;
 
-entity generated_behavior_vhdl is
+library ieee; use ieee.numeric_std.all; entity generated_behavior_vhdl is
   generic (
     enabled : boolean := true
   );
@@ -389,7 +389,7 @@ begin
 end generate chosen;
 end architecture;
 
-entity generated_loop_declarations_vhdl is
+library ieee; use ieee.numeric_std.all; entity generated_loop_declarations_vhdl is
   port (
     observed : out unsigned(3 downto 0)
   );
@@ -427,7 +427,7 @@ begin
   end generate lanes;
 end architecture;
 
-entity generated_range_behavior_vhdl is
+library ieee; use ieee.numeric_std.all; entity generated_range_behavior_vhdl is
   generic (
     mode : integer := 6
   );
@@ -466,7 +466,7 @@ package generated_choice_types is
   type state_t is (idle, ready, 'Z', done);
 end package;
 use work.generated_choice_types.all;
-entity generated_enum_behavior_vhdl is
+library ieee; use ieee.numeric_std.all; entity generated_enum_behavior_vhdl is
   generic (mode : state_t := 'Z');
   port (observed : out unsigned(3 downto 0));
 end entity;
@@ -618,7 +618,7 @@ begin
   end block static_scope;
 end architecture;
 
-entity generated_block_interface_vhdl is
+library ieee; use ieee.numeric_std.all; entity generated_block_interface_vhdl is
   port (
     observed : out unsigned(3 downto 0);
     default_observed : out unsigned(3 downto 0)
@@ -708,21 +708,43 @@ begin
   end block nonvalue_scope;
 end architecture;
 
-entity generated_guarded_behavior_vhdl is
+-- Guarded concurrent assignments (IEEE 1076-2019 11.6): the drivers of
+-- the guarded bus ports and of the guarded register disconnect while GUARD
+-- is false (11.6 d, 7.4: no disconnection specification, so after 0 ns),
+-- and a bus with only its base driver connected is '1'; the register keeps
+-- its value with no driver connected (14.7.3.2). kept_value is not a
+-- guarded signal, so its guarded driver is never disconnected and it keeps
+-- the last value driven. conditional_drive and selected_drive are written
+-- as the equivalent processes of guarded conditional and selected
+-- assignments (11.6) whose selector-'0' branch is a sequential null
+-- transaction (10.5.2.2; a null waveform element in a concurrent signal
+-- assignment is an error, 11.6): it disconnects their drivers 1 ns later,
+-- and a false GUARD disconnects them at once.
+--   0 ns: GUARD false: s, c, sel '1'; kept 'U' ('1' with the driver's
+--     initial 'U'); held 'U'.
+--   2 ns: the guarded drivers' '0' (enabled at 1 ns): s, c, sel, kept 'X'
+--     ('1' against '0'), held '0'. 3 ns: active_sample XXXX0.
+--   4 ns: c and sel disconnected: '1'. 5 ns: selection_sample X11X0;
+--     GUARD false: s '1', kept 'X', held '0'. 6 ns: final_sample 111X0.
+library ieee; use ieee.std_logic_1164.all; entity generated_guarded_behavior_vhdl is
   port (
     observed : out boolean;
-    simple_value, conditional_value, selected_value : out std_logic;
-    active_sample, selection_sample : out std_logic_vector(2 downto 0)
+    simple_value, conditional_value, selected_value : out std_logic bus;
+    kept_value : out std_logic;
+    active_sample, selection_sample, final_sample
+      : out std_logic_vector(4 downto 0)
   );
 end entity;
 
 architecture rtl of generated_guarded_behavior_vhdl is
   signal enabled : boolean;
   signal selector, source : std_logic;
+  signal held : std_logic register;
 begin
   simple_base: simple_value <= '1';
   conditional_base: conditional_value <= '1';
   selected_base: selected_value <= '1';
+  kept_base: kept_value <= '1';
   stimulus: process
   begin
     enabled <= false;
@@ -731,23 +753,48 @@ begin
     wait for 1 ns;
     enabled <= true;
     wait for 2 ns;
-    active_sample <= simple_value & conditional_value & selected_value;
+    active_sample <= simple_value & conditional_value & selected_value
+      & kept_value & held;
     selector <= '0';
     wait for 2 ns;
-    selection_sample <= simple_value & conditional_value & selected_value;
+    selection_sample <= simple_value & conditional_value & selected_value
+      & kept_value & held;
     enabled <= false;
-    wait for 2 ns;
+    wait for 1 ns;
+    final_sample <= simple_value & conditional_value & selected_value
+      & kept_value & held;
+    wait for 1 ns;
     wait;
   end process;
   guarded_scope: block (enabled) is
   begin
     observed <= guard;
     simple_drive: simple_value <= guarded transport source after 1 ns;
-    conditional_drive: conditional_value <= guarded transport
-      source after 1 ns when selector = '1' else null after 1 ns;
-    selected_drive: with selector select
-      selected_value <= guarded transport
-        source after 1 ns when '1', null after 1 ns when others;
+    conditional_drive: process (guard, selector, source)
+    begin
+      if guard then
+        if selector = '1' then
+          conditional_value <= transport source after 1 ns;
+        else
+          conditional_value <= transport null after 1 ns;
+        end if;
+      else
+        conditional_value <= null;
+      end if;
+    end process;
+    selected_drive: process (guard, selector, source)
+    begin
+      if guard then
+        case selector is
+          when '1' => selected_value <= transport source after 1 ns;
+          when others => selected_value <= transport null after 1 ns;
+        end case;
+      else
+        selected_value <= null;
+      end if;
+    end process;
+    kept_drive: kept_value <= guarded transport source after 1 ns;
+    held_drive: held <= guarded transport source after 1 ns;
   end block guarded_scope;
 end architecture;
 )";

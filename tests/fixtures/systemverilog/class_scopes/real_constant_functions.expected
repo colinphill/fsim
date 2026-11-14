@@ -1,0 +1,5 @@
+half 2.50 2.50 2.50
+poly 10.00 from_int 3.00 chain 9.00
+narrow 0.100000001
+rounded 3 unit 10 rtoi 4
+same 1 1 1

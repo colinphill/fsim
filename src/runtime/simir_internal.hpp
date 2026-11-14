@@ -3,19 +3,18 @@
 
 #include "fsim/runtime/simir.hpp"
 #include "fsim/runtime/simir_coverage.hpp"
-#include "fsim/runtime/output_format.hpp"
 #include "simir_cohort_snapshot_pool.hpp"
 #include "simir_driver_table.hpp"
 #include "simir_signal_storage.hpp"
 #include "simir_process_storage.hpp"
 #include "simir_process_program.hpp"
 #include "simir_operation_kinds.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 #include "fsim/runtime/sva_engine.hpp"
 #include <deque>
 
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <bitset>
 #include <cstddef>
 #include <cctype>
@@ -24,16 +23,40 @@
 #include <limits>
 #include <map>
 #include <memory>
-#include <new>
 #include <set>
-#include <source_location>
 #include <span>
 #include <stdexcept>
-#include <sstream>
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include "fsim/runtime/output_format.hpp"
+#include "fsim/runtime/constraint_solver.hpp"
+#include "fsim/runtime/file_operations.hpp"
+#include "fsim/runtime/logic.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir_class.hpp"
+#include "fsim/runtime/simir_container_value.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include "fsim/runtime/simir_operation_storage.hpp"
+#include "fsim/runtime/simir_operations_extended.hpp"
+#include "fsim/runtime/simir_randomize.hpp"
+#include "fsim/runtime/simir_signal_queries.hpp"
+#include "fsim/runtime/simir_vital.hpp"
+#include "fsim/support/rare_vector.hpp"
+#include <atomic>
+#include <new>
+#include <source_location>
+#include <sstream>
+#include <cstdint>
+#include <filesystem>
+#include <functional>
+#include <iterator>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
 
 namespace fsim::runtime::simir {
 
@@ -1443,7 +1466,20 @@ struct Interpreter::Impl : SchedulerBatchTask {
         SimulationTick time { };
         Logic9 value { Logic9::x };
         ScheduledTaskHandle handle;
+        // A null transaction of a bus (1) or register (2) driver
+        // (ProjectedWaveformValue::null); `value` is not used.
+        std::uint8_t null { };
     };
+    // Whether two transactions have the same value component for inertial
+    // pulse rejection (IEEE 1076-2019 10.5.2.2): two null transactions do,
+    // a null and a value transaction do not.
+    [[nodiscard]] static bool same_projected_value(
+        const ProjectedTransaction& left,
+        const ProjectedTransaction& right) noexcept
+    {
+        return left.null == right.null
+            && (left.null != 0U || left.value == right.value);
+    }
 
     struct ProjectedDriverState {
         std::vector<ProjectedTransaction> transactions;
@@ -1622,10 +1658,30 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::set<std::pair<SignalId, ProcessId>> vhdl_disconnected_drivers;
     // The times of the null transactions a driver still has to apply, by
     // signal and process (IEEE 1076-2019 10.5.2.2): added by
-    // schedule_vhdl_disconnect, removed when DriverDisconnect applies one.
-    // They only serve the projected-waveform read (driver_transactions).
+    // schedule_vhdl_disconnect (a foreign library's disconnection), removed
+    // when DriverDisconnect applies one
+    // or a later assignment of the driver deletes one
+    // (schedule_projected_waveform): a DriverDisconnect whose time is no
+    // longer listed does nothing. The projected-waveform read
+    // (driver_transactions) lists them too.
     std::map<std::pair<SignalId, ProcessId>, std::vector<SimulationTick>>
         vhdl_pending_disconnects;
+    // The scalar subelements of nine-state guarded signals whose drivers a
+    // null transaction disconnected (IEEE 1076-2019 10.5.2.2, 14.7.2), by
+    // signal and process, one entry per element of the signal: 0 connected,
+    // 1 disconnected from a bus, 2 from a register (6.4.2.3). A disconnected
+    // element is no source of the signal; with none connected a bus element
+    // is 'Z' (the std_logic resolution of no sources) and a register element
+    // keeps its value (14.7.3.2). A value transaction reconnects the
+    // element; a process whose elements are all connected again leaves the
+    // map, and a signal with no such process does too.
+    std::map<SignalId, std::map<ProcessId, std::vector<std::uint8_t>>>
+        vhdl_null_elements;
+    // The value the kernel holds for a kernel-owned signal of
+    // vhdl_null_elements when it publishes the signal's sources
+    // (StaticKernel::publish_net_sources): the value an element with no
+    // connected source keeps, as the host's own does (driven_values).
+    std::map<SignalId, PackedLogic4> vhdl_null_kept;
     // Drivers a foreign architecture created at run time (IEEE 1076-2019
     // 23.6) for a user-resolved signal, in creation order: sources of the
     // signal after resolver.drivers (14.7.3.2). Empty without a foreign
@@ -2156,6 +2212,46 @@ struct Interpreter::Impl : SchedulerBatchTask {
     ForceStatementHook force_statement_hook;
     SignalTransactionHook signal_transaction_hook;
     DriverTransactionHook driver_transaction_hook;
+    /// The forced bits and watches of debug locals (force_debug_local,
+    /// watch_debug_local), by the process that holds the local's register
+    /// (a kernel member's process on v4) and the register: every executor
+    /// passes a store to the register of a process with an entry
+    /// (debug_local_hooked) to apply_debug_local_forces and
+    /// report_debug_local_value (IEEE 1076-2019 21.3.2.2, 22.5.2).
+    struct DebugLocalHook {
+        ProcessId owner { };
+        RegisterId reg { };
+        ProcessId process { };
+        std::size_t local { };
+        /// The forced value (the local's width) and its forced bit ranges.
+        PackedLogic4 forced;
+        std::vector<std::pair<std::size_t, std::size_t>> forced_ranges;
+        /// The number of watches (watch_debug_local), each of a callback.
+        std::size_t watchers { };
+        /// The value a watcher last saw.
+        std::optional<PackedLogic4> seen;
+    };
+    std::vector<DebugLocalHook> debug_local_hooks;
+    /// Per process, nonzero while it holds a hooked register.
+    std::vector<std::uint8_t> debug_local_hooked;
+    DebugLocalChangeHook debug_local_change_hook;
+    /// A store gave `owner`'s register `reg` the value `value`: puts its
+    /// forced bits back into `value` and returns whether that changed it
+    /// (the caller then writes it to the register).
+    bool apply_debug_local_forces(ProcessId owner, RegisterId reg,
+        PackedLogic4& value);
+    /// The register holds `value` after a store: reports it to the change
+    /// hook when it is watched and differs from the value seen last.
+    void report_debug_local_value(ProcessId owner, RegisterId reg,
+        const PackedLogic4& value);
+    /// While driver_transaction_hook is installed: the bits (offset, width)
+    /// of its signal each process's staged updates write, until the update
+    /// phase that commits them reports them. A driver is one scalar
+    /// subelement's (IEEE 1076-2019 14.7.2): a transaction on part of a
+    /// composite signal is one of the drivers of that part only.
+    std::map<std::pair<ProcessId, SignalId>,
+        std::vector<std::pair<std::uint32_t, std::uint32_t>>>
+        staged_driver_transactions;
     ContainerObjectChangeHook container_object_change_hook;
     ContainerElementChangeHook container_element_change_hook;
     ScalarSignalChangeHook scalar_signal_change_hook;
@@ -2207,6 +2303,15 @@ struct Interpreter::Impl : SchedulerBatchTask {
     ClassPropertyReadHook class_property_read_hook;
     ClassPropertyWriteHook class_property_write_hook;
     ClassPropertyContainerHook class_property_container_hook;
+    // Set only while an embedder callback watches the elements of an
+    // object's array property (Interpreter::set_class_container_watched_hook).
+    ClassContainerWatchedHook class_container_watched_hook;
+    [[nodiscard]] bool class_container_watched(
+        const std::uint64_t handle, const std::string_view identity) const
+    {
+        return class_container_watched_hook
+            && class_container_watched_hook(handle, identity);
+    }
     ClassMethodCallContextHook class_method_call_context_hook;
     ClassStaticPropertyReadHook class_static_property_read_hook;
     ClassStaticPropertyWriteHook class_static_property_write_hook;
@@ -2239,6 +2344,10 @@ struct Interpreter::Impl : SchedulerBatchTask {
     bool has_bidirectional_switches { };
     bool switch_refreshing { };
     bool started { };
+    // start_holding_time_zero(): started, with the time-zero processes not
+    // yet queued; the processes whose static waits were armed meanwhile.
+    bool hold_time_zero { };
+    std::vector<bool> held_prearmed_static_waits;
     /// Builds a fresh interpreter of the same design, configured as this one
     /// was before start; reset_run_state() takes the time-zero image from it
     /// (IEEE 1800-2023 D.8). Empty when the embedder cannot reset.
@@ -2302,6 +2411,9 @@ struct Interpreter::Impl : SchedulerBatchTask {
     bool start_in_progress { };
     /// Interpreter::start_for_restore(): start() builds the tables only.
     bool start_restoring { };
+    /// Runs at the end of static initialization inside start(): the start of
+    /// the time-zero cycle (installed by the embedder).
+    std::function<void()> start_of_simulation_hook;
     bool package_static_initialization_active { };
     ProcessId package_static_initialization_process {
         std::numeric_limits<ProcessId>::max()
@@ -2772,6 +2884,28 @@ struct Interpreter::Impl : SchedulerBatchTask {
         const PackedLogic4& value, const std::optional<PackedLogic4>& base,
         std::vector<PackedLogic4> level_indices,
         const NonblockingSink& nonblocking_sink = { });
+    // A string element write of a container object (WriteContainerObjectString);
+    // `index_text` is the captured key of a string-keyed array.
+    // The index of each level and of the leaf (the last entry), as a packed
+    // value or, for a string key, text; and the new element value.
+    struct StringElementCapture {
+        std::vector<PackedLogic4> indices;
+        std::vector<std::string> texts;
+        std::string value;
+        // The packed or container value of a WriteContainerObjectString of
+        // another source kind.
+        PackedLogic4 packed;
+        ContainerValue container;
+    };
+    void write_object_string_element(
+        const WriteContainerObjectString& operation,
+        ProcessSchedulingDomain process_domain, ProcessId driver,
+        InstructionIndex instruction, const StringElementCapture& capture,
+        const NonblockingSink& nonblocking_sink = { });
+    void write_container_object_string_element_value(
+        const WriteContainerObjectString& operation, ProcessId driver,
+        InstructionIndex instruction, const StringElementCapture& capture,
+        SignalChangeOrigin origin);
     void write_container_object_member_value(
         ContainerObjectId id,
         const PackedLogic4& index,
@@ -2946,6 +3080,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
     void execute_container(ProcessState&, const WriteContainerObjectElement&);
     void execute_container(ProcessState&, const ContainerStringRead&);
     void execute_container(ProcessState&, const ContainerStringWrite&);
+    void execute_container(ProcessState&, const WriteContainerObjectString&);
     void execute_container(ProcessState&, const FormatContainerPattern&);
     void execute_container(ProcessState&, const ContainerElementRead&);
     void execute_container(ProcessState&, const ContainerElementWrite&);
@@ -3318,8 +3453,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
     [[nodiscard]] const char* run_class_operation(ContainerRegisterAccess&,
         const ClassPropertyContainerWrite&);
     // A method call (8.6) or static method or DPI function call (8.10,
-    // 35.5) for `process`, its actuals written back. A VHDL driver
-    // disconnection is the caller's (try_vhdl_disconnect_call).
+    // 35.5) for `process`, its actuals written back.
     [[nodiscard]] const char* run_class_operation(ContainerRegisterAccess&,
         const ClassMethodCall&, ProcessId process);
     // A DPI call whose site the static kernel's image numbered passes it as
@@ -3622,7 +3756,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
         const ExecutionPointKind kind,
         const SourceLocation& source,
         std::string_view scope = { },
-        std::string_view callee = { });
+        std::string_view callee = { },
+        const DebugPoint* frame = nullptr);
     void notify_execution_point(
         ProcessId process,
         ProcessId design_process,
@@ -3632,7 +3767,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
         const SourceLocation& source,
         std::string_view scope = { },
         std::string_view callee = { },
-        std::optional<ProcessId> parent = std::nullopt);
+        std::optional<ProcessId> parent = std::nullopt,
+        const DebugPoint* frame = nullptr);
 
     [[nodiscard]] bool monitor_watches(
         const SignalId signal) const;
@@ -3757,10 +3893,25 @@ struct Interpreter::Impl : SchedulerBatchTask {
         SignalId signal, const std::optional<SignalSelection>& selection) const;
     [[nodiscard]] SimulationTick signal_last_active_attribute(
         SignalId signal, const std::optional<SignalSelection>& selection);
-    void stage_selected_signal_transaction(
-        SignalId signal_id, std::size_t offset, std::size_t width);
-    void stage_selected_signal_transaction_mask(
-        SignalId signal_id, std::span<const std::uint64_t> mask_words);
+    /// Also stages the transaction of `driver`'s driver of those bits
+    /// (staged_driver_transactions).
+    void stage_selected_signal_transaction(SignalId signal_id,
+        std::size_t offset, std::size_t width,
+        std::optional<ProcessId> driver = std::nullopt);
+    void stage_selected_signal_transaction_mask(SignalId signal_id,
+        std::span<const std::uint64_t> mask_words,
+        std::optional<ProcessId> driver = std::nullopt);
+    /// Reports the transactions of `process`'s drivers of `signal`: the
+    /// bits its staged updates wrote, else the whole signal. Nothing for a
+    /// driver the v4 kernel holds, which reports its own.
+    void report_driver_transaction(ProcessId process, SignalId signal);
+    /// Reports a transaction of `process`'s drivers of `width` bits of
+    /// `signal` from `offset`.
+    void report_driver_transaction(ProcessId process, SignalId signal,
+        std::uint32_t offset, std::uint32_t width);
+    /// Reports the staged driver transactions no commit reported (an
+    /// unresolved signal's update), once this update phase committed them.
+    void report_staged_driver_transactions();
     void note_selected_signal_transaction(
         SignalId signal_id, SignalChangeOrigin origin);
     void clear_pending_selected_signal_transactions() noexcept;
@@ -3994,17 +4145,16 @@ struct Interpreter::Impl : SchedulerBatchTask {
     // its default without one. False when the mirror keeps its value.
     bool publish_vhdl_formal_driving_value(
         SignalId signal_id, bool initializing);
-    // `@vhdl-disconnect:<signal>:<delay>`: a null transaction on the
-    // calling process's driver. Returns false for other identities.
-    bool try_vhdl_disconnect_call(
-        ProcessId process, std::string_view identity);
+    // A null transaction on a process's driver after `delay` (a foreign
+    // library's disconnection, Interpreter::disconnect_host_driver).
     void schedule_vhdl_disconnect(
         ProcessId process, SignalId signal, SimulationTick delay);
     void drain_vhdl_resolutions();
     void schedule_next_cycle_vhdl_resolutions();
-    // Queue a port conversion whose source was active; the conversion runs
-    // in this cycle's update (IEEE 1076-2008 14.7.3.3), so an update commit
-    // is scheduled when none will drain it.
+    // Queue a port conversion whose source was active, or the resolution of
+    // a signal a null transaction disconnected a driver of; it runs in this
+    // cycle's update (IEEE 1076-2008 14.7.3.2, 14.7.3.3), so an update
+    // commit is scheduled when none will drain it.
     void queue_vhdl_conversion(SignalId target);
     void initialize_vhdl_resolutions();
 
@@ -4206,11 +4356,31 @@ struct Interpreter::Impl : SchedulerBatchTask {
         const ProcessId process,
         const SignalId signal,
         const std::uint32_t offset,
-        const std::vector<
-            std::pair<PackedLogic4, SimulationTick>>& elements,
+        const std::vector<ProjectedWaveformValue>& elements,
         const SimulationTick rejection,
         const ProjectedDelayMode mode,
         const std::vector<bool>* retained_old = nullptr);
+    // A matured null transaction of `process`'s driver of the nine-state
+    // guarded signal's elements [offset, offset + width) (kind 1 bus, 2
+    // register; vhdl_null_elements): the signal is resolved again in this
+    // update phase.
+    void apply_vhdl_null_transaction(ProcessId process, SignalId signal,
+        std::size_t offset, std::size_t width, std::uint8_t kind);
+    // A value transaction of those elements reconnects them.
+    void reconnect_vhdl_null_elements(ProcessId process, SignalId signal,
+        std::size_t offset, std::size_t width);
+    // The kernel's sources of a kernel-owned nine-state guarded signal as
+    // it publishes them: `kinds` (one entry per element, as in
+    // vhdl_null_elements; empty for none disconnected) replaces the
+    // process's entry, and `kept` is the kernel's value of the signal
+    // (vhdl_null_kept).
+    void publish_vhdl_null_elements(ProcessId process, SignalId signal,
+        std::vector<std::uint8_t> kinds, const PackedLogic4& kept);
+    // The driving value of a nine-state guarded signal some of whose
+    // drivers' elements are disconnected (vhdl_null_elements).
+    [[nodiscard]] PackedLogic4 resolved_guarded_driver_value(SignalId signal_id,
+        const std::map<ProcessId, std::vector<std::uint8_t>>& nulls,
+        const ForcedDriverMapView* override_maps) const;
 
     void schedule_projected_waveform(
         const ProcessId process,

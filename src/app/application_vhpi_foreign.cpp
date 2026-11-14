@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/scheduler_events.hpp"
+#include "fsim/runtime/vpi_control.hpp"
 #include "application_vhpi_foreign.hpp"
 #include "fsim/runtime/run_state_sections.hpp"
 
 #include "application_foreign_signal.hpp"
-#include "application_internal.hpp"
 #include "fsim/platform/dynamic_library.hpp"
 #include "fsim/runtime/scheduler.hpp"
 #include "fsim/runtime/simir_class.hpp"
@@ -14,6 +14,19 @@
 #include "fsim/support/path.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
 #include "fsim/version.hpp"
+#include "application_foreign_run_state.hpp"
+#include "application_vpi_foreign.hpp"
+#include "fsim/elaboration/elaborator.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/runtime/logic.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include "fsim/runtime/vpi_callback.hpp"
+#include "fsim/runtime/vpi_time.hpp"
+#include "fsim/semantic/design_ir.hpp"
+#include "fsim/semantic/model.hpp"
+#include "fsim/semantic/vhdl_hir.hpp"
 
 #include <algorithm>
 #include <array>
@@ -27,7 +40,6 @@
 #include <cstring>
 #include <deque>
 #include <filesystem>
-#include <fstream>
 #include <functional>
 #include <iterator>
 #include <limits>
@@ -42,6 +54,16 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <cstddef>
+#include <exception>
+#include <ios>
+#include <span>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <vhpi_user.h>
+#include "application_internal.hpp"
+#include <fstream>
 
 namespace fsim::app::application_detail {
 
@@ -363,6 +385,11 @@ struct Object final : Handle {
     // occurrence's parameter value (none for the statement itself).
     const vhdl::GenerateRegion* generate { };
     std::optional<std::int64_t> generate_index;
+    // An occurrence of an if or case generate statement whose chosen
+    // alternative is a region of its own in the HIR (an else branch, a case
+    // alternative): the statement, which gives the label; `generate` is the
+    // alternative, which gives the contents.
+    const vhdl::GenerateRegion* generate_statement { };
 
     // Value objects and the names that select their elements: the signal,
     // the bits of this element (offset of the least significant bit), and
@@ -555,6 +582,8 @@ struct Callback final : Handle {
     // ValueChange and Sensitivity: the bits last seen.
     Object* object { };
     std::optional<PackedLogic4> last;
+    // ValueChange on a variable: the debug local the callback watches.
+    std::optional<std::pair<runtime::simir::ProcessId, std::size_t>> watched_local;
     // Sensitivity: an event since the cycle's processes last started.
     bool event { };
     // Sensitivity on an anyCollection (IEEE 1076-2019 21.3.3.3): the
@@ -1001,6 +1030,9 @@ public:
         }
         if (driver_token_ != 0U) {
             simulation_.remove_driver_transaction_hook(driver_token_);
+        }
+        if (local_hook_) {
+            simulation_.set_process_local_change_hook({ });
         }
     }
 
@@ -1912,9 +1944,34 @@ private:
                 return nullptr;
             }
             if (!object->signal) {
-                error(vhpiError, "value-change callbacks need a signal or a "
-                                 "driver");
-                return nullptr;
+                // A variable changes by assignment, association with an
+                // out or inout formal, or vhpi_put_value (IEEE 1076-2019
+                // 21.3.2.2): the engine reports each change of its debug
+                // local at once.
+                const auto local = object->kind != vhpiDriverK
+                    ? variable_local(*object) : std::nullopt;
+                if (!local) {
+                    error(vhpiError, "value-change callbacks need a signal, a "
+                                     "driver or a variable");
+                    return nullptr;
+                }
+                try {
+                    simulation_.watch_process_local(
+                        local->first, local->second, true);
+                } catch (const std::exception& failure) {
+                    error(vhpiError, object->full_name
+                            + " cannot be watched: " + failure.what());
+                    return nullptr;
+                }
+                // The engine counts the watches of a debug local: its
+                // changes are reported until the last callback on the
+                // variable or its subelements ends (release_watch).
+                callback.watched_local = *local;
+                ensure_local_hook();
+                callback.object = object;
+                callback.data.obj = to_handle(object);
+                callback.last = element_bits(*object);
+                break;
             }
             callback.object = object;
             callback.data.obj = to_handle(object);
@@ -2026,7 +2083,12 @@ private:
                 if (object == nullptr) {
                     return nullptr;
                 }
-                if (!object->signal
+                // A variable can be forced too (22.5.2).
+                const bool variable = !object->signal
+                    && data->reason != vhpiCbTransaction
+                    && object->kind != vhpiDriverK
+                    && variable_local(*object).has_value();
+                if ((!object->signal && !variable)
                     || (object->kind == vhpiDriverK
                         && data->reason != vhpiCbTransaction)) {
                     error(vhpiError, "object callbacks need a signal; only "
@@ -2036,6 +2098,11 @@ private:
             }
             callback.object = object;
             callback.data.obj = object != nullptr ? to_handle(object) : nullptr;
+            if (object != nullptr && !object->signal) {
+                // A variable's force or release is reported where
+                // vhpi_put_value makes it (local_force_event).
+                break;
+            }
             if (data->reason == vhpiCbTransaction) {
                 if (object->kind == vhpiDriverK) {
                     ensure_driver_hook();
@@ -2178,8 +2245,24 @@ private:
         return *std::construct_at(slot);
     }
 
+    // A value-change callback on a variable ends: the engine stops
+    // reporting the variable's changes once no callback watches it.
+    void release_watch(Callback& callback)
+    {
+        const auto local = std::exchange(callback.watched_local, std::nullopt);
+        if (!local) {
+            return;
+        }
+        try {
+            simulation_.watch_process_local(local->first, local->second, false);
+        } catch (const std::exception&) {
+            // The process is gone with its watch.
+        }
+    }
+
     void free_callback(Callback& callback)
     {
+        release_watch(callback);
         if (callback.registered) {
             retire(&callback);
         } else if (callback.managed) {
@@ -2195,6 +2278,7 @@ private:
     // (IEEE 1076-2019 21.1).
     void retire(Callback* const callback)
     {
+        release_watch(*callback);
         if (callback->managed) {
             (void)simulation_.systemverilog_vpi_callbacks().remove_callback(
                 *callback->managed);
@@ -2537,6 +2621,10 @@ private:
         // Set around a foreign function call (the execution function).
         FSIM_RS_IDLE("foreign.vhpi_live", active_call_);
         busy(active_call_ != nullptr, "a foreign subprogram call");
+        // A force of a variable of a running call lasts as long as the
+        // activation, whose frame a save does not keep for the library.
+        FSIM_RS_IDLE("foreign.vhpi_live", scoped_forces_);
+        busy(!scoped_forces_.empty(), "a force of a subprogram call's variable");
         // Set by deliver_call for the callbacks of one call point.
         FSIM_RS_IDLE("foreign.vhpi_live", call_process_);
         busy(call_process_.has_value(), "the delivery of a subprogram call");
@@ -2570,6 +2658,7 @@ private:
         flushing_registered_.clear();
         running_.clear();
         frames_.clear();
+        scoped_forces_.clear();
         call_process_.reset();
         postponed_ = false;
         end_of_time_step_pending_ = false;
@@ -3410,6 +3499,10 @@ private:
         }
         if (point.kind == Kind::process_entry) {
             // A process starts over with no call running.
+            if (const auto found = frames_.find(point.design_process);
+                found != frames_.end()) {
+                end_scoped_forces(point.design_process, found->second, 0U);
+            }
             frames_.erase(point.design_process);
             return;
         }
@@ -3708,6 +3801,139 @@ private:
         call_process_.reset();
     }
 
+    // The variable or formal of a call a force reaches (IEEE 1076-2019 14.6 b,
+    // 22.5.2): the force lasts until the activation returns. The object
+    // names the newest activation of its subprogram, whose register the
+    // process shares with the others; a deeper activation of the same
+    // subprogram starts with the register free (suspended), and the force
+    // holds again when that call returns, the object being the outer
+    // activation's. The record keeps the forced value to apply again.
+    struct CallRecord {
+        Object* call { };
+        const vhdl::Declaration* callee { };
+        std::uint32_t line { };
+        std::uint32_t column { };
+        Object* frame { };
+    };
+
+    struct ScopedForce {
+        const Object* frame { };
+        const vhdl::Declaration* callee { };
+        runtime::simir::ProcessId process { };
+        std::size_t local { };
+        std::size_t offset { };
+        std::size_t width { };
+        PackedLogic4 value;
+        bool suspended { };
+    };
+
+    [[nodiscard]] static const Object* activation_root(const Object& object)
+    {
+        const Object* root = &object;
+        while ((root->kind == vhpiIndexedNameK || root->kind == vhpiSelectedNameK
+                   || root->kind == vhpiSliceNameK)
+            && root->parent != nullptr) {
+            root = root->parent;
+        }
+        return root->activation;
+    }
+
+    void note_scoped_force(const Object& object,
+        const std::pair<runtime::simir::ProcessId, std::size_t>& local,
+        const PackedLogic4& value, const std::size_t offset,
+        const std::size_t width)
+    {
+        const auto* const frame = activation_root(object);
+        if (frame == nullptr) {
+            return;
+        }
+        scoped_forces_.push_back(ScopedForce { frame, frame->frame_callee,
+            local.first, local.second, offset, width, value, false });
+    }
+
+    // A release of bits ends the scoped forces they cover.
+    void drop_scoped_forces(const Object& object,
+        const std::pair<runtime::simir::ProcessId, std::size_t>& local,
+        const std::size_t offset, const std::size_t width)
+    {
+        const auto* const frame = activation_root(object);
+        if (frame == nullptr) {
+            return;
+        }
+        std::erase_if(scoped_forces_, [&](const ScopedForce& force) {
+            return force.frame == frame && force.process == local.first
+                && force.local == local.second && force.offset < offset + width
+                && offset < force.offset + force.width;
+        });
+    }
+
+    // A call of a subprogram that has a forced activation: that activation's
+    // forces are suspended for the new one.
+    void suspend_scoped_forces(const runtime::simir::ProcessId process,
+        const vhdl::Declaration* const callee)
+    {
+        for (auto& force : scoped_forces_) {
+            if (force.process == process && force.callee == callee
+                && !force.suspended) {
+                force.suspended = true;
+                try {
+                    simulation_.release_process_local(
+                        force.process, force.local, force.offset, force.width);
+                } catch (const std::exception&) {
+                }
+            }
+        }
+    }
+
+    // A call returned: the forces of its activations end, and the forces
+    // it suspended hold again where no deeper activation of their subprogram
+    // is left.
+    void end_scoped_forces(const runtime::simir::ProcessId process,
+        const std::vector<CallRecord>& stack, const std::size_t kept)
+    {
+        if (scoped_forces_.empty()) {
+            return;
+        }
+        for (auto index = kept; index < stack.size(); ++index) {
+            const auto* const frame = stack[index].frame;
+            std::erase_if(scoped_forces_, [&](const ScopedForce& force) {
+                if (force.frame != frame || force.process != process) {
+                    return false;
+                }
+                if (!force.suspended) {
+                    try {
+                        simulation_.release_process_local(force.process,
+                            force.local, force.offset, force.width);
+                    } catch (const std::exception&) {
+                    }
+                }
+                return true;
+            });
+        }
+        for (auto& force : scoped_forces_) {
+            if (force.process != process || !force.suspended) {
+                continue;
+            }
+            bool deeper = false;
+            bool alive = false;
+            for (std::size_t index = 0U; index < kept; ++index) {
+                if (stack[index].frame == force.frame) {
+                    alive = true;
+                } else if (alive && stack[index].callee == force.callee) {
+                    deeper = true;
+                }
+            }
+            if (alive && !deeper) {
+                force.suspended = false;
+                try {
+                    simulation_.force_process_local(force.process, force.local,
+                        force.value, force.offset, force.width);
+                } catch (const std::exception&) {
+                }
+            }
+        }
+    }
+
     // A call that enters a subprogram of the design opens a frame on its
     // process's stack; a predefined operator has none.
     void push_frame(Object* const call,
@@ -3720,6 +3946,7 @@ private:
         if (callee == nullptr || !callee->callable) {
             return;
         }
+        suspend_scoped_forces(point.design_process, callee);
         frames_[point.design_process].push_back(CallRecord { call, callee,
             point.source.line, point.source.column, nullptr });
     }
@@ -3737,6 +3964,7 @@ private:
             const auto& record = stack[index - 1U];
             if (record.line == point.source.line
                 && record.column == point.source.column) {
+                end_scoped_forces(point.design_process, stack, index - 1U);
                 stack.resize(index - 1U);
                 break;
             }
@@ -3956,80 +4184,104 @@ private:
         return result;
     }
 
-    // Which frame of the lowering an activation ran in and how many newer
-    // activations of the same subprogram are on its process's stack. A call
-    // of a subprogram from its own body runs in the second frame the
-    // lowering made for it (the caller's unspecialized frame); the first call
-    // of the chain runs in the first. Each frame keeps its own locals, so an
-    // activation reads the frame it ran in, as the newer activations of that
-    // frame left it.
-    [[nodiscard]] std::pair<bool, std::size_t> activation_depth(
-        const Object& frame) const
+    // The frame (`Process::call_frames`) each level of a process's call stack
+    // runs, from the process down: a call runs the frame the lowering
+    // recorded for its call site in the body of the frame above it (IEEE
+    // 1076-2019 14.6 b). A level whose call has no recorded site, or whose
+    // site the lowering made several frames for, has no frame, and nor have
+    // the levels below it.
+    static constexpr std::uint32_t no_frame = 0xFFFFFFFFU;
+    [[nodiscard]] std::vector<std::uint32_t> frame_chain(
+        const runtime::simir::ProcessId process) const
     {
-        const auto& stack = frames_.at(frame.frame_process);
-        const auto recursive = [&](const std::size_t level) {
-            return level != 0U
-                && stack[level - 1U].callee->id == stack[level].callee->id;
-        };
-        const bool deep = recursive(frame.frame_level);
-        std::size_t newer { };
-        for (auto level = frame.frame_level + 1U; level < stack.size(); ++level) {
-            if (stack[level].callee->id == frame.frame_callee->id
-                && recursive(level) == deep) {
-                ++newer;
+        const auto& stack = frames_.at(process);
+        const auto& sites = simulation_.process_program(process).call_frames.sites;
+        std::vector<std::uint32_t> chain;
+        std::uint32_t caller { };
+        for (const auto& record : stack) {
+            std::uint32_t frame = no_frame;
+            const auto* const call = record.call;
+            if (caller != no_frame && call != nullptr
+                && (call->expression != nullptr || call->statement != nullptr)) {
+                const bool expression = call->expression != nullptr;
+                const auto site = expression ? call->expression->id.value()
+                                             : call->statement->id.value();
+                for (const auto& entry : sites) {
+                    if (entry.expression == expression && entry.site == site
+                        && entry.caller == caller) {
+                        frame = frame == no_frame || frame == entry.frame
+                            ? entry.frame
+                            : no_frame;
+                        if (frame == no_frame) {
+                            break;
+                        }
+                    }
+                }
             }
+            chain.push_back(frame);
+            caller = frame;
         }
-        return { deep, newer };
+        return chain;
     }
 
-    // The value a frame holds for a declaration it elaborated: the debug
-    // local the subprogram's lowering named `<subprogram>.<declaration>`,
-    // of this activation when the subprogram runs again deeper in the stack
-    // (IEEE 1076-2019 22.5.2). Only what the lowering keeps a local for is
-    // readable; a function's transient locals and formals are not.
+    // The frame a stack frame object runs and how many activations of that
+    // frame are newer on its process's stack: the registers of the frame
+    // are shared by its activations, the newer ones having saved the
+    // registers of the older (IEEE 1076-2019 14.6 b, 22.5.2).
+    struct FrameIdentity {
+        std::uint32_t frame { };
+        std::size_t newer { };
+    };
+    [[nodiscard]] std::optional<FrameIdentity> frame_identity(
+        const Object& frame) const
+    {
+        const auto chain = frame_chain(frame.frame_process);
+        if (frame.frame_level >= chain.size()
+            || chain[frame.frame_level] == no_frame) {
+            return std::nullopt;
+        }
+        FrameIdentity result { chain[frame.frame_level], 0U };
+        for (auto level = frame.frame_level + 1U; level < chain.size(); ++level) {
+            if (chain[level] == result.frame) {
+                ++result.newer;
+            }
+        }
+        return result;
+    }
+
+    // The value a frame holds for a declaration it elaborated: the local
+    // the lowering bound to the declaration in the frame the call runs
+    // (`Process::call_frames`), of this activation when the frame runs again
+    // deeper in the stack (IEEE 1076-2019 22.5.2). Only what the lowering
+    // keeps a local for is readable.
     [[nodiscard]] std::optional<PackedLogic4> activation_value(
         const Object& object) const
     {
         const auto& frame = *object.activation;
-        if (!frame_alive(frame) || frame.frame_callee == nullptr) {
+        if (!frame_alive(frame) || frame.frame_callee == nullptr
+            || object.declaration == nullptr) {
             return std::nullopt;
         }
-        const auto [deep, newer] = activation_depth(frame);
+        const auto identity = frame_identity(frame);
+        if (!identity) {
+            return std::nullopt;
+        }
         try {
-            const auto& program = simulation_.process_program(frame.frame_process);
             if (!object.local_resolved) {
                 object.local_resolved = true;
-                const auto wanted = lower(declared_name(*frame.frame_callee))
-                    + "." + lower(object.name);
-                // The candidates of one table: a name equal to `wanted`, or
-                // ending with it behind a scope prefix.
-                const auto search = [&](const auto& locals) {
-                    std::vector<std::size_t> candidates;
-                    for (std::size_t index = 0U; index < locals.size(); ++index) {
-                        auto name = lower(locals[index].name);
-                        // A second frame's declaration of the name gets a suffix.
-                        name.resize(std::min(name.size(), name.find('@')));
-                        if (name == wanted
-                            || (name.size() > wanted.size()
-                                && name.ends_with(wanted)
-                                && name[name.size() - wanted.size() - 1U] == '.')) {
-                            candidates.push_back(index);
-                        }
-                    }
-                    return candidates;
-                };
-                auto candidates = search(program.debug_locals);
-                bool in_frame_table { };
-                if (candidates.empty()) {
-                    candidates = search(program.frame_locals);
-                    in_frame_table = !candidates.empty();
-                }
-                if (!candidates.empty()) {
-                    const auto chosen = deep && candidates.size() > 1U
-                        ? candidates[1U]
-                        : candidates.front();
-                    object.local = std::pair { frame.frame_process, chosen };
-                    object.local_in_frame_table = in_frame_table;
+                const auto& locals
+                    = simulation_.process_program(frame.frame_process)
+                          .call_frames.locals;
+                const auto bound = std::ranges::find_if(locals,
+                    [&](const runtime::simir::FrameLocalBinding& binding) {
+                        return binding.frame == identity->frame
+                            && binding.declaration
+                            == object.declaration->id.value();
+                    });
+                if (bound != locals.end()) {
+                    object.local = std::pair { frame.frame_process,
+                        static_cast<std::size_t>(bound->index) };
+                    object.local_in_frame_table = bound->frame_table;
                 }
             }
             if (!object.local) {
@@ -4037,10 +4289,11 @@ private:
             }
             if (object.local_in_frame_table) {
                 return simulation_.read_process_frame_local(
-                    object.local->first, object.local->second, newer);
+                    object.local->first, object.local->second,
+                    identity->newer);
             }
             return simulation_.read_process_local(
-                object.local->first, object.local->second, newer);
+                object.local->first, object.local->second, identity->newer);
         } catch (const std::exception&) {
             return std::nullopt;
         }
@@ -4121,9 +4374,88 @@ private:
             return;
         }
         driver_token_ = simulation_.add_driver_transaction_hook(
-            [this](const runtime::simir::ProcessId process, const SignalId signal) {
-                driver_active_.emplace(process, signal);
+            [this](const runtime::simir::ProcessId process, const SignalId signal,
+                const std::uint32_t offset, const std::uint32_t width) {
+                driver_active_[{ process, signal }].emplace_back(offset, width);
             });
+    }
+
+    void ensure_local_hook()
+    {
+        if (std::exchange(local_hook_, true)) {
+            return;
+        }
+        simulation_.set_process_local_change_hook(
+            [this](const runtime::simir::ProcessId process, const std::size_t local) {
+                local_changed(process, local);
+            });
+    }
+
+    // A variable's debug local changed (IEEE 1076-2019 21.3.2.2): the
+    // value-change callbacks on it, or on a subelement whose value changed,
+    // run at once.
+    void local_changed(const runtime::simir::ProcessId process,
+        const std::size_t local)
+    {
+        std::vector<std::pair<Callback*, std::uint64_t>> selected;
+        for (auto* const callback : callbacks_) {
+            if (callback->data.reason != vhpiCbValueChange
+                || callback->object == nullptr || callback->object->signal
+                || callback->object->kind == vhpiDriverK) {
+                continue;
+            }
+            const auto target = variable_local(*callback->object);
+            if (target && target->first == process && target->second == local) {
+                selected.emplace_back(callback, callback->order);
+            }
+        }
+        for (const auto& [callback, order] : selected) {
+            if (!live(callback, order)) {
+                continue;
+            }
+            auto bits = element_bits(*callback->object);
+            if (callback->last && bits && *callback->last == *bits) {
+                continue;
+            }
+            callback->last = std::move(bits);
+            run(*callback);
+        }
+    }
+
+    // A force or release of a variable or a subelement of one by
+    // vhpi_put_value (IEEE 1076-2019 21.3.2.3-4): the callbacks on an
+    // object the update covers, and those with no object.
+    void local_force_event(Object& object,
+        const std::pair<runtime::simir::ProcessId, std::size_t>& local,
+        const bool release)
+    {
+        const auto reason = release ? vhpiCbRelease : vhpiCbForce;
+        const auto low = object.offset;
+        const auto high = low + (object.type != nullptr ? width_of(*object.type) : 0U);
+        std::vector<std::pair<Callback*, std::uint64_t>> selected;
+        for (auto* const callback : callbacks_) {
+            if (callback->data.reason != reason) {
+                continue;
+            }
+            if (callback->object != nullptr) {
+                if (callback->object->signal) {
+                    continue;
+                }
+                const auto target = variable_local(*callback->object);
+                const auto bits = callback->object->type != nullptr
+                    ? width_of(*callback->object->type) : 0U;
+                if (!target || *target != local || callback->object->offset < low
+                    || callback->object->offset + bits > high) {
+                    continue;
+                }
+            }
+            selected.emplace_back(callback, callback->order);
+        }
+        for (const auto& [callback, order] : selected) {
+            if (live(callback, order)) {
+                run(*callback, callback->object != nullptr ? nullptr : &object);
+            }
+        }
     }
 
     // Driver transaction callbacks run for each driver that was updated, and
@@ -4144,10 +4476,25 @@ private:
                 || !callback->object->signal) {
                 continue;
             }
+            // A driver is one scalar subelement's (IEEE 1076-2019 14.7.2):
+            // active when a transaction is on its bits.
             const auto process = driver_process(*callback->object);
-            if (process
-                && active.contains(
-                    std::pair { *process, *callback->object->signal })) {
+            if (!process) {
+                continue;
+            }
+            const auto ranges
+                = active.find({ *process, *callback->object->signal });
+            if (ranges == active.end()) {
+                continue;
+            }
+            const auto& driver = *callback->object;
+            const auto low = driver.offset;
+            const auto high = low
+                + (driver.type != nullptr ? width_of(*driver.type) : 0U);
+            if (std::ranges::any_of(ranges->second, [&](const auto& range) {
+                    const auto [offset, width] = range;
+                    return offset < high && low < std::size_t { offset } + width;
+                })) {
                 selected.emplace_back(callback, callback->order);
             }
         }
@@ -4156,6 +4503,13 @@ private:
                 continue;
             }
             if (callback->data.reason == vhpiCbValueChange) {
+                // A driver a null transaction turned off has no value, so
+                // going off is no change of it; it changes when a value
+                // transaction gives it a value other than its last one
+                // (IEEE 1076-2019 14.7.2, 21.3.2.5).
+                if (driver_off(*callback->object)) {
+                    continue;
+                }
                 auto bits = element_bits(*callback->object);
                 if (callback->last && bits && *callback->last == *bits) {
                     continue;
@@ -4164,6 +4518,20 @@ private:
             }
             run(*callback);
         }
+    }
+
+    // Whether a null transaction turned the driver off (IEEE 1076-2019
+    // 14.7.2): it has no value then.
+    [[nodiscard]] bool driver_off(const Object& driver) const
+    {
+        if (!driver.signal || driver.type == nullptr) {
+            return false;
+        }
+        const auto process = driver_process(driver);
+        return process
+            && simulation_.driver_disconnected(*process, *driver.signal,
+                static_cast<std::uint32_t>(driver.offset),
+                static_cast<std::uint32_t>(width_of(*driver.type)));
     }
 
     void ensure_transaction_hook(const SignalId signal)
@@ -4352,20 +4720,28 @@ private:
 
     [[nodiscard]] int control(const vhpiSimControlT command)
     {
-        // A stop, finish or reset request outside the simulation phase is
-        // an error (IEEE 1076-2019 23.5).
-        if ((command == vhpiStop || command == vhpiFinish
-                || command == vhpiReset)
+        // A stop or finish request outside the simulation phase is an error
+        // (IEEE 1076-2019 23.5), and so is a reset request outside the
+        // initialization and simulation phases (20.9).
+        if ((command == vhpiStop || command == vhpiFinish)
             && phase_ != vhpiSimulationPhase) {
             error(vhpiError,
-                "vhpi_control stop, finish and reset are available only "
-                "during simulation");
+                "vhpi_control stop and finish are available only during "
+                "simulation");
+            return 1;
+        }
+        // A stop, finish or reset request outside the simulation phase is an
+        // error (IEEE 1076-2019 23.5, Errors), the initialization phase
+        // included.
+        if (command == vhpiReset && phase_ != vhpiSimulationPhase) {
+            error(vhpiError,
+                "vhpi_control reset is available only during simulation");
             return 1;
         }
         // The tool enters the reset phase once the calling callback returns
         // (IEEE 1076-2019 23.5, 20.9); with no further argument it goes on
-        // simulating afterwards. A control action the tool does not
-        // implement is an error.
+        // simulating afterwards. A control action the tool does not implement
+        // is an error.
         if (command == vhpiReset) {
             if (!simulation_.request_reset(Simulation::ResetRequest { })) {
                 // 20.9: a tool may allow a reset; the control action is an
@@ -4718,30 +5094,24 @@ private:
         return result;
     }
 
-    // Whether elaboration made any object or instance under `path`.
-    [[nodiscard]] bool elaborated_path(const std::string_view path)
-    {
-        const auto under = [&](const std::string_view name) {
-            return name.size() > path.size() && name.starts_with(path)
-                && name[path.size()] == '.';
-        };
-        return std::ranges::any_of(simulation_.design().signals(),
-                   [&](const auto& info) { return under(info.name); })
-            || std::ranges::any_of(design_.instances(),
-                [&](const auto& instance) {
-                    return under(design_.path(instance.path));
-                });
-    }
-
     // A block statement, a generate statement occurrence, or (with no
     // index) a for-generate statement, whose occurrences `indexed`
     // selects (IEEE 1076-2019 19.4.2, 11.8).
+    //
+    // `statement` is the if or case generate statement when `generate` is
+    // the region of its chosen alternative, and `elaborated` the path that
+    // elaboration gave that alternative (an elsif branch's is nested in the
+    // else branch's).
     [[nodiscard]] Object* generate_object(Object& region,
         const vhdl::GenerateRegion& generate,
-        const std::optional<std::int64_t> index)
+        const std::optional<std::int64_t> index,
+        const vhdl::GenerateRegion* statement = nullptr,
+        std::optional<std::string> elaborated = std::nullopt)
     {
-        auto name = generate.label;
-        auto path = region.path + "." + lower(generate.label);
+        const auto& named = statement != nullptr ? *statement : generate;
+        auto name = named.label;
+        auto path = elaborated ? std::move(*elaborated)
+                               : region.path + "." + lower(generate.label);
         if (index) {
             name += "(" + std::to_string(*index) + ")";
             path += "[" + std::to_string(*index) + "]";
@@ -4751,16 +5121,16 @@ private:
             found != region.children.end()) {
             return found->second;
         }
-        const auto kind = generate.kind == vhdl::GenerateKind::block
+        const auto kind = named.kind == vhdl::GenerateKind::block
             ? vhpiBlockStmtK
-            : generate.kind == vhdl::GenerateKind::iterative
+            : named.kind == vhdl::GenerateKind::iterative
             ? vhpiForGenerateK
             : vhpiIfGenerateK;
         auto* const object = make_object(kind, name, &region);
         object->uninstantiated = region.uninstantiated;
         // CaseName keeps the label as declared (IEEE 1076-2019 19.4.3).
         if (const auto* const declaration
-            = hir_.find_declaration(generate.declaration);
+            = hir_.find_declaration(named.declaration);
             declaration != nullptr && !declaration->spelling.empty()) {
             object->case_name = declaration->spelling;
             if (index) {
@@ -4771,6 +5141,7 @@ private:
         object->unit = region.unit;
         object->generate = &generate;
         object->generate_index = index;
+        object->generate_statement = statement;
         object->full_name = region.full_name + ":" + object->name;
         object->full_case_name
             = region.full_case_name + ":" + object->case_name;
@@ -4802,51 +5173,217 @@ private:
         return object;
     }
 
-    // The statements of `generates` that elaboration made, in order; a
-    // for-generate statement's occurrences are the parameter values its
-    // elaborated objects are named by.
+    // The block and generate statement occurrences elaboration recorded for
+    // the instance that holds `region`, and the path of `region` relative to
+    // that instance ("" for the instance itself).
+    [[nodiscard]] std::pair<
+        const std::vector<std::pair<std::string, semantic::DeclarationId>>*,
+        std::string>
+    recorded_generate_occurrences(const Object& region)
+    {
+        const auto* instance = &region;
+        while (instance != nullptr && instance->occurrence == nullptr) {
+            instance = instance->parent;
+        }
+        if (instance == nullptr) {
+            return { nullptr, { } };
+        }
+        if (specializations_by_instance_.empty()) {
+            for (const auto& specialization :
+                simulation_.design().specializations()) {
+                specializations_by_instance_.emplace(
+                    specialization.instance, &specialization);
+            }
+        }
+        const auto found = specializations_by_instance_.find(instance->path);
+        if (found == specializations_by_instance_.end()) {
+            return { nullptr, { } };
+        }
+        const auto* const specialization = found->second;
+        auto relative = region.path.size() > instance->path.size()
+            ? region.path.substr(instance->path.size() + 1U)
+            : std::string { };
+        return { &specialization->vhdl_generate_occurrences,
+            std::move(relative) };
+    }
+
+    // The region an if generate statement's else part (and an elsif part,
+    // which is an if generate statement with the same label in it) lowers
+    // to: a block nested in the statement. Every if generate statement has
+    // one, empty when the statement has no else part.
+    [[nodiscard]] static const vhdl::GenerateRegion* else_branch(
+        const vhdl::GenerateRegion& generate)
+    {
+        if (generate.kind != vhdl::GenerateKind::conditional) {
+            return nullptr;
+        }
+        const auto label = lower(generate.alternative_label.empty()
+                ? generate.label + ".else"
+                : generate.alternative_label);
+        const auto found = std::ranges::find_if(generate.nested,
+            [&](const vhdl::GenerateRegion& candidate) {
+                return candidate.kind == vhdl::GenerateKind::block
+                    && lower(candidate.label) == label;
+            });
+        return found == generate.nested.end() ? nullptr : &*found;
+    }
+
+    // Whether `nested` is the region of an alternative of `statement` (its
+    // else branch, or a case generate alternative) rather than a block or
+    // generate statement of its own: the occurrence of `statement` stands
+    // for it (IEEE 1076-2019 11.8, 14.5.3).
+    [[nodiscard]] static bool is_alternative_body(
+        const vhdl::GenerateRegion& statement,
+        const vhdl::GenerateRegion& nested)
+    {
+        if (statement.kind == vhdl::GenerateKind::conditional) {
+            return &nested == else_branch(statement);
+        }
+        if (statement.kind != vhdl::GenerateKind::selection
+            || nested.kind != vhdl::GenerateKind::block) {
+            return false;
+        }
+        return std::ranges::any_of(statement.alternatives,
+            [&](const vhdl::GenerateRegion::Alternative& alternative) {
+                return lower(alternative.label.empty()
+                           ? statement.label + ".alternative"
+                           : alternative.label)
+                    == lower(nested.label);
+            });
+    }
+
+    // Whether the region declares, instantiates or holds anything of its
+    // own besides nested generate statements.
+    [[nodiscard]] static bool holds_items(const vhdl::GenerateRegion& region)
+    {
+        return !region.declarations.empty() || !region.instances.empty()
+            || !region.processes.empty()
+            || !region.concurrent_statements.empty();
+    }
+
+    // The occurrences of a generate statement that elaboration made, in
+    // elaboration order: one for each value of a for generate statement's
+    // range and one for the chosen alternative of an if or case generate
+    // statement, also when the occurrence holds nothing but declarations or
+    // other generate statements (IEEE 1076-2019 14.5.3, 19.4.2); a block
+    // statement is always elaborated (14.5.2). The regions of alternatives
+    // are no statements of their own.
     [[nodiscard]] std::vector<Object*> generate_occurrences(Object& region,
         const vhdl::GenerateRegion& generate)
     {
         std::vector<Object*> result;
-        const auto base = region.path + "." + lower(generate.label);
-        if (generate.kind != vhdl::GenerateKind::iterative) {
-            if (generate.kind == vhdl::GenerateKind::block
-                || elaborated_path(base)) {
-                result.push_back(generate_object(region, generate, std::nullopt));
-            }
+        if (region.generate != nullptr
+            && is_alternative_body(*region.generate, generate)) {
             return result;
         }
-        std::vector<std::int64_t> indexes;
-        const auto collect = [&](const std::string_view name) {
-            if (!name.starts_with(base) || name.size() <= base.size()
-                || name[base.size()] != '[') {
-                return;
-            }
-            const auto digits = name.substr(base.size() + 1U);
-            std::int64_t index { };
-            const auto [last, failure] = std::from_chars(
-                digits.data(), digits.data() + digits.size(), index);
-            if (failure != std::errc { } || last == digits.data() + digits.size()
-                || *last != ']') {
-                return;
-            }
-            if (std::ranges::find(indexes, index) == indexes.end()) {
-                indexes.push_back(index);
-            }
+        if (generate.kind == vhdl::GenerateKind::block) {
+            result.push_back(generate_object(region, generate, std::nullopt));
+            return result;
+        }
+        const auto [recorded, relative] = recorded_generate_occurrences(region);
+        if (recorded == nullptr) {
+            return result;
+        }
+        const auto path_of = [&](const std::string_view label) {
+            return relative.empty() ? lower(label)
+                                    : lower(relative) + "." + lower(label);
         };
-        for (const auto& info : simulation_.design().signals()) {
-            collect(info.name);
+        const auto made = [&](const std::string_view path,
+                              const vhdl::GenerateRegion& body) {
+            return std::ranges::any_of(*recorded, [&](const auto& entry) {
+                return entry.second == body.declaration
+                    && lower(entry.first) == path;
+            });
+        };
+        // The path of an occurrence below `region`, from its path relative
+        // to the instance.
+        const auto elaborated = [&](const std::string_view path) {
+            return region.path + "."
+                + std::string { path.substr(
+                    relative.empty() ? 0U : relative.size() + 1U) };
+        };
+        const auto base = path_of(generate.label);
+        switch (generate.kind) {
+        case vhdl::GenerateKind::iterative:
+            for (const auto& [entry, declaration] : *recorded) {
+                if (declaration != generate.declaration) {
+                    continue;
+                }
+                const auto path = lower(entry);
+                if (path.size() <= base.size() + 2U
+                    || !path.starts_with(base) || path[base.size()] != '['
+                    || path.back() != ']') {
+                    continue;
+                }
+                const auto digits = std::string_view { path }.substr(
+                    base.size() + 1U, path.size() - base.size() - 2U);
+                std::int64_t index { };
+                const auto [last, failure] = std::from_chars(
+                    digits.data(), digits.data() + digits.size(), index);
+                if (failure != std::errc { }
+                    || last != digits.data() + digits.size()) {
+                    continue;
+                }
+                auto* const object = generate_object(region, generate, index);
+                if (std::ranges::find(result, object) == result.end()) {
+                    result.push_back(object);
+                }
+            }
+            break;
+        case vhdl::GenerateKind::conditional: {
+            // The first alternative whose condition is true; an elsif
+            // alternative is an if generate statement in the else branch,
+            // elaborated below it.
+            const auto* current = &generate;
+            auto path = base;
+            while (current != nullptr) {
+                if (made(path, *current)) {
+                    result.push_back(current == &generate
+                            ? generate_object(region, generate, std::nullopt)
+                            : generate_object(region, *current, std::nullopt,
+                                  &generate, elaborated(path)));
+                    break;
+                }
+                const auto* const alternative = else_branch(*current);
+                if (alternative == nullptr || !made(path, *alternative)) {
+                    break;
+                }
+                const auto elsif = alternative->nested.size() == 1U
+                    && !holds_items(*alternative)
+                    && alternative->nested.front().kind
+                        == vhdl::GenerateKind::conditional
+                    && lower(alternative->nested.front().label)
+                        == lower(current->label);
+                if (elsif) {
+                    current = &alternative->nested.front();
+                    path += "." + lower(current->label);
+                    continue;
+                }
+                // Without an else part the branch is empty: no alternative
+                // was chosen and there is no occurrence.
+                if (holds_items(*alternative) || !alternative->nested.empty()) {
+                    result.push_back(generate_object(region, *alternative,
+                        std::nullopt, &generate, elaborated(path)));
+                }
+                break;
+            }
+            break;
         }
-        for (const auto& instance : design_.instances()) {
-            collect(design_.path(instance.path));
-        }
-        // A generate that declares no signal is known by its processes.
-        for (const auto& process : design_.processes()) {
-            collect(process.name);
-        }
-        for (const auto index : indexes) {
-            result.push_back(generate_object(region, generate, index));
+        case vhdl::GenerateKind::selection:
+            for (const auto& alternative : generate.nested) {
+                if (!is_alternative_body(generate, alternative)) {
+                    continue;
+                }
+                const auto path = path_of(alternative.label);
+                if (made(path, alternative)) {
+                    result.push_back(generate_object(region, alternative,
+                        std::nullopt, &generate, elaborated(path)));
+                    break;
+                }
+            }
+            break;
+        case vhdl::GenerateKind::block:
+            break;
         }
         return result;
     }
@@ -5084,6 +5621,84 @@ private:
         }
         object.lists[ListKind::sig_attrs] = result;
         return result;
+    }
+
+    // The implicit signal an attribute name S'DELAYED(T), S'STABLE(T),
+    // S'QUIET(T) or S'TRANSACTION in an expression denotes (IEEE 1076-2019
+    // 16.2.4): the object vhpiSigAttrs gives for its prefix, so that a read
+    // of it or an association with it is one of the implicit signal and not
+    // of the prefix (19.12.2.2, 19.12.2.3). None for any other expression.
+    [[nodiscard]] Object* implicit_signal_name(
+        Object& scope, const semantic::ExpressionId id)
+    {
+        const auto* const expression = hir_expression(id);
+        if (expression == nullptr
+            || expression->kind != vhdl::ExpressionKind::call
+            || !expression->text.starts_with('\'')
+            || expression->operands.empty()
+            || expression->operands.size() > 2U) {
+            return nullptr;
+        }
+        const auto designator = lower(expression->text.substr(1U));
+        if (designator != "delayed" && designator != "stable"
+            && designator != "quiet" && designator != "transaction") {
+            return nullptr;
+        }
+        auto* const prefix
+            = target_object(scope, expression->operands.front(), 0U);
+        if (prefix == nullptr || !is_signal_object(*prefix)) {
+            return nullptr;
+        }
+        std::vector<std::pair<Object*, std::string_view>> candidates;
+        for (auto* const attribute : implicit_signals(*prefix)) {
+            if (attribute->implicit_attribute != designator
+                || !attribute->signal) {
+                continue;
+            }
+            const auto* const info = signal_info(*attribute->signal);
+            if (info != nullptr) {
+                candidates.emplace_back(attribute, info->name);
+            }
+        }
+        // The lowering made one implicit signal for each distinct use, so a
+        // single candidate is the one denoted.
+        if (candidates.size() <= 1U) {
+            return candidates.empty() ? nullptr : candidates.front().first;
+        }
+        // Several: the parameter's time in resolution limits names it
+        // (`<signal>'<attribute>(<ticks>)`); no parameter is 0 ns.
+        std::uint64_t ticks { };
+        if (expression->operands.size() == 2U) {
+            auto* const parameter
+                = expression_object(scope, expression->operands[1]);
+            if (parameter == nullptr) {
+                return nullptr;
+            }
+            vhpiValueT value { };
+            value.format = vhpiTimeVal;
+            if (read_value(*parameter, value) != 0) {
+                return nullptr;
+            }
+            const auto femtoseconds
+                = (static_cast<std::uint64_t>(
+                       static_cast<std::uint32_t>(value.value.phys.high))
+                      << 32U)
+                | value.value.phys.low;
+            if (femtoseconds % femtoseconds_per_tick_ != 0U) {
+                return nullptr;
+            }
+            ticks = femtoseconds / femtoseconds_per_tick_;
+        }
+        const auto suffix = "'" + designator + "(" + std::to_string(ticks) + ")";
+        for (const auto& [attribute, name] : candidates) {
+            const auto open = name.find(suffix);
+            if (open != std::string_view::npos
+                && (open + suffix.size() == name.size()
+                    || name[open + suffix.size()] == '[')) {
+                return attribute;
+            }
+        }
+        return nullptr;
     }
 
     // The signal GUARD of a guarded block (IEEE 1076-2019 11.2, 11.6): the
@@ -7180,7 +7795,12 @@ private:
                 return;
             }
         }
-        auto* const object = target_object(scope, id, 0U);
+        // An implicit signal S'DELAYED(T) and the like is a signal actual
+        // (IEEE 1076-2019 16.2.4, 19.12.2.2 NOTE).
+        auto* object = implicit_signal_name(scope, id);
+        if (object == nullptr) {
+            object = target_object(scope, id, 0U);
+        }
         connection.actual = object;
         connection.actual_signal
             = object != nullptr && object->signal && is_signal_object(*object);
@@ -7436,6 +8056,12 @@ private:
                 return;
             }
         }
+        // S'DELAYED(T) and the like read the implicit signal, not S
+        // (IEEE 1076-2019 16.2.4, 19.12.2.3).
+        if (auto* const implicit = implicit_signal_name(scope, id)) {
+            result.push_back(implicit);
+            return;
+        }
         for (const auto operand : expression->operands) {
             collect_reads(scope, operand, result, depth + 1U);
         }
@@ -7451,7 +8077,10 @@ private:
         for (const auto& sensitivity : sensitivities) {
             Object* object = nullptr;
             if (sensitivity.expression) {
-                object = expression_object(owner, *sensitivity.expression);
+                object = implicit_signal_name(owner, *sensitivity.expression);
+                if (object == nullptr) {
+                    object = expression_object(owner, *sensitivity.expression);
+                }
             }
             if (object == nullptr) {
                 object = lookup_name(owner, sensitivity.signal);
@@ -7525,6 +8154,20 @@ private:
             }
         } else if (member.statement != nullptr) {
             collect_statement_reads(member, *member.statement, result, 0U);
+            // The equivalent process of a guarded signal assignment reads
+            // the signal GUARD (IEEE 1076-2019 11.6).
+            if (is_signal_assignment(member)
+                && (member.statement->guarded_assignment
+                    || assignment_of(*member.statement).guarded_assignment)) {
+                auto* block = member.parent;
+                while (block != nullptr && !is_region(*block)) {
+                    block = block->parent;
+                }
+                if (auto* const guard
+                    = block == nullptr ? nullptr : guard_signal(*block, true)) {
+                    result.push_back(guard);
+                }
+            }
         }
         return reads_cache_.emplace(&member, std::move(result)).first->second;
     }
@@ -7553,10 +8196,9 @@ private:
         return result;
     }
 
-    // The design process that runs a process or concurrent statement object.
-    // A concurrent statement's equivalent process (IEEE 1076-2019 11.1) is
-    // named by its label, or for an unlabeled one `concurrent_<n>` with n
-    // increasing in textual order; it has no source process.
+    // The design process that runs a process or concurrent statement object,
+    // found by the process or statement it was lowered from within the
+    // object's region (IEEE 1076-2019 11.1).
     [[nodiscard]] std::optional<runtime::simir::ProcessId> design_process_of(
         const Object& owner) const
     {
@@ -7580,63 +8222,22 @@ private:
             }
             return std::nullopt;
         }
-        if (owner.statement == nullptr) {
+        if (owner.statement == nullptr || !owner.statement->source.valid()) {
             return std::nullopt;
         }
-        if (!owner.statement->label.empty()) {
-            const auto name = prefix + lower(owner.statement->label);
-            for (const auto& occurrence : design_.processes()) {
-                if (!occurrence.source_process && occurrence.name == name) {
-                    return static_cast<runtime::simir::ProcessId>(
-                        occurrence.runtime_index);
-                }
-            }
-            return std::nullopt;
-        }
-        // The rank of this statement among the unlabeled concurrent
-        // statements of its region, and the unlabeled occurrences there in
-        // the order of their sequence numbers.
-        const auto found = owner.parent->lists.find(ListKind::statements);
-        if (found == owner.parent->lists.end()) {
-            return std::nullopt;
-        }
-        std::size_t rank { };
-        bool seen { };
-        for (const auto* const member : found->second) {
-            if (member == &owner) {
-                seen = true;
-                break;
-            }
-            if (member->process == nullptr && member->statement != nullptr
-                && member->statement->label.empty()) {
-                ++rank;
-            }
-        }
-        if (!seen) {
-            return std::nullopt;
-        }
-        const auto unlabeled_prefix = prefix + "concurrent_";
-        std::vector<std::pair<std::size_t, std::uint32_t>> unlabeled;
+        // A concurrent statement's equivalent process records the statement
+        // it was lowered from (ProcessOccurrence::source, its extent); the
+        // one of this region's occurrence is the region's child (IEEE
+        // 1076-2019 11.1).
         for (const auto& occurrence : design_.processes()) {
-            if (occurrence.source_process
-                || !occurrence.name.starts_with(unlabeled_prefix)
-                || !direct_child(occurrence.name)) {
-                continue;
-            }
-            const auto digits = std::string_view { occurrence.name }.substr(
-                unlabeled_prefix.size());
-            std::size_t order { };
-            const auto [end, error] = std::from_chars(
-                digits.data(), digits.data() + digits.size(), order);
-            if (error == std::errc { } && end == digits.data() + digits.size()) {
-                unlabeled.emplace_back(order, occurrence.runtime_index);
+            if (occurrence.source
+                && *occurrence.source == owner.statement->source
+                && direct_child(occurrence.name)) {
+                return static_cast<runtime::simir::ProcessId>(
+                    occurrence.runtime_index);
             }
         }
-        std::ranges::sort(unlabeled);
-        return rank < unlabeled.size()
-            ? std::optional { static_cast<runtime::simir::ProcessId>(
-                  unlabeled[rank].second) }
-            : std::nullopt;
+        return std::nullopt;
     }
 
     // The design process that holds a driver: the one that runs its
@@ -7953,6 +8554,20 @@ private:
             found != scope.children.end()) {
             return found->second;
         }
+        // One call is one object whichever part of its statement a program
+        // reached it from (a waveform element, a branch, the statement): the
+        // call stack names a running call by that object (IEEE 1076-2019
+        // 19.10).
+        const Object* statement = &scope;
+        while (statement->parent != nullptr && !statement->is_stmt) {
+            statement = statement->parent;
+        }
+        const auto owner_key = std::pair { statement, expression.source.value() };
+        if (const auto found = calls_by_statement_.find(owner_key);
+            found != calls_by_statement_.end()) {
+            scope.children.emplace(key, found->second);
+            return found->second;
+        }
         const bool symbol = expression.kind != vhdl::ExpressionKind::call;
         std::string name;
         if (symbol) {
@@ -7972,6 +8587,7 @@ private:
         object->full_name = object->name;
         object->full_case_name = object->case_name;
         scope.children.emplace(key, object);
+        calls_by_statement_.emplace(owner_key, object);
         return object;
     }
 
@@ -10779,6 +11395,14 @@ private:
                 if (name.front() != '(') {
                     name.remove_prefix(1U);
                 }
+            }
+            // A for generate statement's name denotes no object: its
+            // occurrences are `label(value)` (IEEE 1076-2019 19.4.2), and the
+            // lookup matches full names (23.22).
+            if (current != nullptr && current->kind == vhpiForGenerateK
+                && !current->generate_index
+                && (name.empty() || name.front() != '(')) {
+                return nullptr;
             }
         }
         return current == nullptr ? nullptr : to_handle(current);
@@ -14725,8 +15349,8 @@ private:
         case vhpiCapabilitiesP:
             // Only the capability sets that are fully provided (17.3).
             return vhpiProvidesHierarchy | vhpiProvidesStaticAccess
-                | vhpiProvidesPostAnalysis | vhpiProvidesForeignModel
-                | vhpiProvidesAdvancedForeignModel;
+                | vhpiProvidesConnectivity | vhpiProvidesPostAnalysis
+                | vhpiProvidesForeignModel | vhpiProvidesAdvancedForeignModel;
         // No part of a foreign program's state is saved or restored for it:
         // its handles, callbacks and private data go through vhpi_put_data
         // and vhpi_get_data (IEEE 1076-2019 20.7, 20.8).
@@ -15425,7 +16049,9 @@ private:
                 || object.kind == vhpiBlockStmtK
                 || object.kind == vhpiForGenerateK
                 || object.kind == vhpiIfGenerateK) {
-                if (object.generate != nullptr) {
+                if (object.generate_statement != nullptr) {
+                    scratch = object.generate_statement->label;
+                } else if (object.generate != nullptr) {
                     scratch = object.generate->label;
                 } else {
                     text = &object.case_name;
@@ -15717,8 +16343,10 @@ private:
         const Object& object)
     {
         const auto label = [](const Object& scope) {
-            return scope.generate != nullptr ? scope.generate->label
-                                             : scope.case_name;
+            return scope.generate_statement != nullptr
+                ? scope.generate_statement->label
+                : scope.generate != nullptr ? scope.generate->label
+                                            : scope.case_name;
         };
         if (is_type(object)) {
             const auto& data = *object.type_data;
@@ -16125,6 +16753,21 @@ private:
     [[nodiscard]] std::optional<std::pair<runtime::simir::ProcessId, std::size_t>>
     variable_local(const Object& object) const
     {
+        // An element or slice of a variable: the variable's local, whose
+        // bits from the element's offset it denotes.
+        if ((object.kind == vhpiIndexedNameK || object.kind == vhpiSelectedNameK
+                || object.kind == vhpiSliceNameK)
+            && !object.signal && object.expression == nullptr
+            && object.parent != nullptr) {
+            const Object* root = &object;
+            while ((root->kind == vhpiIndexedNameK
+                       || root->kind == vhpiSelectedNameK
+                       || root->kind == vhpiSliceNameK)
+                && root->parent != nullptr) {
+                root = root->parent;
+            }
+            return root == &object ? std::nullopt : variable_local(*root);
+        }
         // A variable a running call elaborated (14.6 b): its debug local, when
         // the activation is the newest of its subprogram, which the write
         // reaches; an outer activation of a recursive call has its registers
@@ -16136,8 +16779,11 @@ private:
                 return std::nullopt;
             }
             (void)activation_value(object);
-            if (!object.local
-                || activation_depth(*object.activation).second != 0U) {
+            const auto identity = frame_identity(*object.activation);
+            // The frame-local table has no write access: a local of a
+            // function is read through it only.
+            if (!object.local || !identity || identity->newer != 0U
+                || object.local_in_frame_table) {
                 return std::nullopt;
             }
             return object.local;
@@ -16180,11 +16826,39 @@ private:
         return object.local;
     }
 
+    // The debug local of a variable of an outer activation of a recursive
+    // call, and the number of activations of the subprogram entered after it.
+    [[nodiscard]] std::optional<std::pair<
+        std::pair<runtime::simir::ProcessId, std::size_t>, std::size_t>>
+    outer_activation_local(const Object& object) const
+    {
+        const Object* root = &object;
+        while ((root->kind == vhpiIndexedNameK || root->kind == vhpiSelectedNameK
+                   || root->kind == vhpiSliceNameK)
+            && root->parent != nullptr) {
+            root = root->parent;
+        }
+        if (root->activation == nullptr
+            || (root->kind != vhpiVarDeclK && root->kind != vhpiVarParamDeclK)
+            || !frame_alive(*root->activation)
+            || root->activation->frame_callee == nullptr) {
+            return std::nullopt;
+        }
+        (void)activation_value(*root);
+        const auto identity = frame_identity(*root->activation);
+        if (!root->local || !identity || identity->newer == 0U
+            || root->local_in_frame_table) {
+            return std::nullopt;
+        }
+        return std::pair { *root->local, identity->newer };
+    }
+
     [[nodiscard]] std::optional<PackedLogic4> read_local(
-        const std::pair<runtime::simir::ProcessId, std::size_t>& local) const
+        const std::pair<runtime::simir::ProcessId, std::size_t>& local,
+        const std::size_t newer = 0U) const
     {
         try {
-            return simulation_.read_process_local(local.first, local.second);
+            return simulation_.read_process_local(local.first, local.second, newer);
         } catch (const std::exception&) {
             return std::nullopt;
         }
@@ -16200,7 +16874,41 @@ private:
         while (body != nullptr && body->kind != vhpiSubpBodyK) {
             body = body->parent;
         }
-        if (body == nullptr || body->declaration == nullptr) {
+        if (body == nullptr) {
+            // The loop belongs to a process: no call elaborates its
+            // parameter, which the lowering keeps in the process's own
+            // frame (Process::call_frames, frame 0).
+            if (parameter.declaration == nullptr) {
+                return std::nullopt;
+            }
+            const auto* owner = parameter.parent;
+            while (owner != nullptr && owner->kind != vhpiProcessStmtK
+                && !(owner->is_stmt && !owner->sequential)) {
+                owner = owner->parent;
+            }
+            const auto design = owner != nullptr
+                ? design_process_of(*owner) : std::nullopt;
+            if (!design) {
+                return std::nullopt;
+            }
+            try {
+                const auto& locals
+                    = simulation_.process_program(*design).call_frames.locals;
+                const auto bound = std::ranges::find_if(locals,
+                    [&](const runtime::simir::FrameLocalBinding& binding) {
+                        return binding.frame == 0U && binding.frame_table
+                            && binding.declaration
+                            == parameter.declaration->id.value();
+                    });
+                return bound != locals.end()
+                    ? std::optional { simulation_.read_process_frame_local(
+                          *design, bound->index, 0U) }
+                    : std::nullopt;
+            } catch (const std::exception&) {
+                return std::nullopt;
+            }
+        }
+        if (body->declaration == nullptr) {
             return std::nullopt;
         }
         for (const auto& [process, stack] : frames_) {
@@ -17169,6 +17877,11 @@ private:
             error(vhpiError, "a null transaction has no value");
             return -1;
         }
+        // Nor has a driver a null transaction turned off (14.7.2).
+        if (object->kind == vhpiDriverK && driver_off(*object)) {
+            error(vhpiError, "a disconnected driver has no value");
+            return -1;
+        }
         return read_value(*object, *value);
     }
 
@@ -17363,16 +18076,46 @@ private:
     // (IEEE 1076-2019 23.26 vhpi_put_value). The buffer size gives the
     // number of array elements written, from the leftmost.
     [[nodiscard]] int put_value(const vhpiHandleT handle, vhpiValueT* const value,
-        const vhpiPutValueModeT mode)
+        const vhpiPutValueModeT requested)
     {
         auto* const object = object_of(handle);
-        if (object == nullptr || value == nullptr) {
+        // A release needs no value structure (IEEE 1076-2019 22.5.1).
+        if (object == nullptr || (value == nullptr && requested != vhpiRelease)) {
             return 1;
         }
+        // A shared variable that is not of a protected type (VHDL-93, 1076-1993
+        // 4.3.1.3) is a variable that the kernel keeps in a signal's storage:
+        // it is updated at once, without activity on signals, and the
+        // propagating mode is the plain one for a variable (IEEE 1076-2019
+        // 22.5.1, 22.5.2).
+        const Object* shared_root = object;
+        while ((shared_root->kind == vhpiIndexedNameK
+                   || shared_root->kind == vhpiSelectedNameK
+                   || shared_root->kind == vhpiSliceNameK)
+            && shared_root->parent != nullptr) {
+            shared_root = shared_root->parent;
+        }
+        const bool shared_variable = object->signal.has_value()
+            && shared_root->kind == vhpiVarDeclK
+            && shared_root->declaration != nullptr
+            && shared_root->declaration->shared;
+        const auto mode = shared_variable && requested == vhpiDepositPropagate
+            ? vhpiDeposit
+            : requested;
         // A variable of a process is updated at once, without activity on
         // signals, so the phases that refuse that allow it (22.5.2).
-        const auto local = variable_local(*object);
-        if (!local && (time_step_ended_ || postponed_)) {
+        auto local = variable_local(*object);
+        // A deposit reaches the variable of an outer activation of a
+        // recursive call too, in the registers the newer activations saved
+        // (22.5.2); a force or release does not.
+        std::size_t newer { };
+        if (!local && (mode == vhpiDeposit || mode == vhpiDepositPropagate)) {
+            if (const auto outer = outer_activation_local(*object)) {
+                local = outer->first;
+                newer = outer->second;
+            }
+        }
+        if (!local && !shared_variable && (time_step_ended_ || postponed_)) {
             error(vhpiError,
                 "cannot create delta cycle during current simulation phase");
             return 1;
@@ -17392,12 +18135,30 @@ private:
             error(vhpiError, object->full_name + " cannot be updated");
             return 1;
         }
-        // A variable takes the deposit modes, which are the same for it
-        // (22.5.1, 22.5.2); forcing a variable is not supported.
-        if (local && mode != vhpiDeposit && mode != vhpiDepositPropagate) {
-            error(vhpiError, object->full_name
-                    + ": forcing and releasing a variable are not supported");
+        // A variable or a subelement of one is forced, which also updates
+        // it, or released (22.5.2); the propagating modes are the plain
+        // ones for a variable (22.5.1).
+        const bool force_local = local
+            && (mode == vhpiForce || mode == vhpiForcePropagate);
+        if (local && !force_local && mode != vhpiDeposit
+            && mode != vhpiDepositPropagate && mode != vhpiRelease) {
+            error(vhpiError, object->full_name + " cannot be updated");
             return 1;
+        }
+        if (local && mode == vhpiRelease) {
+            try {
+                const auto bits = width_of(*object->type);
+                simulation_.release_process_local(local->first, local->second,
+                    object->offset, bits);
+            } catch (const std::exception& failure) {
+                error(vhpiError, object->full_name + " cannot be released: "
+                        + failure.what());
+                return 1;
+            }
+            drop_scoped_forces(*object, *local, object->offset,
+                width_of(*object->type));
+            local_force_event(*object, *local, true);
+            return 0;
         }
         // A foreign subprogram writes its formals of mode out or inout and
         // its function result (IEEE 1076-2019 20.4.2, 22.5.5).
@@ -17448,7 +18209,7 @@ private:
             : pending_updates_.end();
         PackedLogic4 whole;
         if (local) {
-            auto current = read_local(*local);
+            auto current = read_local(*local, newer);
             if (!current) {
                 error(vhpiError, object->full_name + " has no value yet");
                 return 1;
@@ -17475,8 +18236,17 @@ private:
         }
         if (local) {
             try {
-                simulation_.write_process_local(
-                    local->first, local->second, whole);
+                if (force_local) {
+                    const auto bits = width_of(*object->type);
+                    simulation_.force_process_local(local->first, local->second,
+                        whole, object->offset, bits == 0U ? whole.width() : bits);
+                    note_scoped_force(*object, *local, whole, object->offset,
+                        bits == 0U ? whole.width() : bits);
+                    local_force_event(*object, *local, false);
+                } else {
+                    simulation_.write_process_local(
+                        local->first, local->second, whole, newer);
+                }
             } catch (const std::exception& failure) {
                 error(vhpiError, object->full_name + " cannot be updated: "
                         + failure.what());
@@ -18764,6 +19534,9 @@ private:
     std::unordered_map<std::uint32_t, const vhdl::Unit*> declaration_units_;
     std::unordered_map<std::uint32_t, const elaboration::SignalInfo*>
         signal_infos_;
+    // The first specialization of each instance path.
+    std::map<std::string, const elaboration::SpecializationInfo*, std::less<>>
+        specializations_by_instance_;
     std::vector<runtime::SystemVerilogVpiCallbackHandle> lifecycle_;
     std::optional<runtime::SystemVerilogVpiCallbackHandle> next_time_;
     std::set<SignalId> changed_;
@@ -18775,9 +19548,15 @@ private:
     std::set<SignalId> transaction_watch_;
     std::set<SignalId> active_;
     // The drivers (process, signal) updated since the last update phase.
-    std::set<std::pair<runtime::simir::ProcessId, SignalId>> driver_active_;
+    // The bits (offset, width) of each process's drivers of each signal a
+    // transaction was on since the last flush.
+    std::map<std::pair<runtime::simir::ProcessId, SignalId>,
+        std::vector<std::pair<std::uint32_t, std::uint32_t>>>
+        driver_active_;
     std::uint64_t driver_token_ { };
     std::uint64_t force_token_ { };
+    // The variable change hook is set (ensure_local_hook).
+    bool local_hook_ { };
     std::uint64_t execution_token_ { };
     // The design processes that reached a statement since they last
     // suspended.
@@ -18801,6 +19580,10 @@ private:
     std::map<std::tuple<runtime::simir::ProcessId, std::uint32_t, std::uint32_t>,
         Object*>
         call_at_;
+    // The call objects of a statement by the source of the call, so that one call has
+    // one object (a folded call keeps the node it was folded from).
+    std::map<std::pair<const Object*, std::uint32_t>, Object*>
+        calls_by_statement_;
     std::unordered_map<const vhdl::Declaration*, Object*> params_;
     std::map<runtime::simir::ProcessId, Object*> process_objects_;
     std::uint64_t transaction_token_ { };
@@ -18850,14 +19633,9 @@ private:
     // outermost first, kept from the kernel's call and return points while
     // a statement or subprogram call callback is registered; the frame
     // objects (IEEE 1076-2019 19.10) are made when a handle asks for one.
-    struct CallRecord {
-        Object* call { };
-        const vhdl::Declaration* callee { };
-        std::uint32_t line { };
-        std::uint32_t column { };
-        Object* frame { };
-    };
     std::map<runtime::simir::ProcessId, std::vector<CallRecord>> frames_;
+    // The forces of variables of running calls (ScopedForce).
+    std::vector<ScopedForce> scoped_forces_;
     // The design process of the call point being delivered, where a call
     // object looks for its frame first.
     std::optional<runtime::simir::ProcessId> call_process_;

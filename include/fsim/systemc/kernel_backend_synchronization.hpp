@@ -3,7 +3,6 @@
 
 #include "fsim/systemc/kernel_backend_direct.hpp"
 
-#include <compare>
 #include <cstddef>
 #include <cstdint>
 #include <memory>

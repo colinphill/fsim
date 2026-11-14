@@ -7,6 +7,7 @@
 #include <cctype>
 #include <bit>
 #include <cmath>
+#include <iostream>
 #include <limits>
 
 namespace fsim::elaboration {
@@ -14,19 +15,20 @@ using namespace runtime::simir;
 
 namespace {
 
+// A subtype of IEEE.FIXED_PKG's UFIXED or SFIXED, by the identity analysis
+// stamped on the type mark where it is written (12.3, 12.4): a type that only
+// spells like them is another type.
 bool fixed_subtype_name(const semantic::vhdl::SubtypeIndication& subtype)
 {
-    const auto name = lowercase_vhdl_simple_name(subtype.type_mark.spelling);
-    return name == "ufixed" || name == "sfixed"
-        || name == "unresolved_ufixed" || name == "unresolved_sfixed";
+    return subtype.provided_type == semantic::vhdl::ProvidedType::ufixed
+        || subtype.provided_type == semantic::vhdl::ProvidedType::sfixed;
 }
 
 bool signed_fixed_subtype(
     const semantic::vhdl::SubtypeIndication& subtype)
 {
-    const auto name = lowercase_vhdl_simple_name(subtype.type_mark.spelling);
-    return subtype.signed_value || name == "sfixed"
-        || name == "unresolved_sfixed";
+    return subtype.signed_value
+        || subtype.provided_type == semantic::vhdl::ProvidedType::sfixed;
 }
 
 PackedLogic4 fixed_integer_value(
@@ -195,6 +197,14 @@ std::optional<Lowerer::HirVhdlFixedRange> Lowerer::hir_vhdl_fixed_range(
     }
     subtype = hir_effective_vhdl_subtype(*subtype).value_or(*subtype);
     if (!fixed_subtype_name(*subtype)) {
+        if (elaboration_detail::trace_lowering_failures()) {
+            std::cerr << "[fsim-hir-lower] vhdl-fixed-range-rejected mark="
+                      << subtype->type_mark.spelling << " target="
+                      << subtype->type_mark.target.value() << " provided="
+                      << static_cast<unsigned>(subtype->provided_type)
+                      << " constraints=" << subtype->constraints.size()
+                      << '\n';
+        }
         return std::nullopt;
     }
     const auto constraint = std::ranges::find_if(subtype->constraints,
@@ -629,7 +639,9 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_fixed_operator(
     const auto width_of = [](const HirVhdlFixedRange& range) {
         return static_cast<std::size_t>(range.left - range.right + 1);
     };
-    constexpr std::size_t maximum_width = 1U << 16U;
+    // SimIR register widths are 32-bit.
+    constexpr std::size_t maximum_width
+        = std::numeric_limits<std::uint32_t>::max();
     if (width_of(*lhs_range) > maximum_width
         || width_of(*rhs_range) > maximum_width) {
         report("FSIM-ELAB-VHFIX-002",
@@ -1267,7 +1279,8 @@ Lowerer::HirVhdlIntrinsicAttempt Lowerer::lower_hir_vhdl_fixed_function(
         || source_distance >= std::numeric_limits<std::size_t>::max()
         || std::max(source_range->left, *left)
                 - std::min(source_range->right, *right)
-            >= (std::int64_t { 1 } << 20)) {
+            >= static_cast<std::int64_t>(
+                std::numeric_limits<std::uint32_t>::max())) {
         report(
             "FSIM-ELAB-VHFIX-002",
             "fixed-point resize source width is not representable by SimIR",

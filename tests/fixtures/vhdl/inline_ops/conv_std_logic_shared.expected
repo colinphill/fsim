@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+wide event w='U' at 0
+wide w='U' p='U' at 0.5
+wide event w='0' at 1
+wide w='0' p='1' at 1.5
+wide event w='X' at 2
+wide w='X' p='X' at 2.5
+wide event w='1' at 3
+wide w='1' p='0' at 3.5
+wide event w='0' at 4
+wide w='0' p='1' at 4.5

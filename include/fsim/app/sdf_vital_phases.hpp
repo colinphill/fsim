@@ -2,6 +2,10 @@
 #pragma once
 
 #include "fsim/app/sdf_vital_archive.hpp"
+#include "fsim/app/sdf_effective_archive.hpp"
+#include "fsim/app/sdf_reannotation.hpp"
+#include "fsim/app/sdf_value_policy.hpp"
+#include "fsim/frontend/diagnostic.hpp"
 
 #include <cstddef>
 #include <cstdint>

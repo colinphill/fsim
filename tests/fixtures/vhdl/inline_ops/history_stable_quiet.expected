@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+wide A5 stable0=true stable3=true quiet0=true quiet3=true
+wide 10+0 stable0=false stable3=false quiet0=false quiet3=false
+wide 10+0b stable0=true stable3=false quiet0=true quiet3=false
+wide 10+0c stable0=true stable3=false quiet0=true quiet3=false
+wide 12 stable3=false quiet3=false
+wide 14 stable3=true quiet3=true
+wide 20+0 stable0=true stable3=true quiet0=false quiet3=false
+wide 20+0b stable0=true stable3=true quiet0=true quiet3=false
+wide 20+0c stable0=true stable3=true quiet0=true quiet3=false
+wide 24 stable3=true quiet3=true

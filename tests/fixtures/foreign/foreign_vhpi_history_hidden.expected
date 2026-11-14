@@ -1,0 +1,13 @@
+#c sig :top:s
+#c sig :top:v
+#c sig :top:|s'last_value|
+#c signals 3
+#c decls 3
+#c by name top.s: :top:s
+#c by name top.v: :top:v
+#c by name :top:s: :top:s
+#c by name top.s'last_value: null
+#c by name :top:s'last_value: null
+#c by name top.v'last_value: null
+#c by name top.\s'last_value\: :top:|s'last_value|
+#c by name :top:\s'last_value\: :top:|s'last_value|

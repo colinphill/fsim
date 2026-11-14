@@ -3,7 +3,6 @@
 
 #include "run_state_archive.hpp"
 
-#include <algorithm>
 #include <exception>
 #include <limits>
 #include <span>

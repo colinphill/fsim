@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+stdid generate true  7
+stdid hits 2 7 2
+stdid expanded image 5 true 3
+stdid expanded bounds 0 1 2147483647 2147483647
+stdid expanded positions 97 1 true 'B'
+stdid digit 57 49 '7'
+stdid leaf true true true 49 '1'
+stdid leaf true true true 49 '1'

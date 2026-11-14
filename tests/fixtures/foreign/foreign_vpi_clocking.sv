@@ -47,5 +47,19 @@ module top;
   endclocking
   global clocking gck @(posedge clk);
   endclocking
+  // Clocking blocks of generate blocks are children of the generate scope
+  // (37.48, 27.6).
+  logic [3:0] gd, gq;
+  if (1) begin : g
+    clocking gcb @(posedge clk);
+      input #1 gd;
+      output #2 gq;
+    endclocking
+  end
+  for (genvar i = 0; i < 2; i++) begin : gl
+    clocking lcb @(negedge clk);
+      input gd;
+    endclocking
+  end
   initial #3 $finish;
 endmodule

@@ -1,23 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
-#include "fsim/app/artifact_phase.hpp"
-#include "fsim/app/design_artifact.hpp"
-#include "fsim/support/path.hpp"
 #include "assertion_application_support.hpp"
 
 #include <algorithm>
-#include <array>
 #include <cassert>
-#include <chrono>
 #include <filesystem>
 #include <fstream>
-#include <iostream>
-#include <map>
-#include <sstream>
 #include <string>
-#include <string_view>
-#include <system_error>
-#include <utility>
 
 namespace fsim::test::assertion_application {
 

@@ -23,7 +23,6 @@
 #include <string>
 #include <string_view>
 #include <tuple>
-#include <typeindex>
 #include <typeinfo>
 #include <type_traits>
 #include <utility>
@@ -367,7 +366,12 @@ infer_static_read_ranges(
                 != visited.end();
         };
         if (std::ranges::any_of(program.debug_locals(), observed_register)
-            || std::ranges::any_of(program.call_results(), observed_register)) {
+            || std::ranges::any_of(program.call_results(),
+                [&](const auto& local) {
+                    return !is_system_call_value_slot(local)
+                        && local.storage == DebugLocalStorage::packed
+                        && observed_register(local);
+                })) {
             continue;
         }
         ranges.emplace(instruction, std::move(candidate_ranges));
@@ -472,6 +476,20 @@ bool visit_known_region_accesses(
         } else if constexpr (std::is_same_v<T, EventTriggered>) {
             observe(value.event, RegionObservation::events);
             return true;
+        } else if constexpr (std::is_same_v<T, EventArrayElement>) {
+            // Any element the index may select: a trigger reads and writes
+            // it, a wait and the triggered state follow its events.
+            const bool trigger = value.operation == EventArrayOperation::trigger
+                || value.operation == EventArrayOperation::trigger_nonblocking;
+            for (const auto signal : value.elements) {
+                if (trigger) {
+                    observe(signal, RegionObservation::current);
+                    record_write(signal);
+                } else {
+                    observe(signal, RegionObservation::events);
+                }
+            }
+            return true;
         } else if constexpr (std::is_same_v<T, MonitorInstall>) {
             for (const auto& item : value.values) {
                 if (item.kind == MonitorValueKind::signal) {
@@ -521,7 +539,8 @@ bool visit_known_region_accesses(
                 record_write(*value.transaction_signal);
             }
             return descriptor != nullptr && descriptor->complete;
-        } else if constexpr (std::is_same_v<T, WriteContainerObjectElement>) {
+        } else if constexpr (std::is_same_v<T, WriteContainerObjectElement>
+            || std::is_same_v<T, WriteContainerObjectString>) {
             const auto* descriptor = find_container(value.object);
             if (descriptor != nullptr) {
                 for (const auto& binding : descriptor->bindings) {
@@ -530,8 +549,10 @@ bool visit_known_region_accesses(
                     }
                 }
             }
-            if (value.transaction_signal) {
-                record_write(*value.transaction_signal);
+            if constexpr (std::is_same_v<T, WriteContainerObjectElement>) {
+                if (value.transaction_signal) {
+                    record_write(*value.transaction_signal);
+                }
             }
             return descriptor != nullptr && descriptor->complete;
         } else if constexpr (std::is_same_v<T, LoadConstant>
@@ -811,12 +832,7 @@ bool visit_known_region_accesses(
                 RegionObservation::current | RegionObservation::drivers);
             return true;
         } else if constexpr (std::is_same_v<T, ClassStaticMethodCall>) {
-            // Any other static call runs a callee body (opaque); the VHDL
-            // driver disconnection names its one signal.
-            if (const auto signal = vhdl_disconnect_signal(value.method_identity)) {
-                record_write(*signal);
-                return true;
-            }
+            // A static call runs a callee body (opaque).
             return false;
         } else if constexpr (std::is_same_v<T, ClassPropertyRead>
             || std::is_same_v<T, ClassStaticPropertyRead>
@@ -896,7 +912,8 @@ std::string static_loop_failure(const ProcessProgramView& process)
         || process.switch_resistive()) return "switch";
     if (process.string_register_count() != 0U) return "string_registers";
     if (process.container_register_count() != 0U) return "container_registers";
-    if (!process.debug_locals().empty() || !process.call_results().empty()
+    if (!process.debug_locals().empty()
+        || has_function_results(process.call_results())
         || !process.debug_string_locals().empty()
         || !process.debug_container_locals().empty()) return "debug_locals";
     if (!process.static_trigger_regions().empty()) return "static_trigger_regions";
@@ -921,7 +938,7 @@ bool static_loop(const ProcessProgramView& process)
         || process.string_register_count() != 0U
         || process.container_register_count() != 0U
         || !process.debug_locals().empty()
-        || !process.call_results().empty()
+        || has_function_results(process.call_results())
         || !process.debug_string_locals().empty()
         || !process.debug_container_locals().empty()
         || !process.static_trigger_regions().empty()) {
@@ -1175,7 +1192,8 @@ bool ownership_matches_operations(const ProcessProgramView& process,
                 const auto* container = find_container(value.object);
                 return container != nullptr && container->complete;
             } else if constexpr (std::is_same_v<T, WriteContainerObject>
-                || std::is_same_v<T, WriteContainerObjectElement>) {
+                || std::is_same_v<T, WriteContainerObjectElement>
+                || std::is_same_v<T, WriteContainerObjectString>) {
                 exact_ranges = false;
                 const auto* container = find_container(value.object);
                 if (container == nullptr || !container->complete) {
@@ -1189,12 +1207,15 @@ bool ownership_matches_operations(const ProcessProgramView& process,
                         return false;
                     }
                 }
-                if (value.transaction_signal
-                    && !std::ranges::any_of(driver_regions,
-                        [&](const auto& writer) {
-                            return writer.signal == *value.transaction_signal;
-                        })) {
-                    return false;
+                if constexpr (!std::is_same_v<T, WriteContainerObjectString>) {
+                    if (value.transaction_signal
+                        && !std::ranges::any_of(driver_regions,
+                            [&](const auto& writer) {
+                                return writer.signal
+                                    == *value.transaction_signal;
+                            })) {
+                        return false;
+                    }
                 }
                 return true;
             } else if constexpr (std::is_same_v<T, WaitSensitivity>) {
@@ -1316,31 +1337,6 @@ void classify_drivers(RegionSignalNode& signal)
 }
 
 } // namespace
-
-// The disconnection cancels the process's later transactions on the signal
-// and schedules the null transaction (Interpreter::Impl::
-// schedule_vhdl_disconnect). Its only signal access is a driver write to the
-// named signal, so it is a known write.
-std::optional<SignalId> vhdl_disconnect_signal(std::string_view identity)
-{
-    constexpr std::string_view prefix { "@vhdl-disconnect:" };
-    if (!identity.starts_with(prefix)) {
-        return std::nullopt;
-    }
-    const auto fields = identity.substr(prefix.size());
-    const auto separator = fields.find(':');
-    if (separator == std::string_view::npos) {
-        return std::nullopt;
-    }
-    SignalId signal { };
-    const auto parsed = std::from_chars(
-        fields.data(), fields.data() + separator, signal);
-    if (parsed.ec != std::errc { }
-        || parsed.ptr != fields.data() + separator) {
-        return std::nullopt;
-    }
-    return signal;
-}
 
 namespace detail {
 
@@ -2310,7 +2306,10 @@ RegionGraphContainerBindings build_region_graph_container_bindings_impl(
         const auto& elements = elements_by_object[object];
         if (value.slice_alias || !type.fixed || type.dimensions.empty()
             || type.element_kind != ContainerElementKind::Packed
-            || type.two_state || type.element_width == 0U
+            || (type.two_state
+                && signals[aggregate.signal].resolution
+                    != ResolutionKind::user_function)
+            || type.element_width == 0U
             || !aggregate.readable || aggregate.object != object
             || elements.empty()
             || elements.size() != value.initial_value.elements.size()) {
@@ -2325,7 +2324,9 @@ RegionGraphContainerBindings build_region_graph_container_bindings_impl(
             || *bridge_width > std::numeric_limits<std::uint32_t>::max()
             || signals[aggregate.signal].value_kind != ValueKind::logic4
             || signals[aggregate.signal].initial_value.is_logic9()
-            || signals[aggregate.signal].resolution != ResolutionKind::sv_wire
+            || (signals[aggregate.signal].resolution != ResolutionKind::sv_wire
+                && signals[aggregate.signal].resolution
+                    != ResolutionKind::user_function)
             || duplicate_aggregate_signal[aggregate.signal]
             || aggregate_by_signal[aggregate.signal]
                 != std::optional<ContainerObjectId> { object }
@@ -2377,7 +2378,10 @@ RegionGraphContainerBindings build_region_graph_container_bindings_impl(
             if (signal.initial_value.width() != type.element_width
                 || signal.value_kind != ValueKind::logic4
                 || signal.initial_value.is_logic9()
-                || signal.resolution != ResolutionKind::sv_wire) {
+                // The elements of an array of nettype nets resolve each by
+                // the nettype's function (IEEE 1800-2023 6.6.7).
+                || signal.resolution
+                    != signals[aggregate.signal].resolution) {
                 valid = false;
                 break;
             }

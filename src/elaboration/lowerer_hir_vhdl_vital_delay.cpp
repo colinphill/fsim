@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <cctype>
-#include <map>
 
 namespace fsim::elaboration {
 using namespace runtime::simir;

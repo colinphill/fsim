@@ -9,7 +9,6 @@
 #include "fsim/runtime/vpi_abi.h"
 #include "sv_vpi_user.h"
 
-#include <stdio.h>
 #include <string.h>
 
 static const char* text(PLI_INT32 property, vpiHandle object)
@@ -292,13 +291,17 @@ static void statements(vpiHandle top)
             vpiHandle const condition = vpi_handle(vpiCondition, item);
             vpiHandle const variable
                 = condition != NULL ? first(vpiOperand, condition) : NULL;
-            vpiHandle const parent
-                = variable != NULL ? vpi_handle(vpiParent, variable) : NULL;
+            // The loop declares its variable, so it is the variable's
+            // scope (37.12 detail 2).
+            vpiHandle const scope
+                = variable != NULL ? vpi_handle(vpiScope, variable) : NULL;
             vpi_printf("#c line 39: %s localvardecls=%d\n",
                 text(vpiType, item), (int)vpi_get(vpiLocalVarDecls, item));
-            vpi_printf("#c line 39: loop variable %s parent=%s\n",
+            vpi_printf("#c line 39: loop variable %s scope=%s\n",
                 variable != NULL ? text(vpiType, variable) : "?",
-                parent != NULL ? text(vpiFullName, parent) : "?");
+                scope == NULL ? "?"
+                    : vpi_compare_objects(scope, item) ? "the loop"
+                    : text(vpiType, scope));
         } else if (line == 41) {
             vpiHandle const task = vpi_handle(vpiTask, item);
             vpiHandle const arguments = vpi_iterate(vpiArgument, item);

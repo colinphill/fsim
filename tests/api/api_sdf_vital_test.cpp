@@ -11,7 +11,6 @@
 
 #include <cassert>
 #include <filesystem>
-#include <iostream>
 #include <string>
 
 #ifndef FSIM_TEST_SOURCE_DIR

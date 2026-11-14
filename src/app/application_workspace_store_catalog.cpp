@@ -3,9 +3,17 @@
 
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
+#include "application_workspace_store.hpp"
+#include "application_workspace_store_internal.hpp"
+#include "fsim/support/sqlite_database.hpp"
 
 #include <map>
-#include <set>
+#include <cstddef>
+#include <filesystem>
+#include <optional>
+#include <string>
+#include <system_error>
+#include <utility>
 
 namespace fsim::app::workspace::detail {
 namespace {

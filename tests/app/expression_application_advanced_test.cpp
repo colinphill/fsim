@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/runtime/simir.hpp"
 #include "fsim/app/design_artifact.hpp"
 
 #include <array>
 #include <cassert>
-#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -429,11 +430,13 @@ void test_vhdl_falling_edge(
             "0",
             // The t=2 ns zero-time wait resumes after the 1 ns delayed fall.
             "0",
-            // S'TRANSACTION starts at '1' (its initial value is not defined,
-            // IEEE 1076-2019 16.2.4); four transactions on redundant, one on
-            // single.
+            // S'TRANSACTION flips on each transaction; its initial value is
+            // not defined (IEEE 1076-2019 16.2.4), so the design compares it
+            // with its start: four transactions on redundant flip it back,
+            // one on single flips it, and the process sensitive to it
+            // resumes four times, seeing a flip each time.
             "1",
-            "0",
+            "1",
             "1",
             "1",
             "1",

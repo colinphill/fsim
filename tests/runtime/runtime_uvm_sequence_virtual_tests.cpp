@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <array>
 #include <functional>
-#include <ranges>
 #include <stdexcept>
 #include <string>
 #include <string_view>

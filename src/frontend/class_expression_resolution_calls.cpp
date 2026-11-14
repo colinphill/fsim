@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "class_expression_resolution_internal.hpp"
-#include "fsim/support/uvm_identity.hpp"
 #include <array>
 
 #include <algorithm>
@@ -418,6 +417,31 @@ void Resolver::retain_task_profile(
       expression = std::move(selected);
       return resolve_expression(
           expression, scope, expected_class, expected_scalar);
+    }
+    // A member of an element of an instance array selected by a constant
+    // index (`u.a[1].m`) is named by the whole path (IEEE 1800-2023 23.6).
+    if (!identity && !receiver_type
+        && expression.operands.front().kind == ExpressionKind::Index
+        && expression.operands.front().operands.size() == 2U
+        && expression.operands.front().operands[0].kind
+            == ExpressionKind::Identifier
+        && expression.operands.front().operands[1].kind
+            == ExpressionKind::IntegerLiteral
+        && !expression.operands.front().operands[1].text.empty()
+        && expression.operands.front().operands[1].text.find_first_not_of(
+               "0123456789") == std::string::npos
+        && expression.operands.front().text == "index") {
+      const auto& element = expression.operands.front();
+      Expression named{ExpressionKind::Identifier,
+          element.operands[0].text + "[" + element.operands[1].text + "]."
+              + std::string{member},
+          {}, expression.span};
+      named.systemverilog_source_order = expression.systemverilog_source_order;
+      if (auto type = resolve_expression(named, scope);
+          type && class_identity(*type)) {
+        expression = std::move(named);
+        return type;
+      }
     }
     if (!identity) {
       auto receiver = std::move(expression.operands.front());
@@ -1236,7 +1260,11 @@ void Resolver::retain_task_profile(
       if (match && match->method && match->method->is_static) {
         const auto method = specialize_selected_method(
             *match->method, *owner, scope);
-        const auto intrinsic = selected_uvm_intrinsic(*owner, name);
+        // A typedef's actuals (`uvm_config_int` names
+        // `uvm_config_db#(uvm_bitstream_t)`) select the type they denote.
+        auto normalized_owner = *owner;
+        normalize_selection_actuals(normalized_owner, scope);
+        const auto intrinsic = selected_uvm_intrinsic(normalized_owner, name);
         // The unadorned name of a parameterized class selects the method
         // in the specialization the caller runs in (8.25.1).
         const bool specialized = std::ranges::any_of(
@@ -1255,6 +1283,15 @@ void Resolver::retain_task_profile(
         if (specialized) {
           expression.systemverilog_class_owner =
               std::make_shared<const Type>(owner->type);
+        }
+        // A registry's create makes an object of the class its type
+        // expression denotes (`C#(3)::type_id::create`, IEEE 1800-2023
+        // 8.25, 6.22.1), so the call selects that class specialization.
+        if (intrinsic.starts_with("@uvm-registry-create:")
+            || intrinsic.starts_with("@uvm-registry-get:")) {
+          expression.systemverilog_class_owner
+              = selected_uvm_registry_type(*owner);
+          resolve_class_owner_constants(expression, scope, 0U);
         }
         retain_call_profile(expression, method, false);
         for (std::size_t index = 0;
@@ -1402,6 +1439,24 @@ std::optional<Type> Resolver::resolve_expression(
     Expression element{ExpressionKind::Index, "index",
         {expression.operands[0], expression.operands[1]}, expression.span};
     const auto element_type = resolve_expression(element, scope);
+    // An element of an instance array selected by a constant index
+    // (`u.a[1].m`) is named by the whole path (IEEE 1800-2023 23.6).
+    if (!element_type && expression.operands[0].kind == ExpressionKind::Identifier
+        && expression.operands[1].kind == ExpressionKind::IntegerLiteral
+        && !expression.operands[1].text.empty()
+        && expression.operands[1].text.find_first_not_of("0123456789")
+            == std::string::npos) {
+      Expression named{ExpressionKind::Identifier,
+          expression.operands[0].text + "[" + expression.operands[1].text
+              + "]." + expression.text.substr(std::string_view{"index."}.size()),
+          {}, expression.span};
+      named.systemverilog_source_order = expression.systemverilog_source_order;
+      if (auto type = resolve_expression(named, scope);
+          type && class_identity(*type)) {
+        expression = std::move(named);
+        return type;
+      }
+    }
     if (element_type && class_identity(*element_type)
         && !element_type->systemverilog_container) {
       Expression selected = std::move(element);
@@ -1880,6 +1935,39 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
         return;
       }
     }
+    // A call on a handle whose type is a class type parameter of the
+    // enclosing class (`T inner; ... inner.set(x);`) calls a method of the
+    // class the specialization binds the parameter to (IEEE 1800-2023 8.25).
+    // The parameter's class is known only there, so the call keeps the
+    // member-call form with the receiver first, and as a statement it
+    // discards its result (13.4.1).
+    if (receiver_type && !class_identity(*receiver_type)
+        && scope.class_owner != nullptr && scope.method_body
+        && !support::uvm_library(scope.class_owner->uvm_role)
+        && !receiver_type->named_type.empty()
+        // The innermost declaration of the name decides (6.18, 26.3).
+        && class_type_parameter_binding(receiver_type->named_type, scope)
+            != nullptr) {
+      Expression call{ExpressionKind::Call,
+          "." + statement.task_name.substr(dot + 1U), {}, statement.span};
+      call.operands.push_back(std::move(receiver));
+      for (auto& argument : statement.task_arguments) {
+        call.operands.push_back(std::move(argument));
+      }
+      if (!statement.task_argument_names.empty()) {
+        call.call_argument_names.push_back(std::string{});
+        for (const auto& argument_name : statement.task_argument_names) {
+          call.call_argument_names.push_back(argument_name);
+        }
+      }
+      resolve_expression(call, scope);
+      statement.kind = StatementKind::ContainerMethod;
+      statement.value = std::move(call);
+      statement.task_name.clear();
+      statement.task_arguments.clear();
+      statement.task_argument_names.clear();
+      return;
+    }
     if (receiver_type && class_identity(*receiver_type)) {
       const auto name = statement.task_name.substr(dot + 1U);
       // `obj.set_randstate(state)` (IEEE 1800-2017 18.13.5).
@@ -2055,6 +2143,13 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
         statement.task_name.substr(0, selected), scope);
     if (owner) {
       const auto name = statement.task_name.substr(selected + 2U);
+      // A typedef's actuals (`uvm_config_int` names
+      // `uvm_config_db#(uvm_bitstream_t)`) select the type they denote.
+      const auto normalized_owner = [&] {
+        auto normalized = *owner;
+        normalize_selection_actuals(normalized, scope);
+        return normalized;
+      };
       auto kind = SystemVerilogClassMethodKind::Task;
       auto matches = find_methods(
           owner->declaration->canonical_identity,
@@ -2083,8 +2178,8 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
                 || selects_specialization(
                     std::string_view{statement.task_name}.substr(0, selected),
                     *owner))
-            && selected_uvm_intrinsic(*owner, name).empty()
-            && !uvm_library_method(match->method->canonical_identity)) {
+            && selected_uvm_intrinsic(normalized_owner(), name).empty()
+            && !support::uvm_library(match->method->uvm_role)) {
           // A static function called as a statement discards its result
           // (IEEE 1800-2017 13.4.1) and lowers as an expression statement;
           // native UVM methods keep their task form.
@@ -2103,10 +2198,10 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
           return;
         }
         if (match && match->method && match->method->is_static) {
-          const auto intrinsic = selected_uvm_intrinsic(*owner, name);
+          const auto intrinsic = selected_uvm_intrinsic(normalized_owner(), name);
           // The UVM library's own methods run on its native services.
           const bool specialized = intrinsic.empty()
-              && !uvm_library_method(match->method->canonical_identity)
+              && !support::uvm_library(match->method->uvm_role)
               && selects_specialization(
                   std::string_view{statement.task_name}.substr(0, selected),
                   *owner);
@@ -2220,6 +2315,10 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
 [[gnu::noinline]] std::unique_ptr<Scope> Resolver::declare_statement_scope(
     Statement& statement, const Scope& inherited_scope) {
   auto declared_scope = std::make_unique<Scope>(inherited_scope);
+  for (const auto& import : statement.systemverilog_imports) {
+    if (!import.name.empty()) declared_scope->imported_names.insert(import.name);
+    declared_scope->imports.push_back(&import);
+  }
   for (auto& alias : statement.type_aliases) {
     if (auto scoped = resolve_class_scoped_type(alias.type, *declared_scope)) {
       alias.type = std::move(*scoped);
@@ -2230,6 +2329,22 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
     if (auto scoped = resolve_class_scoped_type(
             declaration.type, *declared_scope)) {
       declaration.type = std::move(*scoped);
+    }
+    // A class typedef a block import makes visible (IEEE 1800-2023 26.3)
+    // names its class and specialization.
+    if (!statement.systemverilog_imports.empty()
+        && !declaration.type.named_type.empty()
+        && !class_identity(declaration.type)
+        && !declared_scope->aliases.contains(declaration.type.named_type)) {
+      if (const auto* imported = imported_class_alias(
+              declaration.type.named_type, *declared_scope)) {
+        declaration.type.systemverilog_class_declaration
+            = imported->systemverilog_class_declaration;
+        declaration.type.systemverilog_class_name
+            = imported->systemverilog_class_name;
+        declaration.type.systemverilog_class_parameter_actuals
+            = imported->systemverilog_class_parameter_actuals;
+      }
     }
     if (declaration.initializer) {
       resolve_typed_expression(
@@ -2474,6 +2589,9 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
   for (auto& argument : statement.output_arguments) {
     resolve_expression(argument, scope);
   }
+  // The descriptor of $fdisplay, $fwrite, $fflush and $fclose (IEEE
+  // 1800-2023 21.3) names a class's property as any operand does.
+  resolve_expression(statement.file_handle, scope);
   for (auto& sensitivity : statement.sensitivities) {
     resolve_member_sensitivity(sensitivity, scope);
     resolve_expression(sensitivity.expression, scope);
@@ -2677,6 +2795,16 @@ void Resolver::resolve_class(SystemVerilogClassDeclaration& declaration, Scope s
   for (auto& method : declaration.methods) {
     auto method_scope = scope;
     method_scope.method_body = true;
+    // A default argument is evaluated in the scope that declares the
+    // method, the class (IEEE 1800-2023 13.5.3): a property or method it
+    // names is the one of the object the method is called on, and the
+    // method's own formals and locals are not visible to it.
+    for (auto& argument : method.arguments) {
+      if (argument.default_value) {
+        resolve_typed_expression(
+            *argument.default_value, method_scope, argument.type);
+      }
+    }
     add_objects(method_scope, method.arguments);
     // A formal typed by an array typedef of class handles keeps the array
     // (`typedef C list_t[string]; function f(ref list_t l)`).

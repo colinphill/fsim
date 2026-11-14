@@ -37,6 +37,11 @@ struct ClassPropertyContainerWrite {
   RegisterId receiver{};
   ContainerRegisterId source{};
   std::string property_identity;
+  // The write-back after a change of a method's cached copy of a `this`
+  // property: done only while a value-change callback watches class
+  // properties, so the callback follows each change (IEEE 1800-2023
+  // 38.36.1); the copy is written back at the method's end anyway.
+  bool when_watched{};
 };
 
 struct ClassMethodCall {

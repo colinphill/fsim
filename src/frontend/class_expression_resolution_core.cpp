@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "class_expression_resolution_internal.hpp"
 #include "fsim/frontend/class_resolution.hpp"
-#include "fsim/support/uvm_identity.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -1079,6 +1078,46 @@ bool Resolver::class_assignable(
     lexical_identity.resize(separator);
   }
 }
+const Type* Resolver::imported_class_alias(
+    const std::string_view name, const Scope& scope) const {
+  const Type* found = nullptr;
+  for (const auto* import : scope.imports) {
+    if (!import->name.empty() && import->name != name) continue;
+    for (const auto& unit : design_.units) {
+      if (unit.kind != UnitKind::SystemVerilogPackage
+          || unit.name != import->package) {
+        continue;
+      }
+      const auto alias = class_aliases_.find(effective_library(unit.library)
+          + "::" + unit.name + "::" + std::string{name});
+      if (alias == class_aliases_.end() || !class_identity(*alias->second)) {
+        continue;
+      }
+      if (found != nullptr && found != alias->second) return nullptr;
+      found = alias->second;
+    }
+  }
+  return found;
+}
+const ParameterDeclaration* Resolver::class_type_parameter_binding(
+    const std::string_view name, const Scope& scope) const {
+  if (scope.class_owner == nullptr || scope.aliases.contains(name)
+      || scope.imported_names.contains(name)) {
+    return nullptr;
+  }
+  if (std::ranges::any_of(scope.class_owner->type_aliases,
+          [&](const TypeAliasDeclaration& alias) {
+            return alias.name == name;
+          })) {
+    return nullptr;
+  }
+  const auto parameter = std::ranges::find_if(
+      scope.class_owner->parameters, [&](const ParameterDeclaration& item) {
+        return item.kind == ParameterKind::Type && item.name == name;
+      });
+  return parameter == scope.class_owner->parameters.end() ? nullptr
+                                                          : &*parameter;
+}
 std::optional<Type> Resolver::class_type_parameter_actual(
     const std::string& named, const SystemVerilogClassDeclaration& owner,
     const Type& receiver, const Scope& scope) const {
@@ -2085,13 +2124,38 @@ Resolver::resolve_own_class_selection(
                    named, scope.lexical_identity);
         !resolved.systemverilog_class_parameter_actuals.empty()) {
       alias_type = std::move(resolved);
+    } else if (const auto* imported = imported_class_alias(spelling, scope);
+        imported != nullptr
+        && !imported->systemverilog_class_parameter_actuals.empty()) {
+      // A typedef made visible by a package import (26.3).
+      alias_type = *imported;
     }
   } else if (selected != std::string_view::npos
       && (hash == std::string_view::npos || selected < hash)) {
     const auto owner = spelling.substr(0, selected);
     const auto name = std::string{spelling.substr(selected + 2U)};
     const auto owners = resolve_class_name(owner, scope);
-    if (owners.size() == 1U) {
+    // `typedef C#(7) T; T::m` names the member through the specialization
+    // the typedef denotes, so the member type binds C's parameters to the
+    // typedef's actuals (IEEE 1800-2023 6.18, 8.25.1). T is looked up in the
+    // scope as any type name is.
+    if (owners.size() == 1U && owner.find('#') == std::string_view::npos) {
+      Type named;
+      named.named_type = std::string{owner};
+      const auto local = scope.aliases.find(owner);
+      const auto typedef_type = local != scope.aliases.end()
+          ? *local->second : resolve_alias_type(named, scope.lexical_identity);
+      if (class_identity(typedef_type)
+          && !typedef_type.systemverilog_class_parameter_actuals.empty()) {
+        Type scoped;
+        scoped.named_type = owners.front()->canonical_identity + "::" + name;
+        scoped.systemverilog_class_parameter_actuals
+            = typedef_type.systemverilog_class_parameter_actuals;
+        alias_type = resolve_class_scoped_type(scoped, scope);
+      }
+    }
+    if (alias_type) {
+    } else if (owners.size() == 1U) {
       if (const auto alias = class_aliases_.find(
               owners.front()->canonical_identity + "::" + name);
           alias != class_aliases_.end()) {
@@ -2722,52 +2786,60 @@ void Resolver::anchor_alias_actuals(
   }
   return {};
 }
+[[nodiscard]] std::shared_ptr<const Type> Resolver::selected_uvm_registry_type(
+    const ClassSelection& selection) {
+  const auto role = selection.declaration->uvm_role;
+  if (role != support::UvmRole::object_registry
+      && role != support::UvmRole::component_registry) {
+    return {};
+  }
+  for (const auto& actual :
+       selection.type.systemverilog_class_parameter_actuals) {
+    if (!actual.type_actual) continue;
+    if (actual.type_actual->systemverilog_class_declaration.empty()) return {};
+    return std::make_shared<const Type>(*actual.type_actual);
+  }
+  return {};
+}
 [[nodiscard]] std::string Resolver::selected_uvm_intrinsic(
     const ClassSelection& selection,
     const std::string_view method) {
+  // The library method the call names, by its recorded role.
+  const auto& methods = selection.declaration->methods;
+  const auto found = std::ranges::find(
+      methods, method, &SystemVerilogClassMethod::name);
+  const auto role = found == methods.end() ? support::UvmRole::none
+                                           : found->uvm_role;
   const auto type_identity = selected_uvm_type_identity(selection);
-  if ((selection.declaration->name == "uvm_object_registry"
-       || selection.declaration->name == "uvm_component_registry")
-      && method == "create"
+  if (role == support::UvmRole::registry_create
       && type_identity.starts_with("class:")) {
     return "@uvm-registry-create:" + type_identity.substr(6U);
+  }
+  // The registry's `get` answers the class's type wrapper (IEEE
+  // 1800.2-2020 8.2.4.2.1).
+  if (role == support::UvmRole::registry_get
+      && type_identity.starts_with("class:")) {
+    return "@uvm-registry-get:" + type_identity.substr(6U);
   }
   // The singletons the library's package variables hold (`uvm_top`,
   // `uvm_cmdline_proc`, `uvm_test_done`, `uvm_resources`) are the objects the
   // native UVM services answer for: the getter returns the handle of the
   // run's one object of the class (`@uvm-singleton:<class>`).
-  if (support::is_uvm_library_identity(selection.declaration->canonical_identity)
-      && ((selection.declaration->name == "uvm_root" && method == "get")
-          || (selection.declaration->name == "uvm_cmdline_processor"
-              && method == "get_inst")
-          || (selection.declaration->name == "uvm_test_done_objection"
-              && method == "get")
-          || (selection.declaration->name == "uvm_resource_pool"
-              && method == "get"))) {
+  if (role == support::UvmRole::singleton_get) {
     return "@uvm-singleton:" + selection.declaration->canonical_identity;
   }
-  // Only the UVM library's own methods, `set(cntxt, inst_name,
-  // field_name, value)` and its siblings; a user class of the same name
-  // keeps its declared methods.
-  const auto uvm_profile = std::ranges::any_of(
-      selection.declaration->methods,
-      [&](const SystemVerilogClassMethod& candidate) {
-        return candidate.name == method && candidate.arguments.size() >= 3U;
-      });
-  if (selection.declaration->name == "uvm_config_db"
-      && (method == "set" || method == "get" || method == "exists")
-      && uvm_profile && !type_identity.empty()) {
-    return "@uvm-config-db-" + std::string{method}
-        + ":" + type_identity;
+  // Only the library's own `set(cntxt, inst_name, field_name, value)` and
+  // its siblings of uvm_config_db (IEEE 1800.2-2020 C.4.2).
+  if (selection.declaration->uvm_role == support::UvmRole::config_db
+      && !type_identity.empty()) {
+    if (role == support::UvmRole::database_set)
+      return "@uvm-config-db-set:" + type_identity;
+    if (role == support::UvmRole::database_get)
+      return "@uvm-config-db-get:" + type_identity;
+    if (role == support::UvmRole::database_exists)
+      return "@uvm-config-db-exists:" + type_identity;
   }
   return {};
-}
-bool Resolver::uvm_library_method(const std::string_view identity) const {
-  return support::is_uvm_library_identity(identity)
-      && std::ranges::any_of(classes_, [](const auto& entry) {
-           return support::is_uvm_library_identity(entry.first)
-               && entry.first.ends_with("uvm_pkg::uvm_object");
-         });
 }
 [[nodiscard]] std::vector<const SystemVerilogClassDeclaration*>
 Resolver::resolve_class_name(
@@ -2928,20 +3000,24 @@ Resolver::resolve_class_name(
         && identity.starts_with(scope.library + "::$unit");
   });
   // A typedef of a class (`typedef C #(int) K;`) names that class in a
-  // class scope resolution `K::f()` (IEEE 1800-2017 8.23, 6.18).
+  // class scope resolution `K::f()` (IEEE 1800-2017 8.23, 6.18): the name
+  // is looked up in the scope as any type name is.
   if (matches.empty() && normalized.find("::") == std::string::npos) {
-    const auto library_prefix = scope.library + "::";
-    for (const auto& [key, type] : class_aliases_) {
-      if (!key.starts_with(library_prefix)
-          || !key.ends_with("::" + normalized)) {
-        continue;
+    Type named;
+    named.named_type = normalized;
+    const auto resolved = resolve_alias_type(named, scope.lexical_identity);
+    auto identity = class_identity(resolved);
+    // A typedef a package import makes visible (IEEE 1800-2017 26.3).
+    if (!identity) {
+      if (const auto* imported = imported_class_alias(normalized, scope);
+          imported != nullptr) {
+        identity = class_identity(*imported);
       }
-      if (const auto identity = class_identity(*type)) {
-        if (const auto declaration = find_class(*identity);
-            declaration != nullptr
-            && std::ranges::find(matches, declaration) == matches.end()) {
-          matches.push_back(declaration);
-        }
+    }
+    if (identity) {
+      if (const auto declaration = find_class(*identity);
+          declaration != nullptr) {
+        matches.push_back(declaration);
       }
     }
   }
@@ -3165,10 +3241,12 @@ void Resolver::retain_result_type(
   // The class type of a variable declared in a module or interface unit,
   // resolved in that unit's scope (IEEE 1800-2017 23.8, 25.9).
   const auto unit_variable_class_type
-      = [&](const DesignUnit& target,
-            const std::string_view name) -> std::optional<Type> {
+      = [&](const DesignUnit& target, const std::string_view name,
+            const std::vector<VariableDeclaration>* const scope_variables
+            = nullptr) -> std::optional<Type> {
     const VariableDeclaration* variable = nullptr;
-    for (const auto& candidate : target.variables) {
+    for (const auto& candidate : scope_variables != nullptr
+             ? *scope_variables : target.variables) {
       if (candidate.name != name) {
         continue;
       }
@@ -3198,10 +3276,19 @@ void Resolver::retain_result_type(
       if (declarations.size() == 1U) {
         auto selected_type = class_type(*declarations.front());
         selected_type.systemverilog_container = type.systemverilog_container;
+        // The handle keeps the class parameter actuals it was declared with
+        // (`C #(8) m`, IEEE 1800-2023 8.25).
+        selected_type.systemverilog_class_parameter_actuals
+            = type.systemverilog_class_parameter_actuals;
+        selected_type.systemverilog_source_order
+            = type.systemverilog_source_order;
         type = std::move(selected_type);
       }
     }
-    if (!class_identity(type) || type.systemverilog_container) {
+    // An array, queue or associative array of handles keeps its container
+    // shape, so that an element selected from it (`s1.arr[1].get()`) is the
+    // handle of the element class (IEEE 1800-2023 7.4, 8.4, 23.6).
+    if (!class_identity(type)) {
       return std::nullopt;
     }
     return type;
@@ -3220,20 +3307,23 @@ void Resolver::retain_result_type(
     }
     // `$root.t.i.c` and `t.i.c` inside module `t` name the same object as
     // `i.c` (IEEE 1800-2017 23.6, 23.3.1).
+    const auto has_instance = [&](const std::string_view name) {
+      return scope.instances.contains(std::string{name.substr(0U, name.find('['))});
+    };
     const auto own_unit = scope.lexical_identity.substr(
         scope.lexical_identity.rfind(':') + 1U);
     if (components.size() >= 3U && components.front() == "$root") {
       components.erase(components.begin());
     }
     if (components.size() >= 3U && components.front() == own_unit
-        && !scope.instances.contains(components.front())
-        && scope.instances.contains(components[1])) {
+        && !has_instance(components.front())
+        && has_instance(components[1])) {
       components.erase(components.begin());
     }
     // A path may also start at a top-level module, whose implicit instance
     // has the module's name (IEEE 1800-2017 23.3.1, 23.6).
     const bool rooted_at_module = components.size() >= 2U
-        && !scope.instances.contains(components.front())
+        && !has_instance(components.front())
         && !scope.objects.contains(components.front())
         && std::ranges::count_if(design_.units, [&](const DesignUnit& unit) {
              return unit.name == components.front()
@@ -3241,7 +3331,7 @@ void Resolver::retain_result_type(
                  && effective_library(unit.library) == scope.library;
            }) == 1;
     if (components.size() >= 2U
-        && (scope.instances.contains(components.front())
+        && (has_instance(components.front())
             || rooted_at_module)) {
       const auto select_unit = [&](const std::string_view unit_name,
                                    const std::string_view library)
@@ -3260,33 +3350,71 @@ void Resolver::retain_result_type(
         }
         return selected;
       };
+      // An element of an instance array (`a[1]`) is named by the array's
+      // name (IEEE 1800-2023 23.6, 23.3.2).
+      const auto base_name = [](const std::string_view name) {
+        return name.substr(0U, name.find('['));
+      };
       const auto root_instance
-          = scope.instances.find(components.front());
+          = scope.instances.find(std::string{base_name(components.front())});
       const DesignUnit* target = select_unit(
           root_instance != scope.instances.end()
               ? std::string_view { root_instance->second }
-              : components.front(),
+              : base_name(components.front()),
           scope.library);
-      for (std::size_t index = 1U;
+      // The generate block (`g` or `g[0]`, 27.5) the path has entered, whose
+      // declarations the final name selects among.
+      const GenerateBody* body = nullptr;
+      const auto enter_generate = [&](const std::vector<GenerateRegion>& regions,
+                                      const std::string_view name)
+          -> const GenerateBody* {
+        const GenerateBody* found = nullptr;
+        const auto consider = [&](const std::string& scope_name,
+                                  const GenerateBody& candidate) {
+          if (!scope_name.empty() && scope_name == base_name(name)) {
+            found = found == nullptr ? &candidate : nullptr;
+          }
+        };
+        for (const auto& region : regions) {
+          consider(region.then_scope, region.then_body);
+          consider(region.else_scope, region.else_body);
+          for (const auto& alternative : region.alternatives) {
+            consider(alternative.scope, alternative.body);
+          }
+        }
+        return found;
+      };
+      for (std::size_t index = 1;
            target != nullptr && index + 1U < components.size(); ++index) {
-        const Instance* child = nullptr;
-        for (const auto& candidate : target->instances) {
-          if (candidate.name != components[index]) {
-            continue;
+        if (body == nullptr) {
+          const Instance* child = nullptr;
+          for (const auto& candidate : target->instances) {
+            if (candidate.name != base_name(components[index])) {
+              continue;
+            }
+            if (child != nullptr) {
+              child = nullptr;
+              break;
+            }
+            child = &candidate;
           }
           if (child != nullptr) {
-            child = nullptr;
-            break;
+            target = select_unit(child->unit_name,
+                effective_library(target->library));
+            continue;
           }
-          child = &candidate;
         }
-        target = child == nullptr
-            ? nullptr
-            : select_unit(child->unit_name,
-                  effective_library(target->library));
+        body = enter_generate(
+            body != nullptr ? body->generate_regions
+                            : target->generate_regions,
+            components[index]);
+        if (body == nullptr) {
+          target = nullptr;
+        }
       }
       if (target != nullptr) {
-        if (auto type = unit_variable_class_type(*target, components.back())) {
+        if (auto type = unit_variable_class_type(*target, components.back(),
+                body != nullptr ? &body->variables : nullptr)) {
           expression.nominal_type = *class_identity(*type);
           return type;
         }
@@ -3646,6 +3774,13 @@ void Resolver::retain_result_type(
       if (const auto spelling = class_specialization_spelling(
               owners.front()->name, alias)) {
         specialization_spelling = *spelling;
+      } else if (const auto* imported = imported_class_alias(
+                     owner_name, scope)) {
+        // A typedef made visible by a package import (IEEE 1800-2023 26.3).
+        if (const auto imported_spelling = class_specialization_spelling(
+                owners.front()->name, *imported)) {
+          specialization_spelling = *imported_spelling;
+        }
       }
     } else if (owners.size() == 1U
         && owner_name.find('#') == std::string::npos) {

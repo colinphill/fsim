@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/runtime/simir.hpp"
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/runtime/file_scanning.hpp"
 #include "fsim/runtime/vcd_writer.hpp"
@@ -439,18 +441,17 @@ endmodule
         // FSIM-CONFORMANCE CF-VHDL-FILE-001 source=SRC-IEEE-P1076 expectation=execute
         // FSIM-CONFORMANCE CF-VHDL-TEXTIO-001 source=SRC-UVVM expectation=execute
         R"(
-entity vhdl_file_top is end entity;
+use std.textio.all; entity vhdl_file_top is end entity;
 architecture rtl of vhdl_file_top is
   type integer_file is file of integer;
-  type text_file is file of string;
   signal done : bit;
 begin
   worker: process
     file input_file : integer_file open read_mode is "vhdl-input.txt";
     file empty_file : integer_file open read_mode is "vhdl-empty.txt";
     file output_file : integer_file;
-    file text_input : text_file open read_mode is "vhdl-text-input.txt";
-    file text_output : text_file open write_mode is "vhdl-text-output.txt";
+    file text_input : text open read_mode is "vhdl-text-input.txt";
+    file text_output : text open write_mode is "vhdl-text-output.txt";
     variable status : file_open_status;
     variable value : integer;
     variable flag : boolean;
@@ -504,12 +505,11 @@ begin
   end process;
 end architecture;
 
-entity vhdl_textio_failure is end entity;
+use std.textio.all; entity vhdl_textio_failure is end entity;
 architecture rtl of vhdl_textio_failure is
-  type text_file is file of string;
 begin
   worker: process
-    file input_file : text_file open read_mode is "vhdl-bad-text-input.txt";
+    file input_file : text open read_mode is "vhdl-bad-text-input.txt";
     variable input_line : line;
     variable value : integer;
   begin

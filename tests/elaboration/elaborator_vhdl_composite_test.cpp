@@ -1,7 +1,22 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_test_support.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
+#include "fsim/elaboration/elaborator.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/parser.hpp"
+#include "fsim/frontend/token.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include "fsim/semantic/vhdl_hir.hpp"
+#include <algorithm>
+#include <cassert>
+#include <cstddef>
+#include <iostream>
+#include <optional>
+#include <string>
+#include <string_view>
 
-#include <limits>
 
 namespace fsim::tests::elaboration {
 
@@ -1812,6 +1827,10 @@ void test_vhdl_revision_expression_elaboration()
 
     const auto ambiguous = fsim::frontend::parse_text(
         "vhdl93_expression_ambiguity.vhd",
+        // STD_LOGIC_VECTOR is visible through the use clause (IEEE
+        // 1076-2019 12.4), so both overloads accept the bit-string literal.
+        "library ieee;\n"
+        "use ieee.std_logic_1164.all;\n"
         "entity Revision_Ambiguity is end entity;\n"
         "architecture rtl of revision_ambiguity is\n"
         "  subtype Wide_Bit_T is bit_vector(136 downto 0);\n"

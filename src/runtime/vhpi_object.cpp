@@ -6,7 +6,6 @@
 #include <charconv>
 #include <cctype>
 #include <limits>
-#include <ranges>
 #include <utility>
 
 namespace fsim::runtime {

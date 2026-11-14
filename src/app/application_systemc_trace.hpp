@@ -10,7 +10,6 @@
 #include <cstdint>
 #include <iosfwd>
 #include <memory>
-#include <optional>
 #include <span>
 #include <string>
 #include <type_traits>

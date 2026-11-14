@@ -6,9 +6,96 @@
 
 #include <algorithm>
 #include <map>
+#include <set>
+#include <string>
+#include <string_view>
 #include <unordered_set>
+#include <utility>
 
 namespace fsim::frontend {
+
+bool VerilogParser::reads_sequence_endpoint(const DesignUnit& unit,
+    const std::vector<const GenerateBody*>& outer, const GenerateBody& body) const
+{
+    std::unordered_set<std::string> sequences;
+    const auto add = [&](const std::vector<SystemVerilogAssertionDeclaration>& declarations) {
+        for (const auto& declaration : declarations) {
+            if (declaration.kind == SystemVerilogAssertionDeclarationKind::Sequence) {
+                sequences.insert(declaration.name);
+            }
+        }
+    };
+    add(unit.systemverilog_assertion_declarations);
+    for (const auto* enclosing : outer) {
+        add(enclosing->systemverilog_assertion_declarations);
+    }
+    add(body.systemverilog_assertion_declarations);
+    if (sequences.empty()) {
+        return false;
+    }
+    const auto expression_reads = [&](const auto& self, const Expression& expression) -> bool {
+        if (expression.kind == ExpressionKind::Identifier
+            && expression.text.ends_with(".triggered")
+            && sequences.contains(expression.text.substr(0U,
+                expression.text.size() - std::string_view { ".triggered" }.size()))) {
+            return true;
+        }
+        if (expression.kind == ExpressionKind::Call
+            && expression.text == "@sv-select:triggered" && expression.operands.size() == 1U
+            && expression.operands.front().kind == ExpressionKind::Call
+            && sequences.contains(expression.operands.front().text)) {
+            return true;
+        }
+        return std::ranges::any_of(expression.operands,
+            [&](const Expression& operand) { return self(self, operand); });
+    };
+    const auto statement_reads = [&](const auto& self, const Statement& statement) -> bool {
+        for (const auto* expression : { &statement.target, &statement.value,
+                 &statement.condition, &statement.loop_initial, &statement.loop_limit }) {
+            if (expression_reads(expression_reads, *expression)) {
+                return true;
+            }
+        }
+        for (const auto& list : { &statement.task_arguments, &statement.output_arguments }) {
+            if (std::ranges::any_of(*list, [&](const Expression& argument) {
+                    return expression_reads(expression_reads, argument);
+                })) {
+                return true;
+            }
+        }
+        for (const auto& sensitivity : statement.sensitivities) {
+            if (sequences.contains(sensitivity.signal)
+                || (sensitivity.expression.kind == ExpressionKind::Call
+                    && sequences.contains(sensitivity.expression.text))
+                || expression_reads(expression_reads, sensitivity.expression)) {
+                return true;
+            }
+        }
+        for (const auto& list : { &statement.statements, &statement.else_statements,
+                 &statement.loop_updates }) {
+            if (std::ranges::any_of(*list, [&](const Statement& child) {
+                    return self(self, child);
+                })) {
+                return true;
+            }
+        }
+        return false;
+    };
+    const auto statements_read = [&](const std::vector<Statement>& statements) {
+        return std::ranges::any_of(statements, [&](const Statement& statement) {
+            return statement_reads(statement_reads, statement);
+        });
+    };
+    return std::ranges::any_of(body.processes,
+               [&](const Process& process) { return statements_read(process.statements); })
+        || std::ranges::any_of(body.tasks,
+            [&](const TaskDeclaration& task) { return statements_read(task.statements); })
+        || std::ranges::any_of(body.functions,
+            [&](const FunctionDeclaration& function) {
+                return statements_read(function.statements);
+            })
+        || statements_read(body.concurrent_statements);
+}
 
 void VerilogParser::resolve_generate_assertion_references(DesignUnit& unit)
 {
@@ -39,7 +126,10 @@ void VerilogParser::resolve_generate_assertion_references(DesignUnit& unit)
             });
         resolve_expect_statements(unit, body.processes, body.tasks,
             body.signals, body.concurrent_statements);
-        if (body.systemverilog_concurrent_assertions.empty()) {
+        // A block without directives still resolves when its procedures
+        // read the end point of a sequence it sees (9.4.2.4, 16.13.6).
+        if (body.systemverilog_concurrent_assertions.empty()
+            && !reads_sequence_endpoint(unit, outer, body)) {
             return;
         }
         DesignUnit scratch = unit;
@@ -150,7 +240,9 @@ void VerilogParser::resolve_generate_assertion_references(DesignUnit& unit)
         const auto signal_count = scratch.signals.size();
         const auto variable_count = scratch.variables.size();
         const auto statement_count = scratch.concurrent_statements.size();
+        sva_procedural_body_ = &body;
         resolve_assertion_references(scratch);
+        sva_procedural_body_ = nullptr;
         sva_scopes_.clear();
         for (auto& process : scratch.processes) {
             body.processes.push_back(std::move(process));
@@ -198,8 +290,236 @@ void VerilogParser::resolve_generate_assertion_references(DesignUnit& unit)
     }
 }
 
+std::optional<SystemVerilogAssertionDeclaration>
+VerilogParser::parse_compiled_assertion_declaration(std::vector<Token> source)
+{
+    if (source.size() < 2U || source.front().kind != TokenKind::Identifier
+        || (source.front().text != "sequence" && source.front().text != "property")) {
+        return std::nullopt;
+    }
+    const auto kind = source.front().text == "sequence"
+        ? SystemVerilogAssertionDeclarationKind::Sequence
+        : SystemVerilogAssertionDeclarationKind::Property;
+    Token end;
+    end.kind = TokenKind::EndOfFile;
+    end.span = source.back().span;
+    source.push_back(std::move(end));
+    auto saved_tokens = std::move(tokens_);
+    const auto saved_index = index_;
+    const auto saved_synthetic = synthetic_token_stream_;
+    tokens_ = std::move(source);
+    index_ = 0;
+    synthetic_token_stream_ = true;
+    const auto start = advance();
+    auto declaration = parse_assertion_declaration(start, kind);
+    tokens_ = std::move(saved_tokens);
+    index_ = saved_index;
+    synthetic_token_stream_ = saved_synthetic;
+    return declaration;
+}
+
+void VerilogParser::import_package_assertion_declarations(DesignUnit& unit)
+{
+    if (parsed_design_ == nullptr) {
+        return;
+    }
+    // The sequence and property declarations of package `name`: those of a
+    // package this parse holds, else those the lookup gives for a package
+    // parsed or compiled apart (its sources parsed here, in the package's
+    // own positions); null for a name that is no such package.
+    const auto package_declarations = [&](const std::string_view name)
+        -> const std::vector<SystemVerilogAssertionDeclaration>* {
+        const auto cached = sva_package_declarations_.find(name);
+        if (cached != sva_package_declarations_.end()) {
+            return cached->second.get();
+        }
+        std::shared_ptr<const std::vector<SystemVerilogAssertionDeclaration>> found;
+        for (const auto& candidate : parsed_design_->units) {
+            if (candidate.kind == UnitKind::SystemVerilogPackage
+                && candidate.name == name) {
+                auto own = std::make_shared<std::vector<SystemVerilogAssertionDeclaration>>();
+                for (const auto& declaration : candidate.systemverilog_assertion_declarations) {
+                    if (declaration.kind != SystemVerilogAssertionDeclarationKind::Checker) {
+                        own->push_back(declaration);
+                    }
+                }
+                found = std::move(own);
+                break;
+            }
+        }
+        if (!found) {
+            if (auto apart = package_members_.assertions(name, package_assertion_lookup_)) {
+                auto own = std::make_shared<std::vector<SystemVerilogAssertionDeclaration>>(
+                    std::move(apart->declarations));
+                for (auto& source : apart->sources) {
+                    if (auto parsed = parse_compiled_assertion_declaration(std::move(source))) {
+                        own->push_back(std::move(*parsed));
+                    }
+                }
+                found = std::move(own);
+            }
+        }
+        const auto* const result = found.get();
+        sva_package_declarations_.emplace(std::string { name }, std::move(found));
+        return result;
+    };
+    const auto assertion_declaration
+        = [](const std::vector<SystemVerilogAssertionDeclaration>& package,
+              const std::string_view name)
+        -> const SystemVerilogAssertionDeclaration* {
+        const auto found = std::ranges::find_if(package,
+            [&](const SystemVerilogAssertionDeclaration& entry) {
+                return entry.name == name;
+            });
+        return found == package.end() ? nullptr : &*found;
+    };
+    auto& declarations = unit.systemverilog_assertion_declarations;
+    const auto declared = [&](const std::string_view name) {
+        return std::ranges::any_of(declarations,
+            [&](const SystemVerilogAssertionDeclaration& entry) {
+                return entry.name == name;
+            });
+    };
+    const auto qualified_name = [](const std::string_view package,
+                                    const std::string_view name) {
+        return std::string { package } + "::" + std::string { name };
+    };
+    std::vector<std::string> imported_packages;
+    // `pkg :: s` naming a package's sequence or property becomes the one
+    // name `pkg::s` of its copy; `imported_packages` collects the packages.
+    const auto collapse = [&](std::vector<Token>& tokens) {
+        for (std::size_t index = 0; index + 2U < tokens.size(); ++index) {
+            if (tokens[index].kind != TokenKind::Identifier
+                || tokens[index + 1U].kind != TokenKind::Scope
+                || tokens[index + 2U].kind != TokenKind::Identifier
+                || (index > 0U
+                    && (tokens[index - 1U].kind == TokenKind::Scope
+                        || tokens[index - 1U].kind == TokenKind::Dot))) {
+                continue;
+            }
+            const auto package_name = tokens[index].text;
+            const auto* const package = package_declarations(package_name);
+            if (package == nullptr
+                || assertion_declaration(*package, tokens[index + 2U].text)
+                    == nullptr) {
+                continue;
+            }
+            if (std::ranges::find(imported_packages, package_name)
+                == imported_packages.end()) {
+                imported_packages.push_back(package_name);
+            }
+            tokens[index].text
+                = qualified_name(package_name, tokens[index + 2U].text);
+            tokens.erase(tokens.begin() + static_cast<std::ptrdiff_t>(index + 1U),
+                tokens.begin() + static_cast<std::ptrdiff_t>(index + 3U));
+        }
+    };
+    const auto collapse_declaration
+        = [&](SystemVerilogAssertionDeclaration& declaration) {
+              collapse(declaration.expression_tokens);
+              for (auto& formal : declaration.formals) {
+                  collapse(formal.default_tokens);
+              }
+          };
+    for (auto& declaration : declarations) {
+        collapse_declaration(declaration);
+    }
+    for (auto& directive : unit.systemverilog_concurrent_assertions) {
+        collapse(directive.property_tokens);
+    }
+    for (const auto& import : unit.systemverilog_imports) {
+        const auto* const package = package_declarations(import.package);
+        if (package != nullptr
+            && (import.name.empty()
+                || assertion_declaration(*package, import.name) != nullptr)
+            && std::ranges::find(imported_packages, import.package)
+                == imported_packages.end()) {
+            imported_packages.push_back(import.package);
+        }
+    }
+    // A package's declarations resolve their names in the package (16.8):
+    // in each copy, a name of another declaration of the package becomes
+    // its qualified copy, and a name of another package member is
+    // qualified with the package.
+    for (const auto& package_name : imported_packages) {
+        const auto* const package = package_declarations(package_name);
+        for (const auto& source : *package) {
+            auto copy = source;
+            std::set<std::string, std::less<>> hidden;
+            for (const auto& formal : copy.formals) {
+                hidden.insert(formal.name);
+            }
+            for (const auto& local : copy.local_variables) {
+                hidden.insert(local.name);
+            }
+            const auto qualify = [&](std::vector<Token>& tokens) {
+                for (std::size_t index = 0; index < tokens.size(); ++index) {
+                    auto& token = tokens[index];
+                    if (token.kind != TokenKind::Identifier
+                        || hidden.contains(token.text)
+                        || (index > 0U
+                            && (tokens[index - 1U].kind == TokenKind::Scope
+                                || tokens[index - 1U].kind == TokenKind::Dot))
+                        || (index + 1U < tokens.size()
+                            && tokens[index + 1U].kind == TokenKind::Scope)) {
+                        continue;
+                    }
+                    if (assertion_declaration(*package, token.text) != nullptr) {
+                        token.text = qualified_name(package_name, token.text);
+                        continue;
+                    }
+                    if (package_members_.find(package_name, token.text,
+                            package_member_lookup_)
+                        == SystemVerilogPackageMember::none) {
+                        continue;
+                    }
+                    auto prefix = token;
+                    prefix.text = package_name;
+                    auto scope = token;
+                    scope.kind = TokenKind::Scope;
+                    scope.text = "::";
+                    tokens.insert(tokens.begin()
+                            + static_cast<std::ptrdiff_t>(index),
+                        { std::move(prefix), std::move(scope) });
+                    index += 2U;
+                }
+            };
+            qualify(copy.expression_tokens);
+            for (auto& formal : copy.formals) {
+                qualify(formal.default_tokens);
+            }
+            if (copy.clock) {
+                qualify(copy.clock->event_tokens);
+            }
+            if (copy.disable) {
+                qualify(copy.disable->condition_tokens);
+            }
+            copy.name = qualified_name(package_name, source.name);
+            if (!declared(copy.name)) {
+                declarations.push_back(copy);
+            }
+            // An import makes the simple name visible unless the unit
+            // declares it (26.3).
+            const bool imported = std::ranges::any_of(unit.systemverilog_imports,
+                [&](const SystemVerilogImport& import) {
+                    return import.package == package_name
+                        && (import.name.empty() || import.name == source.name);
+                });
+            if (imported && !declared(source.name)) {
+                copy.name = source.name;
+                declarations.push_back(std::move(copy));
+            }
+        }
+    }
+}
+
 void VerilogParser::resolve_assertion_references(DesignUnit& unit)
 {
+    import_package_assertion_declarations(unit);
+    // The sequence end points this scope's assertions and procedures read
+    // (IEEE 1800-2023 16.13.6).
+    auto saved_endpoints = std::exchange(sva_endpoints_, { });
+    auto saved_destinations = std::exchange(sva_endpoint_destinations_, { });
     extract_procedural_assertions(unit.processes, unit.variables,
         unit.systemverilog_concurrent_assertions,
         unit.systemverilog_assertion_declarations,
@@ -216,10 +536,12 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
         });
     resolve_expect_statements(unit, unit.processes, unit.tasks, unit.signals,
         unit.concurrent_statements);
+    check_sequence_dependencies(unit);
     const auto design_names = assertion_design_unit_names(unit);
     resolve_assertion_declaration_references(unit);
     publish_assertion_trees(unit, unit.systemverilog_assertion_declarations,
         unit.systemverilog_concurrent_assertions);
+    check_recursive_properties(unit);
     using namespace assertion_resolution_detail;
 
     for (std::size_t index = 0;
@@ -229,6 +551,20 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             continue;
         }
         const auto& directive = unit.systemverilog_concurrent_assertions[index];
+        // A form the standard makes illegal is an error whichever evaluator
+        // would see it (IEEE 1800-2023 16.10, 16.12, 16.12.14).
+        if (sva_reject_illegal_) {
+            Token location;
+            location.kind = TokenKind::Identifier;
+            location.text = "assert";
+            location.span = directive.span;
+            error(directive.property_tokens.empty()
+                    ? location
+                    : directive.property_tokens.front(),
+                "FSIM-SV-SEM-474",
+                "the concurrent property is illegal: " + sva_reject_reason_);
+            continue;
+        }
         // A property with local variables is evaluated only by the
         // concurrent-property monitor (IEEE 1800-2023 16.10): a form it does
         // not cover is an error, not the earlier evaluator's sampled reading.
@@ -1679,6 +2015,7 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             ? ProcessKind::VerilogAlways
             : ProcessKind::Initial;
         process.systemverilog_concurrent_assertion = true;
+        process.systemverilog_assertion_directive = index;
         process.name = directive.label.empty()
             ? "$assertion$" + std::to_string(index + 1U)
             : directive.label;
@@ -2574,6 +2911,10 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             process.statements.begin(), coverage_marker("register"));
         unit.processes.push_back(std::move(process));
     }
+    resolve_procedural_sva_endpoints(unit);
+    materialize_sva_endpoints(unit);
+    sva_endpoints_ = std::move(saved_endpoints);
+    sva_endpoint_destinations_ = std::move(saved_destinations);
 }
 
 } // namespace fsim::frontend

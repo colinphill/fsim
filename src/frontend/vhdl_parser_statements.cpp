@@ -1648,19 +1648,11 @@ void VhdlParser::parse_vhdl_waveform(Statement& statement) {
   do {
     const auto start = current();
     VhdlWaveformElement element;
-    // A null transaction must target a guarded signal (IEEE 1076-2008
-    // 10.5.2.2): a sequential one is checked on lowering; a concurrent one
-    // must be a guarded assignment.
+    // A null transaction must target a guarded signal (IEEE 1076-2019
+    // 10.5.2.2), and none appears in a concurrent signal assignment
+    // (11.6): elaboration diagnoses both (FSIM-ELAB-VHDLGUARD-003, -004).
     if (match_keyword("null", true)) {
       element.disconnect = true;
-      if (!statement.vhdl_guarded_assignment
-          && parsing_concurrent_assignment_) {
-        error(
-            previous(),
-            "FSIM-VHDL-UNSUPPORTED-025",
-            "null waveform elements require a guarded concurrent "
-            "signal assignment");
-      }
     } else if (
         at(TokenKind::Semicolon) || keyword("when", 0, true)
         || keyword("else", 0, true)) {

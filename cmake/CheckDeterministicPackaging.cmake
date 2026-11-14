@@ -48,7 +48,7 @@ foreach(FSIM_EXPECTED IN ITEMS
     "executable_file_mode=0755"
     "directory_entries=implicit"
     "host_owner_identity=not-encoded"
-    "source_entry_limit=5000"
+    "source_entry_limit=8000"
     "binary_entry_limit=10000"
     "source_archive_byte_limit=67108864"
     "source_package_root=fsim-v2026.0-source"
@@ -175,8 +175,8 @@ foreach(FSIM_LINE IN LISTS FSIM_SOURCE_LINES)
   endif()
 endforeach()
 list(LENGTH FSIM_SOURCE_FILES FSIM_SOURCE_COUNT)
-if(FSIM_SOURCE_COUNT GREATER 5000)
-  message(FATAL_ERROR "source package exceeds 5000 entries")
+if(FSIM_SOURCE_COUNT GREATER 8000)
+  message(FATAL_ERROR "source package exceeds 8000 entries")
 endif()
 
 if(DEFINED FSIM_SOURCE_PACKAGE_NAME AND

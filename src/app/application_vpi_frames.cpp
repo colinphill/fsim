@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_vpi_frames.hpp"
 
-#include <algorithm>
 #include <utility>
 
 namespace fsim::app::application_detail {
 
 std::vector<VpiFrameModel::Occurrence> VpiFrameModel::apply(
-    const runtime::simir::ExecutionPoint& point)
+    const runtime::simir::ExecutionPoint& point, const bool thread_process)
 {
     using Kind = runtime::simir::ExecutionPointKind;
     std::vector<Occurrence> occurrences;
@@ -19,7 +18,8 @@ std::vector<VpiFrameModel::Occurrence> VpiFrameModel::apply(
         created.process = point.process;
         created.design_process = point.design_process;
         created.origin = point.source;
-        if (point.parent_process) {
+        created.hidden = !thread_process;
+        if (point.parent_process && thread_process) {
             if (const auto found = by_process_.find(*point.parent_process);
                 found != by_process_.end()) {
                 created.parent = found->second;
@@ -27,7 +27,9 @@ std::vector<VpiFrameModel::Occurrence> VpiFrameModel::apply(
             }
         }
         by_process_[point.process] = created.serial;
-        occurrences.push_back({ Event::thread_start, created.serial, 0U });
+        if (thread_process) {
+            occurrences.push_back({ Event::thread_start, created.serial, 0U });
+        }
         threads_.emplace(created.serial, std::move(created));
         return occurrences;
     }
@@ -39,7 +41,9 @@ std::vector<VpiFrameModel::Occurrence> VpiFrameModel::apply(
     switch (point.kind) {
     case Kind::thread_enter:
         current_ = thread.serial;
-        occurrences.push_back({ Event::thread_enter, thread.serial, 0U });
+        if (!thread.hidden) {
+            occurrences.push_back({ Event::thread_enter, thread.serial, 0U });
+        }
         break;
     case Kind::thread_end:
         // All the frames the thread activated end before it does
@@ -57,6 +61,8 @@ std::vector<VpiFrameModel::Occurrence> VpiFrameModel::apply(
         started.parent = thread.frames.empty() ? 0U : thread.frames.back();
         started.design_process = point.design_process;
         started.callee = point.callee;
+        started.callee_declaration = point.callee_declaration;
+        started.callee_receiver = point.callee_receiver;
         if (const auto suffix = started.callee.find('@');
             suffix != std::string::npos) {
             started.lowering = started.callee.substr(suffix);
@@ -104,10 +110,24 @@ std::vector<VpiFrameModel::Occurrence> VpiFrameModel::apply(
         if (thread.frames.empty()) {
             thread.statement = point.source;
             thread.has_statement = true;
+            thread.has_exited = false;
         } else {
             auto& active = frames_.at(thread.frames.back());
             active.statement = point.source;
             active.has_statement = true;
+            active.has_exited = false;
+        }
+        break;
+    // The thread or its active frame left a block a disable statement
+    // names; its last statement no longer places it in that block.
+    case Kind::block_exit:
+        if (thread.frames.empty()) {
+            thread.exited = point.source;
+            thread.has_exited = true;
+        } else {
+            auto& active = frames_.at(thread.frames.back());
+            active.exited = point.source;
+            active.has_exited = true;
         }
         break;
     case Kind::process_suspend:
@@ -122,6 +142,7 @@ std::vector<VpiFrameModel::Occurrence> VpiFrameModel::apply(
     case Kind::object_created:
     case Kind::assertion_pass:
     case Kind::assertion_fail:
+    case Kind::call_value:
         break;
     }
     return occurrences;
@@ -185,7 +206,9 @@ std::vector<std::uint64_t> VpiFrameModel::threads() const
     std::vector<std::uint64_t> live;
     live.reserve(threads_.size());
     for (const auto& entry : threads_) {
-        live.push_back(entry.first);
+        if (!entry.second.hidden) {
+            live.push_back(entry.first);
+        }
     }
     return live;
 }

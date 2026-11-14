@@ -1,17 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 #include "fsim/frontend/parser.hpp"
-#include "fsim/frontend/output_format.hpp"
 
 #include "parser_support.hpp"
+#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/source.hpp"
+#include "fsim/frontend/systemverilog_scalars.hpp"
+#include "fsim/frontend/token.hpp"
+#include "fsim/support/rare_vector.hpp"
 
-#include <algorithm>
 #include <array>
 #include <cstdint>
-#include <iterator>
-#include <limits>
-#include <numeric>
 #include <functional>
+#include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -21,6 +24,9 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <cstddef>
+#include <initializer_list>
+#include <span>
 
 namespace fsim::frontend {
 
@@ -173,7 +179,8 @@ class VerilogParser final : private detail::ParserBase {
   VerilogParser(LexResult lexed, StandardRevision standard_revision);
   VerilogParser(LexResult lexed, StandardRevision standard_revision,
       std::string compatibility_profile,
-      SystemVerilogPackageMemberLookup package_member_lookup = {});
+      SystemVerilogPackageMemberLookup package_member_lookup = {},
+      SystemVerilogPackageAssertionLookup package_assertion_lookup = {});
 
   ParseResult run();
 
@@ -316,6 +323,8 @@ class VerilogParser final : private detail::ParserBase {
   // The property prepared last uses local variables or sequence match
   // items (IEEE 1800-2023 16.10), which only the monitor evaluates.
   bool sva_uses_locals_ {};
+  // Whether sva_reject_reason_ is a form IEEE 1800-2023 makes illegal.
+  bool sva_reject_illegal_ {};
   // Compilation-unit forward type declarations awaiting their definition.
   std::vector<Token> compilation_unit_forward_types_;
   // Reports undeclared names a compilation-unit subprogram noted since
@@ -449,7 +458,126 @@ class VerilogParser final : private detail::ParserBase {
       std::vector<LocalExpression> expressions;
       // The subroutine calls attached to sequences, by number (16.11).
       std::vector<std::vector<Token>> calls;
+      // The tick bits of the end-point monitors whose triggered state the
+      // plan reads (IEEE 1800-2023 16.13.6): the monitor waits for each to
+      // clear, so the end points of its time step are known.
+      std::vector<std::string> endpoint_waits;
   };
+  // A sequence instance whose end points `.triggered` or `.matched` read
+  // (IEEE 1800-2023 16.13.5, 16.13.6). A hidden monitor (`name`) evaluates
+  // the sequence as `cover sequence` does, in the Observed region, and on a
+  // match keeps the time of its last match (`name_t`) and of the last match
+  // of an earlier time step (`name_p`); `name_ck` is its tick bit. Times
+  // are kept as $realtime + 1.0, so a variable's initial 0.0 is no match.
+  struct SvaEndpoint {
+      // The resolved instance: its declaration (an index into the unit's
+      // assertion declarations), the names of its actuals and its clock.
+      std::string key;
+      // The instance, its actuals' names read from the unit's innermost
+      // scope, and the declaration it names.
+      std::vector<Token> receiver;
+      std::size_t declaration {};
+      // The clock of a sequence declared without one: the clock of the
+      // context of its first use (16.13.5).
+      std::vector<Token> clock;
+      SourceSpan span;
+      std::string name;
+      bool materialized {};
+      // The tick bits of the end points the monitor's sequence reads.
+      std::vector<std::string> waits;
+  };
+  // The time of the previous tick of a destination clock of `.matched`
+  // (`name_prev`), kept by a process at the clock (`name_cur` is the
+  // latest tick's), as $realtime + 1.0 (SvaEndpoint).
+  struct SvaEndpointDestination {
+      std::string key;
+      std::vector<Token> clock;
+      SourceSpan span;
+      std::string name;
+      bool materialized {};
+  };
+  std::vector<SvaEndpoint> sva_endpoints_;
+  std::vector<SvaEndpointDestination> sva_endpoint_destinations_;
+  std::size_t sva_endpoint_counter_ {};
+  // The monitor being prepared reports its ticks through a tick bit also
+  // with one clock (an end-point monitor, whose readers wait for it).
+  bool sva_force_ticks_ {};
+  // The declaration the root instance of the monitor being prepared names
+  // (an end point's, resolved where it was read).
+  const SystemVerilogAssertionDeclaration* sva_root_declaration_ {};
+  // The expression that replaces `receiver.triggered` or
+  // `receiver.matched` read on `clock`, the clocking event in effect;
+  // `wait_bit` is the tick bit of the end point's monitor when the read
+  // needs its time step's end points. Empty with `failure` set when the
+  // use cannot be evaluated.
+  // `receiver` is written in scope `origin` of `scopes` and names
+  // `declaration`; `clock` reads from the innermost scope.
+  std::optional<std::vector<Token>> sva_endpoint_use(const DesignUnit& unit,
+      const std::vector<SvaNameScope>& scopes, std::size_t origin,
+      const SystemVerilogAssertionDeclaration& declaration,
+      std::span<const Token> receiver, bool matched,
+      std::span<const Token> clock, const SourceSpan& span,
+      std::string& wait_bit, std::string& failure);
+  // Creates the monitors, hidden variables and destination processes of
+  // the end points registered for the unit.
+  void materialize_sva_endpoints(DesignUnit& unit);
+  // Replaces the reads of sequence end points in the unit's procedural
+  // code: `s.triggered` (16.13.6, 9.4.4) and `@s` (9.4.2.4).
+  void resolve_procedural_sva_endpoints(DesignUnit& unit);
+  // Reports each named sequence of the unit that depends on itself through
+  // its instances (IEEE 1800-2023 16.8): an edge from a sequence to each
+  // sequence its declaration instances, and from the sequence of an
+  // instance to each sequence an actual of that instance instances.
+  void check_sequence_dependencies(const DesignUnit& unit);
+  // The tokens of each `name(...)` event term of an event control, keyed by
+  // the name token's source order: a sequence instance whose end point the
+  // control waits for (9.4.2.4), resolved once the sequences are known.
+  // `sequence_only` is set when the term is no expression (its actuals are
+  // event expressions or sequences): it is then kept only as `signal`.
+  struct SvaEventInstance {
+    std::vector<Token> tokens;
+    bool sequence_only {};
+  };
+  std::map<std::uint64_t, SvaEventInstance> sva_event_instances_;
+  // The generate block whose procedures resolve_procedural_sva_endpoints
+  // also rewrites (resolve_generate_assertion_references): their names see
+  // the block's scopes (23.9), and the monitors become the block's.
+  GenerateBody* sva_procedural_body_ {};
+  // The sequences already reported (name, line, offset of the name), as a
+  // generate block's scope sees its module's declarations again.
+  std::set<std::tuple<std::string, std::size_t, std::size_t>>
+      sva_cyclic_sequences_reported_;
+  // A sequence or property declaration, by name, line and offset of its
+  // name: the same across the scopes that see it.
+  using SvaDeclarationKey = std::tuple<std::string, std::size_t, std::size_t>;
+  // A property instance in the declaration of a property (IEEE 1800-2023
+  // 16.12.17, F.7): the property it names, its weight (the time steps
+  // guaranteed from the beginning of the declaration until it; none when
+  // a bound is not a literal), whether `not` or a strong operator applies
+  // to it (Restriction 1), and whether each actual is a formal of the
+  // declaration, free of its formals, or bound to a local formal
+  // (Restriction 4).
+  struct SvaPropertyInstanceFact {
+      SvaDeclarationKey callee;
+      std::string callee_name;
+      std::optional<std::int64_t> weight;
+      bool restricted {};
+      bool formal_actuals {};
+  };
+  struct SvaPropertyFacts {
+      std::string name;
+      SourceSpan name_span;
+      bool disable {};
+      std::vector<SvaPropertyInstanceFact> instances;
+  };
+  std::map<SvaDeclarationKey, SvaPropertyFacts> sva_property_facts_;
+  // The recursive property declarations that break a restriction of
+  // 16.12.17; an error was reported for each.
+  std::set<SvaDeclarationKey> sva_illegal_recursive_;
+  // Reports the recursive property declarations of the unit that break a
+  // restriction of IEEE 1800-2023 16.12.17 (F.7), from the facts the
+  // published trees of its declarations gave.
+  void check_recursive_properties(const DesignUnit& unit);
   // `tick_prefix` names the hidden bits that report each clock's ticks to
   // a monitor with several clocks or one that `wakes`; without it a
   // multiclocked property is rejected and a property that wakes keeps its
@@ -496,6 +624,10 @@ class VerilogParser final : private detail::ParserBase {
       std::vector<SignalDeclaration>& signals,
       std::vector<Statement>& concurrent_statements);
   bool resolve_sva_directive(DesignUnit& unit, std::size_t index);
+  // The monitor process of a directive (index) or of an end point.
+  bool resolve_sva_monitor(DesignUnit& unit,
+      const SystemVerilogConcurrentAssertion& directive, std::size_t index,
+      const SvaEndpoint* endpoint);
   // Moves the concurrent assertion statements of procedures to directives
   // enabled by those procedures (IEEE 1800-2017 16.14.6).
   // `names_event_or_clocking` tells whether an identifier is an event
@@ -575,7 +707,8 @@ class VerilogParser final : private detail::ParserBase {
   // 37.50-37.54); empty when the body is not covered.
   std::optional<SystemVerilogAssertionTree> build_assertion_tree(
       const DesignUnit& unit, std::vector<Token> tokens,
-      const SystemVerilogAssertionDeclaration* declaration);
+      const SystemVerilogAssertionDeclaration* declaration,
+      std::string* failure = nullptr);
   // Groups the sequences a published tree joins on different clocks into
   // multiclock sequence expressions (IEEE 1800-2023 37.56).
   static void wrap_multiclock_sequences(SystemVerilogAssertionTree& tree,
@@ -591,6 +724,17 @@ class VerilogParser final : private detail::ParserBase {
   // synthesized property declaration that the directive names.
   bool parse_generate_concurrent_assertion(GenerateBody& body);
   void resolve_generate_assertion_references(DesignUnit& unit);
+  // A sequence or property declaration of a compiled package from its
+  // source tokens (SystemVerilogPackageAssertions::sources), parsed in the
+  // package's own source positions.
+  [[nodiscard]] std::optional<SystemVerilogAssertionDeclaration>
+  parse_compiled_assertion_declaration(std::vector<Token> source);
+  // Whether a procedure of `body` may read the end point of a sequence the
+  // block sees (`s.triggered`, `s(...).triggered`, `@s`, `@(s(...))`): a
+  // name some visible sequence declaration has. Resolution decides which.
+  [[nodiscard]] bool reads_sequence_endpoint(const DesignUnit& unit,
+      const std::vector<const GenerateBody*>& outer,
+      const GenerateBody& body) const;
   void declare_inline_property(
       SystemVerilogConcurrentAssertion& assertion,
       std::vector<SystemVerilogAssertionDeclaration>& declarations);
@@ -621,6 +765,9 @@ class VerilogParser final : private detail::ParserBase {
       std::size_t position);
 
   void resolve_assertion_references(DesignUnit& unit);
+  // Copies the sequence and property declarations of the packages a unit
+  // imports or names (`pkg::s`) into its declarations.
+  void import_package_assertion_declarations(DesignUnit& unit);
 
   void resolve_assertion_declaration_references(DesignUnit& unit);
 
@@ -921,6 +1068,13 @@ class VerilogParser final : private detail::ParserBase {
 
   void parse_virtual_interface_declaration(
       DesignUnit& unit,
+      const Token& start);
+  // The declaration into the variables of a generate block (IEEE 1800-2023
+  // 25.9): `signals` are the block's signals, checked for a duplicate name.
+  void parse_virtual_interface_declaration(
+      std::vector<VariableDeclaration>& variables,
+      const std::vector<SignalDeclaration>& signals,
+      const std::vector<SignalDeclaration>& ports,
       const Token& start);
 
   // A struct or union type; `complete` is cleared when its member list is
@@ -1404,7 +1558,17 @@ class VerilogParser final : private detail::ParserBase {
   std::string parsing_package_;
   std::unordered_set<std::string> package_wildcard_references_;
   SystemVerilogPackageMemberLookup package_member_lookup_;
+  SystemVerilogPackageAssertionLookup package_assertion_lookup_;
+  // The sequence and property declarations of each package a unit of this
+  // parse imports from (import_package_assertion_declarations): a package
+  // this parse holds, else the lookup's (sources parsed here); null when
+  // neither knows the package.
+  std::map<std::string, std::shared_ptr<const std::vector<SystemVerilogAssertionDeclaration>>,
+      std::less<>>
+      sva_package_declarations_;
   std::string current_default_nettype_{"wire"};
+  std::string current_default_decay_time_;
+  void parse_default_decay_time(const Token& tick, const Token& directive);
   bool current_cell_define_{};
   VerilogUnconnectedDrive current_unconnected_drive_{
       VerilogUnconnectedDrive::None};

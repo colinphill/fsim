@@ -34,7 +34,19 @@
 # the kernel, such as FSIM_KERNEL_NO_MIRRORS, which leaves every host signal
 # unmirrored). FSIM_REPORTS=warnings compares the simulation's warning
 # reports (`warning[FSIM-HDL-REPORT]: ...`, without source locations)
-# instead of the `inl` lines of a SystemVerilog case.
+# instead of the `inl` lines of a SystemVerilog case. FSIM_COMPARE_TRACE,
+# when set, also runs the interpreter and the kernel with a VCD trace (which
+# makes the kernel publish every change of the traced signals to the host)
+# and requires the two traces to be equal. FSIM_EXPECT_ERROR, a diagnostic
+# code, makes the case a run that must fail: each of the interpreter, the
+# kernel and the verified kernel must exit nonzero
+# with that code reported, after the reports of the .expected file (the
+# reports printed before the error).
+# FSIM_MIN_OWNED, a count, fails the case when the kernel run owns fewer
+# signals (the static-kernel profile's owned_signals=): the signals of the
+# case then live in the compiled kernel, not on the host.
+
+include("${CMAKE_CURRENT_LIST_DIR}/../../../cmake/FsimTestWorkspace.cmake")
 
 if(NOT DEFINED FSIM_EXECUTABLE OR NOT EXISTS "${FSIM_EXECUTABLE}")
   message(FATAL_ERROR "FSIM_EXECUTABLE must name the built fsim command")
@@ -105,7 +117,7 @@ endif()
 
 string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef workspace_id)
 set(case_dir "${CMAKE_CURRENT_BINARY_DIR}/fsim-inline-ops-${FSIM_CASE}-${workspace_id}")
-file(MAKE_DIRECTORY "${case_dir}")
+fsim_test_workspace("${case_dir}")
 file(COPY_FILE "${FSIM_FIXTURE_DIR}/${source}" "${case_dir}/${source}")
 if(DEFINED second_source)
   file(COPY_FILE "${FSIM_FIXTURE_DIR}/${second_source}" "${case_dir}/${second_source}")
@@ -138,10 +150,49 @@ if(DEFINED second_compile_arguments)
   run_fsim_step(compile_second ${second_compile_arguments})
 endif()
 run_fsim_step(elaborate ${elaborate_arguments})
+if(DEFINED FSIM_EXPECT_ERROR)
+  file(READ "${FSIM_FIXTURE_DIR}/${FSIM_CASE}.expected" expected)
+  string(REGEX REPLACE "^# SPDX[^\n]*\n" "" expected "${expected}")
+  string(STRIP "${expected}" expected)
+  foreach(run IN ITEMS interpreter kernel verified)
+    set(run_environment "")
+    if(run STREQUAL "verified")
+      set(run_environment FSIM_KERNEL_VERIFY=1)
+    endif()
+    if(run STREQUAL "interpreter")
+      set(run_engine interpreter)
+    else()
+      set(run_engine v4)
+    endif()
+    execute_process(
+      COMMAND "${CMAKE_COMMAND}" -E env ${run_environment}
+        "${FSIM_EXECUTABLE}" simulate --engine ${run_engine}
+      WORKING_DIRECTORY "${case_dir}"
+      RESULT_VARIABLE result
+      OUTPUT_VARIABLE stdout
+      ERROR_VARIABLE stderr)
+    if("${result}" STREQUAL "0" OR NOT "${stdout}\n${stderr}" MATCHES "${FSIM_EXPECT_ERROR}")
+      message(FATAL_ERROR
+        "${FSIM_CASE} (${run}): the run must fail with ${FSIM_EXPECT_ERROR} "
+        "(exit ${result})\nstdout:\n${stdout}\nstderr:\n${stderr}\n"
+        "workspace: ${case_dir}")
+    endif()
+    string(REGEX REPLACE "(^|\n)fsim-(kernel|profile):[^\n]*" "\\1" scanned "${stdout}\n${stderr}")
+    string(REGEX MATCHALL "${report_regex}" reports "${scanned}")
+    list(JOIN reports "\n" reports)
+    if(NOT "${reports}" STREQUAL "${expected}")
+      message(FATAL_ERROR
+        "${FSIM_CASE} (${run}): the reports before the error differ from "
+        "${FSIM_CASE}.expected\nExpected:\n${expected}\n${run}:\n${reports}\n"
+        "workspace: ${case_dir}")
+    endif()
+  endforeach()
+  return()
+endif()
 run_fsim_step(interpreter simulate --engine interpreter)
 if(DEFINED FSIM_FORBID_GENERIC OR DEFINED FSIM_FORBID_REASON
     OR DEFINED FSIM_FORBID_NOT_COMPILED OR DEFINED FSIM_FORBID_EFFECT
-    OR FSIM_LIBRARY_ONLY)
+    OR DEFINED FSIM_MIN_OWNED OR FSIM_LIBRARY_ONLY)
   set(ENV{FSIM_PROFILE_PHASES} 1)
 endif()
 if(FSIM_FORBID_DEOPT)
@@ -164,6 +215,18 @@ unset(ENV{FSIM_KERNEL_VERIFY})
 foreach(name IN LISTS kernel_env_names)
   unset(ENV{${name}})
 endforeach()
+if(FSIM_COMPARE_TRACE)
+  run_fsim_step(traced_interpreter simulate --engine interpreter
+    --trace trace-interpreter.vcd)
+  run_fsim_step(traced_kernel simulate --engine v4 --trace trace-kernel.vcd)
+  file(READ "${case_dir}/trace-interpreter.vcd" interpreter_trace)
+  file(READ "${case_dir}/trace-kernel.vcd" kernel_trace)
+  if(NOT "${interpreter_trace}" STREQUAL "${kernel_trace}")
+    message(FATAL_ERROR
+      "${FSIM_CASE}: the kernel's trace differs from the interpreter's\n"
+      "workspace: ${case_dir}")
+  endif()
+endif()
 set(ENV{FSIM_STATIC_KERNEL} 0)
 run_fsim_step(elaborate_scheduler ${elaborate_arguments})
 run_fsim_step(scheduler simulate --engine v4)
@@ -180,6 +243,18 @@ foreach(run IN ITEMS interpreter kernel verified scheduler)
       "workspace: ${case_dir}")
   endif()
 endforeach()
+
+if(DEFINED FSIM_MIN_OWNED)
+  set(owned_signals -1)
+  if("${kernel_stderr}" MATCHES "static-kernel disabled=0 [^\n]*owned_signals=([0-9]+)")
+    set(owned_signals "${CMAKE_MATCH_1}")
+  endif()
+  if(owned_signals LESS FSIM_MIN_OWNED)
+    message(FATAL_ERROR
+      "${FSIM_CASE}: the kernel owns ${owned_signals} signals, fewer than ${FSIM_MIN_OWNED}\n"
+      "stderr:\n${kernel_stderr}\nworkspace: ${case_dir}")
+  endif()
+endif()
 
 foreach(kind IN LISTS FSIM_FORBID_GENERIC)
   if("${kernel_stderr}" MATCHES "reason=generic:${kind}[ \n]")
@@ -238,3 +313,6 @@ if(FSIM_LIBRARY_ONLY)
     endif()
   endforeach()
 endif()
+
+# Passed: remove this run's workspaces (a failure above keeps them).
+fsim_test_workspace_cleanup()

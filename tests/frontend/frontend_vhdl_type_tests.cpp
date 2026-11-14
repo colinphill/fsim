@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "fsim/frontend/frontend.hpp"
 
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/diagnostic.hpp"
+#include "fsim/frontend/parser.hpp"
+#include "fsim/frontend/token.hpp"
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -12,6 +15,9 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <cstddef>
+#include <cstdint>
+#include <vector>
 
 namespace fsim::tests::frontend {
 
@@ -1108,13 +1114,13 @@ package Legacy_Types is
   type Wide_T is array (136 downto 0) of bit;
   subtype Descending_T is Wide_T(105 downto 8);
   attribute Trace_Id : integer;
-end package;
+end Legacy_Types;
 architecture rtl of legacy_endpoint is
   signal Bus_Value : Wide_T;
   file Input_File : Text_File is in "legacy.txt";
   alias Bus_Alias : Wide_T is Bus_Value;
 begin
-end architecture;
+end rtl;
 )",
         Language::Vhdl2008, VhdlStandard::Vhdl1987);
     require(vhdl_1987.ok() && vhdl_1987.design.units.size() == 2,
@@ -1200,7 +1206,7 @@ architecture rtl of aggregate_endpoint is
   signal Result : bit_vector(136 downto 0);
 begin
   Result <= (136 downto 69 => '1', others => '0');
-end architecture;
+end rtl;
 )",
             Language::Vhdl2008, standard);
         require(
@@ -1218,7 +1224,7 @@ end architecture;
              VhdlStandard::Vhdl2000,
              VhdlStandard::Vhdl2002 }) {
         for (const auto package_name : synopsys_packages) {
-            const auto source = "package " + std::string { package_name } + " is\n" + "  subtype operand_t is std_logic_vector;\n" + "  subtype ascending_t is std_logic_vector(8 to 105);\n" + "  function \"+\" (left, right : operand_t) return operand_t;\n" + "end package;\n";
+            const auto source = "package " + std::string { package_name } + " is\n" + "  subtype operand_t is std_logic_vector;\n" + "  subtype ascending_t is std_logic_vector(8 to 105);\n" + "  function \"+\" (left, right : operand_t) return operand_t;\n" + "end;\n";
             const auto parsed = parse_text(
                 "ieee/" + std::string { package_name } + ".vhd", source,
                 Language::Vhdl2008, standard);
@@ -1244,7 +1250,7 @@ end architecture;
     const auto shared_in_1987 = unavailable(
         "vhdl87-shared.vhd",
         "architecture rtl of e is\n  shared variable Value : integer;\n"
-        "begin\nend architecture;\n",
+        "begin\nend;\n",
         VhdlStandard::Vhdl1987);
     const auto shared_diagnostic = std::ranges::find_if(
         shared_in_1987.diagnostics, [](const Diagnostic& diagnostic) {
@@ -1256,7 +1262,7 @@ end architecture;
 
     (void)unavailable(
         "vhdl87-group.vhd",
-        "package p is\n  group G is (signal <>);\nend package;\n",
+        "package p is\n  group G is (signal <>);\nend;\n",
         VhdlStandard::Vhdl1987);
     (void)unavailable(
         "vhdl93-protected.vhd",
@@ -1280,7 +1286,7 @@ end architecture;
     (void)unavailable(
         "vhdl87-open-kind.vhd",
         "architecture rtl of e is\n  file F : text open read_mode is "
-        "\"input.txt\";\nbegin\nend architecture;\n",
+        "\"input.txt\";\nbegin\nend;\n",
         VhdlStandard::Vhdl1987);
     (void)unavailable(
         "vhdl93-legacy-file-mode.vhd",
@@ -1291,7 +1297,7 @@ end architecture;
         "vhdl87-alias-signature.vhd",
         "architecture rtl of e is\n  signal Value : bit;\n"
         "  alias Selected : bit is Value [integer return integer];\n"
-        "begin\nend architecture;\n",
+        "begin\nend;\n",
         VhdlStandard::Vhdl1987);
 
     const auto malformed = parse_text(

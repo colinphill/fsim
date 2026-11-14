@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/library/artifact.hpp"
 #include "fsim/artifact/container.hpp"
-#include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
 
 #include <algorithm>
@@ -11,8 +10,6 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <iterator>
-#include <ranges>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -93,12 +90,12 @@ int main()
 {
     static_assert(fsim::library::kFormatVersion == 8);
     static_assert(fsim::library::kPortableSchemaVersion == 16);
-    static_assert(fsim::library::kCompiledHirSchemaVersion == 3);
+    static_assert(fsim::library::kCompiledHirSchemaVersion == 6);
     const auto expected = example_metadata();
     const auto serialized = fsim::library::serialize_metadata(expected);
     assert(serialized.starts_with(
         "format = 8\nlibrary = \"vendor\"\nproducer = \"fsim 0.2.0-dev\"\n"));
-    assert(serialized.find("compiled_hir_schema = 3")
+    assert(serialized.find("compiled_hir_schema = 6")
         != std::string::npos);
     assert(serialized.find("trace_archive = \"\"") != std::string::npos);
     assert(serialized.find("[[dependency]]") != std::string::npos);
@@ -322,8 +319,8 @@ int main()
         stale_publication_diagnostics));
     assert(has_identity_diagnostic(
         stale_publication_diagnostics, ".fsimlib publication",
-        "format 7 and portable-unit schema 15 and compiled-HIR schema 3",
-        "format 8 and portable-unit schema 16 and compiled-HIR schema 3",
+        "format 7 and portable-unit schema 15 and compiled-HIR schema 6",
+        "format 8 and portable-unit schema 16 and compiled-HIR schema 6",
         ".fsimlib"));
     assert(!std::filesystem::exists(stale_publication));
     fsim::diagnostic::Engine publish_diagnostics;
@@ -518,23 +515,23 @@ int main()
         future_portable_diagnostics, ".fsimlib",
         "portable-unit schema 17", "portable-unit schema 16", ".fsimlib"));
 
-    for (const std::uint32_t schema : { 0U, 1U, 2U, 4U }) {
+    for (const std::uint32_t schema : { 0U, 1U, 2U, 3U, 4U, 5U, 7U }) {
         auto incompatible_compiled_hir_text = serialized;
         incompatible_compiled_hir_text.replace(
             incompatible_compiled_hir_text.find(
-                "compiled_hir_schema = 3"),
-            std::string { "compiled_hir_schema = 3" }.size(),
+                "compiled_hir_schema = 6"),
+            std::string { "compiled_hir_schema = 6" }.size(),
             "compiled_hir_schema = " + std::to_string(schema));
         fsim::diagnostic::Engine compiled_hir_schema_diagnostics;
         assert(!fsim::library::parse_metadata(
             incompatible_compiled_hir_text,
-            schema == 4U ? "future-compiled-hir.toml"
+            schema == 7U ? "future-compiled-hir.toml"
                          : "stale-compiled-hir.toml",
             compiled_hir_schema_diagnostics));
         assert(has_identity_diagnostic(
             compiled_hir_schema_diagnostics, ".fsimlib",
             "compiled-HIR schema " + std::to_string(schema),
-            "compiled-HIR schema 3", ".fsimlib"));
+            "compiled-HIR schema 6", ".fsimlib"));
     }
 
     auto systemc_metadata = expected;

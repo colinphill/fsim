@@ -1,5 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_test_support.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
+#include "fsim/frontend/parser.hpp"
+#include "fsim/frontend/token.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include <algorithm>
+#include <cassert>
+#include <iostream>
+#include <string>
+#include <string_view>
+#include <vector>
 
 namespace fsim::tests::elaboration {
 
@@ -11,21 +24,53 @@ library ieee;
 use ieee.std_logic_1164.all;
 entity vhdl_guarded_assignments is
   port (enabled : in boolean; selector, source : in std_logic;
-        simple_value, conditional_value, selected_value : out std_logic);
+        simple_value, conditional_value, selected_value,
+        conditional_kept, selected_kept : out std_logic bus);
 end entity;
 architecture rtl of vhdl_guarded_assignments is begin
   simple_base: simple_value <= '1';
   conditional_base: conditional_value <= '1';
   selected_base: selected_value <= '1';
+  conditional_kept_base: conditional_kept <= '1';
+  selected_kept_base: selected_kept <= '1';
   scope: block (enabled) is
     disconnect simple_value : std_logic after 2 ns;
   begin
     simple_drive: simple_value <= guarded transport source after 1 ns;
-    conditional_drive: conditional_value <= guarded transport
-      source after 1 ns when selector = '1' else null after 1 ns;
-    selected_drive: with selector select
-      selected_value <= guarded transport
-        source after 1 ns when '1', null after 1 ns when others;
+    -- The equivalent processes (IEEE 1076-2019 11.6) of guarded
+    -- conditional and selected assignments whose selector-'0' branch
+    -- disconnects the driver 1 ns later: a sequential null transaction
+    -- (10.5.2.2), since none may appear in a concurrent assignment (11.6).
+    conditional_drive: process (guard, selector, source)
+    begin
+      if guard then
+        if selector = '1' then
+          conditional_value <= transport source after 1 ns;
+        else
+          conditional_value <= transport null after 1 ns;
+        end if;
+      else
+        conditional_value <= null;
+      end if;
+    end process;
+    selected_drive: process (guard, selector, source)
+    begin
+      if guard then
+        case selector is
+          when '1' => selected_value <= transport source after 1 ns;
+          when others => selected_value <= transport null after 1 ns;
+        end case;
+      else
+        selected_value <= null;
+      end if;
+    end process;
+    -- Guarded conditional and selected assignments: a false GUARD
+    -- disconnects the driver, and `unaffected` leaves it as it is.
+    conditional_kept_drive: conditional_kept <= guarded transport
+      source after 1 ns when selector = '1' else unaffected;
+    selected_kept_drive: with selector select
+      selected_kept <= guarded transport
+        source after 1 ns when '1', unaffected when others;
   end block scope;
 end architecture;
 )",
@@ -41,7 +86,7 @@ end architecture;
   }
   assert(elaborated.ok());
   assert(elaborated.design);
-  assert(elaborated.design->processes().size() == 7);
+  assert(elaborated.design->processes().size() == 11);
   const auto enabled = elaborated.design->find_signal("enabled");
   const auto selector = elaborated.design->find_signal("selector");
   const auto source = elaborated.design->find_signal("source");
@@ -49,7 +94,11 @@ end architecture;
   const auto conditional =
       elaborated.design->find_signal("conditional_value");
   const auto selected = elaborated.design->find_signal("selected_value");
+  const auto conditional_kept =
+      elaborated.design->find_signal("conditional_kept");
+  const auto selected_kept = elaborated.design->find_signal("selected_kept");
   assert(enabled && selector && source && simple && conditional && selected);
+  assert(conditional_kept && selected_kept);
   const auto simple_driver_count = std::ranges::count_if(
       elaborated.design->processes(),
       [&](const auto& process) {
@@ -77,14 +126,23 @@ end architecture;
     assert(interpreter->signal_value(*selected).to_msb_string()
            == selected_expected);
   };
+  const auto expect_kept = [&](const std::string_view expected) {
+    assert(interpreter->signal_value(*conditional_kept).to_msb_string()
+           == expected);
+    assert(interpreter->signal_value(*selected_kept).to_msb_string()
+           == expected);
+  };
   deposit(*source, "0");
   deposit(*selector, "1");
   deposit(*enabled, "0");
   expect("1", "1", "1");
+  expect_kept("1");
   deposit(*enabled, "1");
   expect("X", "X", "X");
+  expect_kept("X");
   deposit(*selector, "0");
   expect("X", "1", "1");
+  expect_kept("X");
   const auto disconnect_start = interpreter->scheduler().now();
   deposit(*enabled, "0");
   const auto before_disconnect = interpreter->run(disconnect_start + 1);
@@ -106,6 +164,7 @@ end architecture;
   assert(interpreter->signal_value(*simple).to_msb_string() == "1");
   assert(interpreter->signal_value(*conditional).to_msb_string() == "1");
   assert(interpreter->signal_value(*selected).to_msb_string() == "1");
+  expect_kept("1");
 
   {
     auto pending = elaborated.design->create_interpreter();
@@ -142,6 +201,36 @@ end architecture;
   assert(!rejected_outside.ok());
   assert(has_diagnostic(
       rejected_outside, "FSIM-ELAB-VHDLGUARD-001"));
+
+  // A null waveform element in a concurrent signal assignment is an
+  // error, guarded or not (IEEE 1076-2019 11.6).
+  for (const auto* null_source :
+       { "library ieee; use ieee.std_logic_1164.all; "
+         "entity concurrent_null is port (q : out std_logic bus; "
+         "e : in boolean; s : in std_logic); end; "
+         "architecture rtl of concurrent_null is begin "
+         "scope: block (e) begin "
+         "q <= guarded s when s = '1' else null; end block scope; "
+         "end architecture;",
+         "library ieee; use ieee.std_logic_1164.all; "
+         "entity concurrent_null is port (q : out std_logic bus; "
+         "e : in boolean; s : in std_logic); end; "
+         "architecture rtl of concurrent_null is begin "
+         "scope: block (e) begin "
+         "with s select q <= guarded s when '1', null after 1 ns when others; "
+         "end block scope; end architecture;",
+         "library ieee; use ieee.std_logic_1164.all; "
+         "entity concurrent_null is port (q : out std_logic); end; "
+         "architecture rtl of concurrent_null is begin "
+         "q <= null after 1 ns; end architecture;" }) {
+    const auto concurrent_null = fsim::frontend::parse_text(
+        "concurrent_null.vhd", null_source, fsim::frontend::Language::Vhdl2008);
+    assert(concurrent_null.ok());
+    const auto rejected_null = compile_and_elaborate(
+        concurrent_null.design, "vhdl:work.concurrent_null(rtl)");
+    assert(!rejected_null.ok());
+    assert(has_diagnostic(rejected_null, "FSIM-ELAB-VHDLGUARD-004"));
+  }
 
   const auto wrong_target = fsim::frontend::parse_text(
       "guarded_wrong_target.vhd",

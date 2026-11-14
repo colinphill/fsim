@@ -3,7 +3,6 @@
 #include "fsim/app/sdf_mixed_systemc.hpp"
 #include "sdf_diagnostic.hpp"
 
-#include <ranges>
 #include <set>
 #include <string>
 #include <string_view>

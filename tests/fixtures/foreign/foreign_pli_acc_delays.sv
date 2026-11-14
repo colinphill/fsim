@@ -22,6 +22,19 @@ module timed (input a, input d, input clk, output w);
   endspecify
 endmodule
 
+// An edge-sensitive module path with a data source (IEEE 1364-2001 14.2.4):
+// its data path leads from d to the destination q (23.42). The destination
+// is a net, which acc_handle_conn returns for a path terminal (23.21).
+module edged (input d, input clk, output q);
+  reg r;
+  always @(posedge clk) r <= d;
+  assign q = r;
+
+  specify
+    (posedge clk => (q +: d)) = (2, 3);
+  endspecify
+endmodule
+
 module top;
   reg a = 1'b0;
   reg b = 1'b1;
@@ -34,6 +47,8 @@ module top;
   bufif1 #(1:2:3, 4:5:6, 7:8:9) g_buf (y_buf, a, en);
   udp_inv #(2, 3) u_inv (y_udp, a);
   timed p (a, d, clk, w_path);
+  wire q_edge;
+  edged pe (d, clk, q_edge);
 
   always @(y_and) if ($time >= 10) $display("#c change y_and %0d %b", $time, y_and);
   always @(y_udp) if ($time >= 10) $display("#c change y_udp %0d %b", $time, y_udp);

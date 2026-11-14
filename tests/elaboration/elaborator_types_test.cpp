@@ -1,6 +1,28 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_test_support.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 #include "fsim/semantic/compiled_design_normalization.hpp"
+#include "fsim/elaboration/elaborator.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/parser.hpp"
+#include "fsim/frontend/token.hpp"
+#include "fsim/runtime/file_operations.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include "fsim/semantic/vhdl_hir.hpp"
+#include <algorithm>
+#include <cassert>
+#include <cstddef>
+#include <cstdint>
+#include <iostream>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <type_traits>
+#include <utility>
+#include <vector>
 
 namespace fsim::tests::elaboration {
 
@@ -2344,6 +2366,39 @@ endmodule
     assert(!has_diagnostic(
         user_bit_nettype_result, "FSIM-ELAB-SVNETTYPE-005"));
     assert(user_bit_nettype_result.ok());
+
+    // A net of a nettype declared without a resolution function takes at
+    // most one driver (IEEE 1800-2023 6.6.7): two continuous assignments
+    // are an error, one is not.
+    const auto unresolved_drivers = fsim::frontend::parse_text(
+        "unresolved_nettype_drivers.sv",
+        R"(
+package unresolved_nettype_pkg;
+  nettype logic [3:0] plain_net;
+endpackage
+module unresolved_two;
+  import unresolved_nettype_pkg::*;
+  plain_net value;
+  assign value = 4'd1;
+  assign value = 4'd2;
+endmodule
+module unresolved_one;
+  import unresolved_nettype_pkg::*;
+  plain_net value;
+  assign value = 4'd1;
+endmodule
+)",
+        Language::SystemVerilog2017);
+    assert(unresolved_drivers.ok());
+    const auto unresolved_two_result = compile_and_elaborate(
+        unresolved_drivers.design, "sv:work.unresolved_two");
+    assert(has_diagnostic(
+        unresolved_two_result, "FSIM-ELAB-SVNETTYPE-006"));
+    const auto unresolved_one_result = compile_and_elaborate(
+        unresolved_drivers.design, "sv:work.unresolved_one");
+    assert(!has_diagnostic(
+        unresolved_one_result, "FSIM-ELAB-SVNETTYPE-006"));
+    assert(unresolved_one_result.ok());
 
     const auto user_union_nettype = fsim::frontend::parse_text(
         "user_union_nettype.sv",

@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "change_mismatch_report.hpp"
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/app/artifact_schema.hpp"
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/runtime/vcd_writer.hpp"
 
-#include <array>
 #include <cassert>
 #include <chrono>
 #include <cstdint>
@@ -12,7 +14,6 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
-#include <ranges>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -521,7 +522,7 @@ endmodule
     {
         std::ofstream output(vhdl, std::ios::binary);
         output << R"(
-entity mixed_middle is
+library ieee; use ieee.std_logic_1164.all; entity mixed_middle is
   port (
     source : in std_logic;
     clock : in std_logic;

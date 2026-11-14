@@ -6,7 +6,7 @@ package pk;
     protected int hidden;
     static int count;
     rand bit [3:0] id;
-    localparam int LP = 3;
+    localparam int LP = W - 1;
     typedef int unsigned word_t;
     pure virtual function int get();
     virtual function void set(int v);

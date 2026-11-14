@@ -338,12 +338,49 @@ static void display_arguments(char* name)
         snprintf(line, sizeof line, "#c display line=%d %s:",
             (int)vpi_get(vpiLineNo, item), text(vpiName, item));
         while (arguments != NULL && (argument = vpi_scan(arguments)) != NULL) {
-            const char* const shown = vpi_get(vpiType, argument) == vpiConstant
+            const PLI_INT32 kind = vpi_get(vpiType, argument);
+            const char* const shown = kind == vpiConstant
                 ? text(vpiDecompile, argument)
+                : kind == vpiOperation && vpi_get(vpiOpType, argument) == vpiNullOp
+                ? "<empty>"
                 : text(vpiFullName, argument);
             snprintf(line + strlen(line), sizeof line - strlen(line), " %s", shown);
         }
         vpi_printf("%s\n", line);
+    }
+}
+
+// A for loop that declares its variable: the loop is its scope (37.12
+// detail 2, 37.74), and the initialization assigns that variable.
+static void for_scope(char* name)
+{
+    vpiHandle const task = vpi_handle_by_name(name, NULL);
+    vpiHandle const loop = task != NULL ? vpi_handle(vpiStmt, task) : NULL;
+    vpiHandle const init = loop != NULL ? vpi_handle(vpiForInitStmt, loop) : NULL;
+    vpiHandle const lhs = init != NULL ? vpi_handle(vpiLhs, init) : NULL;
+    vpiHandle variables;
+    vpiHandle variable;
+    if (loop == NULL) {
+        vpi_printf("#c for %s: missing\n", name);
+        return;
+    }
+    vpi_printf("#c for %s line=%d localvardecls=%d\n", text(vpiType, loop),
+        (int)vpi_get(vpiLineNo, loop), (int)vpi_get(vpiLocalVarDecls, loop));
+    variables = vpi_iterate(vpiVariables, loop);
+    while (variables != NULL && (variable = vpi_scan(variables)) != NULL) {
+        vpiHandle const scope = vpi_handle(vpiScope, variable);
+        vpi_printf("#c for variable %s name=%s full=%s line=%d size=%d "
+                   "signed=%d automatic=%d scope=%s init_lhs=%s\n",
+            text(vpiType, variable), text(vpiName, variable),
+            text(vpiFullName, variable), (int)vpi_get(vpiLineNo, variable),
+            (int)vpi_get(vpiSize, variable), (int)vpi_get(vpiSigned, variable),
+            (int)vpi_get(vpiAutomatic, variable),
+            scope == NULL ? "none"
+                : vpi_compare_objects(scope, loop) ? "loop"
+                : "other",
+            lhs == NULL ? "none"
+                : vpi_compare_objects(lhs, variable) ? "variable"
+                : text(vpiType, lhs));
     }
 }
 
@@ -370,6 +407,8 @@ static PLI_INT32 start(p_cb_data data)
     foreach_string("top.each_str");
     operation_values("top.ops");
     display_arguments("top.shown");
+    display_arguments("top.shown_file");
+    for_scope("top.counted");
     return 0;
 }
 

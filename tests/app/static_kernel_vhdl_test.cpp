@@ -18,6 +18,7 @@
 // wide constants (two instances whose wide constants differ only by a
 // generic must not share native code).
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
 #include "fsim/compiler/static_kernel_codegen.hpp"
 
 #include <chrono>

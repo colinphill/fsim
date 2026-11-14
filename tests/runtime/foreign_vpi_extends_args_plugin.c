@@ -2,11 +2,9 @@
 // The vpiArgument objects of a class's extends object: the constructor
 // arguments `extends B(args)` passes (IEEE 1800-2023 8.17, 37.32).
 // Lines starting with "#c " form the checked trace.
-#include "fsim/runtime/dpi_plugin_abi.h"
 #include "fsim/runtime/vpi_abi.h"
 #include "sv_vpi_user.h"
 
-#include <stdio.h>
 #include <string.h>
 
 static void arguments(const char* name, const char* label)

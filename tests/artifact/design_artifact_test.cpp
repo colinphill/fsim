@@ -5,12 +5,16 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
-#include <fstream>
-#include <iterator>
 #include <limits>
 #include <span>
 #include <sstream>
 #include <vector>
+#include <ios>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <utility>
 
 #include "../support/container_test_support.hpp"
 #include "fsim/artifact/design.hpp"
@@ -19,7 +23,6 @@
 #include "fsim/runtime/fst_reader.hpp"
 #include "fsim/runtime/fst_value_encoder.hpp"
 #include "fsim/runtime/fst_writer.hpp"
-#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
 #include "fsim/systemc/kernel_backend_binding_inventory.hpp"
@@ -28,6 +31,16 @@
 #include "fsim/systemc/kernel_backend_tlm1.hpp"
 #include "fsim/systemc/kernel_backend_tlm2.hpp"
 #include "fsim/systemc/kernel_backend_value_codec.hpp"
+#include "fsim/artifact/container.hpp"
+#include "fsim/artifact/coverage_identity.hpp"
+#include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/library/artifact.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/systemverilog_scalar.hpp"
+#include "fsim/runtime/trace_model.hpp"
+#include "fsim/systemc/kernel_backend_execution.hpp"
+#include "fsim/systemc/kernel_backend_protocol.hpp"
+#include "fsim/version.hpp"
 
 namespace {
 

@@ -3,8 +3,8 @@
 #include "fsim/runtime/file_scanning.hpp"
 #include "fsim/runtime/foreign_call_process.hpp"
 #include "fsim/runtime/scope_randomize.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 #include "fsim/runtime/string_methods.hpp"
-#include "fsim/runtime/systemverilog_string.hpp"
 #include "fsim/support/vhdl_tool_identity.hpp"
 #include "fsim/support/environment.hpp"
 #include "fsim/support/native_filesystem.hpp"
@@ -14,18 +14,48 @@
 #include "simir_execution_shared.hpp"
 #include "simir_events.hpp"
 #include "simir_internal.hpp"
-#include "simir_static_kernel_state.hpp"
 #include "simir_signal_attributes.hpp"
+#include "fsim/runtime/constraint_solver.hpp"
+#include "fsim/runtime/logic.hpp"
+#include "fsim/runtime/output_format.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_container_value.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include "fsim/runtime/simir_shared_vector.hpp"
+#include "simir_process_program.hpp"
 
-#include <bit>
-#include <charconv>
 #include <deque>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <algorithm>
+#include <cstdint>
+#include <ctime>
+#include <exception>
+#include <filesystem>
+#include <functional>
+#include <iomanip>
+#include <iterator>
+#include <limits>
+#include <memory>
+#include <optional>
+#include <span>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <utility>
+#include <vector>
+#include "fsim/runtime/systemverilog_string.hpp"
+#include "simir_static_kernel_state.hpp"
+#include <bit>
+#include <charconv>
 #include <numeric>
-
 #include <boost/multiprecision/cpp_int.hpp>
+
 
 namespace fsim::runtime::simir {
 namespace {
@@ -880,13 +910,17 @@ const char* Interpreter::Impl::run_class_operation(
 const char* Interpreter::Impl::run_class_operation(
     ContainerRegisterAccess& access, const ClassPropertyContainerWrite& operation)
 {
+    const auto handle = access.read(operation.receiver).low_word().aval;
+    if (operation.when_watched
+        && !class_container_watched(handle, operation.property_identity)) {
+        return nullptr;
+    }
     if (!class_property_container_hook) {
         return "class property service is unavailable";
     }
     auto value = access.read_container(operation.source);
     class_property_container_hook(
-        access.read(operation.receiver).low_word().aval,
-        operation.property_identity, value, true);
+        handle, operation.property_identity, value, true);
     return nullptr;
 }
 
@@ -2110,8 +2144,16 @@ void Interpreter::Impl::handle_boundary(
     if (const auto* point = fsim::runtime::simir::operation_get_if<DebugPoint>(&operation)) {
         const auto& actual_point = process.program().operations().debug_point(
             instruction, *point);
-        if (actual_point.kind == DebugPointKind::block_entry
-            || actual_point.kind == DebugPointKind::block_exit) {
+        if (actual_point.kind == DebugPointKind::block_entry) {
+            return;
+        }
+        // A thread leaving a disable target tells the foreign observers
+        // (IEEE 1800-2023 38.36.1 cbDisable), as the kernel's probe plan
+        // does; the process stays at its last statement.
+        if (actual_point.kind == DebugPointKind::block_exit) {
+            notify_execution_point(process, instruction,
+                ExecutionPointKind::block_exit, actual_point.source,
+                process.program().operations().debug_scope(actual_point.scope));
             return;
         }
         clear_wait_timeout(process);
@@ -2122,7 +2164,8 @@ void Interpreter::Impl::handle_boundary(
             || actual_point.kind == DebugPointKind::frame_exit
             || actual_point.kind == DebugPointKind::class_constructed
             || actual_point.kind == DebugPointKind::assertion_pass
-            || actual_point.kind == DebugPointKind::assertion_fail;
+            || actual_point.kind == DebugPointKind::assertion_fail
+            || actual_point.kind == DebugPointKind::call_value;
         if (!probe_only) {
             cold.current_source = actual_point.source;
             cold.current_scope = process.program().operations().debug_scope(
@@ -2163,6 +2206,9 @@ void Interpreter::Impl::handle_boundary(
         case DebugPointKind::assertion_fail:
             kind = ExecutionPointKind::assertion_fail;
             break;
+        case DebugPointKind::call_value:
+            kind = ExecutionPointKind::call_value;
+            break;
         case DebugPointKind::block_entry:
         case DebugPointKind::block_exit:
             break;
@@ -2171,12 +2217,13 @@ void Interpreter::Impl::handle_boundary(
             notify_execution_point(process, instruction, kind,
                 actual_point.source,
                 process.program().operations().debug_scope(actual_point.scope),
-                actual_point.callee.str());
+                actual_point.callee.str(), &actual_point);
             return;
         }
         notify_execution_point(
             process, instruction, kind, process.cold().current_source,
-            process.cold().current_scope, actual_point.callee.str());
+            process.cold().current_scope, actual_point.callee.str(),
+            &actual_point);
         if (scheduler.stop_requested()) {
             queue_current(process.id);
         }
@@ -2259,6 +2306,76 @@ void Interpreter::Impl::handle_boundary(
             process.cold().current_source);
         return;
     }
+    if (const auto* element
+        = fsim::runtime::simir::operation_get_if<EventArrayElement>(&operation)) {
+        // The element of a named-event array a run-time index selects (IEEE
+        // 1800-2023 7.4, 15.5); an invalid index selects none (7.4.6).
+        PackedLogic4 index;
+        try {
+            index = process.executor
+                ? process.executor->read_register(
+                      element->index, element->index_width)
+                : get_register(process, element->index);
+        } catch (const std::exception& error) {
+            process.pc = instruction;
+            fail(process, error.what());
+        }
+        const auto signal = event_array_element_signal(*element, index);
+        switch (element->operation) {
+        case EventArrayOperation::wait:
+            // `@(e[i])` (9.4.2): without an element the wait never resumes.
+            clear_wait_timeout(process);
+            process.status = ProcessStatus::waiting;
+            if (signal) {
+                auto& dynamic_wait = ensure_dynamic_wait_state();
+                process.waiting_on_signal = true;
+                dynamic_wait.dynamic_sensitivity.clear();
+                const auto identity = get_signal(*signal).event_variable
+                    ? event_identities.at(*signal)
+                    : std::optional<SignalId> { *signal };
+                if (identity) {
+                    dynamic_wait.dynamic_sensitivity.push_back(
+                        { *identity, EdgeKind::any });
+                }
+                register_dynamic_wait_fanout(process);
+            }
+            notify_execution_point(
+                process, instruction, ExecutionPointKind::process_suspend,
+                process.cold().current_source);
+            return;
+        case EventArrayOperation::trigger:
+        case EventArrayOperation::trigger_nonblocking:
+            // `-> e[i]` and `->> e[i]` (15.5.1), as for a named event.
+            if (signal) {
+                auto value = unary_not(logical_signal_value(*signal));
+                if (element->operation == EventArrayOperation::trigger) {
+                    commit_driver(process.id, *signal, std::move(value));
+                } else if (element->delay) {
+                    schedule_after_update(process.id, *signal, std::move(value),
+                        std::nullopt, SignalUpdateDomain::systemverilog_nba,
+                        *element->delay);
+                } else {
+                    stage_update(process.id, *signal, std::move(value),
+                        SignalUpdateDomain::systemverilog_nba);
+                }
+            }
+            process.status = ProcessStatus::running;
+            return;
+        case EventArrayOperation::triggered:
+            // `e[i].triggered` (15.5.3).
+            if (!element->destination) {
+                process.pc = instruction;
+                fail(process, "EventArrayElement triggered state has no destination");
+            }
+            write_process_register(process, *element->destination,
+                PackedLogic4::from_aval_bval(1,
+                    signal && event_triggered_now(*signal) ? 1U : 0U, 0));
+            process.status = ProcessStatus::running;
+            return;
+        }
+        process.pc = instruction;
+        fail(process, "EventArrayElement has an invalid operation");
+    }
     if (const auto* wait = fsim::runtime::simir::operation_get_if<WaitOn>(&operation)) {
         if (wait->signals.empty() && !wait->timeout) {
             process.pc = instruction;
@@ -2325,6 +2442,7 @@ void Interpreter::Impl::handle_boundary(
             const auto edge = wait->edges.empty() ? EdgeKind::any : wait->edges[index];
             switch (edge) {
             case EdgeKind::any:
+            case EdgeKind::transaction:
                 break;
             case EdgeKind::posedge:
             case EdgeKind::negedge:
@@ -2843,6 +2961,12 @@ void Interpreter::Impl::handle_boundary(
     }
     if (const auto* property = fsim::runtime::simir::operation_get_if<
             ClassPropertyContainerWrite>(&operation)) {
+        const auto handle
+            = read_boundary_value(property->receiver).low_word().aval;
+        if (property->when_watched
+            && !class_container_watched(handle, property->property_identity)) {
+            return;
+        }
         if (!class_property_container_hook) {
             fail(process, "class property service is unavailable");
         }
@@ -2850,8 +2974,7 @@ void Interpreter::Impl::handle_boundary(
             ? process.executor->read_container_register(property->source)
             : read_container_register(process, property->source);
         class_property_container_hook(
-            read_boundary_value(property->receiver).low_word().aval,
-            property->property_identity, value, true);
+            handle, property->property_identity, value, true);
         return;
     }
     if (const auto* method = fsim::runtime::simir::operation_get_if<ClassMethodCall>(
@@ -2967,9 +3090,6 @@ void Interpreter::Impl::handle_boundary(
     }
     if (const auto* method = fsim::runtime::simir::operation_get_if<ClassStaticMethodCall>(
             &operation)) {
-        if (try_vhdl_disconnect_call(process.id, method->method_identity)) {
-            return;
-        }
         const auto dpi = std::string_view { method->method_identity }
             .starts_with(systemverilog_dpi_function_prefix);
         if ((dpi && !dpi_function_call_hook)

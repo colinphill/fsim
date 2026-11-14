@@ -6,7 +6,6 @@
 // trace is derived in foreign_vpi_net_foreign.sv. Lines starting with "#c "
 // form the checked trace.
 #include "fsim/runtime/vpi_abi.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 
 #include <stdio.h>

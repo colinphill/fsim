@@ -303,6 +303,34 @@ bool same_hir_callable_body(const HirCallableBodyRecording& left,
             })) {
         return false;
     }
+    // The frame-local table entries and the declarations the locals belong
+    // to (Process::call_frames).
+    if (!std::ranges::equal(left.frame_locals, right.frame_locals,
+            [](const auto& lhs, const auto& rhs) {
+                const auto& a = lhs.second;
+                const auto& b = rhs.second;
+                return lhs.first == rhs.first
+                    && a.type_name == b.type_name
+                    && a.register_id == b.register_id && a.width == b.width
+                    && a.source == b.source && a.value_kind == b.value_kind;
+            })
+        || !std::ranges::equal(left.local_bindings, right.local_bindings,
+            [](const auto& lhs, const auto& rhs) {
+                return lhs.declaration == rhs.declaration
+                    && lhs.frame_table == rhs.frame_table
+                    && lhs.index == rhs.index;
+            })) {
+        return false;
+    }
+    if (!std::ranges::equal(left.call_values, right.call_values,
+            [](const auto& lhs, const auto& rhs) {
+                return lhs.name == rhs.name
+                    && lhs.register_id == rhs.register_id
+                    && lhs.width == rhs.width
+                    && lhs.value_kind == rhs.value_kind;
+            })) {
+        return false;
+    }
     return std::ranges::equal(left.scalar_ranges, right.scalar_ranges,
         [](const auto& lhs, const auto& rhs) {
             return lhs.source == rhs.source && lhs.left == rhs.left
@@ -554,6 +582,43 @@ std::optional<HirCallableBodyRecording> Lowerer::record_hir_callable_body(
             static_cast<std::size_t>(name - recording.debug_names.begin()),
             local);
     }
+    for (auto index = start.frame_locals; index < process_.frame_locals.size();
+         ++index) {
+        const auto& local = process_.frame_locals[index];
+        if (!known(local.register_id)) {
+            return refuse("frame local " + local.name);
+        }
+        recording.frame_locals.emplace_back(
+            frame_local_simple_names_[index], local);
+    }
+    const auto frame_number
+        = hir_call_frame_numbers_.find(frame.invocation_identity);
+    for (auto index = start.local_bindings;
+         index < process_.call_frames.locals.size(); ++index) {
+        const auto& binding = process_.call_frames.locals[index];
+        const auto first
+            = binding.frame_table ? start.frame_locals : start.debug_locals;
+        if (frame_number == hir_call_frame_numbers_.end()
+            || binding.storage != FrameLocalStorage::packed
+            || binding.frame != frame_number->second
+            || binding.index < first) {
+            return refuse("local binding");
+        }
+        recording.local_bindings.push_back({
+            semantic::DeclarationId::from_index(binding.declaration),
+            binding.frame_table, binding.index - first });
+    }
+    for (auto index = start.call_results;
+         index < process_.call_results.size(); ++index) {
+        const auto& local = process_.call_results[index];
+        if (!runtime::simir::is_system_call_value_slot(local)) {
+            continue;
+        }
+        if (!known(local.register_id)) {
+            return refuse("call value " + local.name);
+        }
+        recording.call_values.push_back(local);
+    }
     const std::span<const ExpressionProfile> profiles
         = process_.expression_profiles;
     recording.expression_profiles.assign(
@@ -634,6 +699,12 @@ std::optional<HirCallableBodyRecording> Lowerer::renumber_hir_callable_body(
     for (auto& entry : body.debug_locals) {
         (void)renumber_register(entry.second.register_id);
     }
+    for (auto& entry : body.frame_locals) {
+        (void)renumber_register(entry.second.register_id);
+    }
+    for (auto& entry : body.call_values) {
+        (void)renumber_register(entry.register_id);
+    }
     body.target = target;
     body.register_begin = register_begin;
     body.invocation_begin
@@ -689,14 +760,40 @@ void Lowerer::replay_hir_callable_body(
                 : hir_callable_debug_local_name(
                       callable, entry.declaration, entry.name));
     }
+    for (auto& value : body.call_values) {
+        if (std::ranges::none_of(process_.call_results,
+                [&](const DebugLocal& existing) {
+                    return existing.name == value.name;
+                })) {
+            process_.call_results.push_back(std::move(value));
+        }
+    }
+    // The slot each recorded local takes in this process, for the bindings.
+    std::vector<std::size_t> debug_slots;
     for (auto& [name, local] : body.debug_locals) {
         local.name = names[name];
-        if (std::ranges::none_of(process_.debug_locals,
-                [&](const DebugLocal& existing) {
-                    return existing.name == local.name;
-                })) {
+        const auto existing = std::ranges::find(process_.debug_locals,
+            local.name, &DebugLocal::name);
+        if (existing == process_.debug_locals.end()) {
+            debug_slots.push_back(process_.debug_locals.size());
             process_.debug_locals.push_back(std::move(local));
+        } else {
+            debug_slots.push_back(static_cast<std::size_t>(
+                existing - process_.debug_locals.begin()));
         }
+    }
+    std::vector<std::size_t> frame_slots;
+    for (auto& [name, local] : body.frame_locals) {
+        local.name = hir_frame_local_name(callable, name);
+        frame_slots.push_back(process_.frame_locals.size());
+        process_.frame_locals.push_back(std::move(local));
+        frame_local_simple_names_.push_back(name);
+    }
+    for (const auto& binding : body.local_bindings) {
+        bind_hir_frame_local(callable, binding.declaration,
+            binding.frame_table,
+            binding.frame_table ? frame_slots[binding.index]
+                                : debug_slots[binding.index]);
     }
 }
 

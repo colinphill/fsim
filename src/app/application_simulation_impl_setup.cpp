@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_simulation_internal.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
+#include "fsim/runtime/vpi_control.hpp"
 #include "application_phase_profile.hpp"
 #include "../elaboration/elaborated_design_process_access.hpp"
 #include "../runtime/simir_static_kernel.hpp"
@@ -9,6 +11,52 @@
 #include "fsim/compiler/object_cache.hpp"
 #include "fsim/compiler/static_kernel_codegen.hpp"
 #include "fsim/support/parallel_for.hpp"
+#include "../runtime/simir_process_program.hpp"
+#include "application_class_execution.hpp"
+#include "application_class_hir_execution.hpp"
+#include "application_internal.hpp"
+#include "application_uvm_registry.hpp"
+#include "application_vpi_frames.hpp"
+#include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/elaboration/elaborator.hpp"
+#include "fsim/frontend/coverage_execution.hpp"
+#include "fsim/frontend/coverage_observation.hpp"
+#include "fsim/frontend/coverage_percentage.hpp"
+#include "fsim/frontend/coverage_sampling.hpp"
+#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/systemverilog_scalars.hpp"
+#include "fsim/frontend/token.hpp"
+#include "fsim/project/project.hpp"
+#include "fsim/runtime/class_heap.hpp"
+#include "fsim/runtime/class_static.hpp"
+#include "fsim/runtime/constraint_solver.hpp"
+#include "fsim/runtime/logic.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_container_value.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include "fsim/runtime/simir_operation_storage.hpp"
+#include "fsim/runtime/simir_operations_extended.hpp"
+#include "fsim/runtime/sva_storage.hpp"
+#include "fsim/runtime/systemverilog_scalar.hpp"
+#include "fsim/runtime/uvm_checkpoint.hpp"
+#include "fsim/runtime/uvm_component.hpp"
+#include "fsim/runtime/uvm_register_model.hpp"
+#include "fsim/runtime/vhdl_psl.hpp"
+#include "fsim/runtime/vpi_abi.h"
+#include "fsim/runtime/vpi_callback.hpp"
+#include "fsim/runtime/vpi_data_read.hpp"
+#include "fsim/runtime/vpi_object.hpp"
+#include "fsim/runtime/vpi_system.hpp"
+#include "fsim/runtime/vpi_time.hpp"
+#include "fsim/runtime/vpi_value.hpp"
+#include "fsim/runtime/vpi_value_control.hpp"
+#include "fsim/semantic/design_ir.hpp"
+#include "fsim/semantic/model.hpp"
+#include "fsim/semantic/systemverilog_class_specialization.hpp"
+#include "fsim/semantic/systemverilog_hir.hpp"
 #endif
 
 #include <algorithm>
@@ -16,6 +64,23 @@
 #include <stdexcept>
 #include <charconv>
 #include <limits>
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <functional>
+#include <iostream>
+#include <iterator>
+#include <map>
+#include <memory>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <utility>
+#include <vector>
 
 namespace fsim::app {
 
@@ -296,7 +361,8 @@ class_static_container_objects(const elaboration::ElaboratedDesign& design)
 
 std::unique_ptr<runtime::simir::Interpreter> create_simulation_interpreter(
     BuiltProject& built, const std::uint64_t max_deltas,
-    const SimulationEngine engine)
+    const SimulationEngine engine,
+    std::shared_ptr<runtime::simir::StaticKernelCodegen>* codegen = nullptr)
 {
     const application_detail::ScopedPhaseProfile profile {
         "create_simulation_interpreter"
@@ -455,6 +521,9 @@ std::unique_ptr<runtime::simir::Interpreter> create_simulation_interpreter(
                     compiler::StaticKernelAheadOfTimeScope::active(),
                     compiler::StaticKernelAheadOfTimeScope::jobs(),
                 });
+                if (codegen != nullptr) {
+                    *codegen = plan.spec->codegen;
+                }
             }
             // VHDL specializations: recorded ahead of time, restored after.
             const auto specializations = persisted_plan_slot(built, "specializations");
@@ -740,7 +809,7 @@ Simulation::Impl::Impl(
               const std::string_view declared,
               const std::string_view) {
               return construct_class(
-                  specialization,
+                  service_construct_identity(specialization),
                   declared,
                   std::span<const runtime::PackedLogic4> { },
                   std::span<const std::string> { },
@@ -768,7 +837,7 @@ Simulation::Impl::Impl(
           [this](const std::string_view specialization,
               const std::string_view name) {
               const auto handle = construct_class(
-                  specialization,
+                  service_construct_identity(specialization),
                   class_specialization(specialization).declaration_identity,
                   std::span<const runtime::PackedLogic4> { },
                   std::span<const std::string> { },
@@ -789,7 +858,7 @@ Simulation::Impl::Impl(
                   std::string { name }, std::string { }
               };
               return construct_class(
-                  specialization,
+                  service_construct_identity(specialization),
                   class_specialization(specialization).declaration_identity,
                   actuals,
                   string_actuals,
@@ -818,7 +887,8 @@ Simulation::Impl::Impl(
     , design_process_count(built.design.process_count())
     , simulation_control_tasks(built.design.uses_simulation_control())
     , class_static_containers(class_static_container_objects(built.design))
-    , interpreter(create_simulation_interpreter(built, max_deltas, engine))
+    , interpreter(create_simulation_interpreter(
+          built, max_deltas, engine, &static_kernel_codegen))
 {
     if (interpreter) {
         interpreter->retain_state_until_exit();
@@ -1129,6 +1199,7 @@ Simulation::Impl::Impl(
         [this](const auto property, const auto handle,
             const auto specialization) {
             const auto [owner, name] = static_property_parts(property);
+            seed_uvm_coreservice(owner, name);
             return packed_property_value(class_static_store.property(
                 static_property_specialization(owner, handle, specialization),
                 name));
@@ -1256,28 +1327,8 @@ Simulation::Impl::Impl(
     // store.
     const auto static_value_container = [this](
         const std::string_view identity,
-        const std::string_view specialization)
-        -> std::optional<runtime::simir::ContainerObjectId> {
-        if (!interpreter) {
-            return std::nullopt;
-        }
-        std::string storage { identity };
-        if (!specialization.empty()) {
-            try {
-                const auto& selected = class_specialization(specialization);
-                if (semantic::sv::has_own_static_storage(selected)) {
-                    storage = selected.specialization_identity + "::"
-                        + std::string { static_property_parts(identity).second };
-                }
-            } catch (const std::exception&) {
-                return std::nullopt;
-            }
-        }
-        const auto found = class_static_containers.find(storage);
-        if (found == class_static_containers.end()) {
-            return std::nullopt;
-        }
-        return found->second;
+        const std::string_view specialization) {
+        return class_static_container_object(identity, specialization);
     };
     class_hir_execution.set_static_property_value_read_service(
         [this, static_value_container](const std::string_view identity,
@@ -1285,6 +1336,7 @@ Simulation::Impl::Impl(
             -> std::optional<runtime::SystemVerilogClassPropertyValue> {
             try {
                 const auto [owner, name] = static_property_parts(identity);
+                seed_uvm_coreservice(owner, name);
                 auto stored = class_static_store.property(
                     static_property_specialization(owner, 0U, specialization),
                     name);
@@ -1624,6 +1676,9 @@ Simulation::Impl::Impl(
             auto& stored = held.container;
             if (write) {
                 stored = value;
+                if (class_property_container_change_hook) {
+                    class_property_container_change_hook(handle, property);
+                }
             } else if (stored) {
                 // Elements a randomize call created keep the declared type
                 // the reading process gives them.
@@ -1753,8 +1808,25 @@ Simulation::Impl::Impl(
                     : method.starts_with("@checked-cast:")
                     ? invoke_checked_class_cast(handle, method)
                     : method == "@builtin-randomize"
-                    ? invoke_source_randomize(
-                          handle, names, actuals, inline_constraints)
+                    ? invoke_source_randomize(handle, names, actuals,
+                          inline_constraints, report_process)
+                    : method == "@builtin-randomize-solve"
+                    ? invoke_source_randomize(handle, names, actuals,
+                          inline_constraints, report_process, true)
+                    : method == "@randomize-begin"
+                        || method == "@randomize-member"
+                        || method == "@randomize-end"
+                        || method.starts_with("@randomize-callback-enter:")
+                        || method == "@randomize-callback-leave"
+                        || method == "@process-kill-begin"
+                        || method == "@process-kill-end"
+                    ? invoke_lowered_randomize_step(
+                          report_process, handle, method, actuals)
+                    : method.starts_with("@randomize-callback:")
+                    ? (run_randomize_callback(handle,
+                           method.substr(method.find(':') + 1U),
+                           report_process),
+                          runtime::PackedLogic4::from_aval_bval(1U, 0U, 0U))
                     : method.starts_with("@builtin-rand-mode:")
                         || method.starts_with("@builtin-constraint-mode:")
                     ? invoke_source_randomization_mode(
@@ -1769,6 +1841,7 @@ Simulation::Impl::Impl(
     interpreter->set_class_static_property_read_hook(
         [this](const std::string_view property) {
             const auto [owner, name] = static_property_parts(property);
+            seed_uvm_coreservice(owner, name);
             return packed_property_value(
                 class_static_store.property(owner, name));
         });
@@ -2125,7 +2198,8 @@ Simulation::Impl::Impl(
                 vpi_event_signals.emplace(handle, signal);
             }
         }
-        vpi_assertion_handles = std::move(published_vpi.assertions);
+        vpi_assertion_occurrences
+            = std::move(published_vpi.assertion_occurrences);
         vpi_scalar_kinds = std::move(published_vpi.scalar_kinds);
         vpi_categories = std::move(published_vpi.categories);
         vpi_container_words = std::move(published_vpi.container_words);
@@ -2192,14 +2266,34 @@ Simulation::Impl::Impl(
                     : std::optional<fsim_vpi_handle_v1> { handle });
             });
     }
-    for (const auto& process : built.design_ir.processes()) {
-        if (const auto assertion = vpi_assertion_handles.find(process.name);
-            assertion != vpi_assertion_handles.end()) {
-            vpi_assertion_processes[assertion->second].insert(
-                static_cast<runtime::simir::ProcessId>(process.runtime_index));
-            vpi_process_assertions[static_cast<runtime::simir::ProcessId>(
-                process.runtime_index)]
-                = assertion->second;
+    // Each assertion object owns the processes of its specialization that
+    // were built from its concurrent assertion statement (37.49).
+    {
+        const auto& occurrences = built.design_ir.processes();
+        std::map<std::pair<std::uint32_t, std::uint32_t>,
+            std::vector<std::uint32_t>>
+            built_from;
+        for (const auto& process : occurrences) {
+            if (process.assertion) {
+                built_from[{ process.specialization.value(),
+                               process.assertion->value() }]
+                    .push_back(process.runtime_index);
+            }
+        }
+        for (const auto& [assertion, index] : vpi_assertion_occurrences) {
+            const auto& published = occurrences.at(index);
+            std::vector<std::uint32_t> own { published.runtime_index };
+            const auto& processes = published.assertion
+                ? built_from.at({ published.specialization.value(),
+                      published.assertion->value() })
+                : own;
+            for (const auto process : processes) {
+                vpi_assertion_processes[assertion].insert(
+                    static_cast<runtime::simir::ProcessId>(process));
+                vpi_process_assertions[static_cast<runtime::simir::ProcessId>(
+                    process)]
+                    = assertion;
+            }
         }
     }
     vpi_time = std::make_unique<runtime::SystemVerilogVpiTimeService>(
@@ -3002,7 +3096,7 @@ Simulation::Impl::Impl(
                         }
                     }
                     // Not retained: a long run would grow without bound.
-                    publish_vpi_assertion(event);
+                    publish_vpi_assertion(event, coverage_key);
                     if (concurrent_assertion_hook) {
                         concurrent_assertion_hook(event);
                     }
@@ -3132,6 +3226,44 @@ Simulation::Impl::Impl(
             for (const auto& [_, observer] : observers) {
                 observer(interpreter->scheduler(), point);
             }
+        });
+    // The frames of the methods the host class executor runs, named by the
+    // callee suffix `@host-frame-<serial>` the VPI reads their automatic
+    // variables by (IEEE 1800-2023 37.43).
+    class_hir_execution.set_frame_probe(
+        [this](const std::optional<runtime::simir::ProcessId> process,
+            const runtime::simir::ExecutionPointKind kind,
+            const semantic::SourceSpanId source_span,
+            const std::uint64_t frame, const std::string_view callee,
+            const semantic::DeclarationId declaration) {
+            if (!foreign_probes || execution_point_observers.empty()) {
+                return false;
+            }
+            runtime::simir::SourceLocation source;
+            const auto& spans = built.semantics.source_spans();
+            if (source_span.value() < spans.size()) {
+                const auto& span = spans[source_span.value()];
+                auto path = span.logical_name;
+                const auto& files = built.semantics.source_files();
+                if (path.empty() && span.file.value() < files.size()) {
+                    path = files[span.file.value()].physical_name;
+                }
+                source = runtime::simir::SourceLocation {
+                    std::move(path), span.begin.line, span.begin.column
+                };
+            }
+            const auto id = process.value_or(runtime::simir::ProcessId { });
+            runtime::simir::ExecutionPoint point {
+                id, id, 0U, kind, std::move(source)
+            };
+            point.callee = std::string { callee } + std::string {
+                application_detail::host_frame_suffix } + std::to_string(frame);
+            point.callee_declaration = declaration.value() + 1U;
+            auto observers = execution_point_observers;
+            for (const auto& [_, observer] : observers) {
+                observer(interpreter->scheduler(), point);
+            }
+            return true;
         });
     interpreter->scheduler().set_safe_point_hook(
         [this](
@@ -3327,7 +3459,8 @@ void Simulation::Impl::refresh_observation_hooks()
     // announce their changes.
     const bool needs_vpi_container_hook = vpi_runtime_updates_enabled
         && (!vpi_live_memories.empty() || !vpi_watched_containers.empty()
-            || vpi_watch_all_values);
+            || vpi_watch_all_values
+            || !class_static_container_watches.empty());
     if (vpi_container_hook_installed != needs_vpi_container_hook) {
         if (needs_vpi_container_hook) {
             interpreter->set_container_object_change_hook(
@@ -3464,7 +3597,7 @@ void Simulation::Impl::finish_concurrent_assertions(
             : ConcurrentAssertionOutcome::failure;
         event.action_suppressed = !concurrent_assertion_action_enabled(
             pending.design_process, pending.vacuous ? "vacuous" : "failure");
-        publish_vpi_assertion(event);
+        publish_vpi_assertion(event, pending.design_process);
         if (concurrent_assertion_hook) {
             concurrent_assertion_hook(event);
         }
@@ -3945,6 +4078,9 @@ void Simulation::Impl::run_assertion_control(
             }
         }
     }
+    // The assertions the call changed, for the assertion callbacks of
+    // Table 20-8.
+    std::vector<std::size_t> changed;
     for (std::size_t index = 0U; index < assertion_controls.size(); ++index) {
         auto& control = assertion_controls[index];
         // The assertion types (Table 20-6) and, for assertions (not expect
@@ -3963,10 +4099,12 @@ void Simulation::Impl::run_assertion_control(
         }
         if (control_type == 1) {
             control.locked = true;
+            changed.push_back(index);
             continue;
         }
         if (control_type == 2) {
             control.locked = false;
+            changed.push_back(index);
             continue;
         }
         if (control.locked) {
@@ -3977,12 +4115,14 @@ void Simulation::Impl::run_assertion_control(
         if (control_type <= 5) {
             if (control.type != semantic::sva::control_expect) {
                 set_assertion_checking(index, static_cast<int>(control_type));
+                changed.push_back(index);
             }
             continue;
         }
         if (violation) {
             continue;
         }
+        changed.push_back(index);
         switch (control_type) {
         case 6:
             control.pass = control.vacuous = true;
@@ -4006,6 +4146,39 @@ void Simulation::Impl::run_assertion_control(
         publish_assertion_control(index);
     }
     interpreter->refresh_sva_actions();
+    if (!assertion_control_task_hook || !vpi_runtime_updates_enabled) {
+        return;
+    }
+    // The VPI callbacks of the call (IEEE 1800-2023 20.11 Table 20-8): a
+    // call without arguments (only the control_type of $assertcontrol) is
+    // an assertion system callback (39.4.1); any other is an assertion
+    // callback of each assertion object it changed (39.4.2).
+    const bool system = fields.size() == 2U
+        && std::ranges::all_of(
+            std::span { arguments }.subspan(task == "assertcontrol" ? 1U : 3U),
+            [](const std::optional<std::int64_t>& argument) {
+                return !argument.has_value();
+            });
+    std::vector<std::uint64_t> objects;
+    if (!system) {
+        for (const auto& [design_process, index] :
+            concurrent_assertion_controls) {
+            const auto object = vpi_process_assertions.find(design_process);
+            if (object != vpi_process_assertions.end()
+                && std::ranges::find(changed, index) != changed.end()
+                && std::ranges::find(objects, object->second)
+                    == objects.end()) {
+                objects.push_back(object->second);
+            }
+        }
+        if (objects.empty()) {
+            return;
+        }
+    }
+    // The callbacks may read values of the design.
+    interpreter->prepare_output_callback_observation();
+    assertion_control_task_hook(static_cast<int>(control_type), system,
+        objects);
 }
 
 } // namespace fsim::app

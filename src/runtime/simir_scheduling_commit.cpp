@@ -2,14 +2,40 @@
 
 #include "simir_events.hpp"
 #include "simir_internal.hpp"
-#include "simir_static_kernel_state.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
+#include "fsim/runtime/logic.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_container_value.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include "fsim/runtime/systemverilog_scalar.hpp"
+#include "fsim/runtime/vhdl_resolution_error.hpp"
+#include "simir_driver_table.hpp"
 
 #include <charconv>
 #include <algorithm>
 #include <array>
-#include <bit>
 #include <limits>
 #include <optional>
+#include <cstddef>
+#include <cstdint>
+#include <deque>
+#include <map>
+#include <memory>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <tuple>
+#include <type_traits>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <vector>
+#include "simir_static_kernel_state.hpp"
+#include <bit>
 
 namespace fsim::runtime::simir {
 namespace {
@@ -113,10 +139,12 @@ void Interpreter::Impl::initialize_package_static_signal(
     }
     const auto& signal = signals[signal_id];
     if (signal.resolution != ResolutionKind::none
-        || signal.systemverilog_scalar != SystemVerilogScalarKind::None
+        || !(signal.systemverilog_scalar == SystemVerilogScalarKind::None
+            || frontend::is_real_scalar_kind(signal.systemverilog_scalar))
         || signal.event_variable || signal.has_implicit_driver
         || signal.has_charge_strength
-        || has_container_signal_alias(signal_id)
+        || (has_container_signal_alias(signal_id)
+            && is_aggregate_signal_proxy(signal_id))
         || delayed_net_initial_values.contains(signal_id)
         || vhdl_resolvers.contains(signal_id)
         || (signal_id < forced_values.size() && forced_values[signal_id])
@@ -1141,8 +1169,7 @@ void Interpreter::Impl::release_slice(
     const auto resolution = signal.resolution;
     if ((resolution == ResolutionKind::sv_wire
             || resolution == ResolutionKind::sv_wand
-            || resolution == ResolutionKind::sv_wor
-            || resolution == ResolutionKind::sv_user_first)
+            || resolution == ResolutionKind::sv_wor)
         && (!driver_values.at(signal_id).empty()
             || external_driver_values.at(signal_id))
         && (signal_id >= static_kernel_owned_signal.size()
@@ -1161,6 +1188,29 @@ void Interpreter::Impl::release_slice(
             if (kept != stored) {
                 stored = std::move(kept);
                 note_aggregate_leaf_stored_change(signal_id);
+            }
+        }
+    }
+    // A released net of a user-defined nettype returns to its resolved
+    // value (IEEE 1800-2023 6.6.7).
+    if (resolution == ResolutionKind::user_function) {
+        if (const auto resolver = vhdl_resolvers.find(signal_id);
+            resolver != vhdl_resolvers.end()
+            && resolver->second.systemverilog_nettype) {
+            const auto found = vhdl_resolved_values.find(signal_id);
+            const auto& resolved = found != vhdl_resolved_values.end()
+                ? found->second
+                : signal.initial_value;
+            auto& stored = driven_values[signal_id];
+            if (resolved.width() == stored.width()) {
+                auto kept = stored;
+                for (auto bit = offset; bit < offset + width; ++bit) {
+                    kept.set(bit, resolved.get(bit));
+                }
+                if (kept != stored) {
+                    stored = std::move(kept);
+                    note_aggregate_leaf_stored_change(signal_id);
+                }
             }
         }
     }
@@ -1729,7 +1779,7 @@ bool Interpreter::Impl::update_container_alias_driver_force(
     const SignalId signal_id) const
 {
     const auto& signal = get_signal(signal_id);
-    if (signal.resolution == ResolutionKind::vhdl_user_function) {
+    if (signal.resolution == ResolutionKind::user_function) {
         if (const auto declared = vhdl_driver_initial_values.find(signal_id);
             declared != vhdl_driver_initial_values.end()) {
             return declared->second;
@@ -1750,7 +1800,6 @@ bool Interpreter::Impl::update_container_alias_driver_force(
     const auto initial = signal.resolution == ResolutionKind::sv_wire
             || signal.resolution == ResolutionKind::sv_wand
             || signal.resolution == ResolutionKind::sv_wor
-            || signal.resolution == ResolutionKind::sv_user_first
         ? Logic4::z
         : signal.resolution == ResolutionKind::vhdl_user_or
         ? Logic4::zero
@@ -1769,10 +1818,31 @@ PackedLogic4 Interpreter::Impl::run_vhdl_resolver(const SignalId signal_id)
     // 1076-2008 14.7.3.2).
     // A dormant driver (a foreign architecture's placeholder before a
     // program created the driver, 20.4.2) is no source either (14.7.3.1).
+    // A source whose subelements are all determined by the null transaction
+    // is no source; it is an error if only some are (14.7.3.2).
+    const auto nulls = vhdl_null_elements.find(signal_id);
+    const auto disconnected = [&](const ProcessId driver) {
+        if (vhdl_disconnected_drivers.contains({ signal_id, driver })) {
+            return true;
+        }
+        if (nulls == vhdl_null_elements.end()) {
+            return false;
+        }
+        const auto found = nulls->second.find(driver);
+        if (found == nulls->second.end()) {
+            return false;
+        }
+        const auto count = static_cast<std::size_t>(std::ranges::count_if(
+            found->second, [](const std::uint8_t kind) { return kind != 0U; }));
+        if (count != 0U && count != found->second.size()) {
+            throw VhdlPartialNullSourceError(get_signal_cold(signal_id).name);
+        }
+        return count != 0U;
+    };
     std::vector<ProcessId> connected;
     connected.reserve(resolver.drivers.size());
     for (const auto driver : resolver.drivers) {
-        if (!vhdl_disconnected_drivers.contains({ signal_id, driver })
+        if (!disconnected(driver)
             && (dormant_driver_regions.empty()
                 || !dormant_driver_regions.contains({ driver, signal_id }))) {
             connected.push_back(driver);
@@ -1783,7 +1853,7 @@ PackedLogic4 Interpreter::Impl::run_vhdl_resolver(const SignalId signal_id)
         if (const auto created = vhdl_created_drivers.find(signal_id);
             created != vhdl_created_drivers.end()) {
             for (const auto driver : created->second) {
-                if (!vhdl_disconnected_drivers.contains({ signal_id, driver })) {
+                if (!disconnected(driver)) {
                     connected.push_back(driver);
                 }
             }
@@ -1797,7 +1867,11 @@ PackedLogic4 Interpreter::Impl::run_vhdl_resolver(const SignalId signal_id)
     if (count != resolver.drivers.size()) {
         // A register keeps its value while every driver is disconnected,
         // and a signal with no source (its drivers dormant) its default;
-        // only a bus calls the function with a null array (14.7.3.2).
+        // only a bus calls the function with a null array (14.7.3.2),
+        // whose result elaboration evaluated (null_value).
+        if (count == 0U && resolver.guarded_kind == 1U && resolver.null_value) {
+            return coerce_value_kind(*resolver.null_value, signal.value_kind);
+        }
         if (count == 0U
             && (resolver.guarded_kind != 1U
                 || (!resolver.variants.empty()
@@ -1875,28 +1949,6 @@ PackedLogic4 Interpreter::Impl::run_vhdl_resolver(const SignalId signal_id)
         get_register(process, program_output), signal.value_kind);
 }
 
-bool Interpreter::Impl::try_vhdl_disconnect_call(
-    const ProcessId process, const std::string_view identity)
-{
-    constexpr std::string_view prefix { "@vhdl-disconnect:" };
-    if (!identity.starts_with(prefix)) {
-        return false;
-    }
-    const auto fields = identity.substr(prefix.size());
-    const auto separator = fields.find(':');
-    SignalId signal { };
-    SimulationTick delay { };
-    if (separator == std::string_view::npos
-        || std::from_chars(fields.data(), fields.data() + separator, signal)
-               .ec != std::errc { }
-        || std::from_chars(fields.data() + separator + 1U,
-               fields.data() + fields.size(), delay).ec != std::errc { }) {
-        throw std::invalid_argument { "malformed VHDL disconnection" };
-    }
-    schedule_vhdl_disconnect(process, signal, delay);
-    return true;
-}
-
 void Interpreter::Impl::schedule_vhdl_disconnect(
     const ProcessId process, const SignalId signal,
     const SimulationTick delay)
@@ -1943,6 +1995,225 @@ void Interpreter::Impl::schedule_vhdl_disconnect(
         SchedulerPhase::update, process,
         events::make<events::DriverDisconnect>(
             events::DriverDisconnect::Payload { this, process, signal }));
+}
+
+void Interpreter::Impl::apply_vhdl_null_transaction(const ProcessId process,
+    const SignalId signal, const std::size_t offset, const std::size_t width,
+    const std::uint8_t kind)
+{
+    const auto signal_width = driven_values[signal].width();
+    if (width == 0U || offset > signal_width || width > signal_width - offset) {
+        throw std::invalid_argument(
+            "null transaction range is outside its target signal");
+    }
+    if (vhdl_resolvers.contains(signal)) {
+        // A guarded signal whose resolution function is the design's own
+        // (6.4.2.3): the null transaction makes the elements of the driver
+        // null, and a driver whose elements are all null is no source
+        // (14.7.3.2) until a value transaction reconnects it; a source
+        // with only some elements null is an error, found when the signal
+        // is resolved. The update commit resolves it again after this
+        // cycle's transactions (DriverDisconnect).
+        auto& elements = vhdl_null_elements[signal][process];
+        auto changed = elements.empty();
+        elements.resize(signal_width, 0U);
+        for (std::size_t index = offset; index < offset + width; ++index) {
+            changed = changed || elements[index] != kind;
+            elements[index] = kind;
+        }
+        if (std::ranges::all_of(elements,
+                [](const std::uint8_t element) { return element != 0U; })) {
+            changed = vhdl_disconnected_drivers.insert({ signal, process }).second
+                || changed;
+        }
+        if (changed) {
+            queue_vhdl_conversion(signal);
+        }
+        return;
+    }
+    if (get_signal(signal).value_kind != ValueKind::logic9) {
+        return;
+    }
+    auto& drivers = vhdl_null_elements[signal];
+    const bool first = drivers.empty();
+    auto& elements = drivers[process];
+    elements.resize(signal_width, 0U);
+    std::fill_n(elements.begin() + static_cast<std::ptrdiff_t>(offset), width,
+        kind);
+    if (first) {
+        // The signal is no longer its sole driver's value
+        // (resolved_guarded_driver_value).
+        refresh_direct_single_driver_route(signal);
+    }
+    // The signal is resolved again in this update phase, without the
+    // element (14.7.3.2): the driver's value is staged as it is.
+    stage_update_slice(process, signal,
+        driver_slot(process, signal).extract_bits(offset, width), offset);
+}
+
+void Interpreter::Impl::reconnect_vhdl_null_elements(const ProcessId process,
+    const SignalId signal, const std::size_t offset, const std::size_t width)
+{
+    if (vhdl_null_elements.empty()) {
+        return;
+    }
+    const auto found = vhdl_null_elements.find(signal);
+    if (found == vhdl_null_elements.end()) {
+        return;
+    }
+    const auto driver = found->second.find(process);
+    if (driver == found->second.end()) {
+        return;
+    }
+    auto& elements = driver->second;
+    for (std::size_t bit = offset; bit < offset + width && bit < elements.size();
+         ++bit) {
+        elements[bit] = 0U;
+    }
+    if (!vhdl_disconnected_drivers.empty() && vhdl_resolvers.contains(signal)) {
+        // A source with an element reconnected is no longer wholly null.
+        vhdl_disconnected_drivers.erase({ signal, process });
+    }
+    if (std::ranges::all_of(elements,
+            [](const std::uint8_t kind) { return kind == 0U; })) {
+        found->second.erase(driver);
+        if (found->second.empty()) {
+            vhdl_null_kept.erase(signal);
+            vhdl_null_elements.erase(found);
+        }
+    }
+}
+
+void Interpreter::Impl::publish_vhdl_null_elements(const ProcessId process,
+    const SignalId signal, std::vector<std::uint8_t> kinds,
+    const PackedLogic4& kept)
+{
+    const bool none = std::ranges::all_of(kinds,
+        [](const std::uint8_t kind) { return kind == 0U; });
+    auto found = vhdl_null_elements.find(signal);
+    if (vhdl_resolvers.contains(signal)) {
+        // The kernel's null elements of a source of a signal with a
+        // resolution function of the design's own (apply_vhdl_null_transaction):
+        // the host resolves it again when they change.
+        const auto previous = found != vhdl_null_elements.end()
+                && found->second.contains(process)
+            ? found->second.at(process)
+            : std::vector<std::uint8_t> { };
+        const bool wholly = !none && !kinds.empty()
+            && std::ranges::all_of(kinds,
+                [](const std::uint8_t kind) { return kind != 0U; });
+        bool changed = (none ? std::vector<std::uint8_t> { } : kinds) != previous;
+        if (wholly) {
+            changed = vhdl_disconnected_drivers.insert({ signal, process }).second
+                || changed;
+        } else {
+            changed = vhdl_disconnected_drivers.erase({ signal, process }) != 0U
+                || changed;
+        }
+        if (none) {
+            if (found != vhdl_null_elements.end()) {
+                found->second.erase(process);
+                if (found->second.empty()) {
+                    vhdl_null_elements.erase(found);
+                }
+            }
+        } else {
+            vhdl_null_elements[signal].insert_or_assign(process, std::move(kinds));
+        }
+        if (changed) {
+            queue_vhdl_conversion(signal);
+        }
+        return;
+    }
+    if (none) {
+        if (found == vhdl_null_elements.end()) {
+            return;
+        }
+        found->second.erase(process);
+        if (found->second.empty()) {
+            vhdl_null_kept.erase(signal);
+            vhdl_null_elements.erase(found);
+        } else {
+            vhdl_null_kept.insert_or_assign(signal, kept);
+        }
+        return;
+    }
+    const bool first = found == vhdl_null_elements.end();
+    vhdl_null_elements[signal].insert_or_assign(process, std::move(kinds));
+    vhdl_null_kept.insert_or_assign(signal, kept);
+    if (first) {
+        refresh_direct_single_driver_route(signal);
+    }
+}
+
+PackedLogic4 Interpreter::Impl::resolved_guarded_driver_value(
+    const SignalId signal_id,
+    const std::map<ProcessId, std::vector<std::uint8_t>>& nulls,
+    const ForcedDriverMapView* const override_maps) const
+{
+    // The std_logic resolution of each element's connected sources (IEEE
+    // 1076-2019 14.7.3.2): an element whose driver a null transaction
+    // disconnected is no source. An element with no connected source is
+    // 'Z' if a bus driver of it is disconnected (std_logic_1164's resolved
+    // of a null array) and otherwise keeps its value (a register's, or one
+    // no process drives); its unforced stored value, as for the elements of
+    // scalar driver regions.
+    const auto& values = driver_values.at(signal_id);
+    struct Source {
+        const DriverRecord* record { };
+        PackedLogic4 value;
+        const std::vector<std::uint8_t>* nulls { };
+    };
+    std::vector<Source> sources;
+    sources.reserve(values.size());
+    values.for_each_in_process_order([&](const DriverRecord& record) {
+        const auto found = nulls.find(record.process);
+        sources.push_back({ &record,
+            apply_driver_force(
+                signal_id, record.process, record.value, override_maps),
+            found != nulls.end() ? &found->second : nullptr });
+    });
+    const auto& external = external_driver_values.at(signal_id);
+    // A kernel-owned signal keeps the kernel's value (vhdl_null_kept).
+    const auto kept = vhdl_null_kept.find(signal_id);
+    auto result = kept != vhdl_null_kept.end()
+            && kept->second.width() == driven_values.at(signal_id).width()
+        ? kept->second
+        : driven_values.at(signal_id);
+    for (std::size_t bit = 0U; bit < result.width(); ++bit) {
+        bool has_source { };
+        bool bus_null { };
+        auto resolved = Logic9::z;
+        const auto add = [&](const Logic9 value) {
+            resolved = has_source ? runtime::resolve(resolved, value) : value;
+            has_source = true;
+        };
+        for (const auto& source : sources) {
+            if (source.record->scalar_regions
+                && std::ranges::none_of(*source.record->scalar_regions,
+                    [bit](const Process::DriverRegion& region) {
+                        return bit >= region.offset
+                            && bit - region.offset < region.width;
+                    })) {
+                continue;
+            }
+            if (source.nulls != nullptr && bit < source.nulls->size()
+                && (*source.nulls)[bit] != 0U) {
+                bus_null = bus_null || (*source.nulls)[bit] == 1U;
+                continue;
+            }
+            add(source.value.get_logic9(bit));
+        }
+        if (external) {
+            add(external->get_logic9(bit));
+        }
+        if (has_source) {
+            result.set_logic9(bit, resolved);
+        } else if (bus_null) {
+            result.set_logic9(bit, Logic9::z);
+        }
+    }
+    return result;
 }
 
 bool Interpreter::Impl::run_vhdl_conversion_drivers(
@@ -2034,11 +2305,127 @@ bool Interpreter::Impl::publish_vhdl_formal_driving_value(
     auto driving = whole_sole_driver
         ? connected.front()->value
         : vhdl_driver_initial_values.at(signal_id);
+    // A formal whose subtype has a resolution function (driving_resolver):
+    // its driving value is the function over its drivers, applied even to
+    // one (IEEE 1076-2019 14.7.3.2); the first driver is the leftmost
+    // element of the array.
+    bool by_function { };
+    if (const auto& resolver = found->second;
+        resolver.guarded_kind != 0U && resolver.driving_resolver
+        && !resolver.driving_drivers.empty()) {
+        // A guarded formal (IEEE 1076-2019 6.4.2.3): a driver whose elements
+        // the null transaction made all null is no source and one with only
+        // some is an error (14.7.3.2); the function runs over the others,
+        // with none a bus has the function's result for a null array and a
+        // register keeps its value.
+        const auto nulls = vhdl_null_elements.find(signal_id);
+        std::vector<ProcessId> live;
+        for (const auto driver : resolver.driving_drivers) {
+            bool off = vhdl_disconnected_drivers.contains({ signal_id, driver });
+            if (!off && nulls != vhdl_null_elements.end()) {
+                if (const auto element = nulls->second.find(driver);
+                    element != nulls->second.end()) {
+                    const auto count = static_cast<std::size_t>(std::ranges::count_if(
+                        element->second,
+                        [](const std::uint8_t kind) { return kind != 0U; }));
+                    if (count != 0U && count != element->second.size()) {
+                        throw VhdlPartialNullSourceError(
+                            get_signal_cold(signal_id).name);
+                    }
+                    off = count != 0U;
+                }
+            }
+            if (!off) {
+                live.push_back(driver);
+            }
+        }
+        if (live.empty()) {
+            if (resolver.guarded_kind == 1U && resolver.null_value) {
+                driving = coerce_value_kind(
+                    *resolver.null_value, get_signal(mirror).value_kind);
+            } else if (!initializing && mirror < driven_values.size()) {
+                driving = driven_values[mirror];
+            }
+        } else {
+            const auto width = get_signal(signal_id).initial_value.width();
+            const auto count = live.size();
+            PackedLogic4 values { width * count, Logic4::x };
+            if (get_signal(signal_id).value_kind == ValueKind::logic9) {
+                values.fill(Logic9::u);
+            }
+            const auto& records = driver_values.at(signal_id);
+            for (std::size_t index = 0U; index < count; ++index) {
+                const auto* record = records.find(live[index]);
+                values.insert_bits(record != nullptr
+                        ? record->value
+                        : vhdl_driver_initial_values.at(signal_id),
+                    (count - 1U - index) * width);
+            }
+            if (count != resolver.driving_drivers.size()
+                && (count >= resolver.variants.size()
+                    || resolver.variants[count].process
+                        == std::numeric_limits<ProcessId>::max())) {
+                throw std::invalid_argument {
+                    "VHDL resolved signal has no resolver for its connected "
+                    "drivers"
+                };
+            }
+            const auto& program = count == resolver.driving_drivers.size()
+                ? *resolver.driving_resolver
+                : resolver.variants[count];
+            if (static_kernel && static_kernel->resolver_member(program.process)) {
+                driving = static_kernel->run_resolver(program.process,
+                    std::move(values), program.input, program.output,
+                    std::nullopt);
+            } else {
+                auto& process = get_process(program.process);
+                get_register(process, program.input) = std::move(values);
+                process.pc = 0U;
+                process.halted = false;
+                execute(program.process);
+                driving = get_register(process, program.output);
+            }
+        }
+        by_function = true;
+    } else if (resolver.driving_resolver && !resolver.driving_drivers.empty()
+        && std::ranges::none_of(resolver.driving_drivers,
+            [&](const ProcessId driver) {
+                return vhdl_disconnected_drivers.contains({ signal_id, driver });
+            })) {
+        const auto width = get_signal(signal_id).initial_value.width();
+        const auto count = resolver.driving_drivers.size();
+        PackedLogic4 values { width * count, Logic4::x };
+        if (get_signal(signal_id).value_kind == ValueKind::logic9) {
+            values.fill(Logic9::u);
+        }
+        const auto& records = driver_values.at(signal_id);
+        for (std::size_t index = 0U; index < count; ++index) {
+            const auto* record = records.find(resolver.driving_drivers[index]);
+            values.insert_bits(record != nullptr
+                    ? record->value
+                    : vhdl_driver_initial_values.at(signal_id),
+                (count - 1U - index) * width);
+        }
+        const auto& program = *resolver.driving_resolver;
+        if (static_kernel && static_kernel->resolver_member(program.process)) {
+            driving = static_kernel->run_resolver(program.process,
+                std::move(values), program.input, program.output,
+                std::nullopt);
+        } else {
+            auto& process = get_process(program.process);
+            get_register(process, program.input) = std::move(values);
+            process.pc = 0U;
+            process.halted = false;
+            execute(program.process);
+            driving = get_register(process, program.output);
+        }
+        by_function = true;
+    }
     // Several drivers need a resolved type; a resolution function has its
     // own program, so these resolve as STD_LOGIC, per scalar subelement of
     // the drivers that drive it. A subelement without a driver keeps the
     // default (14.7.3.2).
-    if (!whole_sole_driver && !connected.empty()) {
+    if (!by_function && !whole_sole_driver && !connected.empty()) {
         const bool logic9 = driving.is_logic9();
         for (std::size_t bit { }; bit < driving.width(); ++bit) {
             bool has_source { };
@@ -2087,6 +2474,27 @@ bool Interpreter::Impl::publish_vhdl_formal_driving_value(
 
 void Interpreter::Impl::queue_vhdl_conversion(const SignalId target)
 {
+    // A net of a user-defined nettype the static kernel owns resolves
+    // there (StaticKernel::queue_nettype_resolution): the drivers it
+    // publishes come with the resolution it published, the host's copy.
+    if (target < static_kernel_owned_signal.size()
+        && static_kernel_owned_signal[target] != 0U) {
+        if (const auto found = vhdl_resolvers.find(target);
+            found != vhdl_resolvers.end()
+            && found->second.systemverilog_nettype) {
+            if (static_kernel) {
+                // As drain_vhdl_resolutions commits: the resolution is the
+                // value a release returns to, a force keeps the effective
+                // one (IEEE 1800-2023 10.6.2).
+                auto value = static_kernel->published_nettype_value(target);
+                if (value) {
+                    vhdl_resolved_values.insert_or_assign(target, *value);
+                    commit(target, apply_force(target, std::move(*value)));
+                }
+            }
+            return;
+        }
+    }
     if (!pending_vhdl_resolution_set.insert(target).second) {
         return;
     }
@@ -2106,6 +2514,77 @@ void Interpreter::Impl::drain_vhdl_resolutions()
         bool& running;
         ~Reset() { running = false; }
     } reset { running_vhdl_resolvers };
+    // The signals commit in one defined order (IEEE 1076-2019 14.7.3): a
+    // signal that is converted from or resolved over others follows them
+    // (its rank, one more than its sources'), and signals of one rank follow
+    // in declaration order, whichever order they were queued in.
+    std::unordered_map<SignalId, std::uint32_t> ranks;
+    std::unordered_set<SignalId> active;
+    const auto rank = [&](const auto& self, const SignalId signal) -> std::uint32_t {
+        if (const auto known = ranks.find(signal); known != ranks.end()) {
+            return known->second;
+        }
+        if (!active.insert(signal).second) {
+            return 0U;
+        }
+        std::uint32_t result { };
+        if (const auto found = vhdl_resolvers.find(signal);
+            found != vhdl_resolvers.end()) {
+            for (const auto source : found->second.sources) {
+                result = std::max(result, self(self, source) + 1U);
+            }
+        }
+        if (const auto found = vhdl_conversion_drivers.find(signal);
+            found != vhdl_conversion_drivers.end()) {
+            for (const auto& driver : found->second) {
+                for (const auto source : driver.sources) {
+                    result = std::max(result, self(self, source) + 1U);
+                }
+            }
+        }
+        active.erase(signal);
+        ranks.emplace(signal, result);
+        return result;
+    };
+    if (pending_vhdl_resolutions.size() > 1U && !vhdl_conversion_dependents.empty()) {
+        std::ranges::stable_sort(pending_vhdl_resolutions,
+            [&](const SignalId left, const SignalId right) {
+                const auto left_rank = rank(rank, left);
+                const auto right_rank = rank(rank, right);
+                if (left_rank != right_rank) {
+                    return left_rank < right_rank;
+                }
+                return left < right;
+            });
+    }
+    // An inout formal's driving value depends only on its own drivers: it
+    // is published first, so the actual it is a source of resolves with it
+    // in this cycle (IEEE 1076-2019 14.7.3.2, NOTE 1), not one later.
+    // A formal that is the actual of another (a nested port) has the inner
+    // one's driving value as a source, a conversion driver the runtime
+    // assigns first, so the formals are published until none changes.
+    for (bool changed = true; changed;) {
+        changed = false;
+        // The inner formal first: its driving value is a source of the one
+        // it is the actual of, so each is computed once, with final sources.
+        std::vector<SignalId> formals;
+        for (const auto signal_id : pending_vhdl_resolutions) {
+            if (const auto resolver = vhdl_resolvers.find(signal_id);
+                resolver != vhdl_resolvers.end()
+                && resolver->second.driving_mirror) {
+                formals.push_back(signal_id);
+            }
+        }
+        std::ranges::stable_sort(formals,
+            [&](const SignalId left, const SignalId right) {
+                return rank(rank, left) > rank(rank, right);
+            });
+        for (const auto signal_id : formals) {
+            run_vhdl_conversion_drivers(signal_id, false);
+            changed = publish_vhdl_formal_driving_value(signal_id, false)
+                || changed;
+        }
+    }
     for (std::size_t index = 0U; index < pending_vhdl_resolutions.size();
         ++index) {
         const auto signal_id = pending_vhdl_resolutions[index];
@@ -2187,7 +2666,20 @@ void Interpreter::Impl::initialize_vhdl_resolutions()
             publish(signal_id, resolved_driver_value(signal_id));
         }
     }
+    std::vector<SignalId> nettype_nets;
     for (const auto& [signal_id, resolver] : vhdl_resolvers) {
+        // A net of a user-defined nettype holds its data type's default;
+        // its function's guaranteed time-zero call is an update of the net
+        // like any other (IEEE 1800-2023 6.7.3), queued below.
+        if (resolver.systemverilog_nettype) {
+            // The kernel resolves the nets it owns itself
+            // (StaticKernel::initialize).
+            if (signal_id >= static_kernel_owned_signal.size()
+                || static_kernel_owned_signal[signal_id] == 0U) {
+                nettype_nets.push_back(signal_id);
+            }
+            continue;
+        }
         if (vhdl_deposited_before_start.contains(signal_id)) {
             vhdl_resolved_values.insert_or_assign(
                 signal_id, logical_signal_value(signal_id));
@@ -2217,6 +2709,16 @@ void Interpreter::Impl::initialize_vhdl_resolutions()
     }
     pending_vhdl_resolutions.clear();
     pending_vhdl_resolution_set.clear();
+    // The time-zero updates of nettype nets, in signal order. A restore
+    // starts past them: the saved values hold their results.
+    std::ranges::sort(nettype_nets);
+    reset.running = false;
+    if (start_restoring) {
+        return;
+    }
+    for (const auto signal_id : nettype_nets) {
+        queue_vhdl_conversion(signal_id);
+    }
 }
 
 PackedLogic4& Interpreter::Impl::driver_slot(
@@ -2280,7 +2782,8 @@ void Interpreter::Impl::refresh_direct_single_driver_route(
         || signal.has_charge_strength
         || external_driver_values.at(signal_id)
         || forced_values.at(signal_id)
-        || forced_driver_values.at(signal_id)) {
+        || forced_driver_values.at(signal_id)
+        || vhdl_null_elements.contains(signal_id)) {
         return;
     }
     const auto* record = values.sole();
@@ -2298,7 +2801,7 @@ void Interpreter::Impl::refresh_direct_single_driver_route(
     const ForcedDriverMapView* const override_maps) const
 {
     if (get_signal(signal_id).resolution
-        == ResolutionKind::vhdl_user_function) {
+        == ResolutionKind::user_function) {
         // The resolver program runs after the update's driver commits; until
         // then the signal keeps its last resolved value.
         if (!running_vhdl_resolvers
@@ -2316,6 +2819,15 @@ void Interpreter::Impl::refresh_direct_single_driver_route(
         return get_signal(signal_id).initial_value;
     }
     const auto& signal = get_signal(signal_id);
+    if (!vhdl_null_elements.empty()
+        && signal.resolution == ResolutionKind::std_logic
+        && signal.value_kind == ValueKind::logic9) {
+        if (const auto nulls = vhdl_null_elements.find(signal_id);
+            nulls != vhdl_null_elements.end()) {
+            return resolved_guarded_driver_value(
+                signal_id, nulls->second, override_maps);
+        }
+    }
     // A nine-value SystemVerilog net (on a VHDL inout) maps a sole 'H' to 1.
     const bool identity_single_driver_resolution
         = (signal.resolution == ResolutionKind::sv_wire
@@ -2444,9 +2956,6 @@ void Interpreter::Impl::refresh_direct_single_driver_route(
             }
         }
         return result;
-    }
-    if (resolution == ResolutionKind::sv_user_first) {
-        return drivers.front();
     }
     if (resolution == ResolutionKind::sv_wire) {
         const auto equal_strength_logic4 = !signal.has_implicit_driver
@@ -3182,6 +3691,12 @@ void Interpreter::Impl::set_driver(
         throw std::invalid_argument(
             "SimIR driver assignment width mismatch");
     }
+    // A transaction that is not null reconnects a disconnected guarded
+    // driver (IEEE 1076-2019 14.7.2, 14.7.3.2), whichever commit path of
+    // the update phase assigns it.
+    if (!vhdl_disconnected_drivers.empty()) {
+        vhdl_disconnected_drivers.erase({ signal_id, process });
+    }
     value = normalize_signal_value(
         signal_id, std::move(value));
     const bool driver_already_registered
@@ -3223,9 +3738,7 @@ void Interpreter::Impl::set_driver(
         }
     }
     if (slot == value) {
-        if (driver_transaction_hook) {
-            driver_transaction_hook(process, signal_id);
-        }
+        report_driver_transaction(process, signal_id);
         return;
     }
     slot = std::move(value);
@@ -3233,9 +3746,7 @@ void Interpreter::Impl::set_driver(
         driver_change_hook(process, signal_id, scheduler.now());
         publish_aggregate_leaf_driver_change(process, signal_id);
     }
-    if (driver_transaction_hook) {
-        driver_transaction_hook(process, signal_id);
-    }
+    report_driver_transaction(process, signal_id);
     wake_switch_source_readers(signal_id, process);
 }
 
@@ -3294,12 +3805,17 @@ void Interpreter::Impl::commit_driver(
     if (get_signal(signal_id).resolution
         == ResolutionKind::none) {
         commit(signal_id, std::move(value), change_origin);
-        if (driver_transaction_hook) {
-            driver_transaction_hook(process, signal_id);
-        }
+        report_driver_transaction(process, signal_id);
         return;
     }
     set_driver(process, signal_id, std::move(value));
+    if (get_signal(signal_id).resolution == ResolutionKind::user_function) {
+        // The driver's change schedules an update of the net, whose
+        // resolution function runs when it matures (IEEE 1800-2023 6.6.7;
+        // drain_vhdl_resolutions).
+        queue_vhdl_conversion(signal_id);
+        return;
+    }
     commit_resolved(
         signal_id, resolved_driver_value(signal_id), change_origin);
 }
@@ -3502,7 +4018,8 @@ void Interpreter::Impl::commit_driver_slice(
                 "SimIR driver slice is outside its aggregate signal"
             };
         }
-        stage_selected_signal_transaction(signal_id, offset, value.width());
+        stage_selected_signal_transaction(
+            signal_id, offset, value.width(), process);
         const auto end = offset + value.width();
         const auto& container = get_container_object(object).initial_value;
         const auto& type = container.type;
@@ -3601,11 +4118,11 @@ void Interpreter::Impl::commit_driver_slice(
     }
     if (get_signal(signal_id).resolution
         == ResolutionKind::none) {
+        const auto width = static_cast<std::uint32_t>(value.width());
         commit_slice(
             signal_id, std::move(value), offset, change_origin);
-        if (driver_transaction_hook) {
-            driver_transaction_hook(process, signal_id);
-        }
+        report_driver_transaction(process, signal_id,
+            static_cast<std::uint32_t>(offset), width);
         return;
     }
     if (offset > get_signal(signal_id).initial_value.width()
@@ -3615,7 +4132,8 @@ void Interpreter::Impl::commit_driver_slice(
             "SimIR driver slice is outside its signal"
         };
     }
-    stage_selected_signal_transaction(signal_id, offset, value.width());
+    stage_selected_signal_transaction(
+        signal_id, offset, value.width(), process);
     const auto updated = insert_value(
         driver_slot(process, signal_id),
         value,

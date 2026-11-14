@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fsim/app/sdf_vital_timing_checks.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 
 #include <array>
 #include <cstdint>
 #include <iostream>
 #include <memory>
-#include <ranges>
 #include <stdexcept>
 #include <string>
 #include <string_view>

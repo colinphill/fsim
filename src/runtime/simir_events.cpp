@@ -4,8 +4,24 @@
 // they replace.
 #include "simir_events.hpp"
 #include "simir_internal.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
+#include "fsim/runtime/logic.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/scheduler_events.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_ids.hpp"
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <optional>
+#include <span>
+#include <stdexcept>
+#include <string_view>
+#include <utility>
+#include "simir_static_kernel_state.hpp"
 
 namespace fsim::runtime::simir::events {
 
@@ -147,6 +163,12 @@ void UpdateCommit::dispatch(Scheduler& runtime, const Payload& scheduled)
     // The callback is built on first use, so a restart that re-creates this
     // event before any update was staged finds it.
     scheduled.owner->ensure_update_commit_callback();
+    if (scheduled.owner->static_kernel) {
+        // The first simulation cycle's update phase: the kernel's
+        // initialization assignments update their signals first (IEEE
+        // 1076-2019 14.7.5.2, 14.7.5.3).
+        scheduled.owner->static_kernel->run_initial_update();
+    }
     scheduled.owner->update_commit_callback(runtime);
 }
 
@@ -166,23 +188,28 @@ void VhdlNextCycleResolutions::dispatch(Scheduler&, const Payload& scheduled)
 void DriverDisconnect::dispatch(Scheduler& runtime, const Payload& scheduled)
 {
     auto& owner = *scheduled.owner;
-    // This null transaction is no longer pending.
-    if (const auto pending = owner.vhdl_pending_disconnects.find(
-            std::pair { scheduled.signal, scheduled.process });
-        pending != owner.vhdl_pending_disconnects.end()) {
-        std::erase(pending->second, runtime.now());
-        if (pending->second.empty()) {
-            owner.vhdl_pending_disconnects.erase(pending);
-        }
+    // This null transaction is no longer pending; one a later edit of the
+    // driver's waveform deleted (10.5.2.2) is not applied.
+    const auto pending = owner.vhdl_pending_disconnects.find(
+        std::pair { scheduled.signal, scheduled.process });
+    if (pending == owner.vhdl_pending_disconnects.end()
+        || std::erase(pending->second, runtime.now()) == 0U) {
+        return;
+    }
+    if (pending->second.empty()) {
+        owner.vhdl_pending_disconnects.erase(pending);
     }
     if (!owner.vhdl_disconnected_drivers
              .insert({ scheduled.signal, scheduled.process }).second) {
         return;
     }
-    auto value = owner.run_vhdl_resolver(scheduled.signal);
-    owner.vhdl_resolved_values.insert_or_assign(scheduled.signal, value);
-    owner.commit(scheduled.signal,
-        owner.apply_force(scheduled.signal, std::move(value)));
+    // The signal's driving value is computed once from all of its drivers
+    // after this cycle's transactions, null ones included, matured
+    // (IEEE 1076-2019 14.7.3.2, 14.7.5.3): the update commit resolves it.
+    // Two null transactions of one cycle leave a register with no
+    // connected driver keeping its value, not the value of the driver
+    // disconnected second.
+    owner.queue_vhdl_conversion(scheduled.signal);
 }
 
 namespace {
@@ -390,9 +417,16 @@ void ProjectedTransactionMature::dispatch(
     if (found_transaction == state.transactions.end()) {
         return;
     }
+    const auto null = found_transaction->null;
     auto committed_value = PackedLogic4 { 1U, Logic4::x };
     committed_value.fill(found_transaction->value);
     state.transactions.erase(found_transaction);
+    if (null != 0U) {
+        // A null transaction disconnects the element (10.5.2.2).
+        owner.apply_vhdl_null_transaction(process, signal, offset, 1U, null);
+        return;
+    }
+    owner.reconnect_vhdl_null_elements(process, signal, offset, 1U);
     owner.stage_update_slice(process, signal, committed_value, offset);
 }
 
@@ -422,16 +456,24 @@ void ProjectedGroupMature::dispatch(Scheduler&, const Payload& scheduled)
         }
     }
     if (complete_group) {
-        // The group's value is what its bits' transactions hold.
+        // The group's value is what its bits' transactions hold; the bits
+        // of one null element are null together.
         PackedLogic4 value { width, Logic4::x };
+        std::uint8_t null { };
         for (std::size_t bit = 0; bit < width; ++bit) {
             auto& transactions
                 = owner.projected_drivers.find(key_of(bit))->second.transactions;
             const auto transaction = std::ranges::find(
                 transactions, id_of(bit), &Impl::ProjectedTransaction::id);
             value.set_logic9(bit, transaction->value);
+            null = transaction->null;
             transactions.erase(transaction);
         }
+        if (null != 0U) {
+            owner.apply_vhdl_null_transaction(process, signal, first, width, null);
+            return;
+        }
+        owner.reconnect_vhdl_null_elements(process, signal, first, width);
         owner.stage_update_slice(process, signal, std::move(value), first);
         return;
     }
@@ -448,7 +490,14 @@ void ProjectedGroupMature::dispatch(Scheduler&, const Payload& scheduled)
         }
         auto scalar = PackedLogic4 { 1U, Logic4::x };
         scalar.fill(transaction->value);
+        const auto null = transaction->null;
         transactions.erase(transaction);
+        if (null != 0U) {
+            owner.apply_vhdl_null_transaction(process, signal, first + bit, 1U,
+                null);
+            continue;
+        }
+        owner.reconnect_vhdl_null_elements(process, signal, first + bit, 1U);
         owner.stage_update_slice(process, signal, std::move(scalar),
             first + bit);
     }

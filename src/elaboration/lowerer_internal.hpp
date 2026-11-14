@@ -4,6 +4,7 @@
 #include "elaborator_internal.hpp"
 #include "hierarchy_sv_constant_evaluator.hpp"
 #include "scoped_bindings.hpp"
+#include "virtual_interface_definition.hpp"
 #include "systemverilog_template_bindings.hpp"
 #include "vhdl_lowering_index.hpp"
 #include "fsim/support/active_set.hpp"
@@ -14,12 +15,16 @@
 
 #include <array>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <map>
 #include <memory>
 #include <set>
+#include <string>
+#include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace fsim::semantic::sv {
@@ -28,6 +33,50 @@ struct SpecializedClassProperty;
 }
 
 namespace fsim::elaboration {
+
+// A callable frame key reserved before its frame exists, so recursive calls
+// in the body find the frame; the reservation is dropped when the frame is not
+// created, so the key never names the index a later frame takes.
+class CallableKeyReservation {
+public:
+    CallableKeyReservation() = default;
+    CallableKeyReservation(const CallableKeyReservation&) = delete;
+    CallableKeyReservation& operator=(const CallableKeyReservation&) = delete;
+    ~CallableKeyReservation()
+    {
+        if (indices_ != nullptr) {
+            indices_->erase(key_);
+        }
+    }
+    void reserve(std::unordered_map<std::string, std::size_t>& indices,
+        std::string key)
+    {
+        indices_ = &indices;
+        key_ = std::move(key);
+    }
+    void commit() noexcept { indices_ = nullptr; }
+
+private:
+    std::unordered_map<std::string, std::size_t>* indices_ { };
+    std::string key_;
+};
+
+// The value a function's result variable holds before its body assigns it:
+// x for a 4-state type, 0 for a 2-state one, 'U' for a VHDL logic value.
+[[nodiscard]] inline runtime::PackedLogic4 callable_default_value(
+    const std::size_t width, const frontend::ValueDomain domain)
+{
+    if (domain == frontend::ValueDomain::Logic9) {
+        return runtime::PackedLogic4::from_logic9_msb_string(
+            std::string(width, 'U'));
+    }
+    return runtime::PackedLogic4(width,
+        domain == frontend::ValueDomain::Bit2
+                || domain == frontend::ValueDomain::Boolean
+                || domain == frontend::ValueDomain::Integer
+            ? runtime::Logic4::zero
+            : runtime::Logic4::x);
+}
 
 // Restores a container to its size at construction.
 template <typename Container>
@@ -51,6 +100,29 @@ private:
 
 template <typename Container>
 SizeRestoreGuard(Container&) -> SizeRestoreGuard<Container>;
+
+// Restores a variable to its value at construction.
+template <typename Value>
+class ValueRestoreGuard final {
+public:
+    explicit ValueRestoreGuard(Value& value)
+        : value_ { value }
+        , saved_ { value }
+    {
+    }
+
+    ValueRestoreGuard(const ValueRestoreGuard&) = delete;
+    ValueRestoreGuard& operator=(const ValueRestoreGuard&) = delete;
+
+    ~ValueRestoreGuard() { value_ = std::move(saved_); }
+
+private:
+    Value& value_;
+    Value saved_;
+};
+
+template <typename Value>
+ValueRestoreGuard(Value&) -> ValueRestoreGuard<Value>;
 
 // The generic binding frames in force while lowering (IEEE 1076-2008
 // 6.5.6.2, 1800-2017 6.20.2). Frames change only by push, pop and resize,
@@ -155,6 +227,11 @@ using runtime::Logic4;
 using runtime::PackedLogic4;
 using namespace runtime::simir;
 using namespace elaboration_detail;
+
+// Whether `operation` may change the container register `container`
+// (elaborated_design_static_kernel.cpp).
+[[nodiscard]] bool hir_operation_writes_container(
+    const Operation& operation, ContainerRegisterId container);
 
 // The runtime report location of a source span: its file and first line
 // and column.
@@ -381,6 +458,23 @@ struct HirCallableBodyRecording {
     // The debug locals the body added, each with the index of its name.
     std::vector<std::pair<std::size_t, runtime::simir::DebugLocal>>
         debug_locals;
+    // The frame-local table entries the body added, each with the simple
+    // name its `<subprogram>.<name>` is made from
+    // (Lowerer::hir_frame_local_name).
+    std::vector<std::pair<std::string, runtime::simir::DebugLocal>>
+        frame_locals;
+    // The declaration each local the body added belongs to, by its index in
+    // `debug_locals` or `frame_locals` (Process::call_frames).
+    struct LocalBinding {
+        semantic::DeclarationId declaration;
+        bool frame_table { };
+        std::size_t index { };
+    };
+    std::vector<LocalBinding> local_bindings;
+    // The slots of the values the body's system function calls with state
+    // returned (probe-only; named by the call's position, so a replay keeps
+    // the names).
+    std::vector<runtime::simir::DebugLocal> call_values;
     std::vector<runtime::simir::ExpressionProfile> expression_profiles;
 };
 
@@ -500,7 +594,8 @@ public:
         std::shared_ptr<const semantic::SpecializedHirUnit>>;
     void set_systemverilog_interface_handles(
         const std::unordered_map<std::string, std::uint64_t>* handles,
-        const std::unordered_map<std::string, std::string>* types = nullptr,
+        const std::unordered_map<std::string,
+            SystemVerilogInterfaceInstanceType>* types = nullptr,
         const HirInstanceUnits* instance_units = nullptr,
         const std::unordered_map<std::string, std::string>* exports = nullptr,
         const std::unordered_set<std::string>* design_element_instances
@@ -530,6 +625,14 @@ public:
         semantic::ProcessId process,
         frontend::Language language,
         std::string_view hierarchy);
+    // The dormant UVM dispatch process of the design (see
+    // lower_uvm_api_dispatch); nullopt when it cannot be lowered.
+    [[nodiscard]] std::optional<Process> lower_uvm_api_process(
+        frontend::Language language, std::string_view hierarchy);
+    [[nodiscard]] bool design_has_uvm_component() const
+    {
+        return hir_design_uses_uvm_library();
+    }
     [[nodiscard]] bool diagnose_hir_vhdl_block_guard(
         semantic::ExpressionId expression);
     [[nodiscard]] std::optional<semantic::SourceSpanId>
@@ -642,6 +745,15 @@ public:
         SignalId destination,
         frontend::Language language,
         std::string_view hierarchy);
+    /// As lower_hir_package_initializer, for a string or container package
+    /// variable: the initializer's value is written to `string_object` or
+    /// `container_object` (IEEE 1800-2023 6.8, 6.21, 10.5).
+    [[nodiscard]] std::optional<Process>
+    lower_hir_package_object_initializer(
+        semantic::DeclarationId declaration,
+        std::optional<StringObjectId> string_object,
+        std::optional<ContainerObjectId> container_object,
+        std::string_view hierarchy);
     /// Lower the initializer of static property `property` of class
     /// specialization `specialization_identity` as a one-shot startup
     /// process that writes the property (IEEE 1800-2017 8.9, 8.25).
@@ -694,6 +806,15 @@ public:
         std::vector<VhdlResolverSegment> segments = { },
         std::vector<VhdlDriverRegions> driver_regions = { },
         bool dynamic_count = false);
+    // The resolver program of a net of a user-defined nettype (IEEE
+    // 1800-2023 6.6.7), in the same form: `input` holds the values of the
+    // net's `driver_count` drivers, the first in the most significant
+    // position, and `output` the value function `function` returns for them.
+    [[nodiscard]] std::optional<HirVhdlResolverProgram>
+    lower_hir_systemverilog_resolver_process(SignalId signal,
+        semantic::DeclarationId function, std::size_t driver_count,
+        std::string_view hierarchy,
+        std::vector<std::vector<std::size_t>> elements = { });
     // A VHDL conversion of a port association (IEEE 1076-2008 6.5.7.1,
     // 14.7.3): the program computes `destination`'s effective value from
     // the signals it reads, in the same simulation cycle they change.
@@ -733,6 +854,13 @@ public:
         std::string_view hierarchy);
 
     [[nodiscard]] std::vector<Process> take_generated_processes();
+    // Notes the callable a user task or function call of this instance is
+    // bound to, for the VPI (IEEE 1800-2023 37.42, 37.38); `receiver` names
+    // the instance that owns it as the call profiles do (empty for this
+    // instance's own callable or a package's).
+    void record_vpi_callee(bool statement, std::uint32_t id,
+        semantic::DeclarationId declaration, std::string_view receiver,
+        semantic::OriginId dpi = { });
 
     // The subtype of an object whose declared subtype leaves index ranges
     // open, completed from the shape of its initial value (IEEE 1076-2008
@@ -999,6 +1127,12 @@ private:
         std::optional<SignalId> input_actual_destination;
         // A STRING input actual written to this object instead.
         std::optional<StringObjectId> input_actual_string_object;
+        // A container-valued SystemVerilog input actual written to this
+        // object instead, typed by `input_actual_assignment_type`.
+        std::optional<ContainerObjectId> input_actual_container_object;
+        // The declaration whose initializer the input actual is, for
+        // contextual typing (a package variable's initializer).
+        std::optional<semantic::DeclarationId> input_actual_declaration;
         bool input_actual_assignment_context { };
         // The input actual is a conversion program: its value goes to the
         // resolver output register instead of an update of the destination.
@@ -1055,6 +1189,9 @@ private:
         bool wait_before_first_execution { };
         bool concurrent_assertion { };
         bool vhdl_guarded_assignment { };
+        // The process the simulation's UVM phase services call components
+        // through: waits for a request and dispatches it (lower_uvm_api_dispatch).
+        bool uvm_api_dispatch { };
         struct VhdlResolver {
             SignalId signal { };
             semantic::DeclarationId function;
@@ -1064,6 +1201,18 @@ private:
             bool dynamic_count { };
         };
         std::optional<VhdlResolver> vhdl_resolver;
+        // The resolver program of a net of a user-defined nettype.
+        struct SystemVerilogResolver {
+            SignalId signal { };
+            semantic::DeclarationId function;
+            std::size_t driver_count { };
+            // An array of nets of the nettype (IEEE 1800-2023 6.6.7): for
+            // each element, leftmost first, the indexes of the drivers that
+            // drive it; each element resolves from those alone. Empty for
+            // one net, which all the drivers drive.
+            std::vector<std::vector<std::size_t>> elements { };
+        };
+        std::optional<SystemVerilogResolver> systemverilog_resolver;
         // A class static property initializer: the specialization and the
         // property it initializes.
         struct ClassStaticInitializer {
@@ -1089,6 +1238,15 @@ private:
         semantic::SourceSpanId source) const;
     [[nodiscard]] bool hir_vhdl_active_package_constant(
         semantic::ExpressionId expression) const;
+    // Whether a SystemVerilog expression calls a user task or function or a
+    // class method: such a call runs where its expression is evaluated in
+    // procedural code (IEEE 1800-2023 13.4.3, 9.4.1), so the expression is
+    // not folded to a constant there. With `effects_only`, a function call
+    // counts only when its body does more than compute its value (a task
+    // call, a display, a timing control...): folding a call whose body only
+    // assigns its locals and returns gives the value the call returns.
+    [[nodiscard]] bool hir_calls_user_function(
+        semantic::ExpressionId expression, bool effects_only = false) const;
     [[nodiscard]] std::optional<std::int64_t> hir_constant_integer(
         semantic::ExpressionId expression) const;
     // The enumeration type a VHDL subtype belongs to, through subtypes and
@@ -2048,20 +2206,15 @@ private:
     hir_systemverilog_event_array_selection(
         semantic::ExpressionId expression,
         semantic::ScopeId process_scope) const;
-    // Selects one element of an event array, `@(e[i])` or `-> e[i]`, and
-    // applies `emit` to it: directly for a constant index, otherwise through
-    // a compare-and-branch chain over the declared elements. When no element
-    // matches, a wait blocks forever and a trigger does nothing.
+    // Selects one element of an event array, `@(e[i])`, `-> e[i]` or
+    // `e[i].triggered`: a constant index applies `emit` to the element, a
+    // run-time index lowers `element` (its operation, destination and delay
+    // set by the caller), which selects the element when it runs.
     [[nodiscard]] bool lower_hir_systemverilog_event_array_dispatch(
         const HirSystemVerilogEventArraySelection& event_array,
         const frontend::SourceSpan& span,
         const std::function<bool(SignalId)>& emit,
-        bool wait_when_unmatched);
-    [[nodiscard]] std::optional<PackedLogic4>
-    hir_systemverilog_event_array_index_value(
-        std::int32_t index,
-        semantic::ExpressionId index_expression,
-        std::size_t width) const;
+        EventArrayElement element);
     [[nodiscard]] std::optional<std::uint64_t>
     hir_systemverilog_interface_handle(
         semantic::ExpressionId expression) const;
@@ -2745,6 +2898,11 @@ private:
     [[nodiscard]] std::optional<semantic::sv::TypeReference>
     hir_systemverilog_value_type(semantic::ExpressionId expression,
         std::size_t trailing_segments = 0U) const;
+    // The function being lowered, when `name` in `scope` denotes it and so
+    // its implicit container result variable (IEEE 1800-2023 13.4.1).
+    [[nodiscard]] std::optional<semantic::DeclarationId>
+    hir_function_result_variable(
+        std::string_view name, semantic::ScopeId scope) const;
     [[nodiscard]] std::optional<HirEnumerationMethod>
     hir_systemverilog_enumeration_profile(HirEnumerationMethod method,
         semantic::DeclarationId declaration) const;
@@ -2884,6 +3042,16 @@ private:
         semantic::ScopeId process_scope) const;
     // The scalar kind a declared type names, following a typedef or type
     // parameter to its built-in base (IEEE 1800-2023 6.18, 6.20.3).
+    // Whether a declared type is the built-in `event`, following typedefs
+    // and type parameters (IEEE 1800-2023 6.18, 15.5); an array of such a
+    // type is an array of events (6.17, 7.4).
+    [[nodiscard]] bool hir_type_is_event(
+        const semantic::sv::TypeReference& type,
+        semantic::ScopeId scope) const;
+    // The same for a class property, whose type is resolved in the scope of
+    // the class that declares it (IEEE 1800-2023 8.18, 6.18).
+    [[nodiscard]] bool hir_class_property_is_event(
+        const semantic::sv::ClassProperty& property) const;
     [[nodiscard]] frontend::SystemVerilogScalarKind
     hir_declared_type_scalar_kind(
         const semantic::sv::TypeReference& type,
@@ -3537,12 +3705,49 @@ private:
         std::string name;
         semantic::ExpressionId actual;
     };
+    // A let expansion with its formals' actuals; or, with no declaration,
+    // the context an actual is lowered in: the actual belongs to the let
+    // expression's own context (IEEE 1800-2023 11.12), so the frames from
+    // `resume` on (the expansion that bound it and those above) are hidden
+    // while it is lowered.
     struct HirLetFrame {
         const semantic::sv::LetDeclaration* declaration { };
         std::vector<HirLetBinding> bindings;
+        std::size_t resume { };
     };
-    [[nodiscard]] std::optional<semantic::ExpressionId>
-    hir_let_actual(semantic::ExpressionId expression) const;
+    // The actual bound to a formal name, with its context: while the object
+    // lives, the frames of the expansion that bound it are hidden.
+    class HirLetActual {
+    public:
+        HirLetActual() = default;
+        HirLetActual(std::vector<HirLetFrame>& frames,
+            const semantic::ExpressionId actual, const std::size_t resume)
+            : frames_(&frames), actual_(actual)
+        {
+            frames.push_back(HirLetFrame { nullptr, { }, resume });
+        }
+        HirLetActual(const HirLetActual&) = delete;
+        HirLetActual& operator=(const HirLetActual&) = delete;
+        HirLetActual(HirLetActual&&) = delete;
+        HirLetActual& operator=(HirLetActual&&) = delete;
+        ~HirLetActual()
+        {
+            if (frames_ != nullptr) {
+                frames_->pop_back();
+            }
+        }
+        explicit operator bool() const noexcept { return frames_ != nullptr; }
+        [[nodiscard]] semantic::ExpressionId operator*() const noexcept
+        {
+            return actual_;
+        }
+
+    private:
+        std::vector<HirLetFrame>* frames_ { };
+        semantic::ExpressionId actual_;
+    };
+    [[nodiscard]] HirLetActual hir_let_actual(
+        semantic::ExpressionId expression) const;
     [[nodiscard]] const semantic::sv::LetDeclaration*
     hir_let_declaration(semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<std::vector<HirLetBinding>>
@@ -4076,6 +4281,7 @@ private:
         runtime::simir::ContainerType type;
         bool leaf { };
         bool string_leaf { };
+        bool string_element { };
         // A constant slice of the selected one-dimensional fixed array
         // (`s.arr[3:1]`, `a[1:0]`, IEEE 1800-2017 7.4.6) ends the path:
         // `type` is the slice and `base` the array it selects from.
@@ -4131,8 +4337,12 @@ private:
     // indexing a subarray (`obj.m[1][2]`, IEEE 1800-2017 7.4.5).
     [[nodiscard]] std::optional<HirSvValuePath> hir_class_subarray_element(
         semantic::ExpressionId expression) const;
+    // With `allow_string_element`, the last index step may select one
+    // element of a string container (`s.q[i]`): `string_element` is then set
+    // and `type` is the string container.
     [[nodiscard]] std::optional<HirSvValuePath> hir_sv_value_path(
-        semantic::ExpressionId expression) const;
+        semantic::ExpressionId expression,
+        bool allow_string_element = false) const;
     // The bits of a fixed container's packed signal bridge that a place with
     // constant selects occupies, leftmost element and first member most
     // significant (IEEE 1800-2017 10.6.2: force targets on that image).
@@ -4157,6 +4367,16 @@ private:
         std::optional<runtime::simir::ContainerRegisterId> container);
     [[nodiscard]] std::optional<HirSvValuePathCursor>
     lower_hir_sv_value_path_descend(const HirSvValuePath& path);
+    // A nonblocking write of one string element of a path
+    // (HirSvValuePath::string_element): the indices and the value are
+    // captured now, the element is written in the NBA region.
+    // The string element a path (HirSvValuePath::string_element) selects
+    // (`s.q[i]`, `obj.q[i]`, IEEE 1800-2023 7.2, 7.10, 8.4).
+    [[nodiscard]] std::optional<runtime::simir::StringRegisterId>
+    lower_hir_sv_value_path_string_element_read(const HirSvValuePath& path);
+    [[nodiscard]] bool lower_hir_sv_value_path_string_nonblocking_write(
+        const HirSvValuePath& path, runtime::simir::StringRegisterId value,
+        const std::function<bool()>& before_write);
     void publish_hir_sv_value_path(
         const HirSvValuePath& path, const HirSvValuePathCursor& cursor);
     [[nodiscard]] std::optional<RegisterId> lower_hir_sv_value_path_read(
@@ -4405,6 +4625,30 @@ private:
         const HirClassPropertyMember& member);
     [[nodiscard]] bool lower_hir_class_property_member_write(
         const HirClassPropertyMember& member, RegisterId value);
+    // Selects of a packed class property or member (`h.p[i][m:l]`).
+    struct HirClassPropertySelectPath {
+        semantic::ExpressionId root;
+        std::optional<HirClassPropertyProfile> property;
+        std::optional<HirClassPropertyMember> member;
+        std::vector<semantic::ExpressionId> selects;
+    };
+    struct HirClassPropertySelectLevel {
+        RegisterId offset { };
+        std::size_t width { };
+    };
+    [[nodiscard]] std::optional<HirClassPropertySelectPath>
+    hir_class_property_select_path(semantic::ExpressionId expression) const;
+    [[nodiscard]] std::optional<HirClassPropertySelectLevel>
+    lower_hir_class_property_select_level(semantic::ExpressionId select,
+        std::size_t enclosing_width, std::vector<HirPackedRange>& shape);
+    [[nodiscard]] std::vector<HirPackedRange> hir_class_property_select_shape(
+        const HirClassPropertySelectPath& path) const;
+    [[nodiscard]] std::optional<std::size_t> hir_class_property_select_width(
+        semantic::ExpressionId expression) const;
+    [[nodiscard]] std::optional<RegisterId>
+    lower_hir_class_property_select_read(semantic::ExpressionId expression);
+    [[nodiscard]] bool lower_hir_class_property_select_write(
+        semantic::ExpressionId target, semantic::ExpressionId value);
     // A string class property read into a string register, or written from
     // one, through the class method boundary.
     [[nodiscard]] std::optional<StringRegisterId>
@@ -4426,6 +4670,10 @@ private:
         bool string { };
         bool container { };
         bool signed_value { };
+        // The formal's default (IEEE 1800-2023 13.5.3): the expression is
+        // the declaration's, evaluated in the method's scope, so `this` in
+        // it is the call's receiver.
+        bool defaulted { };
     };
     struct HirClassMethodProfile {
         semantic::DeclarationId declaration;
@@ -4444,6 +4692,10 @@ private:
         bool container_result { };
         // The parameterized class specialization the call runs in.
         std::optional<std::uint32_t> specialization;
+        // A `@uvm-registry-create:` or `@uvm-registry-get:` call: the
+        // specialization identity of the class its type expression denotes
+        // (IEEE 1800-2023 8.25, 6.22.1).
+        std::string registry_specialization { };
     };
     [[nodiscard]] std::optional<std::vector<
         runtime::SystemVerilogConstraintTemplate>>
@@ -4548,6 +4800,22 @@ private:
     };
     [[nodiscard]] std::vector<HirClassOverride> hir_class_method_overrides(
         semantic::DeclarationId declaration) const;
+    // randomize() with pre_randomize and post_randomize as generated code
+    // (IEEE 1800-2023 18.6.1).
+    [[nodiscard]] std::vector<HirClassOverride>
+    hir_randomize_callback_classes(std::string_view name) const;
+    [[nodiscard]] bool lower_hir_randomize_callback(
+        semantic::SourceSpanId source, RegisterId object,
+        const std::vector<HirClassOverride>& classes, std::string_view name);
+    [[nodiscard]] bool lower_hir_randomize_member_callbacks(
+        semantic::SourceSpanId source, RegisterId receiver, RegisterId count,
+        const std::vector<HirClassOverride>& classes, std::string_view name);
+    // `p.kill()` (IEEE 1800-2023 9.7), with the runtime told when the
+    // killing process goes on after it.
+    void lower_hir_process_kill(RegisterId receiver);
+    [[nodiscard]] bool lower_hir_randomize_with_callbacks(
+        semantic::ExpressionId expression, RegisterId receiver,
+        ClassMethodCall solve);
     // The classes of the design element instances whose objects a call of
     // method `declaration` reaches when the call site does not know the
     // instance (`top.u.h.f()`): each instance has a class of its own (IEEE
@@ -4585,18 +4853,38 @@ private:
         std::optional<std::uint32_t> specialization = std::nullopt) const;
     [[nodiscard]] bool hir_class_derives_from_uvm(
         std::string_view identity) const;
-    // Whether `identity` names a declaration of the UVM library, which the
-    // design contains only when it declares `uvm_pkg::uvm_object`: a user
-    // package that is merely named `uvm_pkg` is ordinary code.
+    // Whether `identity` names a declaration of the governed UVM library
+    // (a class, a specialization of one or a member of one whose recorded
+    // role is not none), or a native UVM service (`@uvm-...`) of a design
+    // that declares the library.
     [[nodiscard]] bool hir_uvm_library_identity(
         std::string_view identity) const;
     mutable std::optional<bool> hir_uvm_library_declared_;
+    // The recorded role (support::UvmRole) of the class, specialization or
+    // class member `identity` names; none outside the governed library.
+    [[nodiscard]] support::UvmRole hir_uvm_role(
+        std::string_view identity) const;
+    // The class `identity` names by its canonical or declaration identity,
+    // or through a specialization of it.
+    [[nodiscard]] const semantic::sv::ClassDeclaration* hir_uvm_role_class(
+        std::string_view identity) const;
+    // Whether the class `identity` names, or a class of its base chain, has
+    // the role `role`.
+    [[nodiscard]] bool hir_class_chain_has_uvm_role(
+        std::string_view identity, support::UvmRole role) const;
+    // Whether a method of a class deriving from the UVM library is run by
+    // the simulation's UVM services rather than lowered, by declaration.
+    [[nodiscard]] bool hir_uvm_method_runs_in_host(
+        semantic::DeclarationId declaration,
+        std::string_view owner_identity) const;
+    mutable std::unordered_map<std::uint32_t, bool> hir_uvm_host_methods_;
     // The specialization identity a runtime call of the class static method
     // `identity` carries (ClassStaticMethodCall::class_specialization): the
     // specialization the call runs in, whose static properties and static
-    // methods it uses (IEEE 1800-2023 8.25.1); empty for a runtime service.
+    // methods it uses (IEEE 1800-2023 8.25.1), the default one of the
+    // declaring class when the call names none; empty for a runtime service.
     [[nodiscard]] std::string hir_static_call_specialization(
-        std::string_view identity,
+        std::string_view identity, semantic::DeclarationId declaration,
         std::optional<std::uint32_t> specialization) const;
     // The class type `$cast` checks its destination `target` against: the
     // specialization the destination's type names when that specialization
@@ -4635,6 +4923,36 @@ private:
     // `super.new(...)` in a lowered constructor body.
     [[nodiscard]] bool lower_hir_base_constructor_call(
         semantic::StatementId statement);
+    // The class whose construction `identity` starts in a lowered
+    // constructor chain: a class of the UVM library is the chain's last
+    // step, else the lowerable class (hir_lowerable_constructor_class).
+    [[nodiscard]] const semantic::sv::ClassDeclaration*
+    hir_construction_step_class(std::string_view identity,
+        std::optional<std::uint32_t> specialization) const;
+    // The constructor of UVM library class `library` on `receiver`, reached
+    // from a lowered constructor chain: its actuals go to the simulation's
+    // UVM services, which make the library's base state (IEEE 1800.2-2020
+    // 5.3.2, 13.1.2).
+    [[nodiscard]] bool lower_hir_uvm_library_construction(
+        const semantic::sv::ClassDeclaration& library, RegisterId receiver,
+        std::span<const semantic::sv::TaskAssociation> actuals,
+        std::optional<std::uint32_t> specialization);
+    // A factory create (`T::type_id::create`) or the run's test creation
+    // whose object's constructor chain the process runs itself: the runtime
+    // allocates the object, then the chain of the class it chose runs on it
+    // with the create's name and parent (IEEE 1800.2-2020 8.2.4.2, F.3.1.2).
+    [[nodiscard]] std::optional<RegisterId> lower_hir_uvm_lowered_create(
+        semantic::ExpressionId expression,
+        const HirClassMethodProfile& profile, std::size_t expected_width);
+    // Whether the base chain of class `identity` reaches the library's
+    // uvm_component.
+    [[nodiscard]] bool hir_class_is_uvm_component(
+        std::string_view identity) const;
+    // Whether the simulation's UVM services build an object of class
+    // `identity` instead of its constructor chain: a native service, or a
+    // UVM library class that is, or derives from, the library's uvm_object.
+    // Another library class runs its own constructors (IEEE 1800-2023 8.7).
+    [[nodiscard]] bool hir_uvm_native_class(std::string_view identity) const;
     // Value-container properties of `this` cached in container registers
     // while a class function or constructor body is lowered (none for a
     // task, which may suspend).
@@ -4657,6 +4975,12 @@ private:
         std::string identity;
         semantic::DeclarationId declaration;
     };
+    // Writes back each cached `this` array the operations from `mark` on
+    // change, while a callback watches (IEEE 1800-2023 38.36.1).
+    void write_back_changed_hir_class_caches(std::size_t mark);
+    // Records the container type of each array property of a class and
+    // its bases (ElaboratedDesign::class_container_types).
+    void record_class_container_types(std::string_view specialization) const;
     [[nodiscard]] std::optional<ContainerType> hir_class_value_container_type(
         std::string_view identity) const;
     // A value-container property of an object: `@sv-container-property:<id>`
@@ -4847,6 +5171,8 @@ private:
     };
     struct HirDpiFunctionProfile {
         std::string linkage_name;
+        // The import's origin, its identity for the VPI (37.40).
+        semantic::OriginId origin;
         // The scope of the import's declaration.
         semantic::ScopeId owner_scope;
         std::vector<HirDpiFunctionActual> actuals;
@@ -4916,7 +5242,7 @@ private:
     // A task-call statement naming a DPI task or function; nullopt when
     // the statement names no DPI import.
     [[nodiscard]] std::optional<bool> lower_hir_dpi_call_statement(
-        std::string_view name,
+        semantic::StatementId statement_id, std::string_view name,
         std::span<const semantic::sv::TaskAssociation> arguments,
         const frontend::SourceSpan& span,
         semantic::ScopeId scope);
@@ -5264,11 +5590,23 @@ private:
     // static selection names, the receiver's declared class type, or the
     // calling method's own specialization; none when no class parameter
     // is bound along the owner's chain.
+    // The parameterized class specialization the code being lowered runs
+    // in: the active method's, or a static initializer's.
+    [[nodiscard]] std::optional<std::uint32_t>
+    hir_running_class_specialization() const;
     // The class specialization a declaration's class-handle type selects:
     // its constant actuals, or actuals bound in the active specialization.
     [[nodiscard]] std::optional<std::uint32_t>
     hir_declaration_class_specialization(
         semantic::DeclarationId declaration) const;
+    // The specialization a class-handle type selects in the design element
+    // instance being lowered, when its actuals read the instance's
+    // parameters (`C #(N) c;` in a module with parameter `N`, IEEE 1800-2023
+    // 8.25, 23.2.2); none when they read none.
+    [[nodiscard]] std::optional<std::uint32_t>
+    hir_instance_class_specialization(
+        const semantic::sv::TypeReference& type,
+        semantic::SourceSpanId source) const;
     // The specialization of a class declared in a loop generate or in a
     // module, interface or program that the scope being lowered selects:
     // each iteration's and instance's class is a distinct type whose members
@@ -5291,6 +5629,26 @@ private:
         std::pair<const semantic::SpecializedHirUnit*, std::uint32_t>,
         std::unique_ptr<semantic::SpecializedHirUnit>>
         hir_generate_class_units_;
+    // Position of the last '.' separating scopes in a hierarchical name
+    // (outside escaped identifiers and indices); npos when none.
+    [[nodiscard]] static std::size_t hierarchical_last_separator(
+        std::string_view path) noexcept;
+    // Calls `visit` with each full path a hierarchical name can denote, in
+    // lookup order (callee instance, enclosing scopes outward, top; only the
+    // top for `$root.`), until it returns true; whether it did.
+    bool hir_walk_hierarchical_name(std::string_view name,
+        const std::function<bool(const std::string&)>& visit) const;
+    // The specialization of the class a handle named hierarchically
+    // (`s2.m`, or an element `s2.arr[1]` of an array or queue of handles)
+    // holds, from the type its instance declares it with (IEEE 1800-2023
+    // 8.25, 23.6); none when the receiver is not such a name.
+    [[nodiscard]] std::optional<std::uint32_t> hir_hierarchical_handle_class(
+        semantic::ExpressionId receiver) const;
+    // The declaration of that handle variable in the instance that declares
+    // it; `element_of` tells whether the name was indexed.
+    [[nodiscard]] std::optional<semantic::DeclarationId>
+    hir_hierarchical_handle_declaration(semantic::ExpressionId receiver,
+        bool* element_of = nullptr) const;
     // The same for an access to class member `member`. `selected`, when
     // given, receives the specialization the access selects before the
     // member's declaring class is sought in its base chain.
@@ -5311,6 +5669,12 @@ private:
     };
     [[nodiscard]] std::optional<HirScopedClassMethod>
     hir_scoped_class_method(const semantic::sv::Expression& call) const;
+    // `h.f(...)` with `h` of a class type parameter (`T inner;`): the method
+    // of the class the active specialization binds the parameter to, found
+    // by name through its base chain (IEEE 1800-2023 8.25, 8.15).
+    [[nodiscard]] std::optional<HirScopedClassMethod>
+    hir_type_parameter_class_method(
+        const semantic::sv::Expression& call) const;
     // The class specialization `T::...::m` selects member `m` of, with the
     // leading name a class type parameter or typedef; `leaf` is `m`.
     [[nodiscard]] std::optional<std::uint32_t> hir_scoped_class_owner(
@@ -5454,6 +5818,49 @@ private:
     // The design-wide signal the runtime toggles whenever a class property
     // changes; waits on expressions that read class properties include it.
     [[nodiscard]] std::optional<SignalId> hir_class_heap_notifier();
+    // Whether the design declares a class of the verified UVM library: the
+    // simulation's UVM services then reach the design through the dispatch
+    // process.
+    [[nodiscard]] bool hir_design_uses_uvm_library() const;
+    // The dormant process that runs a component's library virtual functions
+    // for the simulation's UVM phase services (IEEE 1800.2-2020 13.1): it
+    // waits on the class heap notifier, takes the request from the host and
+    // dispatches it by virtual override (IEEE 1800-2023 8.20).
+    [[nodiscard]] bool lower_uvm_api_dispatch();
+    // The dispatch process's arm that runs the constructor chain of a
+    // component the host allocated without constructing it
+    // (support::uvm_api_construct_kind), bound by the class's constructor.
+    [[nodiscard]] bool lower_uvm_api_construct_arm(
+        runtime::simir::RegisterId kind, runtime::simir::RegisterId receiver);
+    // The constructor chains, as generated code, of the object `handle` that
+    // waits in the host's pending constructions (bound by the class's
+    // specialization, never a spelling), with the name and parent the host
+    // recorded for it. An object whose chain does not lower is reported by
+    // the host when it is reached. `announce` runs the class-constructed
+    // point after each chain (a chain in a design process).
+    [[nodiscard]] bool lower_uvm_pending_chains(
+        runtime::simir::RegisterId handle, bool announce);
+    // After a host service of a design process that may allocate objects
+    // without constructing them: runs the chains of every object waiting.
+    [[nodiscard]] bool lower_uvm_construct_drain();
+    // `object.clone()` of a uvm_object as generated code: allocate the copy
+    // without constructing it, run its class's chain, copy the fields, then
+    // the virtual do_copy (IEEE 1800.2-2020 5.3.8, 5.3.7).
+    [[nodiscard]] std::optional<RegisterId> lower_uvm_clone(
+        runtime::simir::RegisterId receiver);
+    // The user overrides, most derived first, of the library virtual
+    // method `method` called on `receiver` with `actual` as its one
+    // argument (IEEE 1800-2023 8.20).
+    [[nodiscard]] bool lower_uvm_override_arms(
+        const semantic::sv::ClassMethod& method,
+        runtime::simir::RegisterId receiver,
+        runtime::simir::RegisterId actual, bool function);
+    [[nodiscard]] bool lower_uvm_api_constructor(
+        const semantic::sv::ClassDeclaration& lowerable,
+        std::optional<std::uint32_t> specialization,
+        runtime::simir::RegisterId receiver,
+        runtime::simir::StringRegisterId name,
+        runtime::simir::RegisterId parent);
     // `f(i)` read as `f()(i)` when every formal of `f` has a default and the
     // context takes one element of its array result (IEEE 1076-2008 8.4).
     [[nodiscard]] std::optional<RegisterId> lower_hir_vhdl_defaulted_call_index(
@@ -5520,7 +5927,9 @@ private:
     void emit_debug_point(
         DebugPointKind kind,
         const frontend::SourceSpan& span,
-        std::string_view callee = { });
+        std::string_view callee = { },
+        semantic::DeclarationId callee_declaration = { },
+        std::string_view callee_receiver = { });
     [[nodiscard]] std::string debug_scope_name() const;
     /// debug_scope_name() interned; the last result is reused when the
     /// recomputed text is unchanged, which skips the intern table.
@@ -5702,7 +6111,7 @@ private:
     bool discarding_call_result_ { };
     const std::unordered_map<std::string, std::uint64_t>*
         systemverilog_interface_handles_ { };
-    const std::unordered_map<std::string, std::string>*
+    const std::unordered_map<std::string, SystemVerilogInterfaceInstanceType>*
         systemverilog_interface_types_ { };
     // Each interface instance's specialization, by instance path: a
     // function or task called through the instance has its types
@@ -5925,6 +6334,9 @@ private:
         std::size_t debug_locals { };
         std::size_t expression_profiles { };
         std::vector<std::size_t> side_state;
+        std::size_t call_results { };
+        std::size_t frame_locals { };
+        std::size_t local_bindings { };
     };
     // The recording of the body just lowered for `callable` from `start`,
     // which took `debug_names`, when every operation is one a replay can
@@ -5948,9 +6360,40 @@ private:
     // `<subprogram>.<name>` with the invocation identity on a collision, for
     // a VHPI program that reads a running call (IEEE 1076-2019 14.6): the
     // table is no debug local, so no optimizer gate sees it.
-    void add_hir_frame_local(std::size_t callable, std::string_view name,
+    void add_hir_frame_local(std::size_t callable,
+        semantic::DeclarationId declaration, std::string_view name,
         std::string type_name, RegisterId storage,
         semantic::SourceSpanId source);
+    // The name of the frame-local table entry `name` of `callable`'s body,
+    // unique among the process's.
+    [[nodiscard]] std::string hir_frame_local_name(
+        std::size_t callable, std::string_view name);
+    // The process-local number of a frame (1 and up, in the order the
+    // process's lowering first names the frames; 0 is the process itself),
+    // so that processes of the same shape hold the same call-frame map
+    // whatever the invocation identities of their frames.
+    [[nodiscard]] std::uint32_t hir_call_frame_number(
+        std::size_t callable);
+    // Records that the local `index` of the debug locals or of the
+    // frame-local table belongs to `declaration` of `callable`'s frame
+    // (Process::call_frames).
+    void bind_hir_frame_local(std::size_t callable,
+        semantic::DeclarationId declaration, bool frame_table,
+        std::size_t index,
+        runtime::simir::FrameLocalStorage storage
+        = runtime::simir::FrameLocalStorage::packed,
+        bool receiver = false);
+    // The same for the parameter of a `for` loop of the process itself, which
+    // no call elaborates (IEEE 1076-2019 10.10, 14.6 a): frame 0.
+    void add_hir_process_loop_parameter(semantic::DeclarationId declaration,
+        std::string_view name, std::string type_name, RegisterId storage,
+        semantic::SourceSpanId source);
+    // Records that the call at `site` (an expression of a function call, or
+    // a procedure call statement), in the body being lowered (the process
+    // itself when no callable is active), runs the frame `callable`
+    // (IEEE 1076-2019 14.6 b).
+    void record_hir_call_site(
+        bool expression, std::uint32_t site, std::size_t callable);
     std::vector<HirCallableBodyRecording::DebugName>*
         hir_callable_debug_name_log_ { };
     // `recording` renumbered for `callable` with its body at `target` and
@@ -6008,6 +6451,16 @@ private:
     [[nodiscard]] std::optional<std::vector<VhdlResolverSegment>>
     hir_vhdl_resolver_pieces(
         const HirProcessDescription::VhdlResolver& resolver);
+    // The body of a nettype resolver program
+    // (lower_hir_systemverilog_resolver_process).
+    [[nodiscard]] bool lower_hir_systemverilog_resolver(
+        const HirProcessDescription::SystemVerilogResolver& resolver);
+    // A call of SystemVerilog resolution function `function` with the
+    // dynamic array `drivers` as its one argument (IEEE 1800-2023 6.6.7).
+    [[nodiscard]] std::optional<HirFunctionCallValue>
+    lower_hir_systemverilog_resolution_call(
+        semantic::DeclarationId function,
+        const HirStaticContainerValue& drivers);
     std::optional<std::pair<RegisterId, RegisterId>> hir_vhdl_resolver_registers_;
     // Set while a port conversion program is lowered: an inertial part of
     // the actual reads its signal through the implicit signal S'DELAYED(0),
@@ -6049,6 +6502,9 @@ private:
         hir_interface_callable_indices_;
     std::deque<std::size_t> pending_hir_callables_;
     std::optional<std::size_t> active_hir_callable_;
+    // The class specialization a method's static variable initializers run
+    // in while no callable frame is active (IEEE 1800-2023 6.21, 8.25).
+    std::optional<std::uint32_t> hir_static_initializer_specialization_;
     struct HirVhdlAccessHeap {
         ContainerRegisterId objects { };
         ContainerRegisterId issued_handles { };
@@ -6114,6 +6570,25 @@ private:
     // monitor site of this process, from its tick's witness operands: a
     // local read of the site has the local's width.
     std::map<std::uint32_t, std::vector<std::uint32_t>> sva_local_widths_;
+    // The scalar kinds of those locals: a real local's words hold its
+    // value's bits, which a local read gives back as a value of its kind.
+    std::map<std::uint32_t, std::vector<frontend::SystemVerilogScalarKind>>
+        sva_local_kinds_;
+    // The string locals of each monitor site: their words hold the number
+    // of their value in the site's string table, which `numbers` maps each
+    // value to and `values` maps back (16.10). A value keeps its number
+    // for the run, so equal values have equal words.
+    struct SvaStringTable {
+        ContainerRegisterId numbers { };
+        ContainerRegisterId values { };
+    };
+    std::map<std::uint32_t, SvaStringTable> sva_string_tables_;
+    std::set<std::pair<std::uint32_t, std::uint32_t>> sva_string_locals_;
+    // The site's string table, made at its first use.
+    const SvaStringTable& sva_string_table(std::uint32_t site);
+    // A string local's read (`$__fsim_sva_local` in a string context).
+    [[nodiscard]] std::optional<StringRegisterId> lower_hir_sva_string_local(
+        const semantic::sv::Expression& call);
     std::optional<runtime::SchedulerPhase>
         deferred_assertion_action_phase_;
     std::optional<DeferredAssertionActionHandoff>
@@ -6181,6 +6656,13 @@ private:
     std::unordered_map<std::string, StringRegisterId> string_locals_;
     std::unordered_set<std::string> debug_local_names_;
     std::unordered_set<std::string> frame_local_names_;
+    // Set while the path of `ea[i].triggered` is built for the element
+    // `ea[i]`: the suffix names the event's `triggered` property, not a
+    // member of the element.
+    bool hir_value_path_event_element_ { };
+    std::unordered_map<std::uint32_t, std::uint32_t> hir_call_frame_numbers_;
+    // The simple name of each entry of the frame-local table, in its order.
+    std::vector<std::string> frame_local_simple_names_;
     std::vector<std::string> local_scope_;
     /// The SystemVerilog tasks and functions whose bodies are lowering,
     /// innermost last: the name and the local_scope_ depth the body's own
@@ -6338,6 +6820,11 @@ private:
         semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<SignalId> hir_hierarchical_signal(
         std::string_view name) const;
+    // Resolves a hierarchical name (IEEE 1800-2023 23.8): offers `lookup`
+    // each full path the name may denote, innermost scope first, until it
+    // accepts one; whether one was accepted.
+    bool hir_resolve_hierarchical_path(std::string_view name,
+        const std::function<bool(const std::string&)>& lookup) const;
     [[nodiscard]] bool hir_genvar_hides_signal(
         std::string_view name, semantic::ScopeId scope) const;
 };

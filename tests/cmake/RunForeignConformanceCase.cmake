@@ -6,7 +6,9 @@
 # FSIM_SOURCE may list several files separated by "|", compiled one per
 # step in order (one language per compile); a file name may end in
 # "@STANDARD" (for example "leaf.vhd@2008") to compile that file with
-# `--standard STANDARD`; FSIM_INTERFACE "mixed" loads
+# `--standard STANDARD`, and, before that, in "#LIBRARY" to compile it with
+# `--library LIBRARY`; "FILE>DIR/NAME" copies the file to DIR/NAME of the
+# work directory (sources of one base name); FSIM_INTERFACE "mixed" loads
 # the plug-in as both a VPI and a VHPI library. FSIM_SIMULATE_STATUS is the
 # exit status `fsim simulate` must return (0 when unset); a true
 # FSIM_ELABORATE_PLUGIN also loads the VPI plug-in at `fsim elaborate`; a
@@ -50,22 +52,40 @@ if(DEFINED FSIM_ENVIRONMENT)
   fsim_set_environment("${FSIM_ENVIRONMENT}")
 endif()
 
-file(MAKE_DIRECTORY "${FSIM_WORK_DIR}")
+include("${CMAKE_CURRENT_LIST_DIR}/FsimTestWorkspace.cmake")
+# FSIM_WORK_DIR names the case; each run works in a new folder of its own,
+# removed when the case passes.
+fsim_test_case_workspace(FSIM_WORK_DIR "${FSIM_WORK_DIR}")
 string(REPLACE "|" ";" FSIM_SOURCES "${FSIM_SOURCE}")
 set(FSIM_SOURCE_NAMES "")
 # The standard each source compiles with; "-" keeps the default.
 set(FSIM_SOURCE_STANDARDS "")
+# The library each source compiles into; "-" keeps the default.
+set(FSIM_SOURCE_LIBRARIES "")
 foreach(FSIM_SOURCE_FILE IN LISTS FSIM_SOURCES)
   set(FSIM_SOURCE_STANDARD "-")
   if(FSIM_SOURCE_FILE MATCHES "^(.*)@([0-9]+)$")
     set(FSIM_SOURCE_FILE "${CMAKE_MATCH_1}")
     set(FSIM_SOURCE_STANDARD "${CMAKE_MATCH_2}")
   endif()
-  get_filename_component(FSIM_SOURCE_NAME "${FSIM_SOURCE_FILE}" NAME)
+  set(FSIM_SOURCE_LIBRARY "-")
+  if(FSIM_SOURCE_FILE MATCHES "^(.*)#([A-Za-z0-9_]+)$")
+    set(FSIM_SOURCE_FILE "${CMAKE_MATCH_1}")
+    set(FSIM_SOURCE_LIBRARY "${CMAKE_MATCH_2}")
+  endif()
+  # "FILE>DIR/NAME" keeps the file in a subdirectory of the work directory,
+  # for sources that share a base name.
+  if(FSIM_SOURCE_FILE MATCHES "^(.*)>(.*)$")
+    set(FSIM_SOURCE_FILE "${CMAKE_MATCH_1}")
+    set(FSIM_SOURCE_NAME "${CMAKE_MATCH_2}")
+  else()
+    get_filename_component(FSIM_SOURCE_NAME "${FSIM_SOURCE_FILE}" NAME)
+  endif()
   configure_file("${FSIM_SOURCE_FILE}" "${FSIM_WORK_DIR}/${FSIM_SOURCE_NAME}"
     COPYONLY)
   list(APPEND FSIM_SOURCE_NAMES "${FSIM_SOURCE_NAME}")
   list(APPEND FSIM_SOURCE_STANDARDS "${FSIM_SOURCE_STANDARD}")
+  list(APPEND FSIM_SOURCE_LIBRARIES "${FSIM_SOURCE_LIBRARY}")
 endforeach()
 
 function(fsim_step FSIM_STEP_NAME)
@@ -106,9 +126,20 @@ if(DEFINED FSIM_COMPILE_ARGS AND NOT "${FSIM_COMPILE_ARGS}" STREQUAL "")
   separate_arguments(FSIM_COMPILE_EXTRA UNIX_COMMAND "${FSIM_COMPILE_ARGS}")
   list(APPEND FSIM_COMPILE_ARGUMENTS ${FSIM_COMPILE_EXTRA})
 endif()
-foreach(FSIM_SOURCE_NAME FSIM_SOURCE_STANDARD
-    IN ZIP_LISTS FSIM_SOURCE_NAMES FSIM_SOURCE_STANDARDS)
+# FSIM_UVM_ROOT, when set, names a UVM 1.2 kit: its uvm_pkg compiles into
+# library `uvm` first.
+if(DEFINED FSIM_UVM_ROOT AND NOT "${FSIM_UVM_ROOT}" STREQUAL "")
+  fsim_step(compile compile -q --standard 2017 --library uvm
+    --uvm-release 1.2 -I "${FSIM_UVM_ROOT}/src"
+    "${FSIM_UVM_ROOT}/src/uvm_pkg.sv")
+endif()
+foreach(FSIM_SOURCE_NAME FSIM_SOURCE_STANDARD FSIM_SOURCE_LIBRARY
+    IN ZIP_LISTS FSIM_SOURCE_NAMES FSIM_SOURCE_STANDARDS FSIM_SOURCE_LIBRARIES)
   set(FSIM_SOURCE_COMPILE_ARGUMENTS ${FSIM_COMPILE_ARGUMENTS})
+  if(NOT FSIM_SOURCE_LIBRARY STREQUAL "-")
+    list(APPEND FSIM_SOURCE_COMPILE_ARGUMENTS --library
+      "${FSIM_SOURCE_LIBRARY}")
+  endif()
   if(NOT FSIM_SOURCE_STANDARD STREQUAL "-")
     list(APPEND FSIM_SOURCE_COMPILE_ARGUMENTS --standard
       "${FSIM_SOURCE_STANDARD}")
@@ -122,6 +153,7 @@ foreach(FSIM_SOURCE_NAME FSIM_SOURCE_STANDARD
       message(FATAL_ERROR
         "fsim compile did not report \"${FSIM_COMPILE_MESSAGE}\":\n${FSIM_STEP_OUTPUT}${FSIM_STEP_ERROR}")
     endif()
+    fsim_test_workspace_cleanup()
     return()
   endif()
 endforeach()
@@ -132,6 +164,7 @@ if(DEFINED FSIM_DPI_HEADER AND NOT FSIM_DPI_HEADER STREQUAL "")
     message(FATAL_ERROR
       "DPI header differs from ${FSIM_DPI_HEADER}\n--- actual\n${FSIM_HEADER}--- expected\n${FSIM_EXPECTED_HEADER}")
   endif()
+  fsim_test_workspace_cleanup()
   return()
 endif()
 set(FSIM_ELABORATE_ARGUMENTS "")
@@ -157,6 +190,7 @@ if(DEFINED FSIM_ELABORATE_MESSAGE AND NOT FSIM_ELABORATE_MESSAGE STREQUAL "")
     message(FATAL_ERROR
       "fsim elaborate did not report \"${FSIM_ELABORATE_MESSAGE}\":\n${FSIM_STEP_OUTPUT}${FSIM_STEP_ERROR}")
   endif()
+  fsim_test_workspace_cleanup()
   return()
 endif()
 separate_arguments(FSIM_SIMULATE_ARGUMENTS UNIX_COMMAND "${FSIM_SIMULATE_ARGS}")
@@ -212,3 +246,4 @@ if(DEFINED FSIM_RERUN_ENVIRONMENT AND NOT FSIM_RERUN_ENVIRONMENT STREQUAL ""
     ${FSIM_LIBRARY_ARGUMENTS} ${FSIM_SIMULATE_ARGUMENTS})
   fsim_check_trace("${FSIM_STEP_OUTPUT}")
 endif()
+fsim_test_workspace_cleanup()

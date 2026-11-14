@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_test_support.hpp"
-#include "application_workflow_test_support.hpp"
+#include "fsim/app/built_project.hpp"
 #include "../api/api_workspace_support.hpp"
 
 #include <cassert>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
-#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>

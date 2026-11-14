@@ -369,7 +369,7 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
     {
         std::ofstream source(directory / "assertion.vhd");
         source << R"(
-entity assertion_test is
+library ieee; use ieee.std_logic_1164.all; entity assertion_test is
 end entity;
 architecture rtl of assertion_test is
   signal trigger : std_logic;

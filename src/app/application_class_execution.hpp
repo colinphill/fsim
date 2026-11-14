@@ -1,7 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
+#include "fsim/runtime/class_heap.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/uvm_component.hpp"
+#include "fsim/runtime/uvm_phase.hpp"
+#include <cstddef>
+#include <functional>
+#include <map>
+#include <span>
+#include <string>
+#include <string_view>
+#include <utility>
 
-#include "application_internal.hpp"
 
 namespace fsim::app::application_detail {
 

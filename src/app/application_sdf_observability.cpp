@@ -1,12 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fsim/app/sdf_observability.hpp"
+#include "fsim/app/sdf_effective_archive.hpp"
+#include "fsim/frontend/diagnostic.hpp"
+#include "fsim/frontend/source.hpp"
+#include "fsim/runtime/scheduler.hpp"
 
 #include <algorithm>
 #include <cctype>
-#include <ranges>
 #include <set>
 #include <utility>
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
 
 namespace fsim::app {
 namespace {

@@ -8,7 +8,6 @@
 #include <functional>
 #include <map>
 #include <memory>
-#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>

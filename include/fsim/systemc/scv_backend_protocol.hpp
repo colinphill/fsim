@@ -3,7 +3,6 @@
 
 #include "fsim/diagnostic/diagnostic.hpp"
 
-#include <compare>
 #include <cstddef>
 #include <cstdint>
 #include <optional>

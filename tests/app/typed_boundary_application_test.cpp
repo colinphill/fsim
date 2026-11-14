@@ -1,11 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/semantic/design_ir.hpp"
 
 #include "path_test_support.hpp"
 
 #include "fsim/runtime/vcd_writer.hpp"
 #include "fsim/systemc/kernel_backend_value_codec.hpp"
 #include "governed_process_limits.hpp"
+#include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/frontend/token.hpp"
+#include "fsim/project/project.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include "fsim/runtime/vhdl_psl.hpp"
+#include "fsim/support/path.hpp"
 
 #include <algorithm>
 #include <array>
@@ -371,6 +381,7 @@ void write_systemc(const std::filesystem::path& source)
     std::ofstream output { source };
     output << R"(
 #include <systemc>
+#include <cstddef>
 
 SC_MODULE(BoundaryNative) {
   sc_core::sc_in<sc_dt::sc_logic> value{"value"};

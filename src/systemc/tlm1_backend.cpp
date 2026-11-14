@@ -1,13 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/systemc/kernel_backend_tlm1.hpp"
+#include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/systemc/kernel_backend_protocol.hpp"
+#include "fsim/systemc/kernel_backend_value_codec.hpp"
 
 #include <algorithm>
 #include <array>
-#include <bit>
 #include <limits>
-#include <ranges>
 #include <string_view>
 #include <utility>
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <span>
+#include <string>
+#include <vector>
 
 namespace fsim::systemc {
 namespace {

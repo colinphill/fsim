@@ -3,7 +3,6 @@
 
 #include <algorithm>
 #include <limits>
-#include <sstream>
 
 namespace fsim::runtime {
 namespace {

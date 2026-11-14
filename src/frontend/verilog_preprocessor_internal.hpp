@@ -1,7 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
+#include "fsim/frontend/source.hpp"
+#include "fsim/frontend/token.hpp"
+#include <cstddef>
+#include <cstdint>
+#include <filesystem>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
 
-#include "fsim/frontend/preprocessor.hpp"
 
 namespace fsim::frontend::preprocessor_detail {
 

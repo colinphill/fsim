@@ -2,9 +2,11 @@
 #pragma once
 
 #include "fsim/elaboration/verilog_coverage_points.hpp"
-#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/token.hpp"
 
 #include <span>
+#include "fsim/frontend/design.hpp"
 
 namespace fsim::frontend {
 

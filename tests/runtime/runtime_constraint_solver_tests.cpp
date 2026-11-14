@@ -607,10 +607,10 @@ void test_systemverilog_constraint_solver()
         random_heap, random_handle, random_request);
     require(
         randomized.language_result() == 1
-            && random_heap.property(random_handle, "a").packed == value(2, 1)
-            && random_heap.property(random_handle, "b").packed == value(2, 2)
-            && random_heap.random_state(random_handle, "a").revision == 1
-            && random_heap.random_state(random_handle, "b").revision == 1,
+            && random_heap.property(random_handle, "work::Packet::a").packed == value(2, 1)
+            && random_heap.property(random_handle, "work::Packet::b").packed == value(2, 2)
+            && random_heap.random_state(random_handle, "work::Packet::a").revision == 1
+            && random_heap.random_state(random_handle, "work::Packet::b").revision == 1,
         "object randomize must jointly solve class and inline constraints before committing every selected property");
 
     SystemVerilogClassRandomizeRequest selected_request;
@@ -627,19 +627,19 @@ void test_systemverilog_constraint_solver()
         random_heap, random_handle, selected_request);
     require(
         selected_randomized.language_result() == 1
-            && random_heap.property(random_handle, "a").packed == value(2, 3)
-            && random_heap.property(random_handle, "b").packed == value(2, 2)
-            && random_heap.random_state(random_handle, "a").revision == 2
-            && random_heap.random_state(random_handle, "b").revision == 1,
+            && random_heap.property(random_handle, "work::Packet::a").packed == value(2, 3)
+            && random_heap.property(random_handle, "work::Packet::b").packed == value(2, 2)
+            && random_heap.random_state(random_handle, "work::Packet::a").revision == 2
+            && random_heap.random_state(random_handle, "work::Packet::b").revision == 1,
         "an object randomize variable list must publish only the selected property while constraints observe fixed current values");
 
-    const auto before_a = random_heap.property(random_handle, "a").packed;
-    const auto before_b = random_heap.property(random_handle, "b").packed;
+    const auto before_a = random_heap.property(random_handle, "work::Packet::a").packed;
+    const auto before_b = random_heap.property(random_handle, "work::Packet::b").packed;
     const auto before_a_revision = random_heap.random_state(
-                                                  random_handle, "a")
+                                                  random_handle, "work::Packet::a")
                                        .revision;
     const auto before_b_revision = random_heap.random_state(
-                                                  random_handle, "b")
+                                                  random_handle, "work::Packet::b")
                                        .revision;
     SystemVerilogClassRandomizeRequest impossible_request;
     impossible_request.call_identity = "work::Packet::randomize@impossible";
@@ -658,11 +658,11 @@ void test_systemverilog_constraint_solver()
         impossible_randomized.status
                 == SystemVerilogConstraintSolveStatus::Unsatisfiable
             && impossible_randomized.language_result() == 0
-            && random_heap.property(random_handle, "a").packed == before_a
-            && random_heap.property(random_handle, "b").packed == before_b
-            && random_heap.random_state(random_handle, "a").revision
+            && random_heap.property(random_handle, "work::Packet::a").packed == before_a
+            && random_heap.property(random_handle, "work::Packet::b").packed == before_b
+            && random_heap.random_state(random_handle, "work::Packet::a").revision
                 == before_a_revision
-            && random_heap.random_state(random_handle, "b").revision
+            && random_heap.random_state(random_handle, "work::Packet::b").revision
                 == before_b_revision,
         "an unsatisfiable object randomize call must return zero without partial property or revision writes");
 
@@ -677,11 +677,11 @@ void test_systemverilog_constraint_solver()
             && domain_limited_randomized.exhausted_resource
                 == SystemVerilogConstraintResource::DomainValues
             && domain_limited_randomized.language_result() == 0
-            && random_heap.property(random_handle, "a").packed == before_a
-            && random_heap.property(random_handle, "b").packed == before_b
-            && random_heap.random_state(random_handle, "a").revision
+            && random_heap.property(random_handle, "work::Packet::a").packed == before_a
+            && random_heap.property(random_handle, "work::Packet::b").packed == before_b
+            && random_heap.random_state(random_handle, "work::Packet::a").revision
                 == before_a_revision
-            && random_heap.random_state(random_handle, "b").revision
+            && random_heap.random_state(random_handle, "work::Packet::b").revision
                 == before_b_revision,
         "domain exhaustion must be a typed zero result with no object mutation");
 
@@ -696,8 +696,8 @@ void test_systemverilog_constraint_solver()
                 == SystemVerilogConstraintSolveStatus::ResourceExhausted
             && search_limited_randomized.exhausted_resource
                 == SystemVerilogConstraintResource::SearchSteps
-            && random_heap.property(random_handle, "a").packed == before_a
-            && random_heap.random_state(random_handle, "a").revision
+            && random_heap.property(random_handle, "work::Packet::a").packed == before_a
+            && random_heap.random_state(random_handle, "work::Packet::a").revision
                 == before_a_revision,
         "search exhaustion must preserve the complete pre-call object state");
 
@@ -716,8 +716,8 @@ void test_systemverilog_constraint_solver()
     }
     require(
         configuration_failed
-            && random_heap.property(random_handle, "a").packed == before_a
-            && random_heap.random_state(random_handle, "a").revision
+            && random_heap.property(random_handle, "work::Packet::a").packed == before_a
+            && random_heap.random_state(random_handle, "work::Packet::a").revision
                 == before_a_revision,
         "constraint-construction failure must occur before random stream or object-state publication");
 
@@ -740,12 +740,12 @@ void test_systemverilog_constraint_solver()
         replay_left, replay_left_handle, checker_request);
     require(
         checker_result.language_result() == 1
-            && replay_left.property(replay_left_handle, "a").packed
+            && replay_left.property(replay_left_handle, "work::Packet::a").packed
                 == value(2, 3)
-            && replay_left.property(replay_left_handle, "b").packed
+            && replay_left.property(replay_left_handle, "work::Packet::b").packed
                 == value(2, 2)
-            && replay_left.random_state(replay_left_handle, "a").revision == 0
-            && replay_left.random_state(replay_left_handle, "b").revision == 0,
+            && replay_left.random_state(replay_left_handle, "work::Packet::a").revision == 0
+            && replay_left.random_state(replay_left_handle, "work::Packet::b").revision == 0,
         "randomize(null) checker mode must evaluate fixed state without publishing properties or revisions");
     SystemVerilogClassRandomizeRequest replay_request;
     replay_request.call_identity = "work::Packet::randomize@replay";
@@ -757,16 +757,16 @@ void test_systemverilog_constraint_solver()
     require(
         replay_left_result.language_result() == 1
             && replay_right_result.language_result() == 1
-            && replay_left.property(replay_left_handle, "a").packed
-                == replay_right.property(replay_right_handle, "a").packed
-            && replay_left.property(replay_left_handle, "b").packed
-                == replay_right.property(replay_right_handle, "b").packed,
+            && replay_left.property(replay_left_handle, "work::Packet::a").packed
+                == replay_right.property(replay_right_handle, "work::Packet::a").packed
+            && replay_left.property(replay_left_handle, "work::Packet::b").packed
+                == replay_right.property(replay_right_handle, "work::Packet::b").packed,
         "a checker-only call must not perturb the stable stream used by a later randomize assignment");
 
     SystemVerilogClassHeap failing_checker_heap { { }, 177 };
     const auto failing_checker_handle =
         failing_checker_heap.allocate(random_descriptor);
-    failing_checker_heap.property(failing_checker_handle, "a").packed
+    failing_checker_heap.property(failing_checker_handle, "work::Packet::a").packed
         = value(2, 2);
     const auto failing_checker_result = randomize_systemverilog_class_object(
         failing_checker_heap, failing_checker_handle, checker_request);
@@ -775,9 +775,9 @@ void test_systemverilog_constraint_solver()
                 == SystemVerilogConstraintSolveStatus::Unsatisfiable
             && failing_checker_result.language_result() == 0
             && failing_checker_heap.property(
-                   failing_checker_handle, "a").packed == value(2, 2)
+                   failing_checker_handle, "work::Packet::a").packed == value(2, 2)
             && failing_checker_heap.random_state(
-                   failing_checker_handle, "a").revision == 0,
+                   failing_checker_handle, "work::Packet::a").revision == 0,
         "a failed randomize(null) check must return zero without changing fixed state");
 
     SystemVerilogClassDescriptor randc_descriptor;
@@ -800,7 +800,7 @@ void test_systemverilog_constraint_solver()
             cycle_heap, cycle_handle, cycle_request);
         require(result.language_result() == 1, "randc cycle solve must succeed");
         cycle_values.push_back(
-            cycle_heap.property(cycle_handle, "value").packed.low_word().aval);
+            cycle_heap.property(cycle_handle, "work::Cycle::value").packed.low_word().aval);
     }
     for (std::size_t cycle = 0; cycle < 2; ++cycle) {
         std::set<std::uint64_t> values {
@@ -812,9 +812,9 @@ void test_systemverilog_constraint_solver()
             "each randc permutation cycle must visit its exact domain once");
     }
     require(
-        cycle_heap.random_state(cycle_handle, "value").randc_cycle == 1
+        cycle_heap.random_state(cycle_handle, "work::Cycle::value").randc_cycle == 1
             && cycle_heap.random_state(
-                             cycle_handle, "value")
+                             cycle_handle, "work::Cycle::value")
                     .randc_used_values.size()
                 == 4
             && cycle_heap.storage_bytes()
@@ -846,7 +846,7 @@ void test_systemverilog_constraint_solver()
             constrained_cycle_request);
         require(result.language_result() == 1, "constrained randc cycle must restart");
         constrained_values.push_back(constrained_cycle_heap.property(
-                                                               constrained_cycle_handle, "value")
+                                                               constrained_cycle_handle, "work::Cycle::value")
                 .packed.low_word()
                 .aval);
     }
@@ -869,7 +869,7 @@ void test_systemverilog_constraint_solver()
             == 1,
         "the first exact randc domain must solve");
     const auto first_signature = domain_cycle_heap.random_state(
-                                                      domain_cycle_handle, "value")
+                                                      domain_cycle_handle, "work::Cycle::value")
                                      .randc_domain_signature;
     auto changed_domain = cycle_request;
     changed_domain.property_domains["value"] = { value(2, 2), value(2, 3) };
@@ -879,20 +879,20 @@ void test_systemverilog_constraint_solver()
                     .language_result()
                 == 1
             && domain_cycle_heap.property(
-                                    domain_cycle_handle, "value")
+                                    domain_cycle_handle, "work::Cycle::value")
                     .packed.low_word()
                     .aval
                 >= 2
             && domain_cycle_heap.random_state(
-                                    domain_cycle_handle, "value")
+                                    domain_cycle_handle, "work::Cycle::value")
                     .randc_domain_signature
                 != first_signature
             && domain_cycle_heap.random_state(
-                                    domain_cycle_handle, "value")
+                                    domain_cycle_handle, "work::Cycle::value")
                     .randc_cycle
                 == 0
             && domain_cycle_heap.random_state(
-                                    domain_cycle_handle, "value")
+                                    domain_cycle_handle, "work::Cycle::value")
                     .randc_used_values.size()
                 == 1,
         "an exact randc domain change must invalidate the incompatible cycle");
@@ -904,15 +904,15 @@ void test_systemverilog_constraint_solver()
     const auto reseeded_first = randomize_systemverilog_class_object(
         cycle_heap, cycle_handle, cycle_request);
     const auto reseeded_value = cycle_heap.property(
-                                              cycle_handle, "value")
+                                              cycle_handle, "work::Cycle::value")
                                     .packed;
-    cycle_heap.reset_randc_cycle(cycle_handle, "value");
+    cycle_heap.reset_randc_cycle(cycle_handle, "work::Cycle::value");
     const auto reset_result = randomize_systemverilog_class_object(
         cycle_heap, cycle_handle, cycle_request);
     require(
         reseeded_first.language_result() == 1
             && reset_result.language_result() == 1
-            && cycle_heap.property(cycle_handle, "value").packed
+            && cycle_heap.property(cycle_handle, "work::Cycle::value").packed
                 == reseeded_value,
         "explicit reset must replay the first permutation value under the retained seed");
     cycle_heap.reseed_random(cycle_handle, 991);
@@ -921,12 +921,12 @@ void test_systemverilog_constraint_solver()
             cycle_heap, cycle_handle, cycle_request)
                     .language_result()
                 == 1
-            && cycle_heap.property(cycle_handle, "value").packed
+            && cycle_heap.property(cycle_handle, "work::Cycle::value").packed
                 == reseeded_value,
         "object reseed must clear call ordinals and derive a repeatable randc cycle");
 
     const auto before_failed_cycle = cycle_heap.random_state(
-        cycle_handle, "value");
+        cycle_handle, "work::Cycle::value");
     auto failed_cycle_request = cycle_request;
     failed_cycle_request.inline_constraints = [&](auto& configured, const auto& ids) {
         configured.add_clause(equal_clause(
@@ -940,13 +940,13 @@ void test_systemverilog_constraint_solver()
                     .language_result()
                 == 0
             && cycle_heap.random_state(
-                             cycle_handle, "value")
+                             cycle_handle, "work::Cycle::value")
                     .randc_domain_signature
                 == before_failed_cycle.randc_domain_signature
-            && cycle_heap.random_state(cycle_handle, "value").randc_cycle
+            && cycle_heap.random_state(cycle_handle, "work::Cycle::value").randc_cycle
                 == before_failed_cycle.randc_cycle
             && cycle_heap.random_state(
-                             cycle_handle, "value")
+                             cycle_handle, "work::Cycle::value")
                     .randc_used_values
                 == before_failed_cycle.randc_used_values,
         "an unsatisfiable randc solve must preserve the complete cycle state");
@@ -959,7 +959,7 @@ void test_systemverilog_constraint_solver()
     };
     const auto cycle_storage_handle = cycle_storage_limited.allocate(randc_descriptor);
     const auto storage_before = cycle_storage_limited.property(
-                                                         cycle_storage_handle, "value")
+                                                         cycle_storage_handle, "work::Cycle::value")
                                     .packed;
     bool cycle_storage_failed = false;
     try {
@@ -971,15 +971,15 @@ void test_systemverilog_constraint_solver()
     require(
         cycle_storage_failed
             && cycle_storage_limited.property(
-                                        cycle_storage_handle, "value")
+                                        cycle_storage_handle, "work::Cycle::value")
                     .packed
                 == storage_before
             && cycle_storage_limited.random_state(
-                                        cycle_storage_handle, "value")
+                                        cycle_storage_handle, "work::Cycle::value")
                     .revision
                 == 0
             && cycle_storage_limited.random_state(
-                                        cycle_storage_handle, "value")
+                                        cycle_storage_handle, "work::Cycle::value")
                 .randc_used_values.empty()
             && cycle_storage_limited.storage_bytes() == exact_cycle_object_bytes,
         "randc storage exhaustion must reject before publishing assignment, revision, cycle, or accounting changes");

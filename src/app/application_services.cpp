@@ -2,6 +2,15 @@
 #include "application_internal.hpp"
 #include "application_workspace.hpp"
 #include "application_workspace_systemc.hpp"
+#include "fsim/cli/driver.hpp"
+#include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/project/configuration.hpp"
+#include "fsim/project/project.hpp"
+#include "tcl.hpp"
+#include <iostream>
+#include <istream>
+#include <ostream>
+#include <utility>
 
 namespace fsim::app {
 using namespace application_detail;

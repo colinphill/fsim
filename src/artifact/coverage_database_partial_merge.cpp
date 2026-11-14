@@ -2,7 +2,6 @@
 #include "fsim/artifact/coverage_database_partial_merge.hpp"
 
 #include <algorithm>
-#include <compare>
 #include <new>
 #include <set>
 #include <utility>

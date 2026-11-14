@@ -5,7 +5,6 @@
 #pragma once
 
 #include "simir_static_kernel_state.hpp"
-#include "simir_container_helpers.hpp"
 
 #include <algorithm>
 #include <array>
@@ -49,7 +48,10 @@ inline constexpr bool behavioral_suspension = std::is_same_v<T, WaitFor>
     || std::is_same_v<T, SemaphorePut> || std::is_same_v<T, DynamicEvent>
     // A move to a later scheduler region (IEEE 1800-2023 4.4.2, 16.4): other
     // processes run in the regions between.
-    || std::is_same_v<T, WaitRegion>;
+    || std::is_same_v<T, WaitRegion>
+    // An event-array element (7.4, 15.5): a wait suspends; a trigger
+    // resumes other threads.
+    || std::is_same_v<T, EventArrayElement>;
 
 [[nodiscard]] inline bool comparison(const BinaryOperator operation) noexcept
 {
@@ -327,6 +329,15 @@ inline void operation_registers_of(const T& op, std::vector<RegisterId>& reads,
             }
             if (op.minimum) {
                 reads.push_back(*op.minimum);
+            }
+            write = op.destination;
+        } else if constexpr (std::is_same_v<T, RandomDistribution>) {
+            // $dist_* (IEEE 1800-2023 20.14.2): the seed variable's register
+            // is also written back.
+            reads.push_back(op.seed);
+            reads.push_back(op.first);
+            if (op.second) {
+                reads.push_back(*op.second);
             }
             write = op.destination;
         } else if constexpr (std::is_same_v<T, Assert>) {
@@ -937,6 +948,10 @@ public:
         put(body.weak);
         raw(body.tracked);
         raw(body.u_mode);
+        // The statements a watching observer flushes at; part of the
+        // template's code key, so a restored body must carry them.
+        raw(body.statement_starts);
+        grouped(body.variable_stores);
         grouped(body.u_operand_begin);
         grouped(body.u_operands);
         put(body.call_stack_base);
@@ -980,6 +995,7 @@ public:
                 put(static_cast<std::uint64_t>(property.kind));
                 put(property.overlapped ? 1U : 0U);
                 put(property.synchronous ? 1U : 0U);
+                put(property.strong ? 1U : 0U);
                 put(property.clock);
                 put(property.sequence);
                 put_signed(property.child);
@@ -1300,7 +1316,9 @@ public:
             && grouped(body.wide_base) && grouped(body.wide_constants)
             && grouped(body.return_targets) && grouped(body.live_at_entry)
             && get(body.shadow_base) && get(body.weak) && raw(body.tracked)
-            && raw(body.u_mode) && grouped(body.u_operand_begin)
+            && raw(body.u_mode) && raw(body.statement_starts)
+            && grouped(body.variable_stores)
+            && grouped(body.u_operand_begin)
             && grouped(body.u_operands) && get(body.call_stack_base)
             && grouped(body.resume_entries) && get(body.frame_stack_base)
             && list(body.frame_saves, [&](CompiledBody::FrameSave& save) {
@@ -1330,6 +1348,7 @@ public:
                        && list(plan.properties, [&](SvaNativeProperty& property) {
                               return get(property.kind) && get(property.overlapped)
                                   && get(property.synchronous)
+                                  && get(property.strong)
                                   && get(property.clock)
                                   && get(property.sequence)
                                   && get_narrow(property.child)

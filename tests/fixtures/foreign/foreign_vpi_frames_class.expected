@@ -1,0 +1,37 @@
+#c twice vpiFunction body vpiBegin line 19
+#c frame start depth=1 type=vpiFrame active=1 current=1 thread=1 caller=0 origin=40
+#c automatic x vpiIntVar size=32 signed=1 value=3
+#c automatic who vpiStringVar size=1 signed=0 value=q
+#c automatic half vpiIntVar size=32 signed=1 value=0
+#c automatic code vpiReg size=8 signed=0 value=xx
+#c automatic tag vpiStringVar size=0 signed=0 value=
+#c frame start depth=2 type=vpiFrame active=1 current=1 thread=1 caller=29 origin=29
+#c automatic x vpiIntVar size=32 signed=1 value=3
+#c automatic y vpiIntVar size=32 signed=1 value=0
+#c automatic cs vpiClassVar size=-1 signed=0 value=none
+#c caller x vpiIntVar size=32 signed=1 value=3
+#c caller who vpiStringVar size=1 signed=0 value=q
+#c caller half vpiIntVar size=32 signed=1 value=0
+#c caller code vpiReg size=8 signed=0 value=5a
+#c caller tag vpiStringVar size=2 signed=0 value=q!
+#c put tag delayed=refused
+#c put code delayed=refused
+#c put x delayed=refused
+#c stmt vpiBegin line 19
+#c stmt vpiAssignment line 19
+#c stmt vpiAssignment line 20
+#c stmt vpiReturn line 21
+#c frame end depth=2 active=1 stmt=21
+#c quad patched 10 3c 1
+#c frame start depth=2 type=vpiFrame active=1 current=1 thread=1 caller=32 origin=32
+#c automatic x vpiIntVar size=32 signed=1 value=10
+#c automatic y vpiIntVar size=32 signed=1 value=0
+#c automatic cs vpiClassVar size=-1 signed=0 value=none
+#c stmt vpiBegin line 19
+#c stmt vpiAssignment line 19
+#c stmt vpiAssignment line 20
+#c stmt vpiReturn line 21
+#c frame end depth=2 active=1 stmt=21
+#c frame end depth=1 active=1 stmt=32
+#c result 20
+#c stale automatic type=-1

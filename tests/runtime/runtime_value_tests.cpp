@@ -3,14 +3,17 @@
 #include "fsim/runtime/packed_value.hpp"
 #include "fsim/runtime/scheduler.hpp"
 #include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 #include "fsim/runtime/systemverilog_scalar.hpp"
-#include "fsim/runtime/vcd_writer.hpp"
 #include "../../src/runtime/simir_cohort_snapshot_pool.hpp"
+#include "fsim/runtime/simir_container_value.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include "fsim/runtime/simir_operation_storage.hpp"
+#include "fsim/runtime/simir_operations_extended.hpp"
+#include "fsim/runtime/simir_signal_queries.hpp"
 
 #include <algorithm>
 #include <array>
-#include <bit>
-#include <cfenv>
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
@@ -24,6 +27,10 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <span>
+#include <stdlib.h>
+#include <string_view>
+#include <vector>
 
 namespace fsim::tests::runtime {
 

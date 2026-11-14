@@ -12,12 +12,19 @@
 // disagree about what a run state is. $reset_count and $reset_value are the
 // only state a reset keeps (D.8: "the count of resets and the reset value
 // survive").
-#include "simir_run_state.hpp"
 
 #include "fsim/runtime/run_state_image.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_ids.hpp"
 
 #include <exception>
 #include <utility>
+#include <cstddef>
+#include <functional>
+#include <memory>
+#include <string>
+#include "simir_run_state.hpp"
 
 namespace fsim::runtime::simir {
 

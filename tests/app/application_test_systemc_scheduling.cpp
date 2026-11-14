@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_test_support.hpp"
+#include "fsim/app/built_project.hpp"
 
 #include <array>
 #include <cassert>

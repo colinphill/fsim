@@ -28,17 +28,14 @@
 #include "fsim/version.hpp"
 
 #include <algorithm>
-#include <chrono>
 #include <cstdlib>
 #include <iostream>
 #include <array>
-#include <fstream>
 #include <iterator>
 #include <limits>
 #include <map>
 #include <set>
 #include <thread>
-#include <sstream>
 #include <unordered_map>
 
 namespace fsim::app {
@@ -1455,6 +1452,11 @@ std::optional<BuiltProject> load_design_artifact(
         std::move(verilog_unit_revisions),
         std::move(verilog_unit_compatibility_profiles), { }, { }
     };
+    // The constants saved class specializations are bound to take their ids
+    // in this process's pool.
+    semantic::sv::reintern_class_constants(
+        built.compiled_systemverilog_class_specializations,
+        built.systemverilog_hir);
     if (!restore_sdf_phase_artifacts(*design, *metadata, built, diagnostics))
         return std::nullopt;
     built.trace_archive = std::move(trace_archive);

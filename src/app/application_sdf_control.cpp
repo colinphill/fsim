@@ -3,8 +3,6 @@
 #include "fsim/app/sdf_control.hpp"
 
 #include <algorithm>
-#include <map>
-#include <ranges>
 #include <set>
 #include <tuple>
 #include <utility>

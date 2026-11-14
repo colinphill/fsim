@@ -3,7 +3,6 @@
 #include "fsim/app/sdf_mixed_resolution.hpp"
 
 #include <algorithm>
-#include <ranges>
 #include <set>
 #include <string>
 #include <string_view>

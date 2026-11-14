@@ -50,15 +50,15 @@
 #c       rhs: vpiConstant line=31 4'hc const=5 size=4 bin=1100
 #c     vpiFor line=32
 #c       init: vpiAssignment line=32 blocking=1
-#c         lhs: vpiRefObj line=32 top.run.k
+#c         lhs: vpiIntVar line=32 top.run.k
 #c         rhs: vpiConstant line=32 0 const=7 size=32 bin=00000000000000000000000000000000
 #c       cond: vpiOperation line=32 op=20
-#c         vpiRefObj line=32 top.run.k
+#c         vpiIntVar line=32 top.run.k
 #c         vpiConstant line=32 2 const=7 size=32 bin=00000000000000000000000000000010
 #c       inc: vpiAssignment line=32 blocking=1
-#c         lhs: vpiRefObj line=32 top.run.k
+#c         lhs: vpiIntVar line=32 top.run.k
 #c         rhs: vpiOperation line=32 op=24
-#c           vpiRefObj line=32 top.run.k
+#c           vpiIntVar line=32 top.run.k
 #c           vpiConstant line=32 1 const=7 size=32 bin=00000000000000000000000000000001
 #c       vpiAssignment line=33 blocking=1
 #c         lhs: vpiReg line=7 top.d
@@ -147,6 +147,10 @@
 #c operation line=120 value=101001101001
 #c display line=127 $display: 5
 #c display line=128 $write: "a\n" top.n "b"
+#c display line=135 $fdisplay: top.n "v=%0d" top.n "w"
+#c display line=136 $fwrite: top.n <empty> top.n
+#c for vpiFor line=143 localvardecls=1
+#c for variable vpiByteVar name=j full=top.counted.j line=143 size=8 signed=0 automatic=1 scope=loop init_lhs=variable
 #c 10 force vpiForce line=40 top.q=0101
 #c 12 release vpiRelease line=41 top.q=0101
 #c 13 assign vpiAssignStmt line=42 top.r=1110

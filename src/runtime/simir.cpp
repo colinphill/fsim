@@ -966,7 +966,10 @@ bool operation_list_detail::ShareAccess::share_impl(
                 }
                 if constexpr (std::is_same_v<Type, DebugPoint>) {
                     if (left.kind != right->kind
-                        || left.source != right->source) {
+                        || left.source != right->source
+                        || left.callee_declaration
+                            != right->callee_declaration
+                        || left.callee_receiver != right->callee_receiver) {
                         debug_overrides.push_back(
                             { static_cast<InstructionIndex>(index), *right });
                     } else if (left.scope != right->scope) {

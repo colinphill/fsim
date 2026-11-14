@@ -776,6 +776,7 @@ sv::TypeReference retain_systemverilog_declarator(
             replacement.target.target = { };
             replacement.target.spelling
                 = replacement.four_state ? "logic" : "bit";
+            replacement.named = false;
         }
         replacement.packed_over_named_type = false;
     } else {
@@ -1547,6 +1548,65 @@ bool standard_package_exports(const vhdl::Unit& package,
         });
 }
 
+// Whether `member` is the simple name of a declaration of the
+// compiler-provided package STD.STANDARD of a unit's predefined environment
+// (IEEE 1076-2019 16.3): a type or subtype, an enumeration literal of one of
+// its enumeration types, a unit of TIME, function NOW, attribute FOREIGN, or
+// a predefined function the package implicitly declares (5.2.6, 5.3.2.4,
+// 5.7). Operators are named by their operator symbols, never selected here.
+bool builtin_standard_package_declares(
+    const vhdl::PredefinedEnvironment& environment,
+    const std::string_view member)
+{
+    constexpr auto standard_profile
+        = std::string_view { "ieee-1076-standard:" };
+    if (member.empty() || !environment.identity.starts_with(standard_profile)) {
+        return false;
+    }
+    const auto listed = [&](const std::span<const std::string> names,
+                            const std::string_view name) {
+        return std::ranges::any_of(names,
+            [&](const std::string& candidate) {
+                return same_vhdl_identifier(candidate, name);
+            });
+    };
+    if (listed(environment.declarations, member)
+        || listed(environment.time_units, member)) {
+        return true;
+    }
+    using Intrinsic = support::VhdlIntrinsicEnumeration;
+    for (const auto type :
+        { Intrinsic::boolean, Intrinsic::bit, Intrinsic::character }) {
+        if (support::vhdl_intrinsic_enumeration_position(type, member)) {
+            return true;
+        }
+    }
+    for (const auto& type : support::vhdl_standard_enumerations()) {
+        if (listed(environment.declarations, type.name)
+            && support::vhdl_standard_enumeration_position(type, member)) {
+            return true;
+        }
+    }
+    auto edition = environment.identity.substr(standard_profile.size());
+    edition = edition.substr(0U, edition.find(':'));
+    int year { };
+    std::from_chars(edition.data(), edition.data() + edition.size(), year);
+    if (same_vhdl_identifier(member, "now")
+        || (year >= 1993 && same_vhdl_identifier(member, "foreign"))) {
+        return true;
+    }
+    constexpr auto functions_2008 = std::to_array<std::string_view>({
+        "minimum", "maximum", "rising_edge", "falling_edge", "to_string",
+        "to_bstring", "to_binary_string", "to_ostring", "to_octal_string",
+        "to_hstring", "to_hex_string",
+    });
+    return year >= 2008
+        && std::ranges::any_of(functions_2008,
+            [&](const std::string_view candidate) {
+                return same_vhdl_identifier(candidate, member);
+            });
+}
+
 bool builtin_standard_discrete_type(const std::string_view name)
 {
     // Match the implicit STD.STANDARD scalar types completed below. The
@@ -2251,6 +2311,50 @@ CompiledDesignResolver::resolve_systemverilog_class(
             }
             scope = *record->parent;
         }
+        // A class of the compilation unit is visible in its modules,
+        // interfaces and programs (IEEE 1800-2023 3.12.1).
+        const auto& user = *owner->systemverilog;
+        if (!user.compilation_unit_identity.empty()) {
+            std::vector<UnitId> units;
+            for (const auto& unit : design_->systemverilog_units()) {
+                if (unit.compilation_unit_identity
+                        == user.compilation_unit_identity
+                    && normalized_library(unit.library)
+                        == normalized_library(user.library)
+                    && (unit.kind == sv::UnitKind::compilation_unit
+                        || (unit.kind == sv::UnitKind::package
+                            && unit.name.starts_with("fsim_unit_")))) {
+                    units.push_back(unit.id);
+                }
+            }
+            // A class declared in the compilation unit, not nested in
+            // another class.
+            const auto nested = [&](const sv::ClassDeclaration& declaration) {
+                return !declaration.enclosing_identity.empty()
+                    && std::ranges::any_of(design_->systemverilog_hir.classes(),
+                        [&](const sv::ClassDeclaration& enclosing) {
+                            return enclosing.canonical_identity
+                                == declaration.enclosing_identity;
+                        });
+            };
+            std::vector<const sv::ClassDeclaration*> candidates;
+            for (const auto& declaration :
+                design_->systemverilog_hir.classes()) {
+                const auto* record
+                    = declaration.name == member && !nested(declaration)
+                    ? find_scope(*design_, declaration.scope)
+                    : nullptr;
+                if (record != nullptr
+                    && std::ranges::find(units, record->unit)
+                        != units.end()) {
+                    candidates.push_back(&declaration);
+                }
+            }
+            auto result = make_result(std::move(candidates));
+            if (result.status != CompiledResolutionStatus::not_found) {
+                return result;
+            }
+        }
     }
     const auto package_tier = [&](const std::string_view requested) {
         return resolve_systemverilog_package_class(
@@ -2760,20 +2864,66 @@ CompiledDesignResolver::resolve_systemverilog(
             return result;
         }
 
+        // A type parameter qualifier (`C::T` in `class P #(type C)`) names
+        // the class its actual binds, which hides a class of the same name
+        // (IEEE 1800-2023 8.23, 8.25).
+        std::optional<std::string> bound_class;
+        if (const auto parameter = resolve_systemverilog_named_type(
+                std::string { package_name }, use_scope, false, source_order)
+                    .unique()) {
+            const auto view = find_declaration(*design_, effective_, *parameter);
+            if (view && view->systemverilog != nullptr
+                && view->systemverilog->form
+                    == sv::DeclarationForm::type_parameter) {
+                sv::TypeReference qualifier;
+                qualifier.target.spelling = std::string { package_name };
+                qualifier.source_order = source_order;
+                const auto bound
+                    = effective_systemverilog_type(qualifier, use_scope);
+                if (!bound || bound->class_identity.empty()) {
+                    return { CompiledResolutionStatus::not_found, { } };
+                }
+                bound_class = bound->class_identity;
+            }
+        }
+        // A class scope's members include those it inherits; the nearest
+        // declaration hides a base class's one (IEEE 1800-2023 8.13, 8.23).
+        const auto& classes = design_->systemverilog_hir.classes();
         std::vector<DeclarationId> class_candidates;
-        for (const auto& declaration :
-            design_->systemverilog_hir.classes()) {
-            if (declaration.name != package_name) {
+        for (const auto& declaration : classes) {
+            if (bound_class
+                    ? declaration.forward_declaration
+                        || sv::class_declaration_identity(declaration)
+                            != *bound_class
+                    : declaration.name != package_name) {
                 continue;
             }
-            for (const auto id : declaration.type_aliases) {
-                const auto view = find_declaration(
-                    *design_, effective_, id);
-                if (view && view->systemverilog != nullptr
-                    && view->systemverilog->name == member
-                    && (!predicate || predicate(*view))) {
-                    class_candidates.push_back(id);
+            std::vector<const sv::ClassDeclaration*> visited;
+            for (const auto* current = &declaration; current != nullptr;) {
+                if (std::ranges::find(visited, current) != visited.end()) {
+                    break;
                 }
+                visited.push_back(current);
+                bool found { };
+                for (const auto id : current->type_aliases) {
+                    const auto view = find_declaration(
+                        *design_, effective_, id);
+                    if (view && view->systemverilog != nullptr
+                        && view->systemverilog->name == member
+                        && (!predicate || predicate(*view))) {
+                        class_candidates.push_back(id);
+                        found = true;
+                    }
+                }
+                if (found || current->base_declaration_identity.empty()) {
+                    break;
+                }
+                const auto base = std::ranges::find_if(classes,
+                    [&](const sv::ClassDeclaration& item) {
+                        return item.canonical_identity
+                            == current->base_declaration_identity;
+                    });
+                current = base == classes.end() ? nullptr : &*base;
             }
         }
         return declaration_result(std::move(class_candidates));
@@ -3653,14 +3803,26 @@ CompiledDesignResolver::compute_vhdl_type_identity(
             standard_expanded = "std.standard.";
             standard_expanded += parts[1];
         }
+        const auto standard_spelling = standard_expanded.empty()
+            ? spelling
+            : std::string_view { standard_expanded };
         const auto scalar = builtin_standard_scalar_type_identity(
-            standard_expanded.empty() ? spelling
-                                      : std::string_view { standard_expanded },
-            owner_vhdl->predefined_environment,
+            standard_spelling, owner_vhdl->predefined_environment,
             allow_unqualified_standard);
         if (scalar != CompiledVhdlStandardScalarIdentity::none) {
+            // The declaration of STANDARD the name denotes: its type, or
+            // one of the package's subtypes of it (16.3).
+            using Subtype = CompiledVhdlStandardScalarSubtype;
+            const auto member = simple_vhdl_name(standard_spelling);
+            const auto subtype = same_vhdl_identifier(member, "natural")
+                ? Subtype::natural
+                : same_vhdl_identifier(member, "positive")
+                ? Subtype::positive
+                : same_vhdl_identifier(member, "delay_length")
+                ? Subtype::delay_length
+                : Subtype::none;
             return { CompiledResolutionStatus::unique, std::nullopt,
-                vhdl::BuiltinTypeIdentity::none, scalar };
+                vhdl::BuiltinTypeIdentity::none, scalar, subtype };
         }
     }
     const auto builtin = vhdl::standard_array_builtin_type_identity(
@@ -4006,8 +4168,7 @@ CompiledDesignResolver::systemverilog_type_parameter_scoped_typedef(
     const auto& spelling = input.target.spelling;
     const auto separator = spelling.find("::");
     if (design_ == nullptr || separator == std::string::npos
-        || separator == 0U
-        || spelling.find("::", separator + 2U) != std::string::npos) {
+        || separator == 0U) {
         return std::nullopt;
     }
     sv::TypeReference qualifier;
@@ -4052,9 +4213,34 @@ CompiledDesignResolver::systemverilog_type_parameter_scoped_typedef(
     if (selected_class == classes.end()) {
         return std::nullopt;
     }
-    const auto name = std::string_view { spelling }.substr(separator + 2U);
+    // `T::nested::name` selects through the class's nested classes (IEEE
+    // 1800-2023 8.23): every segment before the last names a nested class.
+    auto name = std::string_view { spelling }.substr(separator + 2U);
+    const sv::ClassDeclaration* scope_class = &*selected_class;
+    for (auto next = name.find("::"); next != std::string_view::npos;
+         next = name.find("::")) {
+        const auto nested_name = name.substr(0U, next);
+        const sv::ClassDeclaration* nested { };
+        for (const auto& identity : scope_class->nested_class_identities) {
+            for (const auto& candidate : classes) {
+                if (!candidate.forward_declaration
+                    && sv::class_declaration_identity(candidate) == identity
+                    && candidate.name == nested_name) {
+                    if (nested != nullptr) {
+                        return std::nullopt;
+                    }
+                    nested = &candidate;
+                }
+            }
+        }
+        if (nested == nullptr) {
+            return std::nullopt;
+        }
+        scope_class = nested;
+        name = name.substr(next + 2U);
+    }
     const sv::Declaration* alias { };
-    for (const auto id : selected_class->type_aliases) {
+    for (const auto id : scope_class->type_aliases) {
         const auto declaration = find_declaration(*design_, effective_, id);
         if (declaration && declaration->systemverilog != nullptr
             && declaration->systemverilog->name == name
@@ -4376,8 +4562,19 @@ std::optional<vhdl::SubtypeIndication>
 CompiledDesignResolver::effective_vhdl_subtype(
     const vhdl::SubtypeIndication& input, const ScopeId use_scope) const
 {
+    // A subtype taken from a binding (a generic type's actual, `T =>
+    // sfixed`) denotes the provided type its mark's declaration is, as a
+    // mark written in place does (IEEE 1076-2019 6.5.3, G).
+    const auto stamped = [&](std::optional<vhdl::SubtypeIndication> result) {
+        if (result && result->provided_type == vhdl::ProvidedType::none
+            && result->type_mark.target.valid()) {
+            result->provided_type
+                = vhdl_provided_type_of(result->type_mark.target);
+        }
+        return result;
+    };
     if (!binding_frames_.empty() || !resolutions_memoizable()) {
-        return compute_effective_vhdl_subtype(input, use_scope);
+        return stamped(compute_effective_vhdl_subtype(input, use_scope));
     }
     auto key = std::hash<std::string_view> { }(input.type_mark.spelling);
     key = key * 31U + use_scope.value();
@@ -4398,7 +4595,7 @@ CompiledDesignResolver::effective_vhdl_subtype(
             }
         }
     }
-    auto result = compute_effective_vhdl_subtype(input, use_scope);
+    auto result = stamped(compute_effective_vhdl_subtype(input, use_scope));
     detail::SharedCacheLock lock { memo.mutex };
     if (memo.effective_subtype_count
         < detail::ResolutionMemo::maximum_effective_subtypes) {
@@ -6263,6 +6460,7 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
             ? definition_declaration->vhdl->scope
             : scope;
         std::optional<decltype(result.type_mark)> compiler_owned_mark;
+        vhdl::ProvidedType compiler_owned_provided { vhdl::ProvidedType::none };
         if (definition.form == vhdl::TypeForm::subtype
             || definition.form == vhdl::TypeForm::alias
             || definition.form == vhdl::TypeForm::scalar) {
@@ -6291,8 +6489,16 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
                 // The compiler-owned fixed_pkg and float_pkg types have no
                 // retained declaration: their name is their identity, which
                 // a subtype of one shares (IEEE 1076-2008 6.3).
+                const auto provided_family
+                    = (effective->provided_type == vhdl::ProvidedType::sfixed
+                    || effective->provided_type == vhdl::ProvidedType::ufixed
+                    || effective->provided_type
+                        == vhdl::ProvidedType::ieee_float);
                 if (!effective->type_mark.target.valid()
-                    && std::ranges::any_of(
+                    && (provided_family
+                    // FLOAT32 and its relatives are subtypes of FLOAT
+                    // (G.5); the identity names the family.
+                    || std::ranges::any_of(
                         std::array { std::string_view { "ufixed" },
                             std::string_view { "sfixed" },
                             std::string_view { "unresolved_ufixed" },
@@ -6307,8 +6513,9 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
                                 vhdl::without_builtin_prefix(
                                     effective->type_mark.spelling),
                                 name);
-                        })) {
+                        }))) {
                     compiler_owned_mark = effective->type_mark;
+                    compiler_owned_provided = effective->provided_type;
                 }
             }
         }
@@ -7157,7 +7364,18 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
         }
         active_types.erase(result.type_mark.target);
         if (compiler_owned_mark) {
+            // The provided type is the mark's: a subtype of SFIXED denotes
+            // SFIXED once its mark is (`subtype t is sfixed(3 downto -4)`,
+            // the expansion of a generic type bound to it, 6.5.3).
             result.type_mark = *compiler_owned_mark;
+            // Only a constrained subtype takes the family's identity here:
+            // an unconstrained one (`T => sfixed`, its bounds given per
+            // object by element constraints) still sizes through the
+            // mark, which some object layouts need (nvc issue810, next
+            // gate).
+            if (!result.constraints.empty()) {
+                result.provided_type = compiler_owned_provided;
+            }
         }
         complete_predefined(result, active_frames, scope);
         return result;
@@ -7668,6 +7886,44 @@ bool CompiledDesignResolver::vhdl_subtype_profiles_match(
     return !shapes || *shapes;
 }
 
+void CompiledDesignResolver::complete_vhdl_type_actual(
+    vhdl::SubtypeIndication& subtype, const ScopeId scope) const
+{
+    // A type actual's mark that analysis selected no declaration for denotes
+    // the type visible where the actual is written (IEEE 1076-2019 12.3,
+    // 12.4), possibly a member of a package instance a use clause makes
+    // visible (`use ieee.fixed_pkg.all` for `T => sfixed(3 downto -4)`,
+    // 4.9), and carries the provided type that type is.
+    if (design_ == nullptr || !scope.valid()) {
+        return;
+    }
+    if (!subtype.type_mark.target.valid()
+        && !subtype.type_mark.spelling.empty()) {
+        if (const auto named = resolve_vhdl_named_type(
+                subtype.type_mark.spelling, scope)) {
+            subtype.type_mark.target = *named;
+        } else {
+            vhdl::Name mark;
+            mark.spelling = subtype.type_mark.spelling;
+            const auto member = resolve_vhdl_package_members(
+                mark, scope, is_vhdl_type_declaration)
+                                    .unique();
+            const auto declared = member
+                ? find_declaration(*design_, effective_, member->member)
+                : std::nullopt;
+            if (declared && declared->vhdl != nullptr
+                && declared->vhdl->declared_type) {
+                subtype.type_mark.target = *declared->vhdl->declared_type;
+            }
+        }
+    }
+    if (subtype.provided_type == vhdl::ProvidedType::none) {
+        subtype.provided_type = subtype.type_mark.target.valid()
+            ? vhdl_provided_type_of(subtype.type_mark.target)
+            : resolve_vhdl_provided_type(subtype.type_mark.spelling, scope);
+    }
+}
+
 std::optional<CompiledBindingFrame>
 CompiledDesignResolver::bind_vhdl_generics(
     const std::span<const DeclarationId> formals,
@@ -7726,6 +7982,10 @@ CompiledDesignResolver::bind_vhdl_generics(
         if (!defaulted[*selected]) {
             result[*selected].expression = association.expression;
             result[*selected].vhdl_type = association.type;
+            if (result[*selected].vhdl_type) {
+                complete_vhdl_type_actual(
+                    *result[*selected].vhdl_type, use_scope);
+            }
         }
     }
     for (std::size_t index { }; index < formals.size(); ++index) {
@@ -7927,6 +8187,7 @@ CompiledDesignResolver::bind_vhdl_generics(
                     subtype.type_mark.spelling
                         = expression->vhdl->text;
                 }
+                complete_vhdl_type_actual(subtype, expression->vhdl->scope);
                 const auto spelling = simple_vhdl_name(
                     subtype.type_mark.spelling);
                 if (same_vhdl_identifier(spelling, "integer")
@@ -9127,6 +9388,14 @@ bool CompiledDesignResolver::vhdl_standard_package_member_visible(
     const auto exported = [&](const std::string_view library,
                               const std::string_view package_name,
                               const std::string_view member) {
+        // STD.STANDARD, which the compiler provides: the declarations of the
+        // unit's predefined environment (IEEE 1076-2019 16.3).
+        if (same_vhdl_identifier(library, "std")
+            && same_vhdl_identifier(package_name, "standard")
+            && builtin_standard_package_declares(
+                owner->predefined_environment, member)) {
+            return true;
+        }
         for (const auto& package : design_->vhdl_units()) {
             if (package.kind == vhdl::UnitKind::package
                 && package.primary_name.empty()
@@ -9225,6 +9494,231 @@ bool CompiledDesignResolver::vhdl_standard_package_member_visible(
         return true;
     }
     return false;
+}
+
+bool CompiledDesignResolver::vhdl_denotes_provided_package_member(
+    const std::string_view spelling, const std::string_view library,
+    const std::string_view package, const std::string_view member,
+    const ScopeId use_scope) const
+{
+    const auto parts = vhdl_name_parts(vhdl::without_builtin_prefix(spelling));
+    if (design_ == nullptr || parts.empty() || parts.size() > 3U
+        || !same_vhdl_identifier(parts.back(), member)) {
+        return false;
+    }
+    if (parts.size() == 3U) {
+        return same_vhdl_identifier(parts[0], library)
+            && same_vhdl_identifier(parts[1], package);
+    }
+    if (parts.size() == 2U) {
+        vhdl::Name expanded;
+        expanded.spelling = std::string { spelling };
+        expanded.canonical = expanded.spelling;
+        return same_vhdl_identifier(parts[0], package)
+            && vhdl_standard_package_member_visible(expanded, use_scope);
+    }
+    return vhdl_package_member_use_visible(
+        library, package, member, use_scope, false);
+}
+
+namespace {
+
+// The provided types a package declares, with the names of each type's
+// unresolved and resolved forms (IEEE 1076-2019 16.4, 16.7, 16.8.5, G.3,
+// G.4).
+struct ProvidedPackageMember {
+    CompiledVhdlProvidedType type;
+    std::string_view library;
+    std::string_view package;
+    std::string_view member;
+};
+
+constexpr auto provided_package_members = std::to_array<ProvidedPackageMember>({
+    { CompiledVhdlProvidedType::std_ulogic, "ieee", "std_logic_1164",
+        "std_ulogic" },
+    { CompiledVhdlProvidedType::std_logic, "ieee", "std_logic_1164",
+        "std_logic" },
+    { CompiledVhdlProvidedType::std_ulogic_vector, "ieee", "std_logic_1164",
+        "std_ulogic_vector" },
+    { CompiledVhdlProvidedType::std_logic_vector, "ieee", "std_logic_1164",
+        "std_logic_vector" },
+    { CompiledVhdlProvidedType::numeric_std_unsigned, "ieee", "numeric_std",
+        "unsigned" },
+    { CompiledVhdlProvidedType::numeric_std_unsigned, "ieee", "numeric_std",
+        "unresolved_unsigned" },
+    { CompiledVhdlProvidedType::numeric_std_unsigned, "ieee", "numeric_std",
+        "u_unsigned" },
+    { CompiledVhdlProvidedType::numeric_std_signed, "ieee", "numeric_std",
+        "signed" },
+    { CompiledVhdlProvidedType::numeric_std_signed, "ieee", "numeric_std",
+        "unresolved_signed" },
+    { CompiledVhdlProvidedType::numeric_std_signed, "ieee", "numeric_std",
+        "u_signed" },
+    { CompiledVhdlProvidedType::numeric_bit_unsigned, "ieee", "numeric_bit",
+        "unsigned" },
+    { CompiledVhdlProvidedType::numeric_bit_unsigned, "ieee", "numeric_bit",
+        "unresolved_unsigned" },
+    { CompiledVhdlProvidedType::numeric_bit_unsigned, "ieee", "numeric_bit",
+        "u_unsigned" },
+    { CompiledVhdlProvidedType::numeric_bit_signed, "ieee", "numeric_bit",
+        "signed" },
+    { CompiledVhdlProvidedType::numeric_bit_signed, "ieee", "numeric_bit",
+        "unresolved_signed" },
+    { CompiledVhdlProvidedType::numeric_bit_signed, "ieee", "numeric_bit",
+        "u_signed" },
+    { CompiledVhdlProvidedType::sfixed, "ieee", "fixed_pkg", "sfixed" },
+    { CompiledVhdlProvidedType::sfixed, "ieee", "fixed_pkg",
+        "unresolved_sfixed" },
+    { CompiledVhdlProvidedType::sfixed, "ieee", "fixed_pkg", "u_sfixed" },
+    { CompiledVhdlProvidedType::sfixed, "ieee", "fixed_generic_pkg",
+        "sfixed" },
+    { CompiledVhdlProvidedType::sfixed, "ieee", "fixed_generic_pkg",
+        "unresolved_sfixed" },
+    { CompiledVhdlProvidedType::sfixed, "ieee", "fixed_generic_pkg",
+        "u_sfixed" },
+    { CompiledVhdlProvidedType::ufixed, "ieee", "fixed_pkg", "ufixed" },
+    { CompiledVhdlProvidedType::ufixed, "ieee", "fixed_pkg",
+        "unresolved_ufixed" },
+    { CompiledVhdlProvidedType::ufixed, "ieee", "fixed_pkg", "u_ufixed" },
+    { CompiledVhdlProvidedType::ufixed, "ieee", "fixed_generic_pkg",
+        "ufixed" },
+    { CompiledVhdlProvidedType::ufixed, "ieee", "fixed_generic_pkg",
+        "unresolved_ufixed" },
+    { CompiledVhdlProvidedType::ufixed, "ieee", "fixed_generic_pkg",
+        "u_ufixed" },
+    { CompiledVhdlProvidedType::ieee_float, "ieee", "float_pkg", "float" },
+    { CompiledVhdlProvidedType::ieee_float, "ieee", "float_pkg",
+        "unresolved_float" },
+    { CompiledVhdlProvidedType::ieee_float, "ieee", "float_pkg", "u_float" },
+    { CompiledVhdlProvidedType::ieee_float, "ieee", "float_pkg", "float32" },
+    { CompiledVhdlProvidedType::ieee_float, "ieee", "float_pkg", "float64" },
+    { CompiledVhdlProvidedType::ieee_float, "ieee", "float_pkg", "float128" },
+    { CompiledVhdlProvidedType::ieee_float, "ieee", "float_generic_pkg", "float" },
+    { CompiledVhdlProvidedType::ieee_float, "ieee", "float_generic_pkg",
+        "unresolved_float" },
+    { CompiledVhdlProvidedType::ieee_float, "ieee", "float_generic_pkg",
+        "u_float" },
+    { CompiledVhdlProvidedType::textio_line, "std", "textio", "line" },
+    { CompiledVhdlProvidedType::textio_text, "std", "textio", "text" },
+    { CompiledVhdlProvidedType::textio_side, "std", "textio", "side" },
+    { CompiledVhdlProvidedType::textio_width, "std", "textio", "width" },
+    { CompiledVhdlProvidedType::textio_line_vector, "std", "textio",
+        "line_vector" },
+    { CompiledVhdlProvidedType::std_logic_arith_unsigned, "ieee",
+        "std_logic_arith", "unsigned" },
+    { CompiledVhdlProvidedType::std_logic_arith_signed, "ieee",
+        "std_logic_arith", "signed" },
+});
+
+[[nodiscard]] CompiledVhdlProvidedType provided_standard_scalar(
+    const CompiledVhdlTypeIdentityResolution& identity) noexcept
+{
+    using Scalar = CompiledVhdlStandardScalarIdentity;
+    using Subtype = CompiledVhdlStandardScalarSubtype;
+    using Type = CompiledVhdlProvidedType;
+    switch (identity.standard_scalar_type) {
+    case Scalar::none: break;
+    case Scalar::bit: return Type::bit;
+    case Scalar::boolean: return Type::boolean;
+    case Scalar::character: return Type::character;
+    case Scalar::file_open_kind: return Type::file_open_kind;
+    case Scalar::file_open_status: return Type::file_open_status;
+    case Scalar::range_direction: return Type::range_direction;
+    case Scalar::real: return Type::real;
+    case Scalar::severity_level: return Type::severity_level;
+    case Scalar::integer:
+        return identity.standard_scalar_subtype == Subtype::natural
+            ? Type::natural
+            : identity.standard_scalar_subtype == Subtype::positive
+            ? Type::positive
+            : Type::integer;
+    case Scalar::time:
+        return identity.standard_scalar_subtype == Subtype::delay_length
+            ? Type::delay_length
+            : Type::time;
+    }
+    using Builtin = vhdl::BuiltinTypeIdentity;
+    switch (identity.builtin_type) {
+    case Builtin::none: break;
+    case Builtin::ieee_std_logic_1164_std_logic_vector:
+        return Type::std_logic_vector;
+    case Builtin::ieee_std_logic_1164_std_ulogic_vector:
+        return Type::std_ulogic_vector;
+    case Builtin::std_standard_string: return Type::string;
+    case Builtin::std_standard_bit_vector: return Type::bit_vector;
+    case Builtin::std_standard_boolean_vector: return Type::boolean_vector;
+    case Builtin::std_standard_integer_vector: return Type::integer_vector;
+    case Builtin::std_standard_real_vector: return Type::real_vector;
+    case Builtin::std_standard_time_vector: return Type::time_vector;
+    }
+    return Type::none;
+}
+
+} // namespace
+
+CompiledVhdlProvidedType CompiledDesignResolver::vhdl_provided_type_of(
+    const TypeId type_id) const
+{
+    if (design_ == nullptr || !type_id.valid()) {
+        return CompiledVhdlProvidedType::none;
+    }
+    const auto type = semantic::find_type(*design_, effective_, type_id);
+    if (!type || type->vhdl == nullptr) {
+        return CompiledVhdlProvidedType::none;
+    }
+    const auto declaration
+        = find_declaration(*design_, effective_, type->vhdl->declaration);
+    if (!declaration || declaration->vhdl == nullptr) {
+        return CompiledVhdlProvidedType::none;
+    }
+    for (const auto& provided : provided_package_members) {
+        if (same_vhdl_identifier(type->vhdl->name, provided.member)
+            && design_->vhdl_scope_in_package(declaration->vhdl->scope,
+                provided.library, provided.package)) {
+            return provided.type;
+        }
+    }
+    return CompiledVhdlProvidedType::none;
+}
+
+CompiledVhdlProvidedType CompiledDesignResolver::resolve_vhdl_provided_type(
+    const std::string_view spelling, const ScopeId use_scope) const
+{
+    if (design_ == nullptr || spelling.empty() || !use_scope.valid()) {
+        return CompiledVhdlProvidedType::none;
+    }
+    const auto identity = resolve_vhdl_type_identity(spelling, use_scope);
+    if (identity.status == CompiledResolutionStatus::ambiguous) {
+        return CompiledVhdlProvidedType::none;
+    }
+    if (identity.type) {
+        return vhdl_provided_type_of(*identity.type);
+    }
+    if (const auto standard = provided_standard_scalar(identity);
+        standard != CompiledVhdlProvidedType::none) {
+        return standard;
+    }
+    // Homographs that use clauses make visible hide each other (12.4):
+    // NUMERIC_STD's and NUMERIC_BIT's UNSIGNED, for one.
+    auto found = CompiledVhdlProvidedType::none;
+    for (const auto& provided : provided_package_members) {
+        if (provided.type != found
+            && vhdl_denotes_provided_package_member(spelling,
+                provided.library, provided.package, provided.member,
+                use_scope)) {
+            if (found != CompiledVhdlProvidedType::none) {
+                return CompiledVhdlProvidedType::none;
+            }
+            found = provided.type;
+        }
+    }
+    if (found != CompiledVhdlProvidedType::none) {
+        return found;
+    }
+    return resolve_vhdl_intrinsic_enumeration(spelling, use_scope)
+            == support::VhdlIntrinsicEnumeration::std_ulogic
+        ? CompiledVhdlProvidedType::std_ulogic
+        : CompiledVhdlProvidedType::none;
 }
 
 bool CompiledDesignResolver::vhdl_standard_package_name_visible(
@@ -10256,21 +10750,59 @@ CompiledDesignResolver::vhdl_generic_type_actual_operations(
     // it is the type's operation wherever the instance compares values of
     // the generic type, whatever the instantiation's own context makes
     // visible. Overload resolution then decides by profile (12.5).
+    // MINIMUM, MAXIMUM and TO_STRING, which a classified generic type
+    // declares with its operators (5.8.3-5.8.8), denote the actual type's
+    // operations alike.
     std::vector<DeclarationId> result;
     const auto parts = vhdl_name_parts(vhdl_spelling(name));
-    if (design_ == nullptr || parts.size() != 1U
-        || !vhdl::operator_designator(parts.front()) || !use_scope.valid()
+    const bool operator_name
+        = parts.size() == 1U && vhdl::operator_designator(parts.front());
+    const bool extremum = parts.size() == 1U
+        && (same_vhdl_identifier(parts.front(), "minimum")
+            || same_vhdl_identifier(parts.front(), "maximum"));
+    const bool image = parts.size() == 1U
+        && same_vhdl_identifier(parts.front(), "to_string");
+    if (design_ == nullptr || (!operator_name && !extremum && !image)
+        || !use_scope.valid()
         || (binding_frames_.empty()
             && (effective_ == nullptr
                 || effective_->specialization().actual_identities.empty()))) {
         return result;
     }
+    // Whether the class of a generic type declares the named operation:
+    // every class its operators, the scalar classes MINIMUM, MAXIMUM and
+    // TO_STRING, an array class MINIMUM and MAXIMUM (5.8.3-5.8.8).
+    const auto class_declares = [&](const vhdl::UnspecifiedTypeClass type_class) {
+        using Class = vhdl::UnspecifiedTypeClass;
+        if (operator_name) {
+            return true;
+        }
+        switch (type_class) {
+        case Class::scalar:
+        case Class::discrete:
+        case Class::integer:
+        case Class::physical:
+        case Class::floating:
+            return true;
+        case Class::array:
+            return extremum;
+        case Class::none:
+        case Class::private_type:
+        case Class::access:
+        case Class::file:
+            return false;
+        }
+        return false;
+    };
     std::optional<std::vector<const vhdl::Unit*>> lookup_units;
     // The generic types whose generic clause encloses the use (12.1).
     const auto visible_generic_type = [&](const DeclarationId formal) {
         const auto declaration = find_declaration(*design_, effective_, formal);
         if (!declaration || declaration->vhdl == nullptr
-            || declaration->vhdl->form != vhdl::DeclarationForm::generic_type) {
+            || declaration->vhdl->form != vhdl::DeclarationForm::generic_type
+            || !class_declares(declaration->vhdl->subtype
+                    ? declaration->vhdl->subtype->unspecified_class
+                    : vhdl::UnspecifiedTypeClass::none)) {
             return false;
         }
         const auto* scope = find_scope(*design_, declaration->vhdl->scope);

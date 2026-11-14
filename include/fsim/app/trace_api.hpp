@@ -3,6 +3,7 @@
 
 #include "fsim/frontend/diagnostic.hpp"
 #include "fsim/project/project.hpp"
+#include "fsim/diagnostic/diagnostic.hpp"
 
 #include <cstddef>
 #include <cstdint>

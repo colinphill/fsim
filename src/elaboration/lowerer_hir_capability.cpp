@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "lowerer_internal.hpp"
+#include "hierarchy_sv_type_layout_internal.hpp"
 #include "fsim/support/stack_growth.hpp"
 #include "specialization_cache.hpp"
+#include "virtual_interface_definition.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
 #include "fsim/support/vhdl_standard_enumeration.hpp"
 #include "fsim/frontend/coverage_resolution.hpp"
@@ -11,6 +13,29 @@
 #include "fsim/runtime/output_format.hpp"
 #include "fsim/runtime/string_methods.hpp"
 #include "vhdl_hir_type_validation.hpp"
+#include "elaborator_internal.hpp"
+#include "fsim/elaboration/elaborator.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/source.hpp"
+#include "fsim/frontend/systemverilog_scalars.hpp"
+#include "fsim/frontend/token.hpp"
+#include "fsim/runtime/logic.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_container_value.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include "fsim/runtime/systemverilog_scalar.hpp"
+#include "fsim/semantic/compiled_design.hpp"
+#include "fsim/semantic/compiled_design_resolver.hpp"
+#include "fsim/semantic/compiled_design_specialization.hpp"
+#include "fsim/semantic/model.hpp"
+#include "fsim/semantic/systemverilog_hir.hpp"
+#include "fsim/semantic/vhdl_hir.hpp"
+#include "fsim/support/active_set.hpp"
+#include "fsim/support/index_distance.hpp"
+#include "hierarchy_sv_constant_evaluator.hpp"
+#include "scoped_bindings.hpp"
+#include "vhdl_lowering_index.hpp"
 
 #include <array>
 #include <charconv>
@@ -21,6 +46,25 @@
 #include <new>
 #include <set>
 #include <tuple>
+#include <algorithm>
+#include <bit>
+#include <cctype>
+#include <cstddef>
+#include <cstdint>
+#include <iterator>
+#include <limits>
+#include <memory>
+#include <optional>
+#include <ranges>
+#include <span>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <variant>
+#include <vector>
 
 namespace fsim::elaboration {
 
@@ -1349,7 +1393,8 @@ void Lowerer::set_disable_labels(
 
 void Lowerer::set_systemverilog_interface_handles(
     const std::unordered_map<std::string, std::uint64_t>* const handles,
-    const std::unordered_map<std::string, std::string>* const types,
+    const std::unordered_map<std::string, SystemVerilogInterfaceInstanceType>*
+        const types,
     const HirInstanceUnits* const instance_units,
     const std::unordered_map<std::string, std::string>* const exports,
     const std::unordered_set<std::string>* const design_element_instances)
@@ -1604,7 +1649,7 @@ std::string Lowerer::hir_generic_interface_type(
     const auto found = systemverilog_interface_types_->find(path);
     return found == systemverilog_interface_types_->end()
         ? std::string { }
-        : found->second;
+        : found->second.name;
 }
 
 frontend::SourceSpan Lowerer::hir_source_span(
@@ -2180,6 +2225,96 @@ Lowerer::hir_frame_array_parameter_item(
     return std::optional { items[position].value };
 }
 
+bool Lowerer::hir_calls_user_function(
+    const semantic::ExpressionId expression_id, const bool effects_only) const
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return false;
+    }
+    // Whether a function body only computes: its statements assign, branch,
+    // loop and return (IEEE 1800-2023 13.4.3).
+    const auto computes_only = [&](const semantic::sv::Declaration& callable) {
+        using StatementKind = semantic::sv::StatementKind;
+        const auto pure = [&](const auto& self,
+                              const std::span<const semantic::StatementId>
+                                  statements) -> bool {
+            return std::ranges::all_of(statements,
+                [&](const semantic::StatementId id) {
+                    const auto statement
+                        = specialized_hir_unit_->find_statement(id);
+                    if (!statement || statement->systemverilog == nullptr) {
+                        return false;
+                    }
+                    const auto& input = *statement->systemverilog;
+                    switch (input.kind) {
+                    case StatementKind::assignment:
+                    case StatementKind::conditional:
+                    case StatementKind::selection:
+                    case StatementKind::loop:
+                    case StatementKind::break_loop:
+                    case StatementKind::continue_loop:
+                    case StatementKind::return_statement:
+                    case StatementKind::block:
+                    case StatementKind::null_statement:
+                        break;
+                    default:
+                        return false;
+                    }
+                    return support::with_stack([&] {
+                        return self(self, input.statements)
+                            && self(self, input.else_statements)
+                            && self(self, input.loop_updates)
+                            && std::ranges::all_of(input.case_alternatives,
+                                [&](const auto& alternative) {
+                                    return self(self, alternative.statements);
+                                });
+                    });
+                });
+        };
+        return callable.callable && callable.callable->function
+            && pure(pure, callable.statements);
+    };
+    const auto calls = [&](const auto& self,
+                           const semantic::ExpressionId id) -> bool {
+        const auto view = specialized_hir_unit_->find_expression(id);
+        if (!view || view->systemverilog == nullptr) {
+            return false;
+        }
+        const auto& value = *view->systemverilog;
+        using Kind = semantic::sv::ExpressionKind;
+        if (value.kind == Kind::class_method_call
+            || value.kind == Kind::class_static_method_call) {
+            return true;
+        }
+        if (value.kind == Kind::call) {
+            const auto callee = hir_referenced_declaration(id);
+            const auto declaration = callee
+                ? specialized_hir_unit_->find_declaration(*callee)
+                : std::nullopt;
+            if (declaration && declaration->systemverilog != nullptr
+                && declaration->systemverilog->callable
+                && (!effects_only
+                    || !computes_only(*declaration->systemverilog))) {
+                return true;
+            }
+        }
+        return support::with_stack([&] {
+            return std::ranges::any_of(value.operands,
+                       [&](const auto operand) { return self(self, operand); })
+                || std::ranges::any_of(value.associations,
+                    [&](const auto& association) {
+                        return self(self, association.value);
+                    })
+                || std::ranges::any_of(value.call_arguments,
+                    [&](const auto& association) {
+                        return association.actual
+                            && self(self, *association.actual);
+                    });
+        });
+    };
+    return calls(calls, expression_id);
+}
+
 std::optional<std::int64_t> Lowerer::hir_constant_integer(
     const semantic::ExpressionId expression_id) const
 {
@@ -2580,8 +2715,7 @@ std::optional<std::int64_t> Lowerer::hir_constant_integer(
                         || receiver_record->systemverilog->form
                             == semantic::sv::DeclarationForm::local_parameter)
                     && (!receiver_record->systemverilog->type
-                        || (receiver_record->systemverilog->type->target
-                                    .spelling == "implicit"
+                        || (receiver_record->systemverilog->type->implicit
                             && !receiver_record->systemverilog->type
                                     ->packed_range))) {
                     return finish(std::nullopt);
@@ -4509,6 +4643,19 @@ Lowerer::hir_constant_element_selection(
     if ((!index && !slice) || operands.size() != (index ? 2U : 3U)) {
         return std::nullopt;
     }
+    // A bit-select index and an indexed part-select's base are evaluated
+    // when the select is (11.5.1), so a user function call in them runs
+    // then (13.4.3); a range part-select's bounds and an indexed
+    // part-select's width are constant expressions, where a constant
+    // function call is evaluated at elaboration. A call whose function
+    // only computes its value from its arguments (the evaluator refuses
+    // one reading a variable outside it) returns the folded value, which a
+    // continuous assignment's constant select needs (10.3, 6.5).
+    if (expression->systemverilog != nullptr
+        && hir_calls_user_function(operands[1], true)
+        && (index || operation == "+:" || operation == "-:")) {
+        return std::nullopt;
+    }
     if (std::ranges::any_of(
             std::span { operands }.subspan(1U),
             [&](const semantic::ExpressionId bound) {
@@ -5503,7 +5650,7 @@ bool Lowerer::hir_expression_signed(
                         || source.form
                             == semantic::sv::DeclarationForm::local_parameter)
                     && source.initializer && source.type
-                    && source.type->target.spelling == "implicit"
+                    && source.type->implicit
                     && !source.type->packed_range) {
                     const auto& actuals
                         = specialized_hir_unit_->specialization()
@@ -6336,38 +6483,130 @@ std::optional<std::string> Lowerer::hir_vhdl_array_type_family(
             subtype.builtin_type)) {
         return family;
     }
-    const auto family_of_name = [](std::string_view name)
-        -> std::optional<std::string> {
-        name = simple_name_of(name);
-        auto lowered = support::ascii_lower(name);
-        if (lowered == "std_logic_vector" || lowered == "std_ulogic_vector") {
+    // The provided type the mark denotes where it is written, stamped by
+    // the resolution pass (12.3, 12.4): a formal's mark is resolved in its
+    // subprogram's scope, never the caller's.
+    {
+        using Provided = semantic::vhdl::ProvidedType;
+        switch (subtype.provided_type) {
+        case Provided::std_ulogic_vector:
+        case Provided::std_logic_vector:
             return std::string { "std_ulogic_vector" };
-        }
-        if (lowered == "unsigned" || lowered == "signed") {
-            return lowered;
-        }
-        // numeric_std's resolved vectors are subtypes of its unresolved
-        // ones (IEEE 1076-2008 16.8.5.1).
-        if (lowered == "unresolved_unsigned" || lowered == "u_unsigned") {
+        case Provided::numeric_std_unsigned:
+        case Provided::numeric_bit_unsigned:
+        case Provided::std_logic_arith_unsigned:
             return std::string { "unsigned" };
-        }
-        if (lowered == "unresolved_signed" || lowered == "u_signed") {
+        case Provided::numeric_std_signed:
+        case Provided::numeric_bit_signed:
+        case Provided::std_logic_arith_signed:
             return std::string { "signed" };
+        case Provided::sfixed: return std::string { "sfixed" };
+        case Provided::ufixed: return std::string { "ufixed" };
+        case Provided::ieee_float: return std::string { "float" };
+        case Provided::bit_vector: return std::string { "bit_vector" };
+        case Provided::boolean_vector:
+            return std::string { "boolean_vector" };
+        case Provided::integer_vector:
+            return std::string { "integer_vector" };
+        case Provided::real_vector: return std::string { "real_vector" };
+        case Provided::time_vector: return std::string { "time_vector" };
+        case Provided::string: return std::string { "string" };
+        default: break;
         }
-        // So are the fixed- and floating-point packages' vectors (IEEE
-        // 1076-2008 G.3, G.4).
-        if (lowered == "sfixed" || lowered == "unresolved_sfixed"
-            || lowered == "u_sfixed") {
-            return std::string { "sfixed" };
+    }
+    // The vector families of the compiler-provided IEEE packages: each
+    // package's array type and the subtypes it declares of it (IEEE
+    // 1076-2008 16.7, 16.8.5.1; fixed- and floating-point, G.3, G.4).
+    struct ProvidedFamily {
+        std::string_view family;
+        std::string_view package;
+        std::string_view member;
+    };
+    static constexpr std::array<ProvidedFamily, 38U> provided_families { {
+        { "std_ulogic_vector", "std_logic_1164", "std_ulogic_vector" },
+        { "std_ulogic_vector", "std_logic_1164", "std_logic_vector" },
+        { "unsigned", "numeric_std", "unsigned" },
+        { "unsigned", "numeric_std", "unresolved_unsigned" },
+        { "unsigned", "numeric_std", "u_unsigned" },
+        { "unsigned", "numeric_bit", "unsigned" },
+        { "unsigned", "numeric_bit", "unresolved_unsigned" },
+        { "unsigned", "numeric_bit", "u_unsigned" },
+        { "signed", "numeric_std", "signed" },
+        { "signed", "numeric_std", "unresolved_signed" },
+        { "signed", "numeric_std", "u_signed" },
+        { "signed", "numeric_bit", "signed" },
+        { "signed", "numeric_bit", "unresolved_signed" },
+        { "signed", "numeric_bit", "u_signed" },
+        { "sfixed", "fixed_pkg", "sfixed" },
+        { "sfixed", "fixed_pkg", "unresolved_sfixed" },
+        { "sfixed", "fixed_pkg", "u_sfixed" },
+        { "sfixed", "fixed_generic_pkg", "sfixed" },
+        { "sfixed", "fixed_generic_pkg", "unresolved_sfixed" },
+        { "sfixed", "fixed_generic_pkg", "u_sfixed" },
+        { "ufixed", "fixed_pkg", "ufixed" },
+        { "ufixed", "fixed_pkg", "unresolved_ufixed" },
+        { "ufixed", "fixed_pkg", "u_ufixed" },
+        { "ufixed", "fixed_generic_pkg", "ufixed" },
+        { "ufixed", "fixed_generic_pkg", "unresolved_ufixed" },
+        { "ufixed", "fixed_generic_pkg", "u_ufixed" },
+        { "float", "float_pkg", "float" },
+        { "float", "float_pkg", "unresolved_float" },
+        { "float", "float_pkg", "u_float" },
+        { "float", "float_pkg", "float32" },
+        { "float", "float_pkg", "float64" },
+        { "float", "float_pkg", "float128" },
+        { "float", "float_generic_pkg", "float" },
+        { "float", "float_generic_pkg", "unresolved_float" },
+        { "float", "float_generic_pkg", "u_float" },
+        { "float", "float_generic_pkg", "float32" },
+        { "float", "float_generic_pkg", "float64" },
+        { "float", "float_generic_pkg", "float128" },
+    } };
+    // The family of a type mark without a retained declaration: the type
+    // of a compiler-provided package it denotes where it is written (12.3,
+    // 12.4).
+    const auto family_of_mark = [&](const std::string_view spelling,
+                                    const semantic::ScopeId scope)
+        -> std::optional<std::string> {
+        if (specialized_hir_unit_ == nullptr || spelling.empty()
+            || !scope.valid()) {
+            return std::nullopt;
         }
-        if (lowered == "ufixed" || lowered == "unresolved_ufixed"
-            || lowered == "u_ufixed") {
-            return std::string { "ufixed" };
+        const auto resolver = hir_resolver();
+        const auto identity = resolver.resolve_vhdl_type_identity(
+            spelling, scope);
+        if (identity.type) {
+            return std::nullopt;
         }
-        if (lowered == "float" || lowered == "unresolved_float"
-            || lowered == "u_float" || lowered == "float32"
-            || lowered == "float64" || lowered == "float128") {
-            return std::string { "float" };
+        if (const auto family
+            = standard_family_for_identity(identity.builtin_type)) {
+            return family;
+        }
+        for (const auto& provided : provided_families) {
+            if (resolver.vhdl_denotes_provided_package_member(spelling,
+                    "ieee", provided.package, provided.member, scope)) {
+                return std::string { provided.family };
+            }
+        }
+        return std::nullopt;
+    };
+    // The family of a retained array type declared by one of those
+    // packages.
+    const auto family_of_declaration = [&](
+        const semantic::vhdl::TypeDefinition& definition)
+        -> std::optional<std::string> {
+        const auto declaration = definition.declaration.valid()
+            ? specialized_hir_unit_->find_declaration(definition.declaration)
+            : std::nullopt;
+        if (!declaration || declaration->vhdl == nullptr) {
+            return std::nullopt;
+        }
+        for (const auto& provided : provided_families) {
+            if (same_hir_identifier(definition.name, provided.member, true)
+                && specialized_hir_unit_->design().vhdl_scope_in_package(
+                    declaration->vhdl->scope, "ieee", provided.package)) {
+                return std::string { provided.family };
+            }
         }
         return std::nullopt;
     };
@@ -6426,7 +6665,7 @@ std::optional<std::string> Lowerer::hir_vhdl_array_type_family(
                         = standard_family_for_type(definition)) {
                     return standard_family;
                 }
-                if (const auto known = family_of_name(definition.name)) {
+                if (const auto known = family_of_declaration(definition)) {
                     return known;
                 }
                 return "type:" + std::to_string(definition.id.value());
@@ -6443,12 +6682,23 @@ std::optional<std::string> Lowerer::hir_vhdl_array_type_family(
                         definition.base.builtin_type)) {
                     return family;
                 }
-                return family_of_name(definition.base.type_mark.spelling);
+                const auto owner = definition.declaration.valid()
+                    ? specialized_hir_unit_->find_declaration(
+                          definition.declaration)
+                    : std::nullopt;
+                return family_of_mark(definition.base.type_mark.spelling,
+                    owner && owner->vhdl != nullptr
+                        ? owner->vhdl->scope
+                        : hir_process_scope_);
             }
             type_id = definition.base.type_mark.target;
         }
     }
-    return family_of_name(subtype.type_mark.spelling);
+    return family_of_mark(subtype.type_mark.spelling,
+        hir_process_scope_.valid() ? hir_process_scope_
+        : specialized_hir_unit_ != nullptr
+            ? specialized_hir_unit_->scope()
+            : semantic::ScopeId { });
 }
 
 bool Lowerer::hir_vhdl_enumeration_index(
@@ -6916,7 +7166,7 @@ Lowerer::hir_referenced_declaration(
         if (source && source->systemverilog != nullptr) {
             const auto& value = *source->systemverilog;
             const bool explicit_type = value.type
-                && (value.type->target.spelling != "implicit"
+                && (!value.type->implicit
                     || value.type->packed_range);
             // An implicitly typed parameter takes the type of its final
             // value; when this specialization holds that value it is the
@@ -7334,7 +7584,7 @@ Lowerer::hir_hierarchical_virtual_interface(const std::string_view path) const
         return std::nullopt;
     }
     const auto& full = design_.signal_info_[*signal].name;
-    const auto cut = full.rfind('.');
+    const auto cut = hierarchical_last_separator(full);
     if (cut == std::string::npos) {
         return std::nullopt;
     }
@@ -7486,11 +7736,16 @@ Lowerer::hir_virtual_interface_candidates(HirVirtualInterfaceMember result,
         hierarchical_reference_missed_ = true;
         return std::nullopt;
     }
-    const auto& interface_type = virtual_type.interface_type;
+    const auto* const interface_definition = virtual_interface_definition(
+        specialized_hir_unit_->design(), specialized_hir_unit_->unit(),
+        virtual_type);
+    if (interface_definition == nullptr) {
+        return std::nullopt;
+    }
     std::set<std::uint64_t> handles;
     std::vector<std::string> paths;
     for (const auto& [path, type] : *systemverilog_interface_types_) {
-        if (type == interface_type) {
+        if (type.unit == interface_definition->id) {
             paths.push_back(path);
         }
     }
@@ -7680,22 +7935,8 @@ bool Lowerer::hir_is_interface_hierarchical_path(
     if (has_handle_prefix(name)) {
         return true;
     }
-    for (std::string_view scope = hierarchy_;;) {
-        const auto path = scope.empty()
-            ? std::string { name }
-            : std::string { scope } + "." + std::string { name };
-        if (has_handle_prefix(path)) {
-            return true;
-        }
-        if (scope.empty()) {
-            break;
-        }
-        const auto separator = scope.find_last_of('.');
-        scope = separator == std::string_view::npos
-            ? std::string_view { }
-            : scope.substr(0U, separator);
-    }
-    return false;
+    return hir_walk_hierarchical_name(name,
+        [&](const std::string& path) { return has_handle_prefix(path); });
 }
 
 bool Lowerer::hir_interface_path_has_lexical_root_binding(
@@ -8141,33 +8382,52 @@ std::optional<std::string> Lowerer::hir_systemverilog_constant_path(
     return std::nullopt;
 }
 
-std::optional<SignalId> Lowerer::hir_hierarchical_signal(
-    const std::string_view name) const
+std::size_t Lowerer::hierarchical_last_separator(
+    const std::string_view path) noexcept
 {
-    // A hierarchical name is resolved from the innermost enclosing scope
-    // outward (IEEE 1800-2017 23.8): first below the current instance, then
-    // below each ancestor, and finally from the top. Only full hierarchical
-    // paths are consulted; the single-root shortcut names are ambiguous.
-    auto path = name;
-    if (path.starts_with("$root.")) {
-        path.remove_prefix(6U);
-    }
-    const auto lookup = [&](const std::string& candidate)
-        -> std::optional<SignalId> {
-        const auto found = design_.signal_by_name_.find(candidate);
-        if (found == design_.signal_by_name_.end()
-            || found->second >= design_.signal_info_.size()) {
-            return std::nullopt;
+    // The last '.' that separates scopes: not inside an escaped identifier
+    // (which ends at white space, IEEE 1800-2023 5.6.1) and not inside an
+    // index (`u[a.b]`, 23.6).
+    std::size_t last = std::string_view::npos;
+    std::size_t depth { };
+    for (std::size_t position = 0; position < path.size(); ++position) {
+        const char character = path[position];
+        if (character == '\\') {
+            while (position + 1U < path.size()
+                && path[position + 1U] != ' ' && path[position + 1U] != '\t'
+                && path[position + 1U] != '\n') {
+                ++position;
+            }
+        } else if (character == '[') {
+            ++depth;
+        } else if (character == ']' && depth != 0U) {
+            --depth;
+        } else if (character == '.' && depth == 0U) {
+            last = position;
         }
-        hierarchical_last_found_ = true;
-        hierarchical_last_signal_ = found->second;
-        hierarchical_last_path_ = candidate;
-        return found->second;
+    }
+    return last;
+}
+
+bool Lowerer::hir_walk_hierarchical_name(const std::string_view name,
+    const std::function<bool(const std::string&)>& visit) const
+{
+    // A hierarchical name is looked up from the innermost enclosing scope
+    // outward (IEEE 1800-2023 23.8): the callee's instance first inside a
+    // task or function called through an instance (`u.f()`), then the
+    // scope being lowered and each ancestor, and last from the top. A
+    // `$root.` name starts only at the top (23.3.1).
+    constexpr std::string_view root { "$root." };
+    const bool rooted = name.starts_with(root);
+    const auto path = rooted ? name.substr(root.size()) : name;
+    const auto parent = [](const std::string_view scope) {
+        const auto separator = hierarchical_last_separator(scope);
+        return separator == std::string_view::npos
+            ? std::string_view { }
+            : scope.substr(0U, separator);
     };
-    if (!name.starts_with("$root.")) {
-        // Inside a task or function called through an instance
-        // (`u.f()`), names resolve from the callee's instance first.
-        std::string_view scope = hierarchy_;
+    if (!rooted) {
+        const std::string_view scope = hierarchy_;
         if (active_hir_callable_
             && *active_hir_callable_ < hir_callable_frames_.size()) {
             const auto& receiver
@@ -8178,31 +8438,56 @@ std::optional<SignalId> Lowerer::hir_hierarchical_signal(
                 for (std::string_view callee
                     = std::string_view { *receiver }.substr(
                         instance_prefix.size());
-                    !callee.empty() && callee != scope;) {
-                    if (const auto signal = lookup(std::string { callee }
-                            + "." + std::string { path })) {
-                        return signal;
+                    !callee.empty() && callee != scope;
+                    callee = parent(callee)) {
+                    if (visit(std::string { callee } + "." + std::string { path })) {
+                        return true;
                     }
-                    const auto separator = callee.find_last_of('.');
-                    callee = separator == std::string_view::npos
-                        ? std::string_view { }
-                        : callee.substr(0U, separator);
                 }
             }
         }
-        while (!scope.empty()) {
-            if (const auto signal = lookup(
-                    std::string { scope } + "." + std::string { path })) {
-                return signal;
+        for (auto outer = scope; !outer.empty(); outer = parent(outer)) {
+            if (visit(std::string { outer } + "." + std::string { path })) {
+                return true;
             }
-            const auto separator = scope.find_last_of('.');
-            scope = separator == std::string_view::npos
-                ? std::string_view { }
-                : scope.substr(0U, separator);
         }
     }
-    if (const auto signal = lookup(std::string { path })) {
-        return signal;
+    return visit(std::string { path });
+}
+
+std::optional<SignalId> Lowerer::hir_hierarchical_signal(
+    const std::string_view name) const
+{
+    std::optional<SignalId> signal;
+    (void)hir_resolve_hierarchical_path(name,
+        [&](const std::string& candidate) {
+            const auto found = design_.signal_by_name_.find(candidate);
+            if (found == design_.signal_by_name_.end()
+                || found->second >= design_.signal_info_.size()) {
+                return false;
+            }
+            hierarchical_last_found_ = true;
+            hierarchical_last_signal_ = found->second;
+            hierarchical_last_path_ = candidate;
+            signal = found->second;
+            return true;
+        });
+    return signal;
+}
+
+bool Lowerer::hir_resolve_hierarchical_path(const std::string_view name,
+    const std::function<bool(const std::string&)>& lookup) const
+{
+    // A hierarchical name is resolved from the innermost enclosing scope
+    // outward (IEEE 1800-2017 23.8): first below the current instance, then
+    // below each ancestor, and finally from the top. Only full hierarchical
+    // paths are consulted; the single-root shortcut names are ambiguous.
+    auto path = name;
+    if (path.starts_with("$root.")) {
+        path.remove_prefix(6U);
+    }
+    if (hir_walk_hierarchical_name(name, lookup)) {
+        return true;
     }
     // An upward name may begin with the module name of an enclosing
     // instance (IEEE 1800-2017 23.8): `ma.v` below an instance of `ma`.
@@ -8227,9 +8512,9 @@ std::optional<SignalId> Lowerer::hir_hierarchical_signal(
                 }
             }
             if (found) {
-                if (const auto signal = lookup(std::string { ancestor }
+                if (lookup(std::string { ancestor }
                         + std::string { path.substr(dot) })) {
-                    return signal;
+                    return true;
                 }
                 break;
             }
@@ -8247,7 +8532,7 @@ std::optional<SignalId> Lowerer::hir_hierarchical_signal(
         : path.find('.', first + 1U);
     if (second == std::string_view::npos
         || systemverilog_interface_handles_ == nullptr) {
-        return std::nullopt;
+        return false;
     }
     const auto instance = path.substr(0U, first);
     const auto member = path.substr(second + 1U);
@@ -8259,9 +8544,9 @@ std::optional<SignalId> Lowerer::hir_hierarchical_signal(
             return lookup(prefix + "." + std::string { member });
         }
         if (scope.empty()) {
-            return std::nullopt;
+            return false;
         }
-        const auto separator = scope.find_last_of('.');
+        const auto separator = scope.rfind('.');
         scope = separator == std::string_view::npos
             ? std::string_view { }
             : scope.substr(0U, separator);
@@ -8332,9 +8617,42 @@ Lowerer::hir_systemverilog_event_array_selection(
     const auto& source = *expression->systemverilog;
     const auto base = specialized_hir_unit_->find_expression(
         source.operands.front());
-    if (!base || base->systemverilog == nullptr
-        || base->systemverilog->kind != semantic::sv::ExpressionKind::name) {
+    if (!base || base->systemverilog == nullptr) {
         return std::nullopt;
+    }
+    HirSystemVerilogEventArraySelection result;
+    result.index_expression = source.operands.back();
+    if (base->systemverilog->kind != semantic::sv::ExpressionKind::name
+        || hierarchical_last_separator(base->systemverilog->text)
+            != std::string_view::npos) {
+        // An array named hierarchically (`g[1].e[i]`, `g.e[i]`, IEEE
+        // 1800-2023 23.6): the elements of the array its path resolves to
+        // (23.8). The declaration's element events are bound in the lexical
+        // map of the scope that declares them, which a process outside that
+        // generate block or instance does not see.
+        const auto path = hir_systemverilog_constant_path(
+            source.operands.front());
+        if (!path) {
+            return std::nullopt;
+        }
+        const std::vector<std::pair<std::int32_t, SignalId>>* found { };
+        (void)hir_resolve_hierarchical_path(*path,
+            [&](const std::string& candidate) {
+                const auto array = design_.event_array_by_name_.find(
+                    candidate);
+                if (array == design_.event_array_by_name_.end()) {
+                    return false;
+                }
+                found = &array->second;
+                return true;
+            });
+        if (found == nullptr || found->empty()) {
+            // Not an event array; the caller lowers it as any other select.
+            return std::nullopt;
+        }
+        hierarchical_reference_used_ = true;
+        result.elements = *found;
+        return result;
     }
     const auto declaration_id = hir_referenced_declaration(
         source.operands.front());
@@ -8345,23 +8663,14 @@ Lowerer::hir_systemverilog_event_array_selection(
         || !declaration->systemverilog->type) {
         return std::nullopt;
     }
-    const auto& declared_type = *declaration->systemverilog->type;
-    if (declared_type.container_form
-            != semantic::sv::TypeForm::static_array
-        || declared_type.unpacked_dimensions.size() != 1U
-        || declared_type.container_element_types.size() != 1U) {
+    const auto event_array
+        = hierarchy_sv_type_layout_detail::systemverilog_event_array_type(
+            *specialized_hir_unit_, *declaration->systemverilog->type,
+            declaration->systemverilog->scope);
+    if (!event_array || event_array->unpacked_dimensions.size() != 1U) {
         return std::nullopt;
     }
-    const auto& element_type
-        = declared_type.container_element_types.front();
-    if (element_type.target.spelling != "event"
-        || element_type.container_form
-        || !element_type.unpacked_dimensions.empty()) {
-        return std::nullopt;
-    }
-    if (declared_type.unpacked_dimensions.size() != 1U) {
-        return std::nullopt;
-    }
+    const auto& declared_type = *event_array;
     const auto& dimension = declared_type.unpacked_dimensions.front();
     const auto boundary = [&](
                                const std::optional<std::int64_t> value,
@@ -8387,15 +8696,10 @@ Lowerer::hir_systemverilog_event_array_selection(
         || *right_value > std::numeric_limits<std::int32_t>::max()) {
         return std::nullopt;
     }
-    HirSystemVerilogEventArraySelection result;
-    result.index_expression = source.operands.back();
     const auto index = *left_value;
     const auto final = *right_value;
     const auto count = static_cast<std::uint64_t>(
         index <= final ? final - index + 1 : index - final + 1);
-    if (count > maximum_compiled_event_array_elements) {
-        return std::nullopt;
-    }
     result.elements.reserve(static_cast<std::size_t>(count));
     const auto step = index <= final ? std::int64_t { 1 }
                                      : std::int64_t { -1 };
@@ -8425,34 +8729,6 @@ Lowerer::hir_systemverilog_event_array_selection(
     }
     (void)process_scope;
     return result;
-}
-
-std::optional<PackedLogic4>
-Lowerer::hir_systemverilog_event_array_index_value(
-    const std::int32_t index,
-    const semantic::ExpressionId index_expression,
-    const std::size_t width) const
-{
-    if (width == 0U) {
-        return std::nullopt;
-    }
-    const bool signed_index = hir_expression_signed(index_expression);
-    if (!signed_index && index < 0) {
-        return std::nullopt;
-    }
-    if (width < 64U) {
-        const auto limit = std::int64_t { 1 } << (width - 1U);
-        if (signed_index) {
-            if (static_cast<std::int64_t>(index) < -limit
-                || static_cast<std::int64_t>(index) >= limit) {
-                return std::nullopt;
-            }
-        } else if (static_cast<std::uint64_t>(index)
-            >= (std::uint64_t { 1 } << width)) {
-            return std::nullopt;
-        }
-    }
-    return integer_value(index, width);
 }
 
 std::optional<SignalId> Lowerer::hir_systemverilog_event_signal(
@@ -8750,12 +9026,11 @@ bool Lowerer::hir_virtual_interface_instance_matches(
         return true;
     }
     const auto& hir = specialized_hir_unit_->design().systemverilog_hir;
-    const auto unit = std::ranges::find_if(hir.units(),
-        [&](const semantic::sv::Unit& candidate) {
-            return candidate.kind == semantic::sv::UnitKind::interface
-                && candidate.name == virtual_type.interface_type;
-        });
-    if (unit == hir.units().end()) {
+    // The definition the link step resolved the type to (3.13, 33).
+    const auto* const unit = virtual_interface_definition(
+        specialized_hir_unit_->design(), specialized_hir_unit_->unit(),
+        virtual_type);
+    if (unit == nullptr) {
         return true;
     }
     std::size_t ordinal { };
@@ -9219,8 +9494,9 @@ Lowerer::hir_runtime_binding(
             // An automatic or callable event holds the handle of its
             // event object (IEEE 1800-2017 15.5, 6.21).
             const bool event_handle = source.type
-                && source.type->target.spelling == "event"
-                && source.type->unpacked_dimensions.empty();
+                && source.type->unpacked_dimensions.empty()
+                && !source.type->container_form
+                && hir_type_is_event(*source.type, source.scope);
             if (event_handle) {
                 width = 64U;
             }
@@ -9925,35 +10201,30 @@ Lowerer::hir_container_object_binding(
             return std::nullopt;
         }
         const auto& text = path ? *path : expression->systemverilog->text;
-        for (auto lexical = hierarchy_;;) {
-            const auto candidate
-                = lexical.empty() ? text : lexical + "." + text;
-            if (const auto found = design_.container_by_name_.find(candidate);
-                found != design_.container_by_name_.end()) {
+        std::optional<HirContainerObjectBinding> binding;
+        const bool found_container = hir_walk_hierarchical_name(text,
+            [&](const std::string& candidate) {
+                const auto found = design_.container_by_name_.find(candidate);
+                if (found == design_.container_by_name_.end()) {
+                    return false;
+                }
                 const auto info = std::ranges::find_if(
                     design_.container_object_info_.rbegin(),
                     design_.container_object_info_.rend(),
                     [&](const ContainerObjectInfo& candidate_info) {
                         return candidate_info.id == found->second;
                     });
-                if (info == design_.container_object_info_.rend()) {
-                    return std::nullopt;
+                if (info != design_.container_object_info_.rend()) {
+                    hierarchical_reference_used_ = true;
+                    binding = HirContainerObjectBinding {
+                        { }, candidate, found->second, std::nullopt,
+                        &info->type, false,
+                    };
                 }
-                hierarchical_reference_used_ = true;
-                return HirContainerObjectBinding {
-                    { }, candidate, found->second, std::nullopt,
-                    &info->type, false,
-                };
-            }
-            const auto separator = lexical.rfind('.');
-            if (separator == std::string::npos) {
-                if (!lexical.empty()) {
-                    lexical.clear();
-                    continue;
-                }
-                break;
-            }
-            lexical.resize(separator);
+                return true;
+            });
+        if (found_container) {
+            return binding;
         }
         // The named instance may be elaborated later: lower the statement
         // again in the second pass (IEEE 1800-2017 23.6).
@@ -10004,6 +10275,27 @@ Lowerer::hir_container_object_binding(
         return binding;
     }
     return hierarchical_binding();
+}
+
+std::optional<semantic::DeclarationId> Lowerer::hir_function_result_variable(
+    const std::string_view name, const semantic::ScopeId scope) const
+{
+    if (specialized_hir_unit_ == nullptr || !active_hir_callable_
+        || *active_hir_callable_ >= hir_callable_frames_.size()) {
+        return std::nullopt;
+    }
+    const auto& frame = hir_callable_frames_[*active_hir_callable_];
+    if (!frame.container_result) {
+        return std::nullopt;
+    }
+    const auto found = hir_resolver().resolve_systemverilog(name, scope,
+        [](const semantic::CompiledDeclarationView& candidate) {
+            return candidate.systemverilog != nullptr
+                && candidate.systemverilog->callable
+                && candidate.systemverilog->callable->function;
+        },
+        false).unique();
+    return found && *found == frame.declaration ? found : std::nullopt;
 }
 
 std::optional<Lowerer::HirContainerObjectBinding>
@@ -11178,6 +11470,7 @@ Lowerer::hir_container_aggregate_selection(
                 : std::nullopt;
             if (!named || named->systemverilog == nullptr
                 || named->systemverilog->name != structure_name) {
+                // The structure is a variable or a net (6.7.1, 6.7.2).
                 const semantic::CompiledDeclarationPredicate object
                     = [](const semantic::CompiledDeclarationView& candidate) {
                           return candidate.systemverilog != nullptr
@@ -11186,13 +11479,22 @@ Lowerer::hir_container_aggregate_selection(
                                       == semantic::sv::DeclarationForm::
                                           variable
                                   || candidate.systemverilog->form
-                                      == semantic::sv::DeclarationForm::port);
+                                      == semantic::sv::DeclarationForm::port
+                                  || candidate.systemverilog->form
+                                      == semantic::sv::DeclarationForm::net);
                       };
                 declaration = hir_resolver()
                                   .resolve_systemverilog(structure_name,
                                       base_expression->systemverilog->scope,
                                       object, false)
                                   .unique();
+                // Or the implicit result variable of the function being
+                // lowered (IEEE 1800-2023 13.4.1).
+                if (!declaration) {
+                    declaration = hir_function_result_variable(
+                        structure_name,
+                        base_expression->systemverilog->scope);
+                }
             }
             const auto object = declaration
                 ? hir_container_object_binding_for_declaration(*declaration)
@@ -12192,7 +12494,7 @@ Lowerer::hir_systemverilog_container_query(
                 || declaration->systemverilog->form
                     == semantic::sv::DeclarationForm::local_parameter)
             && declared_type && !declared_type->packed_range
-            && (declared_type->target.spelling == "implicit"
+            && (declared_type->implicit
                 || declared_type->target.spelling.empty());
         const auto type_use_scope
             = named_type_declaration && receiver_expression
@@ -12855,6 +13157,23 @@ bool Lowerer::hir_expression_is_string(
             path && path->string_leaf) {
             return true;
         }
+        // A string element of a container member of a structure or object.
+        if (const auto path = hir_sv_value_path(expression_id, true);
+            path && path->string_element) {
+            return true;
+        }
+        const auto& element = *expression->systemverilog;
+        constexpr std::string_view element_prefix { "@sv-container-index:" };
+        if (element.kind == semantic::sv::ExpressionKind::call
+            && element.text.starts_with(element_prefix)
+            && element.operands.size() == 2U) {
+            const auto type = hir_class_value_container_type(
+                std::string_view { element.text }.substr(
+                    element_prefix.size()));
+            if (type && type->element_kind == ContainerElementKind::String) {
+                return true;
+            }
+        }
     }
     if (expression->vhdl != nullptr) {
         const auto& source = *expression->vhdl;
@@ -13272,7 +13591,10 @@ bool Lowerer::hir_expression_is_string(
         return true;
     }
     if (source.kind == semantic::sv::ExpressionKind::class_method_call
-        || source.kind == semantic::sv::ExpressionKind::class_static_method_call) {
+        || source.kind == semantic::sv::ExpressionKind::class_static_method_call
+        || (source.kind == semantic::sv::ExpressionKind::call
+                && source.text.starts_with('.')
+                && hir_type_parameter_class_method(source))) {
         const auto profile = hir_class_method_profile(
             expression_id, process_scope);
         return profile && profile->string_result;
@@ -13321,7 +13643,7 @@ bool Lowerer::hir_expression_is_string(
             *declaration);
         if (record && record->systemverilog != nullptr
             && record->systemverilog->type
-            && record->systemverilog->type->target.spelling != "implicit") {
+            && !record->systemverilog->type->implicit) {
             return record->systemverilog->type->target.spelling == "string"
                 || record->systemverilog->type->value_form
                     == semantic::sv::TypeForm::string;
@@ -13421,6 +13743,14 @@ bool Lowerer::can_lower_hir_string_expression(
     const semantic::vhdl::SubtypeIndication* const contextual_subtype) const
 {
     if (hir_vhdl_access_string_whole_slice(expression)) {
+        return true;
+    }
+    // A string local variable of a concurrent-property monitor (IEEE
+    // 1800-2023 16.10; lower_hir_sva_string_local).
+    if (const auto record = specialized_hir_unit_->find_expression(expression);
+        record && record->systemverilog != nullptr
+        && record->systemverilog->kind == semantic::sv::ExpressionKind::call
+        && record->systemverilog->text == "$__fsim_sva_local") {
         return true;
     }
     // An allocator or null as a STD.TEXTIO.LINE value (16.4).
@@ -17327,6 +17657,27 @@ std::optional<frontend::ValueDomain> Lowerer::hir_expression_domain(
     if (const auto element = hir_container_element_binding(expression_id)) {
         return element->domain;
     }
+    // An alias of an external name (IEEE 1076-2019 6.6.3, 8.7) has the
+    // domain of the subtype indication of the external name.
+    if (const auto target = hir_vhdl_alias_target_expression(expression_id)) {
+        if (*target != expression_id) {
+            if (const auto external = hir_vhdl_external_subtype(*target)) {
+                if (const auto domain = vhdl_value_domain(external->domain);
+                    domain != frontend::ValueDomain::Unknown) {
+                    return domain;
+                }
+            }
+            if (const auto domain = hir_expression_domain(*target, process_scope)) {
+                return domain;
+            }
+        }
+    }
+    if (const auto external = hir_vhdl_external_subtype(expression_id)) {
+        if (const auto domain = vhdl_value_domain(external->domain);
+            domain != frontend::ValueDomain::Unknown) {
+            return domain;
+        }
+    }
     if (const auto selected = hir_referenced_declaration(expression_id)) {
         const auto declaration = specialized_hir_unit_->find_declaration(
             *selected);
@@ -17400,8 +17751,7 @@ std::optional<frontend::ValueDomain> Lowerer::hir_expression_domain(
                 || hir_constant_integer(expression_id))) {
             if (declaration && declaration->systemverilog != nullptr
                 && declaration->systemverilog->type
-                && declaration->systemverilog->type->target.spelling
-                    != "implicit"
+                && !declaration->systemverilog->type->implicit
                 && hir_systemverilog_type_width(
                     *declaration->systemverilog->type,
                     declaration->systemverilog->scope)) {
@@ -17413,8 +17763,7 @@ std::optional<frontend::ValueDomain> Lowerer::hir_expression_domain(
             if (const auto actual = hir_parameter_actual_constant(*selected);
                 actual && (!declaration || declaration->systemverilog == nullptr
                     || !declaration->systemverilog->type
-                    || declaration->systemverilog->type->target.spelling
-                        == "implicit")) {
+                    || declaration->systemverilog->type->implicit)) {
                 return actual->domain;
             }
             if (const auto inferred = hir_expression_domain(
@@ -17569,7 +17918,10 @@ std::optional<frontend::ValueDomain> Lowerer::hir_expression_domain(
         if (source.kind
                 == semantic::sv::ExpressionKind::class_method_call
             || source.kind
-                == semantic::sv::ExpressionKind::class_static_method_call) {
+                == semantic::sv::ExpressionKind::class_static_method_call
+            || (source.kind == semantic::sv::ExpressionKind::call
+                && source.text.starts_with('.')
+                && hir_type_parameter_class_method(source))) {
             const auto profile = hir_class_method_profile(
                 expression_id, process_scope);
             return profile ? std::optional { profile->result_domain }
@@ -18153,6 +18505,34 @@ bool Lowerer::hir_vhdl_expression_is_real(
     return subtype && hir_vhdl_subtype_is_real(*subtype);
 }
 
+bool Lowerer::hir_type_is_event(const semantic::sv::TypeReference& type,
+    const semantic::ScopeId scope) const
+{
+    if (type.target.spelling == "event") {
+        return true;
+    }
+    if (specialized_hir_unit_ == nullptr || type.target.spelling.empty()) {
+        return false;
+    }
+    const auto underlying
+        = hir_resolver().underlying_systemverilog_type(type, scope);
+    return underlying && underlying->target.spelling == "event";
+}
+
+bool Lowerer::hir_class_property_is_event(
+    const semantic::sv::ClassProperty& property) const
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return false;
+    }
+    const auto declaration
+        = specialized_hir_unit_->find_declaration(property.declaration);
+    return hir_type_is_event(property.type,
+        declaration && declaration->systemverilog != nullptr
+            ? declaration->systemverilog->scope
+            : specialized_hir_unit_->scope());
+}
+
 frontend::SystemVerilogScalarKind Lowerer::hir_declared_type_scalar_kind(
     const semantic::sv::TypeReference& type, const semantic::ScopeId scope) const
 {
@@ -18161,7 +18541,7 @@ frontend::SystemVerilogScalarKind Lowerer::hir_declared_type_scalar_kind(
     const auto direct = frontend::systemverilog_scalar_kind(spelling);
     if (direct != Kind::None || specialized_hir_unit_ == nullptr
         || type.container_form || !type.packed_dimensions.empty()
-        || type.packed_range || spelling.empty() || spelling == "implicit"
+        || type.packed_range || spelling.empty() || type.implicit
         || spelling == "logic" || spelling == "bit" || spelling == "reg"
         || spelling == "int" || spelling == "integer" || spelling == "string") {
         return direct;
@@ -18199,6 +18579,20 @@ frontend::SystemVerilogScalarKind Lowerer::hir_systemverilog_scalar_kind(
         return Kind::None;
     }
     const auto& source = *expression->systemverilog;
+    // A local variable read of a concurrent-property monitor has its
+    // local's kind (IEEE 1800-2023 16.10; lower_hir_sva_call).
+    if (source.kind == semantic::sv::ExpressionKind::call
+        && source.text == "$__fsim_sva_local" && source.operands.size() == 3U) {
+        const auto site = hir_constant_integer(source.operands[0]);
+        const auto index = hir_constant_integer(source.operands[2]);
+        const auto found = site && *site >= 0
+            ? sva_local_kinds_.find(static_cast<std::uint32_t>(*site))
+            : sva_local_kinds_.end();
+        if (found != sva_local_kinds_.end() && index && *index >= 0
+            && static_cast<std::size_t>(*index) < found->second.size()) {
+            return found->second[static_cast<std::size_t>(*index)];
+        }
+    }
     // A real cast has its target's scalar kind (6.24.1).
     if (source.kind == semantic::sv::ExpressionKind::call
         && semantic::sv::systemverilog_cast_value_operand(source)) {
@@ -18223,7 +18617,7 @@ frontend::SystemVerilogScalarKind Lowerer::hir_systemverilog_scalar_kind(
                     == semantic::sv::DeclarationForm::local_parameter)
             && record.initializer && record.initializer != expression_id
             && (!record.type
-                || (record.type->target.spelling == "implicit"
+                || (record.type->implicit
                     && !record.type->packed_range))) {
             // A user function call has its declared return type.
             const auto initializer = specialized_hir_unit_->find_expression(
@@ -18267,7 +18661,7 @@ frontend::SystemVerilogScalarKind Lowerer::hir_systemverilog_scalar_kind(
         const auto kind
             = frontend::systemverilog_scalar_kind(record.type->target.spelling);
         const auto& spelling = record.type->target.spelling;
-        if (kind != Kind::None || spelling.empty() || spelling == "implicit"
+        if (kind != Kind::None || spelling.empty() || record.type->implicit
             || spelling == "logic" || spelling == "bit" || spelling == "reg"
             || spelling == "int" || spelling == "integer"
             || spelling == "string") {
@@ -18489,11 +18883,17 @@ frontend::SystemVerilogScalarKind Lowerer::hir_systemverilog_scalar_kind(
             return kind;
         }
     }
-    if (!source.nominal_type.empty()) {
-        if (const auto kind
-            = frontend::systemverilog_scalar_kind(source.nominal_type);
-            kind != Kind::None) {
-            return kind;
+    // A name the frontend could not bind (a package variable or parameter
+    // named from another unit, `pa::r`, or imported) is bound by the HIR
+    // resolver; its declaration gives the scalar kind (IEEE 1800-2023
+    // 6.12, 26.3).
+    if (source.kind == semantic::sv::ExpressionKind::name
+        && !(source.referenced_name && source.referenced_name->selected)) {
+        if (const auto declaration = hir_referenced_declaration(expression_id)) {
+            if (const auto kind = declaration_kind(*declaration);
+                kind != Kind::None) {
+                return kind;
+            }
         }
     }
     return contextual_kind;
@@ -18514,7 +18914,7 @@ Lowerer::hir_systemverilog_parameter_type(
     if ((source.form != semantic::sv::DeclarationForm::parameter
             && source.form != semantic::sv::DeclarationForm::local_parameter)
         || !source.type
-        || (source.type->target.spelling == "implicit"
+        || (source.type->implicit
             && !source.type->packed_range)
         || source.type->container_form
         || source.type->value_form == semantic::sv::TypeForm::string
@@ -20741,6 +21141,9 @@ std::optional<std::size_t> Lowerer::hir_expression_width(
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
     }
+    if (const auto selected = hir_class_property_select_width(expression_id)) {
+        return selected;
+    }
     std::optional<HirVhdlQueryKey> key;
     if (vhdl_array_context == nullptr
         && hir_captured_update_indices_.empty()) {
@@ -21802,8 +22205,7 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
             // 6.20.2).
             if (declaration && declaration->systemverilog != nullptr
                 && declaration->systemverilog->type
-                && (declaration->systemverilog->type->target.spelling
-                        != "implicit"
+                && (!declaration->systemverilog->type->implicit
                     || declaration->systemverilog->type->packed_range)) {
                 if (const auto declared = hir_systemverilog_type_width(
                         *declaration->systemverilog->type,
@@ -22004,7 +22406,10 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
         if (source.kind
                 == semantic::sv::ExpressionKind::class_method_call
             || source.kind
-                == semantic::sv::ExpressionKind::class_static_method_call) {
+                == semantic::sv::ExpressionKind::class_static_method_call
+            || (source.kind == semantic::sv::ExpressionKind::call
+                && source.text.starts_with('.')
+                && hir_type_parameter_class_method(source))) {
             const auto profile = hir_class_method_profile(
                 expression_id, process_scope);
             return profile ? std::optional { profile->result_width }
@@ -29505,6 +29910,14 @@ bool Lowerer::can_lower_hir_expression(
         const auto& source = *expression->systemverilog;
         operands = source.operands;
         operation = source.text;
+        if (source.kind == semantic::sv::ExpressionKind::index
+            && source.text == "index.triggered" && source.operands.size() == 2U) {
+            // An element of an event array (7.4, 15.5.3); the index is an
+            // ordinary expression.
+            supported = expression_supported(source.operands[1]);
+            erase();
+            return supported;
+        }
         if (source.kind == semantic::sv::ExpressionKind::name
             && source.text.ends_with(".triggered")) {
             supported = hir_systemverilog_event_signal(
@@ -29758,6 +30171,13 @@ bool Lowerer::can_lower_hir_expression(
             return supported;
         }
         if (source.kind == semantic::sv::ExpressionKind::call
+            && source.text == "$__fsim_current") {
+            supported = source.operands.size() == 1U
+                && expression_supported(source.operands.front());
+            erase();
+            return supported;
+        }
+        if (source.kind == semantic::sv::ExpressionKind::call
             && source.text == "$__fsim_assertion_control") {
             // Constant operands: two integers and a string literal.
             erase();
@@ -29770,13 +30190,22 @@ bool Lowerer::can_lower_hir_expression(
                 || source.text == "$__fsim_sva_local"
                 || source.text == "$__fsim_sva_answer"
                 || source.text == "$__fsim_sva_call")) {
-            // The plan operand is a string literal; the others are packed.
+            // The plan operand is a string literal; the others are packed,
+            // but for a string local's witness and value (16.10).
             supported = true;
             for (std::size_t index = 0; index < source.operands.size();
                 ++index) {
+                const auto operand = source.operands[index];
                 if (index != 1U || source.text != "$__fsim_sva_tick") {
                     supported = supported
-                        && expression_supported(source.operands[index]);
+                        && (expression_supported(operand)
+                            || (index >= 2U
+                                && (source.text == "$__fsim_sva_tick"
+                                    || source.text == "$__fsim_sva_answer")
+                                && hir_expression_is_string(
+                                    operand, process_scope)
+                                && can_lower_hir_string_expression(
+                                    operand, process_scope)));
                 }
             }
             erase();
@@ -30024,7 +30453,10 @@ bool Lowerer::can_lower_hir_expression(
         if (source.kind
                 == semantic::sv::ExpressionKind::class_method_call
             || source.kind
-                == semantic::sv::ExpressionKind::class_static_method_call) {
+                == semantic::sv::ExpressionKind::class_static_method_call
+            || (source.kind == semantic::sv::ExpressionKind::call
+                && source.text.starts_with('.')
+                && hir_type_parameter_class_method(source))) {
             supported = can_lower_hir_class_method_call(
                 expression_id, process_scope, visiting);
             erase();

@@ -1,19 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 #include "fsim/elaboration/elaborator.hpp"
-#include "fsim/frontend/frontend.hpp"
+#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/parser.hpp"
+#include "fsim/frontend/token.hpp"
+#include "fsim/semantic/compiled_design.hpp"
 
 #include <algorithm>
-#include <array>
 #include <cassert>
-#include <iostream>
-#include <iterator>
-#include <limits>
 #include <optional>
 #include <string_view>
 #include <utility>
-#include <variant>
 #include <vector>
+#include <cstdint>
+#include <span>
+#include <string>
 
 namespace fsim::tests::elaboration {
 

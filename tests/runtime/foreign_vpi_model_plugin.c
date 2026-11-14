@@ -643,6 +643,21 @@ static void late_checks(void)
         text(vpi_get_str(vpiType, object)),
         vpi_handle_by_name("top.shr.s2", NULL) != NULL,
         vpi_handle_by_name("top.shr.s1", NULL) != NULL);
+    // Its statements are the selected branch's (27.5).
+    {
+        vpiHandle const statements
+            = object != NULL ? vpi_iterate(vpiStmt, object) : NULL;
+        vpiHandle const statement
+            = statements != NULL ? vpi_scan(statements) : NULL;
+        vpi_printf("#c shared else block stmt=%s lhs=%s\n",
+            statement != NULL ? text(vpi_get_str(vpiType, statement)) : "-",
+            statement != NULL
+                ? text(vpi_get_str(vpiName, vpi_handle(vpiLhs, statement)))
+                : "-");
+        if (statement != NULL) {
+            vpi_free_object(statements);
+        }
+    }
 }
 
 static PLI_INT32 start(p_cb_data data)

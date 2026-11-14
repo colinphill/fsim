@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/semantic/design_ir.hpp"
+#include "fsim/elaboration/elaborator.hpp"
 #include "fsim/runtime/vcd_writer.hpp"
 
 #include <algorithm>

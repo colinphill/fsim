@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/semantic/vhdl_hir.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -175,7 +177,7 @@ int main() {
     output << R"(
 library ieee;
 use ieee.float_pkg.all;
-entity float_app is
+library ieee; use ieee.std_logic_1164.all; entity float_app is
   port (seed : in float(8 downto -23));
 end entity;
 library ieee;

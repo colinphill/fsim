@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fsim/app/sdf_vital_archive.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 
 #include <array>
 #include <cstddef>

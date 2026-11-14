@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/frontend/class_specialization.hpp"
+#include "fsim/frontend/systemverilog_scalars.hpp"
 
 #include <algorithm>
 #include <array>
@@ -169,6 +170,30 @@ void diagnose(
     return std::nullopt;
   }
   return fit_width(static_cast<std::int64_t>(value), width, is_signed);
+}
+
+// Whether a class value parameter is declared real (IEEE 1800-2023 6.20.2),
+// by the scalar kind of its type after typedef resolution (6.18), or of the
+// type the class's own type parameter is bound to (8.25).
+[[nodiscard]] bool real_formal(const ParameterDeclaration& formal,
+    const TypeEnvironment& types,
+    const std::map<std::string, Type>& aliases) {
+  const Type* current = &formal.type;
+  std::set<std::string> visited;
+  while (current != nullptr) {
+    if (is_real_scalar_kind(current->systemverilog_scalar)) return true;
+    const auto& name = current->named_type;
+    if (name.empty() || !visited.insert(name).second) return false;
+    if (const auto bound = types.find(name); bound != types.end()) {
+      current = &bound->second;
+    } else if (const auto alias = aliases.find(name);
+               alias != aliases.end()) {
+      current = &alias->second;
+    } else {
+      return false;
+    }
+  }
+  return false;
 }
 
 [[nodiscard]] std::optional<std::int64_t> evaluate(
@@ -907,24 +932,15 @@ specialize_systemverilog_classes(const ParsedDesign& design) {
     std::map<std::string, std::uint32_t> profiles;
     std::map<std::string, std::uint32_t> methods;
   };
-  std::map<std::string, SlotTable> slot_tables;
-  std::set<std::string> active_slot_tables;
-  std::function<void(const SystemVerilogClassDeclaration&)> build_slots;
-  build_slots = [&](const SystemVerilogClassDeclaration& declaration) {
-    if (slot_tables.contains(declaration.canonical_identity)) return;
-    if (!active_slot_tables.insert(declaration.canonical_identity).second) {
-      return;
-    }
-    SlotTable table;
-    if (declaration.base
-        && !declaration.base->declaration_identity.empty()) {
-      if (const auto base = declarations.find(
-              declaration.base->declaration_identity);
-          base != declarations.end()) {
-        build_slots(*base->second);
-        table = slot_tables[base->first];
-      }
-    }
+  // The virtual-method slots of a specialization: those of the
+  // specialization it extends, and one more for each virtual method its
+  // declaration adds (IEEE 1800-2023 8.20). The slots follow the base the
+  // specialization extends (8.25): a class that extends a type parameter
+  // (`class P #(type IF) extends IF`) inherits the actual's methods, so its
+  // own take the slots after them.
+  std::map<std::string, SlotTable> specialization_slot_tables;
+  const auto extend_slots = [&](SlotTable& table,
+                                const SystemVerilogClassDeclaration& declaration) {
     std::uint32_t next_slot{};
     for (const auto& [profile, slot] : table.profiles) {
       (void)profile;
@@ -954,13 +970,7 @@ specialize_systemverilog_classes(const ParsedDesign& design) {
         ++next_slot;
       }
     }
-    active_slot_tables.erase(declaration.canonical_identity);
-    slot_tables.emplace(declaration.canonical_identity, std::move(table));
   };
-  for (const auto& [identity, declaration] : declarations) {
-    (void)identity;
-    build_slots(*declaration);
-  }
 
   using Actual = SystemVerilogClassTypeActual;
   struct PendingSpecialization {
@@ -1124,14 +1134,17 @@ specialize_systemverilog_classes(const ParsedDesign& design) {
       } else {
         const bool string_parameter =
             formal.type.domain == ValueDomain::String;
-        const auto value = string_parameter
+        const bool real_parameter =
+            real_formal(formal, types, package_aliases);
+        const auto value = string_parameter || real_parameter
             ? std::optional<std::int64_t>{}
             : evaluate(actual.value, values);
         const auto string_value = string_parameter
             ? evaluate_string(actual.value, string_values)
             : std::optional<std::string>{};
         if (!value && !string_value
-            && actual.value.kind == ExpressionKind::Aggregate) {
+            && (actual.value.kind == ExpressionKind::Aggregate
+                || real_parameter)) {
           // An assignment pattern takes its layout from the formal's type:
           // the semantic class specialization evaluates it (IEEE 1800-2023
           // 8.25, 10.9).
@@ -1199,7 +1212,9 @@ specialize_systemverilog_classes(const ParsedDesign& design) {
             formal.type.domain == ValueDomain::String;
         if (!bound_values.contains(formal.name)
             && !string_values.contains(formal.name)) {
-          const auto value = string_parameter
+          const bool real_parameter =
+              real_formal(formal, types, package_aliases);
+          const auto value = string_parameter || real_parameter
               ? std::optional<std::int64_t>{}
               : evaluate(formal.default_value, values);
           const auto string_value = string_parameter
@@ -1207,7 +1222,10 @@ specialize_systemverilog_classes(const ParsedDesign& design) {
                     formal.default_value, string_values)
               : std::optional<std::string>{};
           if (!value && !string_value
-              && formal.default_value.kind == ExpressionKind::Aggregate) {
+              && (formal.default_value.kind == ExpressionKind::Aggregate
+                  || real_parameter)) {
+            // An assignment pattern or a real value is folded by the
+            // semantic class specialization (IEEE 1800-2023 8.25, 6.20.2).
             deferred_value = true;
             continue;
           }
@@ -1645,6 +1663,14 @@ specialize_systemverilog_classes(const ParsedDesign& design) {
       }
       retained.properties.push_back(std::move(layout));
     }
+    SlotTable slots;
+    if (const auto base_slots = specialization_slot_tables.find(
+            retained.base_specialization_identity);
+        !retained.base_specialization_identity.empty()
+        && base_slots != specialization_slot_tables.end()) {
+      slots.profiles = base_slots->second.profiles;
+    }
+    extend_slots(slots, declaration);
     for (const auto& method : declaration.methods) {
       struct PriorAlias {
         std::string name;
@@ -1739,15 +1765,10 @@ specialize_systemverilog_classes(const ParsedDesign& design) {
           };
       specialize_statement_types(
           specialize_statement_types, profile.statements);
-      if (const auto table = slot_tables.find(
-              declaration.canonical_identity);
-          table != slot_tables.end()) {
-        if (const auto slot = table->second.methods.find(
-                method.canonical_identity);
-            slot != table->second.methods.end()) {
-          profile.virtual_slot = slot->second;
-          profile.is_virtual = true;
-        }
+      if (const auto slot = slots.methods.find(method.canonical_identity);
+          slot != slots.methods.end()) {
+        profile.virtual_slot = slot->second;
+        profile.is_virtual = true;
       }
       std::ostringstream profile_identity;
       profile_identity << static_cast<unsigned>(method.kind)
@@ -1794,6 +1815,8 @@ specialize_systemverilog_classes(const ParsedDesign& design) {
     const auto index = result.specializations.size();
     materialized.emplace(specialization_identity, index);
     result.specializations.push_back(std::move(retained));
+    specialization_slot_tables.emplace(
+        specialization_identity, std::move(slots));
     return specialization_identity;
   };
 

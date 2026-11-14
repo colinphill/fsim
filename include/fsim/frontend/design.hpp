@@ -2,6 +2,19 @@
 #pragma once
 
 #include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/source.hpp"
+#include "fsim/frontend/systemverilog_scalars.hpp"
+#include "fsim/frontend/token.hpp"
+#include "fsim/support/rare_vector.hpp"
+#include "fsim/support/uvm_role.hpp"
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 namespace fsim::frontend {
 
@@ -402,6 +415,9 @@ struct SystemVerilogClassDeclaration {
     bool is_forward_declaration { };
     std::optional<std::string> end_name;
     SourceSpan span;
+    // The class's role in the governed UVM library (none outside it),
+    // recorded when the library package is parsed.
+    support::UvmRole uvm_role { };
 };
 
 /// Typed source-level VHDL procedure.
@@ -683,6 +699,14 @@ struct GenerateRegion {
     std::vector<ParameterOverride> block_generic_map;
     std::vector<SignalDeclaration> block_ports;
     std::vector<PortConnection> block_port_map;
+    // The loop generate of a gate instance array whose bounds are known only
+    // at elaboration (IEEE 1800-2023 28.3.6): one primitive per iteration,
+    // published as an element of the array named `then_scope`, in the scope
+    // that holds the array; the block is no scope of the design.
+    bool gate_array { };
+    // The declared range of that array, left and right (28.3.6).
+    Expression gate_array_left;
+    Expression gate_array_right;
     SourceSpan span;
 };
 
@@ -1009,6 +1033,13 @@ enum class SystemVerilogAssertionOperator : std::uint8_t {
 struct SystemVerilogAssertionTreeOperand {
     std::int32_t node { -1 };
     std::optional<Expression> expression;
+    // The match items of a sequence operand written `(s, item, ...)`, in
+    // order (IEEE 1800-2023 16.10, 16.11, 37.54 vpiMatchItem): each one an
+    // assignment, an increment or decrement, or a subroutine call.
+    std::vector<Statement> match_items;
+    // The strength `strong(b)` or `weak(b)` gives a boolean leaf (IEEE
+    // 1800-2023 16.12.2; 37.52 detail 3 vpiOpStrong of a sequence expr).
+    std::optional<bool> strong;
 };
 
 /// One operation or instance of a property or sequence expression (IEEE
@@ -1091,6 +1122,11 @@ struct SystemVerilogAssertionDeclaration {
     // containing design-unit scope before ordinary assertion resolution.
     std::vector<SystemVerilogAssertionDeclaration> checker_declarations;
     std::vector<SystemVerilogConcurrentAssertion> checker_assertions;
+    // The checker instance this declaration was specialized for (IEEE
+    // 1800-2023 17.3) and its name as written in the checker; both empty
+    // for a declaration written in its scope.
+    std::string checker_instance;
+    std::string checker_name;
     // A checker's variable declarations and procedures as source tokens,
     // and the variables they declare (IEEE 1800-2017 17.7, 17.5): each
     // instance re-parses them with its actuals and renamed variables.
@@ -1126,6 +1162,11 @@ struct SystemVerilogConcurrentAssertion {
     };
     std::string label;
     SourceSpan label_span;
+    // A statement a checker instance expanded (IEEE 1800-2023 17.2): the
+    // instance and the statement's name in the checker; `label` is then
+    // `instance.name`.
+    std::string checker_instance;
+    std::string checker_name;
     std::vector<Token> property_tokens;
     // The property instance the directive names (37.50 vpiProperty): one
     // instance node with the actuals as written; empty for an inline
@@ -1778,6 +1819,9 @@ struct DesignUnit {
     std::string time_precision;
     // Verilog/SystemVerilog compilation-directive state at unit declaration.
     std::string default_nettype;
+    // The argument of `default_decay_time in effect at the unit (IEEE
+    // 1800-2023 E.2): its spelling, `infinite`, or empty when none.
+    std::string default_decay_time;
     bool is_cell { };
     // The generate blocks named by the implicit-name rule (IEEE 1800-2023
     // 27.6), as '.'-separated block paths from the unit.
@@ -1815,6 +1859,9 @@ struct DesignUnit {
     SourceSpan systemverilog_default_clocking_span;
     // The condition of `default disable iff` (16.15), empty when absent.
     std::vector<Token> systemverilog_default_disable_tokens;
+    // The same condition as an expression (37.5 vpiDefaultDisableIff); empty
+    // when absent or not an ordinary expression.
+    std::optional<Expression> systemverilog_default_disable_condition;
     std::vector<SystemVerilogAssertionDeclaration>
         systemverilog_assertion_declarations;
     std::vector<SystemVerilogConcurrentAssertion>
@@ -1880,6 +1927,11 @@ struct DesignUnit {
     // optional value is a port slot with no internal port expression.
     std::optional<std::vector<std::optional<std::string>>>
         systemverilog_port_slots;
+    // `member` for the package `uvm_pkg` of the governed UVM library, whose
+    // package-level declarations with a role of their own are listed by
+    // declared name (record_uvm_library_roles); none otherwise.
+    support::UvmRole uvm_role { };
+    std::vector<support::UvmDeclarationRole> uvm_declaration_roles;
 };
 
 struct ParsedDesign {

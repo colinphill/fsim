@@ -3,7 +3,6 @@
 
 #include "fsim/runtime/scheduler.hpp"
 
-#include <compare>
 #include <cstddef>
 #include <cstdint>
 #include <functional>

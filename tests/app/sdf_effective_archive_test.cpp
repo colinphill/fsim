@@ -2,16 +2,20 @@
 
 #include "fsim/app/sdf_effective_archive.hpp"
 #include "fsim/support/sha256.hpp"
+#include "fsim/app/sdf_value_policy.hpp"
+#include "fsim/frontend/diagnostic.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <iostream>
-#include <ranges>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
+#include <cstddef>
+#include <exception>
+#include <utility>
 
 namespace {
 

@@ -365,16 +365,16 @@ bool validate_uvm_environment(const CompilationWorkspace& checked,
     if (release == project::SystemVerilogUvmRelease::none) {
         return true;
     }
-    const auto has_class = [&](const std::string_view suffix) {
+    const auto has_class = [&](const support::UvmRole role) {
         return std::ranges::any_of(
             checked.compiled_systemverilog_class_specializations,
             [&](const auto& specialization) {
-                return specialization.declaration_identity.ends_with(suffix);
+                return specialization.uvm_role == role;
             });
     };
     const auto compatibility = project::systemverilog_uvm_compatibility(release);
-    if (!has_class("::uvm_object")
-        || has_class("::uvm_policy") != compatibility.ieee_policy_classes) {
+    if (!has_class(support::UvmRole::object)
+        || has_class(support::UvmRole::policy) != compatibility.ieee_policy_classes) {
         diagnostics.error("FSIM-UVM-VERSION-002",
             "governed UVM workspace release does not match its linked "
             "compiled-HIR uvm_pkg API surface");

@@ -2,6 +2,13 @@
 #include "application_systemverilog_hir_internal.hpp"
 #include "../elaboration/hir_output_conversion.hpp"
 #include "fsim/semantic/systemverilog_type_state.hpp"
+#include "application_internal.hpp"
+#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/source.hpp"
+#include "fsim/frontend/token.hpp"
+#include "fsim/semantic/model.hpp"
+#include "fsim/semantic/systemverilog_hir.hpp"
 
 #include <algorithm>
 #include <concepts>
@@ -13,6 +20,12 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+#include <cstddef>
+#include <iterator>
+#include <map>
+#include <set>
+#include <stdexcept>
+#include <string>
 
 namespace fsim::app::application_detail {
 namespace {
@@ -2023,8 +2036,11 @@ namespace {
             }
             output.output_trailing_text = input.output_trailing_text;
             for (const auto& argument : input.output_arguments) {
-                if (const auto value = expression(
-                        argument, child_scope, statement_origin)) {
+                // An empty argument stays in its place (37.42 detail 8).
+                if (!argument.valid()) {
+                    output.output_arguments.emplace_back();
+                } else if (const auto value = expression(
+                               argument, child_scope, statement_origin)) {
                     output.output_arguments.push_back(*value);
                 }
             }
@@ -2116,7 +2132,8 @@ namespace {
 
         void fill_process(
             const frontend::Process& input,
-            const semantic::ProcessId id)
+            const semantic::ProcessId id,
+            const std::vector<sv::ConcurrentAssertion>& assertions)
         {
             const auto& identity = model_.process_identities()[id.value()];
             sv::Process output;
@@ -2128,6 +2145,14 @@ namespace {
             output.origin = identity.origin;
             output.concurrent_assertion
                 = input.systemverilog_concurrent_assertion;
+            if (const auto directive = input.systemverilog_assertion_directive) {
+                if (*directive >= assertions.size()) {
+                    throw std::logic_error {
+                        "SystemVerilog HIR assertion process without its "
+                        "concurrent assertion statement" };
+                }
+                output.assertion = assertions[*directive].origin;
+            }
             for (const auto& declaration : input.variables) {
                 const auto* hir_declaration
                     = &existing_variable(declaration, identity.scope);
@@ -2464,6 +2489,11 @@ namespace {
                           output.expression
                               = expression(*input.expression, scope, origin);
                       }
+                      for (const auto& item : input.match_items) {
+                          output.match_items.push_back(
+                              statement(item, scope, origin));
+                      }
+                      output.strong = input.strong;
                       return output;
                   };
             for (const auto& input : declared.nodes) {
@@ -2556,6 +2586,10 @@ namespace {
                         *inline_sequence.disable->condition, scope,
                         converted.origin);
                 }
+                if (inline_sequence.tree) {
+                    converted.inline_tree = assertion_tree(
+                        *inline_sequence.tree, scope, converted.origin);
+                }
             }
         }
 
@@ -2591,7 +2625,8 @@ namespace {
             for (std::size_t index = 0;
                 index < input.processes.size() && index < output.processes.size();
                 ++index) {
-                fill_process(input.processes[index], output.processes[index]);
+                fill_process(input.processes[index], output.processes[index],
+                    output.concurrent_assertions);
             }
             for (const auto& item : input.concurrent_statements) {
                 output.concurrent_statements.push_back(statement(
@@ -2782,7 +2817,8 @@ namespace {
             for (std::size_t index = 0;
                 index < input.processes.size() && index < output.processes.size();
                 ++index) {
-                fill_process(input.processes[index], output.processes[index]);
+                fill_process(input.processes[index], output.processes[index],
+                    output.concurrent_assertions);
             }
             for (const auto& item : input.concurrent_statements) {
                 output.concurrent_statements.push_back(statement(

@@ -2,8 +2,16 @@
 #pragma once
 
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
 #include "fsim/app/sdf_portable_archive.hpp"
 #include "fsim/artifact/container.hpp"
+#include "fsim/artifact/design.hpp"
+#include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/library/artifact.hpp"
+#include <cstddef>
+#include <memory>
+#include <span>
+#include <vector>
 
 namespace fsim::app {
 

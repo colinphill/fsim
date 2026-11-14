@@ -16,6 +16,7 @@
 // operations back to the original ones for diagnostics. The first activation
 // (operation 0, through the process prologue) still runs the original body.
 #include "simir_static_kernel_compiled_internal.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -1381,6 +1382,10 @@ bool Interpreter::Impl::StaticKernel::specialize_member(
             }
         }
     }
+    // A pinned member's recipe is its own.
+    if (member_index < member_pinned_.size() && member_pinned_[member_index] != 0U) {
+        identity = nullptr;
+    }
     if (!specialize_cache_) {
         specialize_cache_ = std::make_shared<SpecializeCache>();
     }
@@ -1500,6 +1505,27 @@ bool Interpreter::Impl::StaticKernel::specialize_member(
         return reg < member.register_kinds.size() ? member.register_kinds[reg]
                                                   : ValueKind::logic4;
     };
+    // The variables of a process whose variables the debug interface watches
+    // or forces (pin_member), which it reads and writes at any statement
+    // (vhpi_put_value, IEEE 1076-2019 22.5.2): a deposit lands in the
+    // register, so no read may use a folded value or a copy's source in its
+    // place. Each store of one is emitted at once.
+    std::vector<std::uint8_t> pinned_registers;
+    if (member_index < member_pinned_.size() && member_pinned_[member_index] != 0U) {
+        const auto* const original = debug_program(member.process);
+        const auto program = original != nullptr
+            ? ProcessProgramView { *original }
+            : impl_.processes.program_view(member.process);
+        for (const auto& local : program.debug_locals()) {
+            if (local.register_id >= pinned_registers.size()) {
+                pinned_registers.resize(local.register_id + 1U, 0U);
+            }
+            pinned_registers[local.register_id] = 1U;
+        }
+    }
+    const auto pinned = [&](const RegisterId reg) {
+        return reg < pinned_registers.size() && pinned_registers[reg] != 0U;
+    };
 
     // Folding runs the reference evaluator on the member's own registers;
     // they are restored afterwards.
@@ -1596,6 +1622,13 @@ bool Interpreter::Impl::StaticKernel::specialize_member(
         release(state, reg);
         const auto at = std::ranges::lower_bound(state.known, reg, { },
             &KnownRegister::reg);
+        if (pinned(reg)) {
+            if (at != state.known.end() && at->reg == reg) {
+                state.known.erase(at);
+            }
+            emit(LoadConstant { reg, std::move(value) }, from);
+            return;
+        }
         const auto hash = value_hash(value);
         if (at != state.known.end() && at->reg == reg) {
             at->materialized = false;
@@ -1809,6 +1842,7 @@ bool Interpreter::Impl::StaticKernel::specialize_member(
                         const auto root = alias_root(state, op.source);
                         if (!known && op.destination < member.registers.size()
                             && root < member.registers.size()
+                            && !pinned(op.destination) && !pinned(root)
                             && kind_of(op.destination) == kind_of(root)) {
                             if (op.destination != root) {
                                 spill_aliases_of(state, op.destination, pc);
@@ -1955,6 +1989,151 @@ bool Interpreter::Impl::StaticKernel::specialize_member(
         renames.clear();
     }
     return finish(accepted);
+}
+
+void Interpreter::Impl::StaticKernel::pin_members()
+{
+    const auto pending = std::exchange(pending_pins_, { });
+    for (const auto member : pending) {
+        pin_member(member);
+    }
+}
+
+void Interpreter::Impl::StaticKernel::pin_member(const std::uint32_t index)
+{
+    member_pinned_.resize(members_.size(), 0U);
+    if (std::exchange(member_pinned_[index], std::uint8_t { 1U }) != 0U) {
+        return;
+    }
+    auto& member = members_[index];
+    if (trace_) {
+        std::cerr << "fsim-kernel-trace: pin member=" << index
+                  << " specialized=" << (index < specialized_size_.size()
+                                         && specialized_size_[index] != 0U)
+                  << " partition=" << (member.partition != no_slot)
+                  << " lazy=" << member.lazy
+                  << " generic=" << member.generic_mode
+                  << " compiled=" << member.compiled.has_value() << '\n';
+    }
+    // A member whose body specialization left alone has nothing folded.
+    if (index >= specialized_size_.size() || specialized_size_[index] == 0U) {
+        return;
+    }
+    // Only a specialized member is pinned, and today a specialized member is
+    // never fused into a partition (build_partitions takes only members that
+    // are not VHDL and have no loop) nor dead logic (lazy_ok in
+    // elaborated_design_static_kernel.cpp takes only SystemVerilog members),
+    // so the two cases below do not arise; they keep the pin correct should
+    // either rule change, and no design reaches them for a test.
+    // Dead logic that a hook observes runs from now on (the reversal
+    // apply_watches makes for a watched slot): the slots it writes are
+    // revived, and the revival ends the collapse of the rounds.
+    if (member.lazy) {
+        for (std::uint32_t slot = 0U; slot < slots_.size(); ++slot) {
+            if (std::ranges::find(slots_[slot].lazy_writers, index)
+                != slots_[slot].lazy_writers.end()) {
+                pending_revivals_.push_back(slot);
+            }
+        }
+        open_boundary();
+        if (member.lazy) {
+            apply_watches();
+        }
+    }
+    // The compiled registers are the state; the new body starts from them.
+    // A member in generic mode or without compiled code keeps its state in
+    // the reference registers, and runs the same (folded) operations, so it
+    // is re-specialized too.
+    if (member.compiled && saves_compiled_registers(member)) {
+        const auto& body = *member.compiled;
+        for (std::size_t reg = 0U; reg < member.registers.size(); ++reg) {
+            if (auto value = exact_register(body, index, static_cast<RegisterId>(reg))) {
+                member.registers[reg] = std::move(*value);
+            }
+        }
+    }
+    const auto original = specialized_size_[index];
+    auto saved_operations = member.operations();
+    auto saved_origin = member.origin;
+    const auto saved_begin = member.body_begin;
+    const auto* const saved_identity = member.body_identity;
+    const auto restore = [&] {
+        member.operations() = std::move(saved_operations);
+        member.origin = std::move(saved_origin);
+        member.body_begin = saved_begin;
+        member.body_identity = saved_identity;
+    };
+    member.operations().resize(original);
+    member.origin.resize(original);
+    member.body_begin = member.prologue_end;
+    member.body_identity = nullptr;
+    std::optional<CompiledBody> compiled;
+    try {
+        (void)specialize_member(index);
+        if (member.compiled) {
+            compiled = compile(index);
+        }
+    } catch (...) {
+        restore();
+        return;
+    }
+    if (member.compiled && !compiled) {
+        restore();
+        return;
+    }
+    // A member a partition fused leaves its pass: gated since this moment as
+    // a foreign write gates it, and run on its own, a level after the
+    // partition's (as split_gate_delay does for a gate driver).
+    if (member.partition != no_slot) {
+        const auto partition = member.partition;
+        const auto position = member.position;
+        dissolve_member(index);
+        auto& dissolved = *dissolved_[partition];
+        if (dissolved.retired.size() < dissolved.gated.size()) {
+            dissolved.retired.resize(dissolved.gated.size(), 0U);
+        }
+        dissolved.retired[position] = 1U;
+        dissolved.due[position] = 0U;
+        const auto level = partition_level_[partition] + 1U;
+        member_schedule_[index].partition = no_slot;
+        member_schedule_[index].level = level;
+        member.level = level;
+        member.retired_partition = partition;
+        member.partition = no_slot;
+    }
+    if (compiled) {
+        member.compiled = std::move(compiled);
+        member.frames_elided = member.compiled->frame_stack_base == 0U;
+        detach_native_unit(member.native);
+        member.native = NativeUnit { };
+        std::unordered_map<std::uint32_t, std::uint32_t> slot_of_offset;
+        slot_of_offset.reserve(slots_.size());
+        for (std::uint32_t slot = 0U; slot < slots_.size(); ++slot) {
+            slot_of_offset.emplace(slots_[slot].offset, slot);
+        }
+        std::unique_ptr<CompiledBody> canonical;
+        std::vector<std::uint32_t> bindings;
+        std::unordered_map<std::uint64_t, std::uint32_t> binding_of;
+        canonicalize_unit(*member.compiled, slot_of_offset, canonical, bindings,
+            binding_of);
+        bind_native_unit(member.native, std::move(canonical), std::move(bindings), false);
+        sync_compiled_registers(index);
+    }
+    for (auto& group : dispatch_groups_) {
+        if (std::ranges::find(group.members, index) != group.members.end()) {
+            group.fused = false;
+        }
+    }
+    sensitive_programs_.clear();
+    build_level_queues();
+    rebuild_notify_tables();
+    if (member.compiled) {
+        refresh_fast_run(index);
+    }
+    if (parallel_planned_ && pool_ != nullptr) {
+        parallel_planned_ = false;
+        build_parallel_plan();
+    }
 }
 
 std::string static_kernel_specializer_identity()

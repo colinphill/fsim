@@ -2,6 +2,10 @@
 #include "fsim/elaboration/dpi_c_type.hpp"
 #include "fsim/support/stack_growth.hpp"
 #include "fsim/support/active_set.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/systemverilog_scalars.hpp"
+#include "fsim/semantic/model.hpp"
+#include "fsim/semantic/systemverilog_hir.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -16,6 +20,9 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <optional>
+#include <span>
+#include <utility>
 
 namespace fsim::elaboration {
 

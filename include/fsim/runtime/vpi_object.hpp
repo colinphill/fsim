@@ -124,6 +124,9 @@ enum class SystemVerilogVpiObjectKind : std::uint32_t {
     UserSystemTaskFunction,
     Attribute,
     AttributeSpecification,
+    /// An array of named events (IEEE 1800-2023 7.4, 37.43); its elements
+    /// are its children, in declaration order.
+    NamedEventArray,
 };
 
 enum class SystemVerilogVpiObjectError {
@@ -313,6 +316,10 @@ struct SystemVerilogVpiObjectDescriptor {
     /// A place from reserve_ordinals: the object takes it among its
     /// siblings and in iterations instead of coming last.
     std::optional<std::uint64_t> ordinal { };
+    /// Dotted names of non-scopes between the parent's full name and the
+    /// name: an assertion a checker instance expanded into the module
+    /// (`top.u_chk.ca`, IEEE 1800-2023 17.2) is held by the module.
+    std::string name_prefix { };
 };
 
 struct SystemVerilogVpiObjectInfo {
@@ -592,6 +599,8 @@ private:
         bool live_value { };
         // Live child slots in ordinal order.
         std::vector<std::uint32_t> children;
+        // The descriptor's name_prefix; part of the sibling key.
+        std::string name_prefix { };
     };
     struct IteratorRecord {
         std::uint16_t epoch { };

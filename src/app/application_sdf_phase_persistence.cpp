@@ -2,13 +2,25 @@
 #include "fsim/app/sdf_phase_persistence.hpp"
 
 #include "fsim/artifact/container.hpp"
-#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/app/sdf_artifact_identity.hpp"
+#include "fsim/app/sdf_portable_archive.hpp"
+#include "fsim/artifact/design.hpp"
+#include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/library/artifact.hpp"
 
 #include <cstring>
-#include <fstream>
-#include <ranges>
+#include <algorithm>
+#include <cstddef>
+#include <filesystem>
+#include <memory>
+#include <optional>
+#include <span>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace fsim::app {
 

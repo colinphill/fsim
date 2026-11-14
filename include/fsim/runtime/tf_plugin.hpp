@@ -10,7 +10,6 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
-#include <optional>
 #include <string>
 
 namespace fsim::runtime {

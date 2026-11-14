@@ -2,6 +2,9 @@
 #pragma once
 
 #include "fsim/app/sdf_precedence.hpp"
+#include "fsim/app/sdf_target_plan.hpp"
+#include "fsim/elaboration/elaborator.hpp"
+#include "fsim/frontend/diagnostic.hpp"
 
 #include <cstddef>
 #include <cstdint>

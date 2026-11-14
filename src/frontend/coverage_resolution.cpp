@@ -6,10 +6,8 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
-#include <functional>
 #include <map>
 #include <optional>
-#include <ranges>
 #include <set>
 #include <span>
 #include <sstream>

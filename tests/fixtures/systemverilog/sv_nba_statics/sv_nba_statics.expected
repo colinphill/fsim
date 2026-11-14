@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
+sns init 3 4 5 q=3,9 dyn=3,5
+sns same-step total=0 log=0 vec=0000 r=8 k=0 s=1 u=1 w=2
+sns next-step total=2 log=7 vec=0010 k=5 s=9 u=3 w=20

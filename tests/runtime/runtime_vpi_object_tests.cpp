@@ -280,7 +280,7 @@ void test_systemverilog_vpi_objects_and_errors() {
       capabilities.systemverilog_revision == 2023U
           && capabilities.object_kind_count
               == static_cast<std::uint32_t>(
-                     SystemVerilogVpiObjectKind::AttributeSpecification)
+                     SystemVerilogVpiObjectKind::NamedEventArray)
                   + 1U
           && capabilities.relationship_kind_count == 15U
           && capabilities.property_kind_count == 24U

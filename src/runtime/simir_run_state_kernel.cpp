@@ -29,7 +29,6 @@
 #include "simir_static_kernel_state.hpp"
 
 #include <algorithm>
-#include <queue>
 
 namespace fsim::runtime::simir {
 
@@ -108,6 +107,8 @@ void Kernel::audit_run_state(std::vector<std::string>& messages) const
     busy(std::ranges::any_of(debug_write_pending_,
              [](const std::uint8_t pending) { return pending != 0U; }),
         "debugger write list");
+    FSIM_RS_IDLE("kernel.impl", debug_write_flag_);
+    busy(debug_write_flag_ != 0U, "debugger write list");
     FSIM_RS_IDLE("kernel.impl", hosted_active_);
     busy(!hosted_active_.empty(), "hosted Active queue");
     FSIM_RS_IDLE("kernel.impl", hosted_inactive_);
@@ -134,6 +135,15 @@ void Kernel::audit_run_state(std::vector<std::string>& messages) const
     busy(in_activation_ || activating_ || running_conversions_
             || committing_round_ || sv_draining_,
         "activation in progress");
+    // The first simulation cycle's update of a VHDL kernel runs at time 0
+    // (schedule_initial_update), before any save point.
+    FSIM_RS_IDLE("kernel.impl", initialization_round_);
+    FSIM_RS_IDLE("kernel.impl", initial_update_pending_);
+    FSIM_RS_IDLE("kernel.impl", initial_update_running_);
+    FSIM_RS_IDLE("kernel.impl", initial_commit_due_);
+    busy(initialization_round_ || initial_update_pending_
+            || initial_update_running_ || initial_commit_due_,
+        "the first simulation cycle's update is pending");
 
     // The step scratch (#185): each member below is emptied or cleared when
     // the step that fills it ends, so a save at a slot or cycle end finds it
@@ -170,6 +180,14 @@ void Kernel::audit_run_state(std::vector<std::string>& messages) const
         "delta-collapse queues");
     FSIM_RS_IDLE("kernel.impl", deferred_threads_);
     busy(!deferred_threads_.empty(), "deferred thread list");
+    // A slot or cycle end follows the drain of the nettype nets' pending
+    // resolutions (settle, finish_nettype_resolutions).
+    FSIM_RS_IDLE("kernel.impl", nettype_pending_);
+    FSIM_RS_IDLE("kernel.impl", nettype_queued_);
+    busy(!nettype_pending_.empty()
+            || std::ranges::any_of(nettype_queued_,
+                [](const std::uint8_t queued) { return queued != 0U; }),
+        "nettype resolution queue");
     FSIM_RS_IDLE("kernel.impl", held_round_);
     FSIM_RS_IDLE("kernel.impl", held_threads_);
     busy(!held_round_.empty() || !held_threads_.empty(), "held wake lists");
@@ -505,6 +523,9 @@ void Kernel::run_state_io(RunStateArchive& ar)
     FSIM_RS_IO("kernel.impl", guard_epoch_, ar, *this);
     FSIM_RS_IO("kernel.impl", guard_commit_, ar, *this);
     FSIM_RS_IO("kernel.impl", slot_wait_seen_, ar, *this);
+    // The signal history of the kernel's slots (IEEE 1076-2019 16.2.4).
+    FSIM_RS_IO("kernel.impl", history_words_, ar, *this);
+    FSIM_RS_IO("kernel.impl", history_current_, ar, *this);
     if (ar.loading() && behavioral_) {
         // A restore start builds the tables but not prepare_behavioral, which
         // sizes slot_waitable_ (a behavioral kernel indexes it by every slot
@@ -540,6 +561,12 @@ void Kernel::run_state_io(RunStateArchive& ar)
     static_cast<void>(kernel_version);
 
     if (ar.loading() && ar.ok()) {
+        // A kernel whose host boundary this run opened (its observers'
+        // watches, kept as configuration) is not closed, whatever the image
+        // says: a reset's twin, or the saving run, may not have had them.
+        if (host_boundary_) {
+            closed_ = false;
+        }
         restore_thread_registers();
         // The lookup from a net-delay operation to its site.
         net_delay_site_of_.clear();
@@ -657,7 +684,12 @@ void Kernel::rearm_run_state()
     if (vhdl_round) {
         defer_vhdl_round();
     }
-    if (late_start_armed_) {
+    // The late activation is a scheduler event of its own, which the file
+    // leaves out: queue it again while it is armed, and for a kernel that has
+    // not been initialized yet (a reset's time-zero state, taken before any
+    // activation), whose first activation arms its late members as
+    // Interpreter::start had queued their activation for.
+    if (late_start_armed_ || !initialized_) {
         if (const auto first = first_late_process()) {
             queue_late_start(*first);
         }

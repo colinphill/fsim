@@ -2,6 +2,11 @@
 #include "verilog_parser_coverage_internal.hpp"
 
 #include "fsim/frontend/coverage_sampling.hpp"
+#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/systemverilog_scalars.hpp"
+#include "fsim/frontend/token.hpp"
+#include "verilog_parser_assertion_support.hpp"
+#include "verilog_parser_internal.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -9,6 +14,11 @@
 #include <span>
 #include <unordered_set>
 #include <utility>
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <vector>
 
 namespace fsim::frontend {
 

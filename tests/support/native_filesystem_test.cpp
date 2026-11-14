@@ -2,7 +2,6 @@
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 
-#include <algorithm>
 #include <cassert>
 #include <chrono>
 #include <filesystem>

@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+sns pa base=3 a=4 name=n4 tag=n4! q=3,4 dyn=4,3 aa=3,4
+sns pa-more fromfn=9 fnq=6,8 fnstr=fn3 viapb=13
+sns pa-fixed arr=3,4,5 p=3,4
+sns pa-aggregate sw=3,4,5 ps=3,4 grid=3,4
+sns pa-nested nq=3,1 sq=s3,y sn=n3,3 sna=p,3,q,4
+sns pa-constant snc=c,7 swc=1,2,3
+sns pa-real r=1.50 sr=0.50 rt=2.25 r2=6.00 PR=2.50 sum=4.00 g=1.5 e=2.250000e+00
+sns pa-typedef tr=1.75 tsr=0.75 tr2=2.75
+sns pb-more carr=4,7 cr=8.50
+sns pb c=7 cdyn=4,7 cs=n4-7 viaf=14 m=14

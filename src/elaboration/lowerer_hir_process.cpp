@@ -260,6 +260,26 @@ void Lowerer::set_hir_code_coverage_active(const bool active) noexcept
     coverage_hir_process_active_ = active;
 }
 
+void Lowerer::record_vpi_callee(const bool statement, const std::uint32_t id,
+    const semantic::DeclarationId declaration, const std::string_view receiver,
+    const semantic::OriginId dpi)
+{
+    if (hierarchy_.empty() || (!declaration.valid() && !dpi.valid())) {
+        return;
+    }
+    // The instance path as hir_callee_unit resolves the receiver.
+    constexpr std::string_view instance_prefix { "@instance:" };
+    std::string instance;
+    if (!receiver.empty()) {
+        instance = receiver.starts_with(instance_prefix)
+            ? std::string { receiver.substr(instance_prefix.size()) }
+            : hierarchy_ + "." + std::string { receiver };
+    }
+    design_.record_vpi_callee(hierarchy_,
+        VpiCalleeInfo {
+            statement, id, declaration, std::move(instance), dpi });
+}
+
 std::vector<Process> Lowerer::take_generated_processes()
 {
     return std::exchange(generated_processes_, { });
@@ -664,14 +684,23 @@ InternedString Lowerer::debug_scope()
 void Lowerer::emit_debug_point(
     const DebugPointKind kind,
     const frontend::SourceSpan& span,
-    const std::string_view callee)
+    const std::string_view callee,
+    const semantic::DeclarationId callee_declaration,
+    const std::string_view callee_receiver)
 {
-    process_.operations.emplace_back(DebugPoint {
+    DebugPoint point {
         kind,
         runtime_source_location(span),
         debug_scope(),
         callee.empty() ? InternedString { } : InternedString { callee },
-    });
+    };
+    if (callee_declaration.valid()) {
+        point.callee_declaration = callee_declaration.value() + 1U;
+    }
+    if (!callee_receiver.empty()) {
+        point.callee_receiver = InternedString { callee_receiver };
+    }
+    process_.operations.emplace_back(std::move(point));
 }
 
 namespace {
@@ -1150,27 +1179,69 @@ std::string Lowerer::hir_callable_formal_debug_name(
     return result;
 }
 
-void Lowerer::add_hir_frame_local(const std::size_t callable,
-    const std::string_view name, std::string type_name,
-    const RegisterId storage, const semantic::SourceSpanId source)
+std::string Lowerer::hir_frame_local_name(
+    const std::size_t callable, const std::string_view name)
 {
-    if (specialized_hir_unit_ == nullptr
-        || callable >= hir_callable_frames_.size()) {
-        return;
-    }
     const auto& frame = hir_callable_frames_[callable];
     std::string callee = frame.debug_name;
     if (callee.empty()) {
         const auto declaration
             = specialized_hir_unit_->find_declaration(frame.declaration);
         if (!declaration || declaration->vhdl == nullptr) {
-            return;
+            return { };
         }
         callee = declaration->vhdl->name;
     }
     auto result = callee + "." + std::string { name };
     if (!frame_local_names_.emplace(result).second) {
         result += "@hir-callable-" + std::to_string(frame.invocation_identity);
+        frame_local_names_.emplace(result);
+    }
+    return result;
+}
+
+std::uint32_t Lowerer::hir_call_frame_number(const std::size_t callable)
+{
+    const auto identity = hir_callable_frames_[callable].invocation_identity;
+    return hir_call_frame_numbers_
+        .try_emplace(identity,
+            static_cast<std::uint32_t>(hir_call_frame_numbers_.size() + 1U))
+        .first->second;
+}
+
+void Lowerer::bind_hir_frame_local(const std::size_t callable,
+    const semantic::DeclarationId declaration, const bool frame_table,
+    const std::size_t index, const runtime::simir::FrameLocalStorage storage,
+    const bool receiver)
+{
+    if (callable >= hir_callable_frames_.size()) {
+        return;
+    }
+    const auto record = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_declaration(declaration)
+        : std::nullopt;
+    const bool event = !receiver && record && record->systemverilog != nullptr
+        && record->systemverilog->type
+        && hir_type_is_event(
+            *record->systemverilog->type, record->systemverilog->scope);
+    const runtime::simir::FrameLocalBinding binding {
+        hir_call_frame_number(callable), declaration.value(), frame_table,
+        static_cast<std::uint32_t>(index), storage, event, receiver
+    };
+    auto& locals = process_.call_frames.locals;
+    if (std::ranges::find(locals, binding) == locals.end()) {
+        locals.push_back(binding);
+    }
+}
+
+void Lowerer::add_hir_process_loop_parameter(
+    const semantic::DeclarationId declaration, const std::string_view name,
+    std::string type_name, const RegisterId storage,
+    const semantic::SourceSpanId source)
+{
+    auto result = "@loop." + std::string { name };
+    if (!frame_local_names_.emplace(result).second) {
+        result += "@" + std::to_string(process_.frame_locals.size());
         frame_local_names_.emplace(result);
     }
     process_.frame_locals.push_back(DebugLocal {
@@ -1185,6 +1256,60 @@ void Lowerer::add_hir_frame_local(const std::size_t callable,
         { },
         frontend::SystemVerilogScalarKind::None,
     });
+    frame_local_simple_names_.emplace_back(name);
+    const runtime::simir::FrameLocalBinding binding {
+        0U, declaration.value(), true,
+        static_cast<std::uint32_t>(process_.frame_locals.size() - 1U)
+    };
+    process_.call_frames.locals.push_back(binding);
+}
+
+void Lowerer::record_hir_call_site(const bool expression,
+    const std::uint32_t site, const std::size_t callable)
+{
+    if (callable >= hir_callable_frames_.size()) {
+        return;
+    }
+    const runtime::simir::CallSiteFrame entry {
+        expression, site,
+        active_hir_callable_ ? hir_call_frame_number(*active_hir_callable_)
+                             : 0U,
+        hir_call_frame_number(callable)
+    };
+    auto& sites = process_.call_frames.sites;
+    if (std::ranges::find(sites, entry) == sites.end()) {
+        sites.push_back(entry);
+    }
+}
+
+void Lowerer::add_hir_frame_local(const std::size_t callable,
+    const semantic::DeclarationId declaration, const std::string_view name,
+    std::string type_name, const RegisterId storage,
+    const semantic::SourceSpanId source)
+{
+    if (specialized_hir_unit_ == nullptr
+        || callable >= hir_callable_frames_.size()) {
+        return;
+    }
+    auto result = hir_frame_local_name(callable, name);
+    if (result.empty()) {
+        return;
+    }
+    process_.frame_locals.push_back(DebugLocal {
+        std::move(result),
+        std::move(type_name),
+        storage,
+        register_width(storage),
+        runtime_source_location(hir_source_span(source)),
+        std::nullopt,
+        std::nullopt,
+        value_kind(register_domains_[storage]),
+        { },
+        frontend::SystemVerilogScalarKind::None,
+    });
+    frame_local_simple_names_.emplace_back(name);
+    bind_hir_frame_local(
+        callable, declaration, true, process_.frame_locals.size() - 1U);
 }
 
 bool Lowerer::initialize_hir_declarations(
@@ -1599,6 +1724,11 @@ bool Lowerer::initialize_hir_declarations(
             const bool first_debug_name = active_hir_callable_
                 || debug_local_names_.emplace(name).second;
             if (first_initialization && first_debug_name) {
+                if (active_hir_callable_) {
+                    bind_hir_frame_local(*active_hir_callable_, declaration_id,
+                        false, process_.debug_container_locals.size(),
+                        runtime::simir::FrameLocalStorage::container);
+                }
                 process_.debug_container_locals.push_back(
                     DebugContainerLocal {
                         std::move(name),
@@ -2034,6 +2164,11 @@ bool Lowerer::initialize_hir_declarations(
             const bool first_debug_name = active_hir_callable_
                 || debug_local_names_.emplace(name).second;
             if (first_initialization && first_debug_name) {
+                if (active_hir_callable_ && declaration->systemverilog != nullptr) {
+                    bind_hir_frame_local(*active_hir_callable_, declaration_id,
+                        false, process_.debug_string_locals.size(),
+                        runtime::simir::FrameLocalStorage::string);
+                }
                 process_.debug_string_locals.push_back(DebugStringLocal {
                     std::move(name),
                     destination,
@@ -2475,7 +2610,8 @@ bool Lowerer::initialize_hir_declarations(
         if (!retained_static && !initializer
             && declaration->systemverilog != nullptr
             && declaration->systemverilog->type
-            && declaration->systemverilog->type->target.spelling == "event"
+            && hir_type_is_event(*declaration->systemverilog->type,
+                declaration->systemverilog->scope)
             && binding->width == 64U) {
             process_.operations.emplace_back(DynamicEvent {
                 DynamicEventOperation::create, destination, 0U, false });
@@ -2485,20 +2621,17 @@ bool Lowerer::initialize_hir_declarations(
             const auto kind = file_open_kind
                 ? specialized_hir_unit_->find_expression(*file_open_kind)
                 : std::nullopt;
-            auto kind_name = kind && kind->vhdl != nullptr
-                ? std::string_view { kind->vhdl->text }
-                : std::string_view { "read_mode" };
-            const auto separator = kind_name.find_last_of('.');
-            if (separator != std::string_view::npos) {
-                kind_name.remove_prefix(separator + 1U);
-            }
-            const auto mode_text = kind_name == "read_mode"
-                ? std::string_view { "r" }
-                : kind_name == "write_mode"
-                ? std::string_view { "w" }
-                : kind_name == "append_mode"
-                ? std::string_view { "a" }
-                : std::string_view { };
+            // The open kind is a static value of FILE_OPEN_KIND (IEEE
+            // 1076-2019 6.4.2.5): its position, whatever expression yields it.
+            const auto kind_position = file_open_kind
+                ? hir_constant_integer(*file_open_kind)
+                : std::optional<std::int64_t> { 0 };
+            const auto mode_text = !kind_position
+                ? std::string_view { }
+                : *kind_position == 0 ? std::string_view { "r" }
+                : *kind_position == 1 ? std::string_view { "w" }
+                : *kind_position == 2 ? std::string_view { "a" }
+                                      : std::string_view { };
             if (!path || mode_text.empty()) {
                 const auto diagnostic_source = kind && kind->vhdl != nullptr
                     ? kind->vhdl->source
@@ -2562,7 +2695,25 @@ bool Lowerer::initialize_hir_declarations(
                 ? lower_hir_vhdl_access_expression(
                       *initializer, binding->width,
                       &*declaration->vhdl->subtype)
-                : [&] {
+                : [&]() -> std::optional<RegisterId> {
+                      // A real initializer of an integral local, or an
+                      // integral one of a real local, converts as an
+                      // assignment does (IEEE 1800-2023 6.12.2, 10.5).
+                      if (declaration->systemverilog != nullptr
+                          && declaration->systemverilog->type) {
+                          const auto target_scalar
+                              = hir_declared_type_scalar_kind(
+                                  *declaration->systemverilog->type,
+                                  declaration->systemverilog->scope);
+                          if (frontend::is_real_scalar_kind(target_scalar)
+                              != frontend::is_real_scalar_kind(
+                                  hir_systemverilog_scalar_kind(
+                                      *initializer))) {
+                              return lower_hir_scalar_converted_value(
+                                  *initializer, binding->width,
+                                  target_scalar);
+                          }
+                      }
                       // `C#(7) h = new` allocates the declaration's class
                       // specialization (IEEE 1800-2017 8.25).
                       const auto saved_target = std::exchange(
@@ -2637,10 +2788,19 @@ bool Lowerer::initialize_hir_declarations(
             && (loop_control
                 || hir_callable_frames_[*active_hir_callable_]
                        .debug_name.empty())) {
-            add_hir_frame_local(*active_hir_callable_, binding->name,
+            add_hir_frame_local(*active_hir_callable_, declaration_id,
+                binding->name, type_name, destination, source);
+        }
+        if (first_initialization && !active_hir_callable_ && loop_control
+            && declaration->vhdl != nullptr) {
+            add_hir_process_loop_parameter(declaration_id, binding->name,
                 type_name, destination, source);
         }
         if (first_initialization && !loop_control && first_debug_name) {
+            if (active_hir_callable_) {
+                bind_hir_frame_local(*active_hir_callable_, declaration_id,
+                    false, process_.debug_locals.size());
+            }
             process_.debug_locals.push_back(DebugLocal {
                 std::move(name),
                 std::move(type_name),
@@ -3161,6 +3321,38 @@ std::optional<Process> Lowerer::lower_hir_process(
                     hir_source_span(sensitivity.source));
                 continue;
             }
+            // S'TRANSACTION in a sensitivity list is the same wait as in a
+            // wait on (IEEE 1076-2019 11.3): the process resumes in the
+            // cycle S is updated, whether or not the value changes
+            // (14.7.3.1); the signal S(i)'TRANSACTION of an element is
+            // its own implicit signal (16.2.4).
+            if (sensitivity_expression && sensitivity_expression->valid()) {
+                if (const auto attribute = hir_vhdl_signal_attribute_profile(
+                        *sensitivity_expression, input.scope);
+                    attribute
+                    && attribute->kind
+                        == HirVhdlSignalAttributeKind::transaction) {
+                    if (!attribute->selection
+                        || attribute->selection->width
+                            >= design_.signal_info_[attribute->signal]
+                                   .width) {
+                        description.sensitivities.push_back({
+                            attribute->signal,
+                            runtime::simir::EdgeKind::transaction });
+                        continue;
+                    }
+                    const auto derived = vhdl_implicit_signal_attribute(
+                        attribute->signal, "transaction", 0U,
+                        hir_source_span(sensitivity.source),
+                        attribute->selection);
+                    if (!derived) {
+                        return std::nullopt;
+                    }
+                    description.sensitivities.push_back({
+                        *derived, runtime::simir::EdgeKind::any });
+                    continue;
+                }
+            }
             if (sensitivity_expression
                 && sensitivity_expression->valid()) {
                 // An alias of an element or slice of a signal denotes that
@@ -3510,6 +3702,52 @@ std::optional<Process> Lowerer::lower_hir_concurrent_statement(
         : std::nullopt;
     if (!source) {
         return std::nullopt;
+    }
+    if (source->vhdl != nullptr) {
+        // A null waveform element is an error in a concurrent signal
+        // assignment, guarded or not (IEEE 1076-2019 11.6): only the
+        // equivalent process of a guarded one disconnects its drivers.
+        const auto null_element = [&](const auto& self,
+                                      const semantic::StatementId id)
+            -> std::optional<decltype(semantic::vhdl::WaveformElement::source)> {
+            const auto view = specialized_hir_unit_->find_statement(id);
+            if (!view || view->vhdl == nullptr) {
+                return std::nullopt;
+            }
+            const auto& vhdl = *view->vhdl;
+            if (vhdl.kind != semantic::vhdl::StatementKind::signal_assignment
+                && vhdl.kind != semantic::vhdl::StatementKind::conditional
+                && vhdl.kind != semantic::vhdl::StatementKind::selection) {
+                return std::nullopt;
+            }
+            for (const auto& element : vhdl.waveform) {
+                if (element.disconnect) {
+                    return element.source;
+                }
+            }
+            for (const auto* list : { &vhdl.statements, &vhdl.else_statements }) {
+                for (const auto child : *list) {
+                    if (const auto found = self(self, child)) {
+                        return found;
+                    }
+                }
+            }
+            for (const auto& alternative : vhdl.alternatives) {
+                for (const auto child : alternative.statements) {
+                    if (const auto found = self(self, child)) {
+                        return found;
+                    }
+                }
+            }
+            return std::nullopt;
+        };
+        if (const auto element = null_element(null_element, statement)) {
+            report("FSIM-ELAB-VHDLGUARD-004",
+                "a null waveform element appears in a concurrent signal "
+                "assignment (IEEE 1076-2019 11.6)",
+                hir_source_span(*element));
+            return std::nullopt;
+        }
     }
     const auto source_span = source->systemverilog != nullptr
         ? source->systemverilog->source
@@ -3912,6 +4150,54 @@ std::optional<Process> Lowerer::lower_hir_package_initializer(
     auto process = lower_hir_process_body(description, language, hierarchy);
     hir_allocation_target_ = saved_target;
     return process;
+}
+
+std::optional<Process> Lowerer::lower_hir_package_object_initializer(
+    const semantic::DeclarationId declaration_id,
+    const std::optional<StringObjectId> string_object,
+    const std::optional<ContainerObjectId> container_object,
+    const std::string_view hierarchy)
+{
+    [[maybe_unused]] const HirEffectiveVhdlSubtypeCacheScope cache_scope {
+        *this
+    };
+    if (specialized_hir_unit_ == nullptr
+        || string_object.has_value() == container_object.has_value()
+        || (string_object && *string_object >= design_.string_objects_.size())
+        || (container_object
+            && *container_object >= design_.container_objects_.size())) {
+        return std::nullopt;
+    }
+    const auto declaration
+        = specialized_hir_unit_->find_declaration(declaration_id);
+    if (!declaration || declaration->systemverilog == nullptr
+        || declaration->systemverilog->form
+            != semantic::sv::DeclarationForm::variable
+        || !declaration->systemverilog->initializer
+        || !declaration->systemverilog->type
+        || !declaration->systemverilog->scope.valid()) {
+        return std::nullopt;
+    }
+    const auto initializer = *declaration->systemverilog->initializer;
+    const auto expression
+        = specialized_hir_unit_->find_expression(initializer);
+    if (!expression || expression->systemverilog == nullptr) {
+        return std::nullopt;
+    }
+    HirProcessDescription description;
+    description.source = expression->systemverilog->source;
+    description.scope = declaration->systemverilog->scope;
+    description.name = "$package_static_initializer_"
+        + std::to_string(declaration_id.value());
+    description.input_actual = initializer;
+    description.input_actual_string_object = string_object;
+    description.input_actual_container_object = container_object;
+    description.input_actual_declaration = declaration_id;
+    description.kind = frontend::ProcessKind::Initial;
+    description.initial = true;
+    description.require_wildcard_dependency = false;
+    return lower_hir_process_body(
+        description, frontend::Language::SystemVerilog2017, hierarchy);
 }
 
 std::optional<Process> Lowerer::lower_hir_class_static_initializer(
@@ -4804,8 +5090,24 @@ std::optional<Process> Lowerer::lower_hir_process_body_attempts(
         if (hierarchical_reference_retry_ && hierarchical_reference_missed_) {
             return std::nullopt;
         }
-        // Strict mode reports the failing body instead of falling back.
-        if (std::getenv("FSIM_CLASS_LOWER_STRICT") != nullptr) {
+        // A function of a class that is not part of the UVM library, a
+        // class deriving from the library included, is lowered or reported:
+        // leaving its calls to the host class executor would run the body
+        // outside the generated code. The failing statement's
+        // FSIM-ELAB-HIR-001 diagnostic stays and fails the elaboration.
+        const auto uvm_function = [&](const std::uint32_t declaration) {
+            for (const auto& candidate :
+                specialized_hir_unit_->design().systemverilog_hir.classes()) {
+                for (const auto& method : candidate.methods) {
+                    if (method.declaration.value() == declaration) {
+                        return hir_uvm_library_identity(
+                            candidate.canonical_identity);
+                    }
+                }
+            }
+            return false;
+        };
+        if (!std::ranges::all_of(hir_failed_class_functions_, uvm_function)) {
             return lowered;
         }
         bool narrowed { };
@@ -4828,19 +5130,10 @@ std::optional<Process> Lowerer::lower_hir_process_body_attempts(
         }
         diagnostics_.resize(diagnostics_before);
     }
+    // Nothing left to narrow: the failing bodies' FSIM-ELAB-HIR-001
+    // diagnostics stand. The process is not lowered again with every class
+    // function call left to the host class executor.
     hir_interpreted_class_functions_.clear();
-    if (elaboration_detail::trace_lowering_failures()) {
-        for (auto index = diagnostics_before; index < diagnostics_.size();
-             ++index) {
-            std::cerr << "[fsim-hir-lower] class-function retry after "
-                      << diagnostics_[index].code << ": "
-                      << diagnostics_[index].message << '\n';
-        }
-    }
-    diagnostics_.resize(diagnostics_before);
-    lower_class_functions_ = false;
-    lowered = lower_hir_process_body_once(description, language, hierarchy);
-    lower_class_functions_ = true;
     return lowered;
 }
 
@@ -4880,6 +5173,8 @@ void Lowerer::reset_hir_process_state()
     string_locals_.clear();
     debug_local_names_.clear();
     frame_local_names_.clear();
+    hir_call_frame_numbers_.clear();
+    frame_local_simple_names_.clear();
     local_scope_.clear();
     loop_controls_.clear();
     block_controls_.clear();
@@ -4911,6 +5206,9 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
     hir_qualified_if_link_.reset();
     assertion_control_sites_.clear();
     sva_local_widths_.clear();
+    sva_local_kinds_.clear();
+    sva_string_tables_.clear();
+    sva_string_locals_.clear();
     language_ = language;
     // A process that holds a deferred assertion (directly or in a callable
     // it calls) clears its report queue at each flush point (16.4.2); no
@@ -5140,7 +5438,8 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
     }
     const auto input_adapter = description.input_actual.has_value()
         || description.input_actual_destination.has_value()
-        || description.input_actual_string_object.has_value();
+        || description.input_actual_string_object.has_value()
+        || description.input_actual_container_object.has_value();
     const auto output_adapter = description.output_actual_source.has_value()
         || description.output_actual.has_value();
     const auto procedural_driver
@@ -5149,9 +5448,13 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
         || description.procedural_assignment_value.has_value();
     if (description.input_actual.has_value()
             != (description.input_actual_destination.has_value()
-                || description.input_actual_string_object.has_value())
+                || description.input_actual_string_object.has_value()
+                || description.input_actual_container_object.has_value())
         || (description.input_actual_destination
             && description.input_actual_string_object)
+        || (description.input_actual_container_object
+            && (description.input_actual_destination
+                || description.input_actual_string_object))
         || (description.input_actual_assignment_context
             && (!description.input_actual
                 || !description.input_actual_assignment_type
@@ -5233,6 +5536,13 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
             || initializer.property == nullptr
             || !lower_hir_class_static_property_initializer(
                 initializer.specialization, *initializer.property)) {
+            process_ = { };
+            return std::nullopt;
+        }
+    } else if (description.systemverilog_resolver) {
+        if (input_adapter || output_adapter
+            || !lower_hir_systemverilog_resolver(
+                *description.systemverilog_resolver)) {
             process_ = { };
             return std::nullopt;
         }
@@ -5381,6 +5691,203 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
         }
         process_.operations.emplace_back(WriteStringObject {
             *description.input_actual_string_object, *text });
+    } else if (description.input_actual_container_object) {
+        // A container-valued initializer: the object takes the value the
+        // expression forms, typed by the object (IEEE 1800-2023 6.8, 7.9.11,
+        // 10.9, 10.10).
+        const auto object = *description.input_actual_container_object;
+        const auto value = lower_hir_static_container_actual(
+            *description.input_actual,
+            design_.container_objects_[object].initial_value.type,
+            description.input_actual_declaration.value_or(
+                semantic::DeclarationId { }));
+        if (!value) {
+            process_ = { };
+            return std::nullopt;
+        }
+        const auto positions
+            = design_.container_element_alias_positions(object);
+        const ContainerSignalAlias* whole_alias { };
+        for (const auto position : design_.container_alias_positions(object)) {
+            const auto& candidate = design_.container_signal_aliases_[position];
+            if (candidate.writable) {
+                whole_alias = &candidate;
+            }
+        }
+        if (positions.empty() && whole_alias != nullptr) {
+            // A fixed array whose elements are the bits of one packed
+            // signal, element 0 most significant: the elements are
+            // concatenated and written to that signal into the startup
+            // baseline (IEEE 1800-2023 6.8, 6.21, 10.5).
+            const auto& type = design_.container_objects_[object]
+                                   .initial_value.type;
+            const auto domain = type.two_state && !type.aggregate_value
+                ? frontend::ValueDomain::Bit2
+                : frontend::ValueDomain::Logic4;
+            std::vector<RegisterId> parts;
+            std::size_t total { };
+            bool flattened = true;
+            const auto element_count = [](const ContainerType& element) {
+                if (!element.fixed) {
+                    return std::size_t { 1U };
+                }
+                std::size_t count { 1U };
+                if (element.dimensions.empty()) {
+                    return static_cast<std::size_t>(
+                        std::abs(static_cast<std::int64_t>(element.index_left)
+                            - element.index_right) + 1);
+                }
+                for (const auto& dimension : element.dimensions) {
+                    count *= static_cast<std::size_t>(
+                        std::abs(static_cast<std::int64_t>(dimension.first)
+                            - dimension.second) + 1);
+                }
+                return count;
+            };
+            const auto scalar_leaf = [&](const ContainerType& element) {
+                return (element.element_kind == ContainerElementKind::Packed
+                        || element.element_kind
+                            == ContainerElementKind::Scalar)
+                    && !element.aggregate_value && !element.queue
+                    && !element.associative && element_count(element) == 1U
+                    && element.element_width != 0U;
+            };
+            // The bits of a value in the packed bridge: the elements of an
+            // array in order (element 0 most significant), the members of a
+            // structure in order, recursively.
+            const auto flatten = [&](const auto& self,
+                const ContainerRegisterId holder,
+                const ContainerType& held) -> void {
+                if (held.aggregate_value) {
+                    for (std::size_t member { };
+                        member < held.element_types.size(); ++member) {
+                        const auto& member_type = held.element_types[member];
+                        if (scalar_leaf(member_type)) {
+                            const auto element = allocate_register(
+                                member_type.element_width, domain);
+                            ContainerAggregateRead read;
+                            read.destination = element;
+                            read.source = holder;
+                            read.index = load_constant(unsigned_value(0U, 32U),
+                                frontend::ValueDomain::Bit2);
+                            read.members = {
+                                static_cast<std::uint32_t>(member) };
+                            process_.operations.emplace_back(std::move(read));
+                            parts.push_back(element);
+                            total += member_type.element_width;
+                        } else if (member_type.queue || member_type.associative
+                            || member_type.element_kind
+                                == ContainerElementKind::String) {
+                            flattened = false;
+                            return;
+                        } else {
+                            const auto child
+                                = allocate_container_register(member_type);
+                            ContainerElementRead read;
+                            read.destination = child;
+                            read.source = holder;
+                            read.index = load_constant(unsigned_value(0U, 32U),
+                                frontend::ValueDomain::Bit2);
+                            read.members = {
+                                static_cast<std::uint32_t>(member) };
+                            process_.operations.emplace_back(std::move(read));
+                            self(self, child, member_type);
+                            if (!flattened) {
+                                return;
+                            }
+                        }
+                    }
+                    return;
+                }
+                if (!held.fixed || held.queue || held.associative) {
+                    flattened = false;
+                    return;
+                }
+                const auto count = element_count(held);
+                const auto element_type = nested_element_container_type(held);
+                for (std::size_t ordinal { }; ordinal < count; ++ordinal) {
+                    const auto index = load_constant(
+                        unsigned_value(ordinal, 32U),
+                        frontend::ValueDomain::Bit2);
+                    if (held.element_kind == ContainerElementKind::Packed
+                        || held.element_kind == ContainerElementKind::Scalar) {
+                        const auto element = allocate_register(
+                            held.element_width, domain);
+                        ContainerRead read;
+                        read.destination = element;
+                        read.source = holder;
+                        read.index = index;
+                        read.linear_index = true;
+                        process_.operations.emplace_back(std::move(read));
+                        parts.push_back(element);
+                        total += held.element_width;
+                    } else if (element_type) {
+                        const auto child
+                            = allocate_container_register(*element_type);
+                        ContainerElementRead read;
+                        read.destination = child;
+                        read.source = holder;
+                        read.index = index;
+                        read.linear_index = true;
+                        process_.operations.emplace_back(std::move(read));
+                        self(self, child, *element_type);
+                        if (!flattened) {
+                            return;
+                        }
+                    } else {
+                        flattened = false;
+                        return;
+                    }
+                }
+            };
+            flatten(flatten, *value, type);
+            if (!flattened) {
+                process_ = { };
+                return std::nullopt;
+            }
+            if (parts.empty() || whole_alias->signal >= design_.signal_info_.size()
+                || design_.signal_info_[whole_alias->signal].width != total) {
+                process_ = { };
+                return std::nullopt;
+            }
+            const auto packed = allocate_register(total, domain);
+            process_.operations.emplace_back(Concatenate { packed,
+                std::move(parts), static_cast<std::uint32_t>(total) });
+            process_.operations.emplace_back(WriteBlocking {
+                whole_alias->signal, packed });
+        } else if (positions.empty()) {
+            process_.operations.emplace_back(WriteContainerObject {
+                object, *value, std::nullopt });
+        } else {
+            // A fixed array of element signals: each element is written
+            // through its alias signal into the startup baseline, in
+            // ordinal order (IEEE 1800-2023 6.8, 6.21, 10.5).
+            const auto& type = design_.container_objects_[object]
+                                   .initial_value.type;
+            for (const auto position : positions) {
+                const auto alias
+                    = design_.container_element_signal_aliases_[position];
+                if (!alias.writable || type.element_width == 0U
+                    || type.element_kind == ContainerElementKind::Container
+                    || type.element_kind == ContainerElementKind::Aggregate
+                    || type.element_kind == ContainerElementKind::String) {
+                    process_ = { };
+                    return std::nullopt;
+                }
+                const auto element = allocate_register(type.element_width,
+                    type.two_state ? frontend::ValueDomain::Bit2
+                                   : frontend::ValueDomain::Logic4);
+                ContainerRead read;
+                read.destination = element;
+                read.source = *value;
+                read.index = load_constant(unsigned_value(alias.ordinal, 32U),
+                    frontend::ValueDomain::Bit2);
+                read.linear_index = true;
+                process_.operations.emplace_back(std::move(read));
+                process_.operations.emplace_back(WriteBlocking {
+                    alias.signal, element });
+            }
+        }
     } else if (description.input_actual) {
         const auto destination = *description.input_actual_destination;
         // A conversion program keeps its own copy of the destination's
@@ -6070,48 +6577,10 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
                     && target_record->vhdl != nullptr
                 ? target_record->vhdl->guarded_kind
                 : std::uint8_t { };
-            if (binding->domain != frontend::ValueDomain::Logic9
-                && guarded_kind == 0U) {
+            if (guarded_kind == 0U) {
                 // The target is not a guarded signal: a false guard leaves
-                // its driver unchanged (IEEE 1076-2008 11.6).
-            } else if (binding->domain != frontend::ValueDomain::Logic9) {
-                // A guarded signal's driver is disconnected by a null
-                // transaction after the disconnection delay (6.9).
-                const auto delay = [&]()
-                    -> std::optional<runtime::SimulationTick> {
-                    if (!description.vhdl_disconnection_delay) {
-                        return runtime::SimulationTick { };
-                    }
-                    const auto& source
-                        = description.vhdl_disconnection_delay->primary;
-                    if (!source.expression) {
-                        return source.magnitude;
-                    }
-                    const auto evaluated = specialized_hir_unit_
-                        ->evaluate_integral_expression(*source.expression);
-                    if (!evaluated || *evaluated < 0
-                        || (*evaluated != 0
-                            && source.magnitude
-                                > std::numeric_limits<std::uint64_t>::max()
-                                    / static_cast<std::uint64_t>(
-                                        *evaluated))) {
-                        return std::nullopt;
-                    }
-                    return source.magnitude
-                        * static_cast<std::uint64_t>(*evaluated);
-                }();
-                if (!delay) {
-                    process_ = { };
-                    return std::nullopt;
-                }
-                const auto ignored = allocate_register(
-                    1U, frontend::ValueDomain::Bit2);
-                process_.operations.emplace_back(ClassStaticMethodCall {
-                    ignored,
-                    "@vhdl-disconnect:" + std::to_string(*binding->signal)
-                        + ":" + std::to_string(*delay),
-                    { }, { }, { }, 1U, { } });
-                record_readonly_vhdl_output_write(*binding);
+                // its driver unchanged (IEEE 1076-2019 11.6: the equivalent
+                // process has no else branch), whatever the target's type.
             } else {
                 const auto delay = [&]()
                     -> std::optional<runtime::SimulationTick> {
@@ -6143,19 +6612,48 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
                     process_ = { };
                     return std::nullopt;
                 }
-                const auto disconnected = allocate_register(
-                    binding->width, frontend::ValueDomain::Logic9);
-                auto value = PackedLogic4(binding->width, Logic4::z);
-                value.fill(runtime::Logic9::z);
+                // The disconnection statement of each scalar subelement of
+                // the target: a null transaction after the disconnection
+                // delay (11.6, 10.5.2.2), whose kind the signal's (bus or
+                // register) records for the resolution of a driverless
+                // element (14.7.3.2).
+                const auto selection
+                    = hir_constant_selection(*target, hir_process_scope_);
+                const auto width = selection ? selection->width
+                                             : binding->width;
+                // A whole signal of another type (its resolution function
+                // the design's own) takes a null transaction of its type's
+                // width; its value only gives the width.
+                const bool nine
+                    = binding->domain == frontend::ValueDomain::Logic9;
+                const auto disconnected = allocate_register(width,
+                    nine ? frontend::ValueDomain::Logic9 : binding->domain);
+                auto value = PackedLogic4(width, nine ? Logic4::z : Logic4::zero);
+                if (nine) {
+                    value.fill(runtime::Logic9::z);
+                }
                 process_.operations.emplace_back(LoadConstant {
                     disconnected, std::move(value) });
-                process_.operations.emplace_back(WriteProjected {
-                    *binding->signal,
-                    disconnected,
-                    *delay,
-                    *delay,
-                    ProjectedDelayMode::inertial,
-                });
+                std::vector<ProjectedWaveformElement> waveform;
+                waveform.push_back(ProjectedWaveformElement {
+                    disconnected, *delay, std::nullopt, 0U, guarded_kind });
+                if (selection) {
+                    process_.operations.emplace_back(
+                        WriteProjectedWaveformSlice {
+                            *binding->signal,
+                            std::move(waveform),
+                            static_cast<std::uint32_t>(selection->offset),
+                            *delay,
+                            ProjectedDelayMode::inertial,
+                        });
+                } else {
+                    process_.operations.emplace_back(WriteProjectedWaveform {
+                        *binding->signal,
+                        std::move(waveform),
+                        *delay,
+                        ProjectedDelayMode::inertial,
+                    });
+                }
                 record_readonly_vhdl_output_write(*binding);
             }
             const auto end = static_cast<InstructionIndex>(
@@ -6175,6 +6673,9 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
             lowered = wake_branch.has_value();
         }
         lowered = lowered && lower_hir_statements(description.statements);
+        if (lowered && description.uvm_api_dispatch) {
+            lowered = lower_uvm_api_dispatch();
+        }
         if (!lowered) {
             process_ = { };
             hir_local_registers_.clear();
@@ -6456,7 +6957,8 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
     std::optional<InstructionIndex> vhdl_trailing_wait;
     std::vector<Operation> process_termination;
     if (description.initial || description.final || executes_once
-        || description.vhdl_resolver || description.input_actual_program) {
+        || description.vhdl_resolver || description.systemverilog_resolver
+        || description.input_actual_program) {
         process_termination.emplace_back(Halt { });
     } else if (waits_before_first_execution
         || description.body_timed_always) {

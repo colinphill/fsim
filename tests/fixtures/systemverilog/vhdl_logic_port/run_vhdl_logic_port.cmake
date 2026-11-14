@@ -7,6 +7,8 @@
 # entity driven from VHDL, on the interpreter, the v4 kernel and the
 # reference scheduler.
 
+include("${CMAKE_CURRENT_LIST_DIR}/../../../cmake/FsimTestWorkspace.cmake")
+
 if(NOT DEFINED FSIM_EXECUTABLE OR NOT EXISTS "${FSIM_EXECUTABLE}")
   message(FATAL_ERROR "FSIM_EXECUTABLE must name the built fsim command")
 endif()
@@ -20,6 +22,7 @@ endforeach()
 
 string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef workspace_id)
 set(workspace "${CMAKE_CURRENT_BINARY_DIR}/fsim-vhdl-logic-port-${workspace_id}")
+fsim_test_workspace("${workspace}")
 
 function(run_fsim_step CASE_DIR STEP_NAME)
   execute_process(
@@ -83,3 +86,6 @@ foreach(run IN ITEMS sv_interpreter sv_kernel sv_scheduler)
       "workspace: ${workspace}")
   endif()
 endforeach()
+
+# Passed: remove this run's workspaces (a failure above keeps them).
+fsim_test_workspace_cleanup()

@@ -438,7 +438,27 @@ semantic::SourceSpanId intern_semantic_span(
   }
   std::optional<semantic::ExpansionId> expansion;
   if (!source_span.expansion_stack.empty()) {
-    expansion = model.intern_expansion(source_span.expansion_stack);
+    // The definition of the outermost macro: the digest of the file holding
+    // the `define is the one the source registration recorded.
+    std::optional<semantic::MacroDefinition> macro;
+    if (source_span.macro_origin) {
+      const auto& origin = *source_span.macro_origin;
+      auto definition_file
+          = model.find_source_file(origin.definition_source.str());
+      if (!definition_file) {
+        definition_file = model.find_source_file(
+            normalized_source_name(origin.definition_source.str()));
+      }
+      macro = semantic::MacroDefinition {
+          origin.name,
+          definition_file
+              ? model.source_files()[definition_file->value()].content_digest
+              : std::string {},
+          static_cast<std::uint32_t>(origin.definition.line),
+          static_cast<std::uint32_t>(origin.definition.column)};
+    }
+    expansion = model.intern_expansion(
+        source_span.expansion_stack, macro ? &*macro : nullptr);
   }
   auto begin = semantic_position(source_span.begin);
   auto end = semantic_position(source_span.end);
@@ -459,12 +479,17 @@ semantic::Model build_semantic_model(
     const frontend::ParsedDesign& parsed,
     const std::span<const CheckedSource> hdl_sources,
     const std::span<const CheckedSource> systemc_sources,
-    const std::span<const CheckedSource> standard_sources) {
+    const std::span<const CheckedSource> standard_sources,
+    const std::span<const semantic::SourceFile> compiled_sources) {
   semantic::Model result;
   SemanticModelBuilder builder{result};
   builder.add_sources(hdl_sources);
   builder.add_sources(systemc_sources);
   builder.add_sources(standard_sources);
+  for (const auto& file : compiled_sources) {
+    (void)result.intern_source_file(
+        normalized_source_name(file.physical_name), file.content_digest);
+  }
   for (const auto& unit : parsed.units) {
     builder.add_unit(unit);
   }

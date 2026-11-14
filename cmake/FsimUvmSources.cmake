@@ -20,6 +20,7 @@ set(
 )
 set(FSIM_UVM_1_2_ARCHIVE_SIZE 2463986)
 set(FSIM_UVM_1_2_ROOT_DIR "uvm-1.2")
+set(FSIM_UVM_1_2_VENDORED_DIR "third_party/uvm-1.2/kit")
 set(FSIM_UVM_1_2_TREE_FILE_COUNT 960)
 set(
   FSIM_UVM_1_2_TREE_SHA256
@@ -53,6 +54,7 @@ set(
 )
 set(FSIM_UVM_2020_3_1_ARCHIVE_SIZE 724207)
 set(FSIM_UVM_2020_3_1_ROOT_DIR "1800.2-2020.3.1")
+set(FSIM_UVM_2020_3_1_VENDORED_DIR "third_party/uvm-2020.3.1/kit")
 set(FSIM_UVM_2020_3_1_TREE_FILE_COUNT 326)
 set(
   FSIM_UVM_2020_3_1_TREE_SHA256
@@ -99,8 +101,8 @@ function(fsim_uvm_validate_metadata)
   foreach(release IN LISTS FSIM_UVM_RELEASE_IDS)
     foreach(field IN ITEMS
         VERSION STANDARD RELEASE_ID UPSTREAM_COMMIT URL ARCHIVE_NAME
-        ARCHIVE_SHA256 ARCHIVE_SIZE ROOT_DIR TREE_FILE_COUNT TREE_SHA256
-        REQUIRED_FILES)
+        ARCHIVE_SHA256 ARCHIVE_SIZE ROOT_DIR VENDORED_DIR TREE_FILE_COUNT
+        TREE_SHA256 REQUIRED_FILES)
       fsim_uvm_release_field("${release}" "${field}" value)
       if(value STREQUAL "")
         message(FATAL_ERROR "empty ${field} metadata for ${release}")
@@ -238,10 +240,16 @@ function(fsim_uvm_compute_tree_identity root output_count output_digest)
   set(${output_digest} "${tree_digest}" PARENT_SCOPE)
 endfunction()
 
+# `expected_root_name` is the archive's top-level directory for an extracted
+# archive and empty for the vendored tree, whose root is named by VENDORED_DIR.
 function(fsim_uvm_validate_source_tree release root)
-  fsim_uvm_release_field("${release}" ROOT_DIR expected_root_name)
+  set(expected_root_name "")
+  if(ARGC GREATER 2)
+    set(expected_root_name "${ARGV2}")
+  endif()
   get_filename_component(actual_root_name "${root}" NAME)
-  if(NOT actual_root_name STREQUAL expected_root_name)
+  if(NOT expected_root_name STREQUAL "" AND
+      NOT actual_root_name STREQUAL expected_root_name)
     message(
       FATAL_ERROR
       "unexpected ${release} source-root name: ${actual_root_name}"
@@ -368,7 +376,7 @@ function(fsim_uvm_materialize_release release work_root archive_override output_
     file(MAKE_DIRECTORY "${source_parent}")
     file(ARCHIVE_EXTRACT INPUT "${archive}" DESTINATION "${source_parent}")
   endif()
-  fsim_uvm_validate_source_tree("${release}" "${root}")
+  fsim_uvm_validate_source_tree("${release}" "${root}" "${root_dir}")
 
   file(MAKE_DIRECTORY "${work_root}/manifests")
   set(manifest "${work_root}/manifests/${release}.txt")
@@ -380,17 +388,44 @@ endfunction()
 
 function(fsim_uvm_configure_sources)
   string(TOUPPER "${FSIM_UVM_SOURCE_MODE}" mode)
-  if(NOT mode MATCHES "^(OFF|FETCH|ARCHIVE)$")
+  if(NOT mode MATCHES "^(OFF|VENDORED|FETCH|ARCHIVE)$")
     message(
       FATAL_ERROR
-      "FSIM_UVM_SOURCE_MODE must be OFF, FETCH, or ARCHIVE "
+      "FSIM_UVM_SOURCE_MODE must be OFF, VENDORED, FETCH, or ARCHIVE "
       "(received '${FSIM_UVM_SOURCE_MODE}')"
     )
   endif()
   if(mode STREQUAL "OFF")
     set(FSIM_UVM_1_2_SOURCE_DIR "" PARENT_SCOPE)
     set(FSIM_UVM_2020_3_1_SOURCE_DIR "" PARENT_SCOPE)
-    message(STATUS "fsim external UVM sources disabled")
+    message(STATUS "fsim UVM sources disabled")
+    return()
+  endif()
+  if(mode STREQUAL "VENDORED")
+    # The default: the reviewed releases checked in under third_party, with
+    # no network access and no archive.  The tree identity and entry-point
+    # digests are the ones frozen for the official archives.
+    fsim_uvm_validate_metadata()
+    if(DEFINED FSIM_SOURCE_DIR AND NOT FSIM_SOURCE_DIR STREQUAL "")
+      set(source_root "${FSIM_SOURCE_DIR}")
+    else()
+      set(source_root "${PROJECT_SOURCE_DIR}")
+    endif()
+    foreach(release IN ITEMS uvm-1.2 uvm-2020.3.1)
+      fsim_uvm_release_field("${release}" VENDORED_DIR vendored_dir)
+      set(vendored_root "${source_root}/${vendored_dir}")
+      fsim_uvm_validate_source_tree("${release}" "${vendored_root}")
+      if(release STREQUAL "uvm-1.2")
+        set(root_1_2 "${vendored_root}")
+      else()
+        set(root_2020 "${vendored_root}")
+      endif()
+    endforeach()
+    set(FSIM_UVM_1_2_SOURCE_DIR "${root_1_2}" PARENT_SCOPE)
+    set(FSIM_UVM_2020_3_1_SOURCE_DIR "${root_2020}" PARENT_SCOPE)
+    set(FSIM_UVM_SOURCE_MANIFESTS "" PARENT_SCOPE)
+    message(STATUS "fsim UVM 1.2 source: ${root_1_2}")
+    message(STATUS "fsim UVM 2020.3.1 source: ${root_2020}")
     return()
   endif()
   if(mode STREQUAL "ARCHIVE")

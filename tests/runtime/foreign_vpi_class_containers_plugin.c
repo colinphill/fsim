@@ -6,7 +6,6 @@
 // routines, and a size-change callback. At the end of time 1 the plug-in
 // reads them; the queue then grows at time 2.
 // Lines starting with "#c " form the checked trace.
-#include "fsim/runtime/dpi_plugin_abi.h"
 #include "fsim/runtime/vpi_abi.h"
 #include "sv_vpi_user.h"
 

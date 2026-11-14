@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+inl str pass=2 fail=25,
+inl mix pass=1 fail=35,
+inl mc pass=1 fail=21,35,
+inl ex pass@25 after@25 calls=q3@15,

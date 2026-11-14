@@ -1,31 +1,59 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "application_class_execution.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
+#include "fsim/runtime/vpi_control.hpp"
 #include "application_simulation_internal.hpp"
+#include "../runtime/simir_static_kernel_native.hpp"
 #include "application_uvm_registry.hpp"
-#include "fsim/app/design_artifact.hpp"
 #include "fsim/app/sdf_reannotation.hpp"
 #include "fsim/elaboration/sdf_net_delay_split.hpp"
-#include "fsim/artifact/coverage_database_codec.hpp"
-#include "fsim/artifact/coverage_database_merge.hpp"
-#include "fsim/support/path.hpp"
-#include "fsim/support/sha256.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "../runtime/simir_process_program.hpp"
+#include "application_internal.hpp"
+#include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/elaboration/elaborator.hpp"
+#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/diagnostic.hpp"
+#include "fsim/runtime/class_heap.hpp"
+#include "fsim/runtime/class_methods.hpp"
+#include "fsim/runtime/logic.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/run_state_sections.hpp"
+#include "fsim/runtime/scheduler_events.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_container_value.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include "fsim/runtime/systemverilog_coverage_state.hpp"
+#include "fsim/runtime/uvm_phase.hpp"
+#include "fsim/runtime/vhdl_psl.hpp"
+#include "fsim/runtime/vhpi_object.hpp"
+#include "fsim/runtime/vpi_callback.hpp"
+#include "fsim/runtime/vpi_data_read.hpp"
+#include "fsim/runtime/vpi_object.hpp"
+#include "fsim/runtime/vpi_time.hpp"
+#include "fsim/runtime/vpi_value_control.hpp"
 
 #include <algorithm>
-#include <atomic>
-#include <charconv>
 #include <chrono>
-#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
-#include <future>
 #include <iostream>
-#include <iterator>
-#include <numeric>
 #include <ranges>
 #include <set>
-#include <thread>
 #include <tuple>
 #include <type_traits>
+#include <cstdint>
+#include <exception>
+#include <functional>
+#include <memory>
+#include <optional>
+#include <ratio>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 namespace fsim::app {
 using namespace application_detail;
@@ -373,6 +401,15 @@ runtime::RunResult Simulation::run(
                 std::cerr << cause << ':' << count << ',';
             }
             std::cerr << '\n';
+            // The host class executor runs class code that no generated
+            // code runs; a compiled run enters it never.
+            std::cerr << "fsim-profile: class-executor invocations="
+                      << impl_->class_hir_execution.invocations() << '\n';
+            for (const auto& [site, count]
+                : impl_->class_hir_execution.invocation_sites()) {
+                std::cerr << "fsim-profile: class-executor-site " << site
+                          << " count=" << count << '\n';
+            }
             for (const auto& [program, count] : counts.executed_programs) {
                 auto name = program;
                 std::ranges::replace(name, ' ', '_');
@@ -401,6 +438,24 @@ runtime::RunResult Simulation::run(
         }
         impl_->refresh_observation_hooks();
         return result;
+    } catch (const runtime::simir::AssertionError&) {
+        impl_->lifecycle = Impl::Lifecycle::poisoned;
+        throw;
+    } catch (const runtime::DeltaCycleLimitError&) {
+        impl_->lifecycle = Impl::Lifecycle::poisoned;
+        throw;
+    } catch (const std::exception& error) {
+        impl_->lifecycle = Impl::Lifecycle::poisoned;
+        // An error a generated pre_randomize or post_randomize left names
+        // the callback, as one the runtime runs does (18.6.1).
+        // $finish ends the run where it is (IEEE 1800-2023 20.2): an error
+        // of a final block after it is no callback's.
+        if (!impl_->randomize_callback_contexts.empty()
+            && !impl_->interpreter->stopped_by_design()) {
+            throw std::runtime_error {
+                impl_->randomize_callback_error(error.what()) };
+        }
+        throw;
     } catch (...) {
         impl_->lifecycle = Impl::Lifecycle::poisoned;
         throw;
@@ -615,12 +670,24 @@ std::size_t Simulation::compiled_module_count() const noexcept
     return 0U;
 }
 
-// Stub: the per-process JIT native cache no longer exists; all counters are
-// zero. The v4 kernel cache is reported by the planner and codegen profiles.
+// The v4 kernel's use of the code built ahead of time (elaborate --aot), as
+// its code generator counts it; all zero without a code generator. The kernel
+// compiles on the calling thread, so there is nothing to synchronize with.
 NativeCacheStatistics Simulation::native_cache_statistics(
     const bool) const noexcept
 {
-    return { };
+    if (!impl_->static_kernel_codegen) {
+        return { };
+    }
+    const auto counts = impl_->static_kernel_codegen->cache_statistics();
+    NativeCacheStatistics statistics;
+    statistics.hits = counts.hits;
+    statistics.misses = counts.misses;
+    statistics.stores = counts.stores;
+    statistics.rejected_entries = counts.rejected_entries;
+    statistics.load_failures = counts.load_failures;
+    statistics.store_failures = counts.store_failures;
+    return statistics;
 }
 
 // Stub: there is no background native compilation to await.
@@ -766,6 +833,15 @@ Simulation::systemverilog_vpi_assertions() const noexcept
     return *impl_->vpi_assertions;
 }
 
+std::optional<std::uint32_t> Simulation::systemverilog_vpi_assertion_occurrence(
+    const fsim_vpi_handle_v1 assertion) const
+{
+    const auto found = impl_->vpi_assertion_occurrences.find(assertion);
+    return found == impl_->vpi_assertion_occurrences.end()
+        ? std::nullopt
+        : std::optional { found->second };
+}
+
 void Simulation::set_safe_point_hook(SafePointHook hook)
 {
     impl_->safe_point_hook = std::move(hook);
@@ -859,10 +935,11 @@ std::uint64_t Simulation::add_driver_transaction_hook(
     if (impl_->driver_transaction_observers.size() == 1U) {
         impl_->interpreter->set_driver_transaction_hook(
             [impl = impl_.get()](const runtime::simir::ProcessId process,
-                const SignalId signal) {
+                const SignalId signal, const std::uint32_t offset,
+                const std::uint32_t width) {
                 for (const auto& [_, observer] :
                     impl->driver_transaction_observers) {
-                    observer(process, signal);
+                    observer(process, signal, offset, width);
                 }
             });
     }
@@ -1579,7 +1656,9 @@ void Simulation::install_execution_point_hooks()
                 && point.kind != Kind::thread_enter
                 && point.kind != Kind::object_created
                 && point.kind != Kind::assertion_pass
-                && point.kind != Kind::assertion_fail) {
+                && point.kind != Kind::assertion_fail
+                && point.kind != Kind::block_exit
+                && point.kind != Kind::call_value) {
                 impl->execution_point_primary(scheduler, point);
             }
         });
@@ -1738,6 +1817,12 @@ void Simulation::set_assertion_step_hook(AssertionStepHook hook)
     impl_->assertion_step_hook = std::move(hook);
 }
 
+void Simulation::set_assertion_control_task_hook(
+    AssertionControlTaskHook hook)
+{
+    impl_->assertion_control_task_hook = std::move(hook);
+}
+
 Simulation::AssertionStepResult Simulation::set_assertion_step(
     const std::uint64_t assertion, const runtime::SimulationTick start,
     const bool enable)
@@ -1791,6 +1876,97 @@ void Simulation::set_class_property_change_hook(
     ClassPropertyChangeHook hook)
 {
     impl_->class_property_change_hook = std::move(hook);
+}
+
+void Simulation::set_class_property_container_change_hook(
+    ClassPropertyContainerChangeHook hook)
+{
+    impl_->class_property_container_change_hook = std::move(hook);
+}
+
+void Simulation::watch_class_container(const runtime::SystemVerilogClassHandle handle,
+    const std::size_t property, const bool watched)
+{
+    auto& watches = impl_->class_container_watches;
+    const auto key = std::pair { handle, property };
+    if (watched) {
+        ++watches[key];
+    } else if (const auto found = watches.find(key);
+               found != watches.end() && --found->second == 0U) {
+        watches.erase(found);
+    }
+    if (!impl_->interpreter) {
+        return;
+    }
+    if (watches.empty()) {
+        impl_->interpreter->set_class_container_watched_hook({ });
+        return;
+    }
+    // A method's cached `this` array is written back to the object after
+    // each statement that changes it, for a watched property only (IEEE
+    // 1800-2023 38.36.1).
+    impl_->interpreter->set_class_container_watched_hook(
+        [impl = impl_.get()](const std::uint64_t object,
+            const std::string_view identity) {
+            const auto first
+                = impl->class_container_watches.lower_bound({ object, 0U });
+            if (first == impl->class_container_watches.end()
+                || first->first.first != object
+                || !impl->class_heap.contains(object)) {
+                return false;
+            }
+            const auto& held = impl->class_heap.object(object);
+            const auto named = std::ranges::find(held.property_names, identity);
+            if (named == held.property_names.end()) {
+                return false;
+            }
+            return impl->class_container_watches.contains(
+                { object,
+                    static_cast<std::size_t>(
+                        named - held.property_names.begin()) });
+        });
+}
+
+std::optional<runtime::simir::ContainerValue>
+Simulation::class_static_container_value(
+    const std::string_view identity, const std::string_view specialization) const
+{
+    const auto object
+        = impl_->class_static_container_object(identity, specialization);
+    if (!object) {
+        return std::nullopt;
+    }
+    return impl_->interpreter->container_object_value_snapshot(*object);
+}
+
+std::optional<runtime::simir::SynchronizationObject>
+Simulation::synchronization_object(const std::uint64_t handle) const
+{
+    return impl_->interpreter->synchronization_object(handle);
+}
+
+bool Simulation::watch_class_static_container(
+    const std::string_view identity, const std::string_view specialization)
+{
+    const auto object
+        = impl_->class_static_container_object(identity, specialization);
+    if (!object) {
+        return false;
+    }
+    if (impl_->class_static_container_watches
+            .try_emplace(*object, std::string { identity },
+                std::string { specialization })
+            .second) {
+        impl_->interpreter->watch_container_object_changes(*object);
+        impl_->refresh_observation_hooks();
+    }
+    return true;
+}
+
+void Simulation::set_class_static_container_change_hook(
+    ClassStaticContainerChangeHook hook)
+{
+    impl_->class_static_container_change_hook = std::move(hook);
 }
 
 void Simulation::set_class_static_property_change_hook(

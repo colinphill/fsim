@@ -1,13 +1,17 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Governed external UVM sources
 
-Fsim does not vendor or patch the UVM reference implementations. The Batch 159
-source harness materializes the two reviewed Accellera archives only in an
-isolated build/work directory, validates the archive before extraction, and
-then validates every extracted file through a canonical path-and-content tree
-digest. Generated manifests record the release identity, archive, source root,
-complete tree identity, and exact package, macro, DPI, license, notice, and
-release-note entry points.
+Fsim vendors the two reviewed Accellera UVM releases unmodified and never
+patches them. `third_party/uvm-1.2/kit` and `third_party/uvm-2020.3.1/kit` are
+the official archives' trees extracted byte-for-byte (Apache-2.0, with each
+release's `LICENSE.txt` and `NOTICE.txt`); each directory also carries a
+`README.md` with the provenance and a `SHA256SUMS` of every file. The source
+harness (`cmake/FsimUvmSources.cmake`) validates the vendored trees at
+configuration time through a canonical path-and-content tree digest and the
+exact entry-point digests, and can still materialize and validate the official
+archives. Generated manifests record the release identity, archive, source
+root, complete tree identity, and exact package, macro, DPI, license, notice,
+and release-note entry points.
 
 | Harness ID | Standard/version | Immutable upstream identity | Official archive | Archive SHA-256 | Extracted identity |
 |---|---|---|---|---|---|
@@ -20,12 +24,15 @@ The governed entry points are `src/uvm_pkg.sv`, `src/uvm_macros.svh`,
 individual digests are frozen in `cmake/FsimUvmSources.cmake`; the full-tree
 digest prevents an unreviewed change elsewhere in either distribution.
 
-Normal fsim configuration uses `FSIM_UVM_SOURCE_MODE=OFF` and performs no
-network access. `FETCH` downloads the two exact official archives into
+Normal fsim configuration uses `FSIM_UVM_SOURCE_MODE=VENDORED` (the default),
+which validates the vendored trees and performs no network access. `OFF`
+disables the UVM tests. The alternatives verify the vendored trees against the
+official archives: `FETCH` downloads the two exact official archives into
 `FSIM_UVM_WORK_ROOT`; `ARCHIVE` consumes exact predownloaded files named by
-`FSIM_UVM_1_2_ARCHIVE` and `FSIM_UVM_2020_3_1_ARCHIVE`. All modes reject an
-authored-source work root; an ignored configured binary tree remains valid. A
-direct materialization is also available:
+`FSIM_UVM_1_2_ARCHIVE` and `FSIM_UVM_2020_3_1_ARCHIVE`. Both extract into the
+work root and apply the same archive-size, SHA-256, and tree-identity checks.
+All archive modes reject an authored-source work root; an ignored configured
+binary tree remains valid. A direct materialization is also available:
 
 ```sh
 cmake -DFSIM_SOURCE_DIR="$PWD" \
@@ -34,9 +41,14 @@ cmake -DFSIM_SOURCE_DIR="$PWD" \
   -P cmake/MaterializeUvmSources.cmake
 ```
 
-The downloaded archives, extracted sources, and generated manifests are build
-products and remain outside fsim's authored source, license, and release
-inventories.
+The installed package carries each release under
+`share/fsim/uvm/<release>/` (`uvm-1.2`, `uvm-2020.3.1`) and the license,
+notice, README, and `SHA256SUMS` under `share/doc/fsim/third-party/<release>/`.
+Archives downloaded by `FETCH`/`ARCHIVE`, their extracted sources, and generated
+manifests are build products and remain outside fsim's authored source and
+inventories; the vendored trees are third-party sources that keep their own
+headers and are exempt from fsim's SPDX-header rule.
+
 
 ## Batch 160-161 exact UVM execution resource baseline
 

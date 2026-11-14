@@ -555,6 +555,11 @@ public:
     [[nodiscard]] std::optional<SpecializedHirVhdlConstantValue>
     evaluate_vhdl_constant_expression(ExpressionId expression) const;
 
+    /// Whether a VHDL expression is a value of IEEE.STD_LOGIC_1164's
+    /// STD_ULOGIC or a subtype of it (IEEE 1076-2019 16.7), whose integral
+    /// value is its position in STD_ULOGIC.
+    [[nodiscard]] bool vhdl_std_ulogic_expression(ExpressionId expression) const;
+
     /// Evaluate one bounded one-dimensional array of packed VHDL constants.
     /// Unsupported shapes, mismatched bounds, and partially initialized
     /// arrays return no value. Elements are ordered from the declared left

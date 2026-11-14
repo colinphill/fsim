@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/runtime/simir.hpp"
 #include "fsim/runtime/vcd_writer.hpp"
 
 #include <algorithm>
@@ -15,7 +17,6 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
-#include <variant>
 #include <vector>
 
 namespace {
@@ -315,13 +316,14 @@ void verify(
                   << calls << '\n';
     }
     assert(calls == expected_call_points);
-    // `failing(8'd0)` folds to x (IEEE 1800-2017 11.4.2), so its two calls
-    // are not lowered.
-    if (capture.call_operations != 41) {
+    // `failing(8'd0)` is a user function call in procedural code, not a
+    // constant expression context: its two calls are lowered and run when
+    // the expression does (IEEE 1800-2023 13.4.3).
+    if (capture.call_operations != 43) {
         std::cerr << "unexpected lowered Call operation count: "
                   << capture.call_operations << '\n';
     }
-    assert(capture.call_operations == 41);
+    assert(capture.call_operations == 43);
     assert(std::ranges::find(
                capture.locals, "inner.temporary")
         != capture.locals.end());

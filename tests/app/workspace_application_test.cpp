@@ -2,6 +2,7 @@
 #include "../../src/app/application_workspace_store.hpp"
 
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
 #include "fsim/app/artifact_phase.hpp"
 #include "fsim/artifact/coverage_database_codec.hpp"
 #include "fsim/artifact/design.hpp"
@@ -2169,6 +2170,48 @@ void test_outdated_objects()
     assert_output(simulate(), "OU_USE 7");
 }
 
+void test_package_sequence_import()
+{
+    // A package's sequences and properties reach a unit compiled apart from
+    // it, by wildcard and explicit import and by qualified name (IEEE
+    // 1800-2023 16.8, 16.12, 26.3); editing the package refuses the stale
+    // importer until it is recompiled, as for any package member.
+    Directory directory;
+    workspace::Store store { directory.path };
+    const auto package = [](const std::string_view second) {
+        return "package ps_q;\n  sequence s(x, y);\n    x ##1 " + std::string { second }
+            + ";\n  endsequence\n  property p(x, y);\n    x |=> y;\n"
+              "  endproperty\nendpackage\n";
+    };
+    const auto user = [](const std::string_view name, const std::string_view imports) {
+        return "module " + std::string { name } + ";\n  " + std::string { imports }
+            + "\n  logic clk = 0, a = 1, b = 1;\n  int n1, n2, n3;\n"
+              "  always #5 clk = ~clk;\n"
+              "  cover property (@(posedge clk) s(a, b)) n1++;\n"
+              "  cover property (@(posedge clk) ps_q::s(a, b)) n2++;\n"
+              "  assert property (@(posedge clk) p(a, b)) n3++;\n"
+              "  initial begin #100; $display(\"PS %0d %0d %0d\", n1, n2, n3); "
+              "$finish; end\nendmodule\n";
+    };
+    write_file("pkg.sv", package("y"));
+    write_file("wild.sv", user("ps_wild", "import ps_q::*;"));
+    write_file("named.sv", user("ps_named", "import ps_q::s; import ps_q::p;"));
+    assert(invoke({ "compile", "--quiet", "pkg.sv" }).output.empty());
+    assert(invoke({ "compile", "--quiet", "wild.sv" }).output.empty());
+    assert(invoke({ "compile", "--quiet", "named.sv" }).output.empty());
+    for (const auto* const top : { "ps_wild", "ps_named" }) {
+        elaborate({ top });
+        assert_output(simulate(), "PS 9 9 9");
+    }
+    write_file("pkg.sv", package("!y"));
+    assert(invoke({ "compile", "--quiet", "pkg.sv" }).output.empty());
+    const auto stale = elaborate({ "ps_wild" }, "default", false);
+    assert(stale.error.find("FSIM-WS-002") != std::string::npos);
+    assert(invoke({ "compile", "--quiet", "wild.sv" }).output.empty());
+    elaborate({ "ps_wild" });
+    assert_output(simulate(), "PS 0 0 9");
+}
+
 void test_package_first_compile()
 {
     // A package passes no state to the files after it, so its users compile
@@ -2264,6 +2307,7 @@ int main(const int argc, const char* const* argv)
         Case { "vhdl-latest-architecture", test_vhdl_latest_architecture },
         Case { "compile-order-cache-key", test_compile_order_keeps_cache_key },
         Case { "package-first-compile", test_package_first_compile },
+        Case { "package-sequence-import", test_package_sequence_import },
         Case { "outdated-objects", test_outdated_objects },
     };
     if (argc > 2) {

@@ -3,6 +3,7 @@
 #include "fsim/runtime/packed_value.hpp"
 #include "fsim/runtime/scheduler.hpp"
 #include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 #include "fsim/runtime/simir_vital.hpp"
 #include "fsim/runtime/vcd_writer.hpp"
 
@@ -11,9 +12,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
-#include <iostream>
 #include <limits>
-#include <memory>
 #include <optional>
 #include <sstream>
 #include <stdexcept>

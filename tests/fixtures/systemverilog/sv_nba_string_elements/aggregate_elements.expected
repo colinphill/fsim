@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+sns agg queue same-step 1 2
+sns agg queue next-step 10 20 3 4
+sns agg queue sampled 3 4 10
+sns agg queue sampled-next 7 8 6 6
+sns agg fixed same-step 0 0
+sns agg fixed next-step 0 30 31
+sns agg dynamic 0 40 41
+sns agg assoc same-step n=0 e4=0
+sns agg assoc next-step n=1 e4=1 9 10
+sns agg assoc other n=1 a=99 b=8 e5=0
+sns agg assoc delayed n=2 a5=50 b5=51
+sns cont dynamic same-step 0
+sns cont dynamic next-step 0 3 1 3
+sns cont assoc same-step n=0
+sns cont assoc next-step n=1 size=1 q0=5

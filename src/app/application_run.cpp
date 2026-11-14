@@ -4,7 +4,7 @@
 #include "application_trace_control.hpp"
 #include "application_trace_hierarchy.hpp"
 #include "application_trace_observation.hpp"
-#include "fsim/app/design_artifact.hpp"
+#include "fsim/app/artifact_schema.hpp"
 #if defined(FSIM_HAS_LLVM)
 #include "fsim/compiler/static_kernel_codegen.hpp"
 #endif
@@ -13,16 +13,54 @@
 #include "fsim/support/glob_match.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
-#include "fsim/support/sha256.hpp"
+#include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/app/trace_api.hpp"
+#include "fsim/artifact/coverage_identity.hpp"
+#include "fsim/compiler/object_cache.hpp"
+#include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/elaboration/elaborator.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/preprocessor.hpp"
+#include "fsim/frontend/systemverilog_scalars.hpp"
+#include "fsim/project/project.hpp"
+#include "fsim/runtime/logic.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include "fsim/runtime/systemverilog_scalar.hpp"
+#include "fsim/runtime/trace_model.hpp"
+#include "fsim/runtime/uvm_activity.hpp"
+#include "fsim/runtime/vcd_writer.hpp"
+#include "fsim/semantic/compiled_design.hpp"
+#include "fsim/semantic/design_ir.hpp"
+#include "fsim/semantic/model.hpp"
+#include "fsim/semantic/vhdl_hir.hpp"
+#include "fsim/version.hpp"
+#include "fsim/runtime/simir.hpp"
 
 #include <algorithm>
 #include <cctype>
-#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <limits>
 #include <map>
 #include <set>
+#include <array>
+#include <charconv>
+#include <cstdint>
+#include <exception>
+#include <ios>
+#include <iterator>
+#include <memory>
+#include <optional>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace fsim::app::application_detail {
 

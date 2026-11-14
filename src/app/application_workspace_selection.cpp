@@ -8,7 +8,6 @@
 #include <array>
 #include <ranges>
 #include <set>
-#include <tuple>
 #include <vector>
 
 namespace fsim::app::application_detail {
@@ -760,8 +759,16 @@ namespace {
             if (metadata->compilation_digest != record.fingerprint) {
                 return workspace_error(diagnostics_, "compiled object fingerprint differs from its library catalog");
             }
+            // The packages of an object compiled with a governed UVM release:
+            // its library package is the one the native UVM services serve.
             if (metadata->uvm_release != "none") {
-                select_target({ "systemverilog", { }, "uvm_pkg", { } }, location(index).name, "package");
+                for (const auto& owned : record.units) {
+                    if (owned.unit.language == "systemverilog"
+                        && owned.unit.kind == "package") {
+                        select_target({ "systemverilog", { }, owned.unit.name, { } },
+                            location(index).name, "package");
+                    }
+                }
             }
             WorkspaceObjectSelection selected { *path, { } };
             for (const auto& owned : record.units) {

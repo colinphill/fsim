@@ -34,7 +34,8 @@ namespace {
         || view.driver_regions().size() != 1U
         || view.string_register_count() != 0U
         || view.container_register_count() != 0U
-        || !view.debug_locals().empty() || !view.call_results().empty()
+        || !view.debug_locals().empty()
+        || runtime::simir::has_function_results(view.call_results())
         || !view.debug_string_locals().empty()
         || !view.debug_container_locals().empty()
         || !view.static_trigger_regions().empty()
@@ -280,6 +281,54 @@ void HierarchyBuilder::append_generated_systemverilog_processes(
         specialization.processes.push_back(generated.id);
         design_.append_process_record(std::move(generated));
     }
+}
+
+HierarchyBuilder::UvmApiEmission HierarchyBuilder::emit_uvm_api_process(
+    Lowerer& source, const semantic::sv::Unit& unit,
+    SpecializationInfo& specialization,
+    const std::optional<std::uint32_t> program_owner,
+    const frontend::Language language, const std::string& path,
+    const bool retry)
+{
+    if (uvm_api_process_emitted_ || !source.design_has_uvm_component()) {
+        return UvmApiEmission::done;
+    }
+    if (uvm_api_process_deferred_path_
+        && *uvm_api_process_deferred_path_ != path) {
+        // Deferred by another instance: its later pass retries it, with the
+        // lowering context of the first attempt.
+        return UvmApiEmission::done;
+    }
+    uvm_api_process_emitted_ = true;
+    source.reset_hierarchical_reference_state();
+    const auto diagnostics_before = diagnostics_.size();
+    source.set_hierarchical_reference_retry(retry);
+    auto lowered = source.lower_uvm_api_process(language, path);
+    source.set_hierarchical_reference_retry(false);
+    if (!lowered && retry && source.hierarchical_reference_missed()) {
+        // A component's method names an instance bound later (a virtual
+        // interface member, IEEE 1800-2023 25.9): retried then.
+        diagnostics_.resize(diagnostics_before);
+        uvm_api_process_emitted_ = false;
+        uvm_api_process_deferred_path_ = path;
+        return UvmApiEmission::deferred;
+    }
+    uvm_api_process_deferred_path_.reset();
+    if (!lowered) {
+        report("FSIM-ELAB-HIR-001",
+            "the UVM dispatch process could not be lowered from HIR"
+                + hir_lowering_rejection_detail(source),
+            compiled_source_span(*compiled_, unit.source));
+        return UvmApiEmission::failed;
+    }
+    lowered->language_standard = unit.standard;
+    lowered->compatibility_profile = unit.compatibility_profile;
+    lowered->reactive = program_owner.has_value();
+    lowered->program_owner = program_owner;
+    canonicalize_process_operations(*lowered);
+    specialization.processes.push_back(lowered->id);
+    design_.append_process_record(std::move(*lowered));
+    return UvmApiEmission::done;
 }
 
 bool HierarchyBuilder::lower_compiled_systemverilog_processes(
@@ -528,6 +577,12 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
             lowered->id, process_id);
         design_.append_process_record(std::move(*lowered));
         append_generated_processes(lowerer);
+    }
+    if (!active_processes.empty()
+        && emit_uvm_api_process(lowerer, unit, specialization, program_owner,
+               source_language, path, deferred_processes != nullptr)
+            == UvmApiEmission::failed) {
+        return false;
     }
     // Constant continuous drivers of this instance's generate blocks run as
     // one process (merge_constant_drivers);
@@ -1012,6 +1067,19 @@ bool HierarchyBuilder::lower_deferred_systemverilog_processes(
         append_generated_systemverilog_processes(
             lowerer, unit, specialization, program_owner);
     }
+    if (!uvm_api_process_emitted_) {
+        // The dispatch process's own retry, or its first lowering when every
+        // process of the first instance waited for this pass.
+        const auto emission = emit_uvm_api_process(lowerer, unit,
+            design_.specializations_[specialization_index], program_owner,
+            source_language, path, missed != nullptr);
+        if (emission == UvmApiEmission::failed) {
+            return false;
+        }
+        if (emission == UvmApiEmission::deferred) {
+            missed->uvm_api = true;
+        }
+    }
     return true;
 }
 
@@ -1156,7 +1224,8 @@ void HierarchyBuilder::lower_forward_deferred_systemverilog(
             entry.source_language, entry.items.processes, lowerer,
             entry.specialization_index, entry.program_owner,
             entry.items.statements, final ? nullptr : &missed));
-        if (!missed.processes.empty() || !missed.statements.empty()) {
+        if (!missed.processes.empty() || !missed.statements.empty()
+            || missed.uvm_api) {
             entry.items = std::move(missed);
             forward_deferred_systemverilog_.push_back(std::move(entry));
         }

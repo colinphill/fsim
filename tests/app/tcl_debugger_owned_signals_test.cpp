@@ -652,6 +652,44 @@ puts "owned-containers-ok"
             engine);
     }
 
+    const auto writes_source = directory / "owned-writes.sv";
+    {
+        std::ofstream file(writes_source);
+        file
+            << "module owned_writes; timeunit 1ns; timeprecision 1ns;\n"
+            << "  logic [3:0] x;\n"
+            << "  initial begin\n"
+            << "    x = 1; x = 2;\n"
+            << "    #1 x = 3; x = 4; x = 5;\n"
+            << "    #1 $finish;\n"
+            << "  end\n"
+            << "endmodule\n";
+    }
+    require_cli({ "fsim", "compile", writes_source.string() });
+    require_cli({ "fsim", "elaborate", "--top", "sv:work.owned_writes",
+        "--snapshot", "owned-writes" });
+
+    // A value-change observer hears each blocking write of x that changes
+    // its value, also several in one time step: a blocking assignment
+    // updates its target at once (IEEE 1800-2023 10.4.1), so each is a
+    // change of its own, on every engine.
+    constexpr auto writes_script = R"tcl(
+set ::changes {}
+proc write_change {name value time delta} {
+  if {$name eq "owned_writes.x"} {lappend ::changes [list $value $time]}
+}
+fsim::add_callback value_change write_change
+fsim::run
+set expected [list {0001 0} {0010 0} {0011 1} {0100 1} {0101 1}]
+if {$::changes ne $expected} {
+  error "x changed as $::changes, not once per write"
+}
+puts "owned-writes-ok"
+)tcl";
+    for (const std::string_view engine : { "interpreter", "v4", "debug" }) {
+        run_script("owned-writes", writes_script, "owned-writes-ok", engine);
+    }
+
     std::filesystem::current_path(working_directory.previous);
     return 0;
 }

@@ -4,10 +4,8 @@
 // delay terms on the nets they join (IEEE 1800-2023 37.37, 37.45, 38.22).
 // Lines starting with "#c " form the checked trace.
 #include "fsim/runtime/vpi_abi.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 
-#include <stdio.h>
 #include <string.h>
 
 static const char* text(const char* value)

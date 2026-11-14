@@ -1,8 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_class_execution.hpp"
+#include "application_internal.hpp"
+#include "fsim/runtime/class_heap.hpp"
+#include "fsim/runtime/logic.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/uvm_component.hpp"
+#include "fsim/runtime/uvm_phase.hpp"
 
 #include <algorithm>
 #include <utility>
+#include <cstddef>
+#include <functional>
+#include <map>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <string_view>
 
 namespace fsim::app::application_detail {
 SystemVerilogClassExecution::SystemVerilogClassExecution(

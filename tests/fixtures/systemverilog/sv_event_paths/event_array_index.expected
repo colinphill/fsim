@@ -1,0 +1,6 @@
+sep idx triggered ev[2]=1 ev[3]=0 dv[9]=0 ev[x]=0
+sep idx ev[2] 1
+sep idx wait ev[3] 2
+sep idx wait dv[6] 3
+sep idx wait ev[4] 6
+sep idx done 7

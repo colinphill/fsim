@@ -5,6 +5,25 @@
 #include "fsim/runtime/logic.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
 #include "fsim/support/phase_profile.hpp"
+#include "../runtime/simir_process_program.hpp"
+#include "elaboration_targets.hpp"
+#include "elaborator_internal.hpp"
+#include "fsim/elaboration/elaborator.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/source.hpp"
+#include "fsim/frontend/systemverilog_scalars.hpp"
+#include "fsim/runtime/file_operations.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_container_value.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include "fsim/runtime/simir_shared_vector.hpp"
+#include "fsim/semantic/compiled_design.hpp"
+#include "fsim/semantic/model.hpp"
+#include "fsim/semantic/systemverilog_hir.hpp"
+#include "fsim/semantic/vhdl_hir.hpp"
+#include "scoped_bindings.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -20,6 +39,11 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <cstdint>
+#include <functional>
+#include <string>
+#include <string_view>
+#include <vector>
 
 namespace fsim::elaboration {
 using namespace runtime::simir;
@@ -45,62 +69,6 @@ const semantic::sv::TypeDefinition* compiled_systemverilog_type(
     return found && found->systemverilog != nullptr
         ? found->systemverilog
         : nullptr;
-}
-
-const semantic::sv::Statement* compiled_systemverilog_statement(
-    const semantic::CompiledDesign& compiled,
-    const semantic::StatementId id)
-{
-    const auto found = compiled.find_statement(id);
-    return found && found->systemverilog != nullptr
-        ? found->systemverilog
-        : nullptr;
-}
-
-const semantic::sv::Expression* compiled_systemverilog_expression(
-    const semantic::CompiledDesign& compiled,
-    const semantic::ExpressionId id)
-{
-    const auto found = compiled.find_expression(id);
-    return found && found->systemverilog != nullptr
-        ? found->systemverilog
-        : nullptr;
-}
-
-bool compiled_resolver_returns_first(
-    const semantic::CompiledDesign& compiled,
-    const semantic::sv::Declaration& function)
-{
-    if (!function.callable || function.callable->formals.size() != 1U
-        || function.statements.size() != 1U) {
-        return false;
-    }
-    const auto* formal = compiled_systemverilog_declaration(
-        compiled, function.callable->formals.front());
-    const auto* statement = compiled_systemverilog_statement(
-        compiled, function.statements.front());
-    if (formal == nullptr || statement == nullptr
-        || statement->kind
-            != semantic::sv::StatementKind::return_statement
-        || !statement->value) {
-        return false;
-    }
-    const auto* value = compiled_systemverilog_expression(
-        compiled, *statement->value);
-    if (value == nullptr
-        || value->kind != semantic::sv::ExpressionKind::index
-        || value->operands.size() != 2U) {
-        return false;
-    }
-    const auto* drivers = compiled_systemverilog_expression(
-        compiled, value->operands.front());
-    const auto* index = compiled_systemverilog_expression(
-        compiled, value->operands.back());
-    return drivers != nullptr && index != nullptr
-        && drivers->kind == semantic::sv::ExpressionKind::name
-        && drivers->text == formal->name
-        && index->kind == semantic::sv::ExpressionKind::integer_literal
-        && index->text == "0";
 }
 
 } // namespace
@@ -239,8 +207,14 @@ HierarchyBuilder::rewrite_eligible_element_net_families()
         }
 
         const auto& type = object_info.type;
+        // An array of nets of a user-defined nettype (6.6.7) may have a
+        // two-state element type.
+        const auto nettype_alias = alias_by_object.find(object_id);
+        const bool nettype_array = nettype_alias != alias_by_object.end()
+            && systemverilog_function_resolvers_.contains(
+                nettype_alias->second->signal);
         if (!type.fixed || type.queue || type.associative
-            || type.string_indices || type.two_state
+            || type.string_indices || (type.two_state && !nettype_array)
             || type.element_kind != ContainerElementKind::Packed
             || type.element_width == 0U
             || type.scalar_kind != frontend::SystemVerilogScalarKind::None
@@ -300,8 +274,12 @@ HierarchyBuilder::rewrite_eligible_element_net_families()
         const auto& proxy_info = design_.signal_info_[proxy];
         const auto& proxy_signal = design_.signals_[proxy];
         if ((proxy_info.systemverilog_net_type != "wire"
-                && proxy_info.systemverilog_net_type != "tri")
-            || proxy_info.source_domain != frontend::ValueDomain::Logic4
+                && proxy_info.systemverilog_net_type != "tri"
+                && !nettype_array)
+            || (proxy_info.source_domain != frontend::ValueDomain::Logic4
+                && !(nettype_array
+                    && proxy_info.source_domain
+                        == frontend::ValueDomain::Bit2))
             || proxy_info.is_port
             || proxy_info.vhdl_array != nullptr
             || proxy_info.vhdl_access != nullptr
@@ -577,6 +555,17 @@ HierarchyBuilder::rewrite_eligible_element_net_families()
             design_.signal_info_.push_back(std::move(leaf_info));
             design_.signals_.push_back(std::move(leaf_signal));
             family.leaves.push_back(leaf_id);
+            // Each element of an array of nets of a user-defined nettype
+            // is a net of that nettype, resolved on its own (IEEE 1800-2023
+            // 6.6.7).
+            if (const auto pending
+                = systemverilog_function_resolvers_.find(family.proxy);
+                pending != systemverilog_function_resolvers_.end()) {
+                auto element = pending->second;
+                element.array = false;
+                systemverilog_function_resolvers_.insert_or_assign(
+                    leaf_id, std::move(element));
+            }
             design_.container_element_signal_aliases_.push_back(
                 ContainerElementSignalAlias {
                     family.object,
@@ -593,6 +582,11 @@ HierarchyBuilder::rewrite_eligible_element_net_families()
                         public_name + suffix, leaf_id);
                 }
             }
+        }
+        // The array itself is no net of the nettype: its elements are. It
+        // is their aggregate view, of their resolution.
+        if (systemverilog_function_resolvers_.erase(family.proxy) != 0U) {
+            systemverilog_nettype_array_proxies_.insert(family.proxy);
         }
     }
 
@@ -697,6 +691,12 @@ HierarchyBuilder::rewrite_eligible_element_net_families()
                     || std::is_same_v<Type, EventTriggered>) {
                     known = true;
                     used = value.destination == register_id;
+                } else if constexpr (
+                    std::is_same_v<Type, EventArrayElement>) {
+                    known = true;
+                    used = value.index == register_id
+                        || (value.destination
+                            && *value.destination == register_id);
                 } else if constexpr (std::is_same_v<Type, Extract>) {
                     known = true;
                     used = value.source == register_id
@@ -1024,6 +1024,11 @@ HierarchyBuilder::rewrite_eligible_element_net_families()
                         || std::is_same_v<Type, SignalDriving>
                         || std::is_same_v<Type, EventTriggered>) {
                         offer(value.destination, 1U);
+                    } else if constexpr (
+                        std::is_same_v<Type, EventArrayElement>) {
+                        if (value.destination) {
+                            offer(*value.destination, 1U);
+                        }
                     } else if constexpr (
                         std::is_same_v<Type, SignalLastEvent>
                         || std::is_same_v<Type, SignalLastActive>) {
@@ -2199,17 +2204,17 @@ std::optional<ResolutionKind>
 HierarchyBuilder::explicit_resolution(
     const SignalId signal)
 {
+    // A net of a user-defined nettype resolves with the nettype's function
+    // or, without one, not at all (IEEE 1800-2023 6.6.7).
+    if (systemverilog_function_resolvers_.contains(signal)
+        || systemverilog_nettype_array_proxies_.contains(signal)) {
+        return ResolutionKind::user_function;
+    }
+    if (systemverilog_unresolved_nettype_nets_.contains(signal)) {
+        return ResolutionKind::none;
+    }
     const auto found = resolver_by_signal_.find(signal);
     if (found == resolver_by_signal_.end()) {
-        const auto& info = design_.signal_info_.at(signal);
-        const auto nettype = info.systemverilog_net_type.empty()
-            ? info.type_name
-            : info.systemverilog_net_type;
-        const auto user_nettype = systemverilog_resolution_kinds_.find(
-            nettype);
-        if (user_nettype != systemverilog_resolution_kinds_.end()) {
-            return user_nettype->second;
-        }
         return std::nullopt;
     }
     if (found->second == "std_logic") {
@@ -2220,10 +2225,6 @@ HierarchyBuilder::explicit_resolution(
     }
     if (const auto user = vhdl_resolution_kinds_.find(found->second);
         user != vhdl_resolution_kinds_.end()) {
-        return user->second;
-    }
-    if (const auto user = systemverilog_resolution_kinds_.find(found->second);
-        user != systemverilog_resolution_kinds_.end()) {
         return user->second;
     }
     report(
@@ -2245,23 +2246,61 @@ void HierarchyBuilder::register_systemverilog_resolution_functions(
         != systemverilog_resolution_unit_registrations_.end()) {
         return;
     }
-    const auto diagnostics_before = diagnostics_.size();
+    systemverilog_resolution_unit_registrations_.push_back(unit.id);
+    // Each nettype's function is found once, whether or not a net uses it.
+    const semantic::CompiledDesignResolver resolver { *compiled_, unit.id };
     for (const auto declaration_id : unit.declarations) {
         const auto* declaration = compiled_systemverilog_declaration(
             *compiled_, declaration_id);
+        if (declaration != nullptr
+            && declaration->form
+                == semantic::sv::DeclarationForm::nettype_declaration
+            && declaration->declared_type) {
+            static_cast<void>(systemverilog_nettype_function(
+                *declaration->declared_type, resolver));
+        }
+    }
+}
+
+HierarchyBuilder::SystemVerilogNettypeFunction
+HierarchyBuilder::systemverilog_nettype_function(
+    const semantic::TypeId nettype,
+    const semantic::CompiledDesignResolver& resolver)
+{
+    if (const auto found = systemverilog_nettype_functions_.find(
+            nettype.value());
+        found != systemverilog_nettype_functions_.end()) {
+        return found->second;
+    }
+    SystemVerilogNettypeFunction result;
+    std::vector<semantic::TypeId> visited;
+    auto current = nettype;
+    while (current.valid()
+        && std::ranges::find(visited, current) == visited.end()) {
+        visited.push_back(current);
+        const auto* type = compiled_systemverilog_type(*compiled_, current);
+        const auto* declaration = type != nullptr
+            ? compiled_systemverilog_declaration(
+                  *compiled_, type->declaration)
+            : nullptr;
         if (declaration == nullptr
             || declaration->form
-                != semantic::sv::DeclarationForm::nettype_declaration
-            || !declaration->declared_type) {
+                != semantic::sv::DeclarationForm::nettype_declaration) {
+            break;
+        }
+        result.nettype = type;
+        if (type->resolution_function.empty()) {
+            // `nettype A B;` names nettype A, with its function, B (6.6.7).
+            current = type->base.target.target;
+            if (!current.valid() && type->base.named) {
+                if (const auto effective
+                    = resolver.effective_systemverilog_type(
+                        type->base, declaration->scope)) {
+                    current = effective->target.target;
+                }
+            }
             continue;
         }
-        const auto* type = compiled_systemverilog_type(
-            *compiled_, *declaration->declared_type);
-        if (type == nullptr || type->resolution_function.empty()) {
-            continue;
-        }
-        const auto& resolver = type->resolution_function;
-        std::vector<const semantic::sv::Declaration*> matches;
         const semantic::CompiledDeclarationPredicate executable_function
             = [](const semantic::CompiledDeclarationView& candidate) {
                   return candidate.systemverilog != nullptr
@@ -2269,106 +2308,68 @@ void HierarchyBuilder::register_systemverilog_resolution_functions(
                           == semantic::sv::DeclarationForm::function
                       && !candidate.systemverilog->statements.empty();
               };
-        const auto resolution = semantic::CompiledDesignResolver {
-            *compiled_, unit.id }
-                                    .resolve_systemverilog(resolver,
-                                        unit.scope, executable_function,
-                                        false);
-        for (const auto candidate_id : resolution.candidates) {
-            if (const auto* candidate = compiled_systemverilog_declaration(
-                    *compiled_, candidate_id)) {
-                matches.push_back(candidate);
+        const auto resolution = resolver.resolve_systemverilog(
+            type->resolution_function, declaration->scope,
+            executable_function, false);
+        if (resolution.candidates.size() == 1U) {
+            result.function = resolution.candidates.front();
+            break;
+        }
+        // `with C::f`: a static function of class C or of a class it
+        // extends (IEEE 1800-2023 6.6.7, 8.23).
+        if (const auto scoped = type->resolution_function.rfind("::");
+            resolution.candidates.empty()
+            && scoped != std::string::npos) {
+            const auto* owner = resolver.resolve_systemverilog_class(
+                std::string_view { type->resolution_function }.substr(
+                    0U, scoped),
+                declaration->scope, false).unique();
+            const auto member = std::string_view {
+                type->resolution_function }.substr(scoped + 2U);
+            std::vector<std::string_view> visited_classes;
+            while (owner != nullptr && !result.function
+                && std::ranges::find(visited_classes,
+                       owner->canonical_identity)
+                    == visited_classes.end()) {
+                visited_classes.push_back(owner->canonical_identity);
+                for (const auto& method : owner->methods) {
+                    if (method.name == member && method.static_method
+                        && method.kind == semantic::sv::ClassMethodKind::function
+                        && method.defined) {
+                        result.function = method.declaration;
+                        break;
+                    }
+                }
+                const auto* next = owner;
+                owner = nullptr;
+                if (next->base) {
+                    for (const auto& candidate :
+                        compiled_->systemverilog_hir.classes()) {
+                        if (candidate.canonical_identity
+                            == next->base->declaration_identity) {
+                            owner = &candidate;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (result.function) {
+                break;
             }
         }
-        const auto source = compiled_source_span(
-            *compiled_, type->source);
-        if (matches.size() != 1U) {
-            report(
-                matches.empty()
-                    ? "FSIM-ELAB-SVNETTYPE-001"
-                    : "FSIM-ELAB-SVNETTYPE-002",
-                matches.empty()
-                    ? "SystemVerilog nettype resolution function '"
-                        + resolver
-                        + "' is not visible with an executable body"
-                    : "SystemVerilog nettype resolution function '"
-                        + resolver + "' is ambiguous",
-                source);
-            continue;
-        }
-        const auto& function = *matches.front();
-        const auto* formal = function.callable
-                && function.callable->formals.size() == 1U
-            ? compiled_systemverilog_declaration(
-                  *compiled_, function.callable->formals.front())
-            : nullptr;
-        const bool profile_matches = function.callable
-            && function.callable->function
-            && formal != nullptr && formal->type
-            && formal->type->container_form
-                == semantic::sv::TypeForm::dynamic_array
-            && type->base.executable_width
-            && function.callable->return_type.executable_width
-            && *type->base.executable_width
-                == *function.callable->return_type.executable_width
-            && type->base.four_state
-                == function.callable->return_type.four_state;
-        if (!profile_matches) {
-            report(
-                "FSIM-ELAB-SVNETTYPE-003",
-                "SystemVerilog nettype resolution function '" + resolver
-                    + "' must take one dynamic array of the net base type "
-                      "and return that base type",
-                compiled_source_span(
-                    *compiled_, function.source));
-            continue;
-        }
-        // A nettype that no net uses never resolves anything.
-        const auto used = std::ranges::any_of(
-            compiled_->systemverilog_hir.declarations(),
-            [&](const semantic::sv::Declaration& candidate) {
-                return candidate.form
-                        != semantic::sv::DeclarationForm::nettype_declaration
-                    && candidate.type
-                    && (candidate.type->systemverilog_net_type
-                            == declaration->name
-                        || candidate.type->target.spelling
-                            == declaration->name);
-            });
-        if (used && !compiled_resolver_returns_first(*compiled_, function)) {
-            report(
-                "FSIM-ELAB-SVNETTYPE-004",
-                "the executable SystemVerilog nettype resolver '" + resolver
-                    + "' is outside the retained deterministic resolution "
-                      "forms",
-                compiled_source_span(
-                    *compiled_, function.source));
-            continue;
-        }
-        const auto [entry, inserted] = systemverilog_resolution_kinds_.emplace(
-            resolver, ResolutionKind::sv_user_first);
-        if (!inserted && entry->second != ResolutionKind::sv_user_first) {
-            report(
-                "FSIM-ELAB-SVNETTYPE-002",
-                "SystemVerilog nettype resolution function '" + resolver
-                    + "' has conflicting visible bodies",
-                source);
-        }
-        const auto [nettype, nettype_inserted]
-            = systemverilog_resolution_kinds_.emplace(
-                declaration->name, ResolutionKind::sv_user_first);
-        if (!nettype_inserted
-            && nettype->second != ResolutionKind::sv_user_first) {
-            report(
-                "FSIM-ELAB-SVNETTYPE-002",
-                "SystemVerilog nettype '" + declaration->name
-                    + "' has conflicting visible resolution functions",
-                source);
-        }
+        result.error = true;
+        report(resolution.candidates.empty() ? "FSIM-ELAB-SVNETTYPE-001"
+                                             : "FSIM-ELAB-SVNETTYPE-002",
+            "SystemVerilog nettype resolution function '"
+                + type->resolution_function
+                + (resolution.candidates.empty()
+                        ? "' is not visible with an executable body"
+                        : "' is ambiguous"),
+            compiled_source_span(*compiled_, type->source));
+        break;
     }
-    if (diagnostics_.size() == diagnostics_before) {
-        systemverilog_resolution_unit_registrations_.push_back(unit.id);
-    }
+    systemverilog_nettype_functions_.emplace(nettype.value(), result);
+    return result;
 }
 
 void HierarchyBuilder::set_resolution(
@@ -2527,7 +2528,10 @@ void HierarchyBuilder::validate_process_drivers()
     };
     SharedBodyOperationScan container_writes { [](const Operation& operation) {
         return operation_holds<WriteContainerObject>(operation)
-            || operation_holds<WriteContainerObjectElement>(operation);
+            || operation_holds<WriteContainerObjectElement>(operation)
+            || operation_holds<WriteContainerObjectString>(operation)
+            || operation_holds<ReadContainerObject>(operation)
+            || operation_holds<ContainerElementWrite>(operation);
     } };
     SharedBodyOperationScan register_constants { [](const Operation& operation) {
         return operation_holds<LoadConstant>(operation)
@@ -2555,7 +2559,9 @@ void HierarchyBuilder::validate_process_drivers()
                         std::is_same_v<
                             OperationType, WriteContainerObject>
                         || std::is_same_v<
-                            OperationType, WriteContainerObjectElement>) {
+                            OperationType, WriteContainerObjectElement>
+                        || std::is_same_v<
+                            OperationType, WriteContainerObjectString>) {
                         const auto aliases
                             = writable_container_signals.find(value.object);
                         if (aliases != writable_container_signals.end()) {
@@ -2700,6 +2706,46 @@ void HierarchyBuilder::validate_process_drivers()
                     const auto aggregates
                         = writable_aggregate_signals.find(object);
                     if (aggregates == writable_aggregate_signals.end()) {
+                        // An element of an array of nettype nets is a net
+                        // of its own (IEEE 1800-2023 6.6.7): its writer
+                        // drives that element's bit range of the array's
+                        // bridge, leftmost element most significant.
+                        const auto bridges
+                            = writable_container_signals.find(object);
+                        if (bridges == writable_container_signals.end()) {
+                            return;
+                        }
+                        const auto& type = design_.container_objects_[object]
+                                               .initial_value.type;
+                        std::uint64_t count = 1U;
+                        for (const auto& [left, right] : type.dimensions) {
+                            count *= static_cast<std::uint64_t>(left <= right
+                                    ? static_cast<std::int64_t>(right) - left
+                                    : static_cast<std::int64_t>(left) - right)
+                                + 1U;
+                        }
+                        for (const auto signal : bridges->second) {
+                            const auto pending
+                                = systemverilog_function_resolvers_.find(signal);
+                            if (pending == systemverilog_function_resolvers_.end()
+                                || !pending->second.array
+                                || signal >= design_.signals_.size()) {
+                                continue;
+                            }
+                            const auto width = static_cast<std::uint64_t>(
+                                design_.signals_[signal].initial_value.width());
+                            if (count == 0U || *element >= count
+                                || width % count != 0U) {
+                                continue;
+                            }
+                            const auto element_width = width / count;
+                            process_outputs[signal].push_back(DriverRegion {
+                                signal,
+                                static_cast<std::uint32_t>(
+                                    (count - 1U - *element) * element_width),
+                                static_cast<std::uint32_t>(element_width),
+                                false });
+                        }
                         return;
                     }
                     const auto& type
@@ -2739,10 +2785,18 @@ void HierarchyBuilder::validate_process_drivers()
                 }
                 // Members of an unpacked structure are separate longest
                 // static prefixes (IEEE 1800-2017 6.5); a whole-object claim
-                // cannot tell member drivers apart.
+                // cannot tell member drivers apart. A net of a user-defined
+                // nettype is atomic: each continuous assignment drives all
+                // of it (IEEE 1800-2023 6.6.7).
+                const auto nettype_net = [&](const SignalId signal) {
+                    return systemverilog_function_resolvers_.contains(signal)
+                        || systemverilog_unresolved_nettype_nets_.contains(
+                            signal);
+                };
                 if (object < design_.container_objects_.size()
                     && design_.container_objects_[object]
-                           .initial_value.type.aggregate_value) {
+                           .initial_value.type.aggregate_value
+                    && std::ranges::none_of(aliases->second, nettype_net)) {
                     return;
                 }
                 for (const auto signal : aliases->second) {
@@ -2765,6 +2819,29 @@ void HierarchyBuilder::validate_process_drivers()
                     }
                 }
             };
+        // A write of one element of an unpacked-structure array is the
+        // array read, that element set and the array written back; for an
+        // array of nettype nets it drives that element's net alone (IEEE
+        // 1800-2023 6.6.7, 6.5): the registers read from an array, and the
+        // one element (by constant index) each had set, if only one.
+        struct ElementUpdate {
+            ContainerObjectId object { };
+            std::optional<std::uint32_t> ordinal;
+            bool set { };
+            bool single { true };
+        };
+        std::unordered_map<ContainerRegisterId, ElementUpdate> element_updates;
+        const auto nettype_array_object = [&](const ContainerObjectId object) {
+            const auto bridges = writable_container_signals.find(object);
+            return bridges != writable_container_signals.end()
+                && std::ranges::any_of(bridges->second,
+                    [&](const SignalId signal) {
+                        const auto pending
+                            = systemverilog_function_resolvers_.find(signal);
+                        return pending != systemverilog_function_resolvers_.end()
+                            && pending->second.array;
+                    });
+        };
         worker_container_writes[worker].visit_stored(process.operations(),
             [&](std::size_t, const Operation& operation) {
             visit_operation(
@@ -2772,13 +2849,77 @@ void HierarchyBuilder::validate_process_drivers()
                     using OperationType
                         = std::decay_t<decltype(value)>;
                     if constexpr (
+                        std::is_same_v<OperationType, ReadContainerObject>) {
+                        if (nettype_array_object(value.object)) {
+                            element_updates.insert_or_assign(value.destination,
+                                ElementUpdate {
+                                    value.object, std::nullopt, false, true });
+                        } else {
+                            element_updates.erase(value.destination);
+                        }
+                    } else if constexpr (
+                        std::is_same_v<OperationType, ContainerElementWrite>) {
+                        const auto found = element_updates.find(value.target);
+                        if (found == element_updates.end()) {
+                            return;
+                        }
+                        auto& update = found->second;
+                        const auto& type = design_.container_objects_
+                                               [update.object].initial_value.type;
+                        const auto constant = constant_registers.find(value.index);
+                        std::optional<std::int64_t> index;
+                        if (constant != constant_registers.end()
+                            && constant->second && !value.string_index) {
+                            index = value.signed_index
+                                ? constant->second->known_signed_value()
+                                : std::nullopt;
+                            if (!value.signed_index) {
+                                if (const auto known
+                                    = constant->second->known_unsigned_value();
+                                    known
+                                    && *known <= static_cast<std::uint64_t>(
+                                        std::numeric_limits<std::int64_t>::max())) {
+                                    index = static_cast<std::int64_t>(*known);
+                                }
+                            }
+                        }
+                        const auto ordinal = !index ? std::optional<std::int64_t> { }
+                            : value.linear_index ? index
+                            : type.dimensions.size() != 1U
+                            ? std::optional<std::int64_t> { }
+                            : type.index_left <= type.index_right
+                            ? *index - type.index_left
+                            : type.index_left - *index;
+                        const auto element = ordinal && *ordinal >= 0
+                                && *ordinal <= std::numeric_limits<std::uint32_t>::max()
+                            ? std::optional { static_cast<std::uint32_t>(*ordinal) }
+                            : std::nullopt;
+                        if (!element || (update.set && update.ordinal != element)) {
+                            update.single = false;
+                        }
+                        update.ordinal = element;
+                        update.set = true;
+                    } else if constexpr (
                         std::is_same_v<OperationType, WriteContainerObject>) {
-                        record_container_object_write(value.object);
+                        const auto found = element_updates.find(value.source);
+                        if (found != element_updates.end()
+                            && found->second.object == value.object
+                            && found->second.set && found->second.single
+                            && found->second.ordinal) {
+                            record_container_object_write(
+                                value.object, found->second.ordinal);
+                        } else {
+                            record_container_object_write(value.object);
+                        }
                     } else if constexpr (
                         std::is_same_v<
                             OperationType, WriteContainerObjectElement>) {
                         record_container_object_write(
                             value.object, constant_element(value));
+                    } else if constexpr (
+                        std::is_same_v<
+                            OperationType, WriteContainerObjectString>) {
+                        record_container_object_write(value.object);
                     }
                 },
                 operation);
@@ -2818,7 +2959,7 @@ void HierarchyBuilder::validate_process_drivers()
         // 14.7.3.3), whatever its type.
         if (const auto& resolver = design_.signals_[signal].vhdl_resolver;
             resolver && resolver->driving_mirror) {
-            set_resolution(signal, ResolutionKind::vhdl_user_function);
+            set_resolution(signal, ResolutionKind::user_function);
             continue;
         }
         const auto selected = explicit_resolution(signal);
@@ -3076,6 +3217,23 @@ void HierarchyBuilder::validate_process_drivers()
         processes.insert(processes.end(), added.begin(), added.end());
     }
     lower_compiled_vhdl_resolvers(driver_processes);
+    // The regions each driver of an array of nettype nets drives, in the
+    // order of driver_processes (the added boundary drivers drive all).
+    std::unordered_map<SignalId, std::vector<std::vector<DriverRegion>>>
+        nettype_array_regions;
+    for (const auto& [signal, pending] : systemverilog_function_resolvers_) {
+        if (!pending.array) {
+            continue;
+        }
+        auto& regions = nettype_array_regions[signal];
+        if (const auto found = drivers.find(signal); found != drivers.end()) {
+            for (const auto& driver : found->second) {
+                regions.push_back(driver.regions);
+            }
+        }
+    }
+    lower_compiled_systemverilog_resolvers(
+        driver_processes, nettype_array_regions);
     for (const auto& [signal, process_drivers] : drivers) {
         const auto& info = design_.signal_info_.at(signal);
         const auto boundary_drivers = boundary_driver_paths_.find(signal);
@@ -3084,6 +3242,8 @@ void HierarchyBuilder::validate_process_drivers()
                 && boundary_drivers->second.size() > 1U)
             || vhdl_unprotected_shared_signals_.contains(signal)
             || static_callable_signals_.contains(signal)
+            // SVNETTYPE-006 (lower_compiled_systemverilog_resolvers).
+            || systemverilog_unresolved_nettype_nets_.contains(signal)
             // A class method's static local is shared by every caller
             // (IEEE 1800-2017 6.21).
             || info.name.starts_with("$class-static-local:")

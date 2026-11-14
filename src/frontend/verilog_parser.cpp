@@ -49,6 +49,13 @@ void SystemVerilogPackageMembers::add(const DesignUnit& package) {
   for (const auto& let : package.systemverilog_lets) {
     member(let.name, SystemVerilogPackageMember::value);
   }
+  // A sequence or property declaration (IEEE 1800-2023 16.8, 16.12).
+  for (const auto& declaration : package.systemverilog_assertion_declarations) {
+    if (declaration.kind != SystemVerilogAssertionDeclarationKind::Checker) {
+      member(declaration.name, SystemVerilogPackageMember::value);
+      record.assertion_declarations.push_back(declaration);
+    }
+  }
   for (const auto& covergroup : package.systemverilog_covergroups) {
     member(covergroup.name, SystemVerilogPackageMember::type);
   }
@@ -73,6 +80,19 @@ SystemVerilogPackageMember SystemVerilogPackageMembers::find(
     const SystemVerilogPackageMemberLookup& fallback) const {
   std::vector<std::string_view> visiting;
   return find(package, member, fallback, visiting);
+}
+
+std::optional<SystemVerilogPackageAssertions>
+SystemVerilogPackageMembers::assertions(const std::string_view package,
+    const SystemVerilogPackageAssertionLookup& fallback) const {
+  const auto record = packages_.find(std::string { package });
+  if (record != packages_.end()) {
+    return SystemVerilogPackageAssertions { record->second.assertion_declarations, {} };
+  }
+  if (fallback) {
+    return fallback(package);
+  }
+  return std::nullopt;
 }
 
 SystemVerilogPackageMember SystemVerilogPackageMembers::find(
@@ -171,13 +191,24 @@ ParseResult parse_verilog(
     const StandardRevision standard_revision,
     const std::string_view compatibility_profile,
     SystemVerilogPackageMemberLookup package_member_lookup) {
+  return parse_verilog(std::move(lexed), standard_revision,
+      compatibility_profile, std::move(package_member_lookup), {});
+}
+
+ParseResult parse_verilog(
+    LexResult lexed,
+    const StandardRevision standard_revision,
+    const std::string_view compatibility_profile,
+    SystemVerilogPackageMemberLookup package_member_lookup,
+    SystemVerilogPackageAssertionLookup package_assertion_lookup) {
   return VerilogParser(std::move(lexed), standard_revision,
       std::string { compatibility_profile },
-      std::move(package_member_lookup)).run();
+      std::move(package_member_lookup),
+      std::move(package_assertion_lookup)).run();
 }
 
 std::optional<Statement> uvm_run_test_statement(const SourceSpan& call,
-    std::optional<Expression> test_name,
+    std::optional<Expression> test_name, const UvmRunTestNames& names,
     const StandardRevision standard_revision, std::string& diagnostic) {
   std::string text(call.begin.line > 1U ? call.begin.line - 1U : 0U, '\n');
   const bool named = test_name.has_value();
@@ -195,27 +226,34 @@ std::optional<Statement> uvm_run_test_statement(const SourceSpan& call,
           "__fsim_uvm_run_test_next(); end ";
   };
   text += "module __fsim_uvm_run_test; initial begin begin : __fsim_uvm_run_test "
-          "int __fsim_uvm_count; uvm_pkg::uvm_phase __fsim_uvm_phase; "
-          "uvm_pkg::uvm_component __fsim_uvm_component; "
-          "__fsim_uvm_count = __fsim_uvm_run_test_begin(";
-  text += named ? "\"__fsim_uvm_test_name\"" : "";
-  text += "); ";
-  text += function_phase(0, "build_phase");
-  text += function_phase(1, "connect_phase");
-  text += function_phase(2, "end_of_elaboration_phase");
-  text += function_phase(3, "start_of_simulation_phase");
+          "int __fsim_uvm_count; string __fsim_uvm_test; "
+          + names.phase_class + " __fsim_uvm_phase; "
+          + names.component_class + " __fsim_uvm_component; ";
+  // A named test is created as uvm_test_top, without a parent, through the
+  // factory (IEEE 1800.2-2020 F.3.1.2, 13.2.3.6).
+  text += named
+      ? "__fsim_uvm_test = \"__fsim_uvm_test_name\"; "
+        "__fsim_uvm_count = __fsim_uvm_run_test_begin(__fsim_uvm_test); "
+        "__fsim_uvm_component = __fsim_uvm_run_test_construct("
+        "__fsim_uvm_test, \"uvm_test_top\", null); "
+      : "__fsim_uvm_count = __fsim_uvm_run_test_begin(); ";
+  text += function_phase(0, names.phase_methods[0]);
+  text += function_phase(1, names.phase_methods[1]);
+  text += function_phase(2, names.phase_methods[2]);
+  text += function_phase(3, names.phase_methods[3]);
   text += "__fsim_uvm_count = __fsim_uvm_run_test_components(); "
           "__fsim_uvm_phase = __fsim_uvm_run_test_phase(); "
           "for (int __fsim_uvm_index = 0; __fsim_uvm_index < __fsim_uvm_count; "
-          "__fsim_uvm_index++) fork automatic uvm_pkg::uvm_component "
-          "__fsim_uvm_task_component = "
+          "__fsim_uvm_index++) fork automatic "
+          + names.component_class + " __fsim_uvm_task_component = "
           "__fsim_uvm_run_test_component(__fsim_uvm_index); "
-          "__fsim_uvm_task_component.run_phase(__fsim_uvm_phase); join_none "
+          "__fsim_uvm_task_component." + names.phase_methods[4]
+          + "(__fsim_uvm_phase); join_none "
           "__fsim_uvm_run_test_wait(); ";
-  text += function_phase(4, "extract_phase");
-  text += function_phase(5, "check_phase");
-  text += function_phase(6, "report_phase");
-  text += function_phase(7, "final_phase");
+  text += function_phase(4, names.phase_methods[5]);
+  text += function_phase(5, names.phase_methods[6]);
+  text += function_phase(6, names.phase_methods[7]);
+  text += function_phase(7, names.phase_methods[8]);
   text += "__fsim_uvm_run_test_end(); $finish; end end endmodule\n";
   auto parsed = parse_verilog(
       SourceText { std::string { call.source_name.str() }, std::move(text) },

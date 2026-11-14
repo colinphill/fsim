@@ -312,7 +312,7 @@ ConeFusionPlan ElaboratedDesign::plan_cone_fusion() const
             || view.string_register_count() != 0U
             || view.container_register_count() != 0U
             || !view.debug_locals().empty()
-            || !view.call_results().empty()
+            || has_function_results(view.call_results())
             || !view.debug_string_locals().empty()
             || !view.debug_container_locals().empty()
             || !view.static_trigger_regions().empty()
@@ -696,6 +696,7 @@ ConeFusionPlan ElaboratedDesign::plan_cone_fusion() const
         fused.debug_locals.clear();
         fused.call_results.clear();
         fused.frame_locals.clear();
+        fused.call_frames = { };
         fused.expression_profiles = { };
         fused.register_value_kinds = { };
         fused.static_trigger_regions = { };

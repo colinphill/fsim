@@ -3,11 +3,13 @@
 
 #include "fsim/semantic/model.hpp"
 #include "fsim/support/rare_vector.hpp"
+#include "fsim/support/uvm_role.hpp"
 
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -568,8 +570,9 @@ struct Statement {
     // VPI-only: the output task as written ([0], with its radix suffix) and
     // its leading format string literal ([1]), when the call had one.
     std::vector<std::string> output_source;
-    // Every argument of a Display task in source order (37.62 vpiArgument).
-    std::vector<ExpressionId> output_arguments;
+    // Every argument of a Display task in source order (37.62 vpiArgument);
+    // an empty argument has no expression (37.42 detail 8).
+    std::vector<std::optional<ExpressionId>> output_arguments;
     std::vector<StatementId> statements;
     std::vector<StatementId> else_statements;
     CaseMatchKind case_match { CaseMatchKind::exact };
@@ -599,6 +602,9 @@ struct Process {
     std::vector<Sensitivity> sensitivities;
     std::vector<StatementId> statements;
     bool concurrent_assertion { };
+    // The origin of the concurrent assertion statement an assertion process
+    // was built from (IEEE 1800-2023 37.49).
+    std::optional<OriginId> assertion;
 };
 
 struct PackedRange {
@@ -654,6 +660,14 @@ struct AssociativeIndexTypeReference {
 
 struct TypeReference {
     semantic::TypeReference target;
+    // No data type was written (the frontend's Type::implicit_type); the
+    // target spelling is then a placeholder, not a type name.
+    bool implicit { };
+    // The data type was written as a type identifier (a typedef, class,
+    // type parameter or package-scoped name, IEEE 1800-2023 6.18, 8.25,
+    // 26.3), so the target spelling is a name a later scope can resolve;
+    // a keyword or inline type (`void`, `logic [3:0]`) is not named.
+    bool named { };
     std::optional<TypeForm> value_form;
     std::string class_identity;
     bool virtual_interface { };
@@ -946,6 +960,8 @@ struct ClassProperty {
     // literal. A random enumerated property takes only these values (IEEE
     // 1800-2017 18.4).
     std::vector<std::uint64_t> enumeration_domain { };
+    // The property's role in the governed UVM library (none outside it).
+    support::UvmRole uvm_role { };
 };
 
 struct ClassMethod {
@@ -967,6 +983,8 @@ struct ClassMethod {
     SourceSpanId source;
     OriginId origin;
     ResidualDependencies dependencies;
+    // The method's role in the governed UVM library (none outside it).
+    support::UvmRole uvm_role { };
 };
 
 struct ClassConstraint {
@@ -1028,6 +1046,9 @@ struct ClassDeclaration {
     SourceSpanId source;
     OriginId origin;
     ResidualDependencies dependencies;
+    // The class's role in the governed UVM library (none outside it),
+    // recorded on the frontend declaration (support::UvmRole).
+    support::UvmRole uvm_role { };
 };
 
 struct PackedMember {
@@ -1117,6 +1138,9 @@ struct Declaration {
     // A `localparam type`: not a formal of a parameter association list
     // (IEEE 1800-2017 23.10.1).
     bool local_type_parameter { };
+    // The role in the governed UVM library of a declaration of its package
+    // (none outside it).
+    support::UvmRole uvm_role { };
 };
 
 // A named constant usable as a casting size: a parameter, a local
@@ -1313,6 +1337,14 @@ struct GenerateRegion {
     std::vector<GenerateRegion> nested;
     // Clocking blocks of each generated scope (IEEE 1800-2023 14.3, 27.3).
     std::vector<ClockingBlock> clocking_blocks;
+    // A gate instance array expanded by a loop generate (IEEE 1800-2023
+    // 28.3.6): the block is no scope, its primitives are elements of the
+    // array named `label`.
+    bool gate_array { };
+    // The declared range of that array (28.3.6), evaluated in the scope that
+    // holds the array.
+    std::optional<ExpressionId> gate_array_left;
+    std::optional<ExpressionId> gate_array_right;
     SourceSpanId source;
     OriginId origin;
     ResidualDependencies dependencies;
@@ -1960,6 +1992,13 @@ enum class AssertionOperator : std::uint8_t {
 struct AssertionTreeOperand {
     std::int32_t node { -1 };
     std::optional<ExpressionId> expression;
+    // The match items of a sequence operand `(s, item, ...)`, in order: each
+    // an assignment, increment, decrement or subroutine call statement (IEEE
+    // 1800-2023 16.10, 37.54 vpiMatchItem).
+    std::vector<StatementId> match_items;
+    // The strength `strong(b)` or `weak(b)` gives a boolean leaf (16.12.2,
+    // 37.52 detail 3).
+    std::optional<bool> strong;
 };
 
 /// An operation or an instance of a property or sequence expression (IEEE
@@ -2005,6 +2044,11 @@ struct ConcurrentAssertion {
     ConcurrentAssertionForm form { ConcurrentAssertionForm::property };
     std::string name;
     bool explicit_label { };
+    // A statement a checker instance expanded (IEEE 1800-2023 17.2): the
+    // instance and the statement's name in the checker; `name` is then
+    // `instance.name`.
+    std::string checker_instance;
+    std::string checker_name;
     std::vector<SourceToken> property_tokens;
     bool has_pass_action { };
     std::vector<SourceToken> pass_action_tokens;
@@ -2035,6 +2079,9 @@ struct ConcurrentAssertion {
     // vpiDisableCondition).
     std::vector<Sensitivity> inline_clock_events;
     std::optional<ExpressionId> inline_disable_condition;
+    // The sequence expression of an inline `cover sequence` (37.50
+    // vpiProperty: a property spec of it, 37.52 vpiPropertyExpr).
+    std::optional<AssertionTree> inline_tree;
     // The property instance the assertion names (37.50 vpiProperty); empty
     // for an inline property.
     std::optional<AssertionTree> property_instance;
@@ -2383,6 +2430,11 @@ struct AssertionDeclaration {
     std::optional<AssertionTree> tree;
     std::vector<AssertionDeclaration> checker_declarations;
     std::vector<ConcurrentAssertion> checker_assertions;
+    // The checker instance this declaration was specialized for (17.3) and
+    // its name as written in the checker; both empty for a declaration
+    // written in its scope.
+    std::string checker_instance;
+    std::string checker_name;
     SourceSpanId source;
     OriginId origin;
 };
@@ -2417,6 +2469,9 @@ struct Unit {
     UnitId id;
     ScopeId scope;
     UnitKind kind { UnitKind::module };
+    // `member` for the package of the governed UVM library (its
+    // declarations carry their own roles); none otherwise.
+    support::UvmRole uvm_role { };
     // True for an extern module, interface, or program prototype. This is
     // unit-selection metadata and must remain available after syntax storage
     // has been destroyed.
@@ -2456,6 +2511,12 @@ struct Unit {
     std::vector<CheckerInstance> checker_instances;
     // The `unconnected_drive in effect where the module is defined (22.9).
     UnconnectedDrive unconnected_drive { UnconnectedDrive::none };
+    // The `default_decay_time argument in effect where the module is defined
+    // (IEEE 1800-2023 E.2): its spelling, `infinite`, or empty when none.
+    std::string default_decay_time;
+    // The condition of the unit's `default disable iff` (16.15, 37.5
+    // vpiDefaultDisableIff).
+    std::optional<ExpressionId> default_disable_condition;
     // Ordered external port slots from the module header. A disengaged slot
     // denotes a legal empty port expression and has no internal declaration or
     // runtime connection. Absent metadata preserves legacy declaration order.
@@ -2497,14 +2558,15 @@ struct Unit {
     return search(search, unit.generates);
 }
 
-/// The concurrent assertion statement named `name` in the unit or in one of
-/// its generate blocks (IEEE 1800-2023 27.3, 37.49); null when there is none.
-/// Loop-generate copies of a block share one statement.
-[[nodiscard]] inline const ConcurrentAssertion* find_concurrent_assertion(
-    const Unit& unit, const std::string_view name)
+/// The concurrent assertion statement of the unit, or of one of its generate
+/// blocks, that satisfies `matches` (IEEE 1800-2023 27.3, 37.49); null when
+/// there is none. Loop-generate copies of a block share one statement.
+template <typename Predicate>
+[[nodiscard]] inline const ConcurrentAssertion* find_concurrent_assertion_if(
+    const Unit& unit, const Predicate& matches)
 {
     for (const auto& assertion : unit.concurrent_assertions) {
-        if (assertion.name == name) {
+        if (matches(assertion)) {
             return &assertion;
         }
     }
@@ -2513,7 +2575,7 @@ struct Unit {
         -> const ConcurrentAssertion* {
         for (const auto& region : regions) {
             for (const auto& assertion : region.concurrent_assertions) {
-                if (assertion.name == name) {
+                if (matches(assertion)) {
                     return &assertion;
                 }
             }
@@ -2526,9 +2588,34 @@ struct Unit {
     return search(search, unit.generates);
 }
 
+/// The concurrent assertion statement with origin `origin`.
+[[nodiscard]] inline const ConcurrentAssertion* find_concurrent_assertion(
+    const Unit& unit, const OriginId origin)
+{
+    return find_concurrent_assertion_if(unit,
+        [&](const ConcurrentAssertion& assertion) {
+            return assertion.origin == origin;
+        });
+}
+
+/// Expression ids from this value on name literals interned in a Hir (see
+/// Hir::intern_constant); the compiled design's own expressions never reach it.
+inline constexpr std::uint32_t interned_constant_base { 0x40000000U };
+
 /// Owning SystemVerilog semantic HIR, including opaque class-handle operations.
 class Hir final {
 public:
+    /// A literal expression holding a constant a class value parameter was
+    /// bound to (IEEE 1800-2023 8.25, 6.20.2): the same kind and text give the
+    /// same id. It resolves through CompiledDesign::find_expression in every
+    /// unit, so a binding never reads the expression of the unit that
+    /// instantiated the class. Safe to call on a shared const Hir.
+    [[nodiscard]] ExpressionId intern_constant(
+        ExpressionKind kind, std::string text) const;
+    /// The interned literal with `id`, or nullptr.
+    [[nodiscard]] const Expression* find_interned_constant(
+        ExpressionId id) const noexcept;
+
     /// Changes whenever mutable access to an owning collection is requested.
     /// Consumers may use this to invalidate non-owning lookup acceleration;
     /// the revision is intentionally not part of the serialized HIR schema.
@@ -2584,6 +2671,8 @@ private:
     std::vector<DpiDeclaration> dpi_declarations_;
     std::vector<CovergroupInstance> covergroup_instances_;
     std::uint64_t revision_ { };
+    struct InternedConstants;
+    mutable std::shared_ptr<InternedConstants> interned_;
 };
 
 /// What applying packed dimensions declared over a named type did.

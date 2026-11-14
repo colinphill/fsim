@@ -1,8 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/frontend/output_format.hpp"
+#include "fsim/frontend/design_core.hpp"
 
 #include <limits>
 #include <utility>
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#include <string_view>
 
 namespace fsim::frontend {
 [[nodiscard]] ParsedOutputFormat

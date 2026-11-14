@@ -9,7 +9,6 @@
 #include "fsim/runtime/vpi_abi.h"
 #include "fsim/runtime/veriuser.h"
 
-#include <stdio.h>
 #include <string.h>
 
 static PLI_BYTE8 work_marker;

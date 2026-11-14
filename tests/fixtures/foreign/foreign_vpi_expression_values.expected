@@ -1,0 +1,51 @@
+#c assign d1 = 2
+#c   sysfunc $dimensions(mem) value=2
+#c assign d2 = 1
+#c   sysfunc $unpacked_dimensions(mem) value=1
+#c assign d3 = 2
+#c   sysfunc $left(mem) value=2
+#c assign d4 = 0
+#c   sysfunc $right(mem,2) value=0
+#c assign d5 = 4
+#c   sysfunc $size(mem) value=4
+#c assign d6 = 4294967295
+#c   sysfunc $increment(up) value=-1
+#c assign d7 = 7
+#c   sysfunc $high(v) value=7
+#c assign d8 = 3
+#c   sysfunc $size(q) value=3
+#c assign d9 = x
+#c   sysfunc $left(mem,3) value=x
+#c assign e1 = 1
+#c   op 20 s1 < s2 value=1
+#c     other top.s1
+#c     other top.s2
+#c assign e2 = 1
+#c   op 14 {s1,s2} == "abcd" value=1
+#c     op 33 {s1,s2} string=abcd
+#c       other top.s1
+#c       other top.s2
+#c     const 1633837924
+#c assign e3 = 0
+#c   op 15 {2{s1}} != "abab" value=0
+#c     op 34 {2{s1}} string=abab
+#c       const 2
+#c       other top.s1
+#c     const 1633837410
+#c assign e4 = 1
+#c   op 14 (v[0] ? s1 : s2) == "cd" value=1
+#c     op 32 v[0] ? s1 : s2 string=cd
+#c       other top.v[0]
+#c       other top.s1
+#c       other top.s2
+#c     const 25444
+#c assign e5 = 93
+#c   op 11 (v + 8'd1) * 2 - (v - 1) value=93
+#c     op 25 (v + 8'd1) * 2 value=182
+#c       op 24 v + 8'd1 value=91
+#c         vpiReg top.v
+#c         const 1
+#c       const 2
+#c     op 11 v - 1 value=89
+#c       vpiReg top.v
+#c       const 1

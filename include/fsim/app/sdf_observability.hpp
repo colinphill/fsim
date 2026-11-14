@@ -3,6 +3,8 @@
 
 #include "fsim/app/sdf_effective_archive.hpp"
 #include "fsim/runtime/scheduler.hpp"
+#include "fsim/frontend/diagnostic.hpp"
+#include "fsim/frontend/source.hpp"
 
 #include <array>
 #include <cstddef>

@@ -379,6 +379,57 @@ enum class BuiltinOperatorIdentity : std::uint8_t {
     ieee_std_logic_1164_xnor,
 };
 
+/// A type or subtype whose declaration the compiler provides (IEEE
+/// 1076-2019 16.3 STD.STANDARD, 16.4 STD.TEXTIO, 16.7 IEEE.STD_LOGIC_1164,
+/// 16.8.5 IEEE.NUMERIC_STD and IEEE.NUMERIC_BIT, G IEEE fixed and floating
+/// point), which a type mark denotes where it is written: identified by the
+/// declaration the visibility rules select (12.3, 12.4), never by the mark's
+/// spelling. A package's unresolved and resolved forms of one vector type
+/// share an identity. The resolution pass stamps it on each subtype
+/// indication (SubtypeIndication::provided_type) where the mark is written.
+enum class ProvidedType : std::uint8_t {
+    none,
+    boolean,
+    bit,
+    character,
+    severity_level,
+    integer,
+    natural,
+    positive,
+    real,
+    time,
+    delay_length,
+    file_open_kind,
+    file_open_status,
+    range_direction,
+    string,
+    bit_vector,
+    boolean_vector,
+    integer_vector,
+    real_vector,
+    time_vector,
+    std_ulogic,
+    std_logic,
+    std_ulogic_vector,
+    std_logic_vector,
+    numeric_std_unsigned,
+    numeric_std_signed,
+    numeric_bit_unsigned,
+    numeric_bit_signed,
+    sfixed,
+    ufixed,
+    ieee_float,
+    textio_line,
+    textio_text,
+    textio_side,
+    textio_width,
+    textio_line_vector,
+    // Synopsys IEEE.STD_LOGIC_ARITH's UNSIGNED and SIGNED: types distinct
+    // from NUMERIC_STD's of the same names.
+    std_logic_arith_unsigned,
+    std_logic_arith_signed,
+};
+
 struct RangeConstraint {
     RangeKind kind { RangeKind::discrete };
     std::optional<std::int64_t> left;
@@ -448,6 +499,12 @@ struct Expression {
     // (19.8, funcCall). The node is shared by every copy of the expression and
     // its operand ids index the same expression table.
     std::shared_ptr<const Expression> unfolded_call;
+    // The type mark of a qualified expression `T'(...)` (IEEE 1076-2019
+    // 9.3.5) or of the subtype indication of an external name (8.7), as
+    // written, with `selected` the type or subtype declaration it denotes
+    // where the design retains one; set when analysis resolves it (12.3,
+    // 12.4). A subtype declaration keeps its own constraint.
+    std::optional<Name> qualified_type_mark;
 };
 
 struct DelayValue {
@@ -591,6 +648,9 @@ struct SubtypeIndication {
     std::string unspecified_inference_identity;
     BuiltinTypeIdentity builtin_type { BuiltinTypeIdentity::none };
     std::vector<ElementConstraint> element_constraints;
+    /// The compiler-provided type the type mark denotes where the
+    /// indication is written, stamped by the resolution pass.
+    ProvidedType provided_type { ProvidedType::none };
 
     bool operator==(const SubtypeIndication&) const = default;
 

@@ -20,8 +20,6 @@ namespace fsim::runtime {
 
 namespace {
 
-    /// Live (active) registrations; retired ones keep only their status.
-    constexpr std::size_t maximum_callbacks = 1'048'576;
     std::atomic<std::uint64_t> next_callback_manager_owner { 1 };
 
     bool valid_kind(const SystemVerilogVpiCallbackKind kind)
@@ -664,8 +662,7 @@ SystemVerilogVpiCallbackManager::register_callback(
     }
 
     std::scoped_lock lock { impl_->mutex };
-    if (impl_->records.size() >= maximum_callbacks
-        || impl_->next_id == 0U) {
+    if (impl_->next_id == 0U) {
         return registration_failure(
             SystemVerilogVpiCallbackError::ResourceLimit);
     }

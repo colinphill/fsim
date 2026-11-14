@@ -8,6 +8,9 @@
 #include "fsim/support/native_filesystem.hpp"
 
 #include "vpi_user.h"
+#include "fsim/runtime/logic.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/simir.hpp"
 
 #if defined(FSIM_HAS_LIBFFI)
 #include <ffi.h>
@@ -32,6 +35,12 @@
 #include <thread>
 #include <unordered_map>
 #include <utility>
+#include <span>
+#include <string>
+#include <string_view>
+#include <svdpi.h>
+#include <system_error>
+#include <vector>
 
 namespace fsim::app::application_detail {
 

@@ -15,14 +15,14 @@
 #include "run_state_archive.hpp"
 #include "fsim/runtime/run_state_image.hpp"
 #include "fsim/runtime/run_state_sections.hpp"
-#include "run_state_value_codecs.hpp"
 #include "simir_events.hpp"
-#include "simir_internal.hpp"
 
 #include <cstdint>
 #include <string>
-#include <string_view>
 #include <vector>
+#include "run_state_value_codecs.hpp"
+#include "simir_internal.hpp"
+#include <string_view>
 
 // A saved member: `archive.io(object.member)`.
 #define FSIM_RS_IO(scope, member, archive, object) \
@@ -55,9 +55,9 @@ using Impl = InterpreterEventAccess::Impl;
 
 /// Section versions: each subsystem bumps its own when its layout changes.
 inline constexpr std::uint32_t scheduler_version = 1U;
-inline constexpr std::uint32_t host_version = 3U;
+inline constexpr std::uint32_t host_version = 4U;
 inline constexpr std::uint32_t process_version = 1U;
-inline constexpr std::uint32_t kernel_version = 3U;
+inline constexpr std::uint32_t kernel_version = 4U;
 
 /// Processes per "host.processes.<n>" section (the unit $incsave compares).
 inline constexpr std::size_t process_chunk = 4096U;

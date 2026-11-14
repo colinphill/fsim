@@ -86,6 +86,14 @@ namespace {
     }
     result.packed = *descriptor.initial_packed;
   }
+  if (descriptor.initial_container) {
+    if (descriptor.kind != SystemVerilogClassPropertyKind::Container
+        || descriptor.handle_container) {
+      throw std::invalid_argument{
+          "class static container default requires a value container"};
+    }
+    result.container = *descriptor.initial_container;
+  }
   if (descriptor.initial_string) {
     if (descriptor.kind != SystemVerilogClassPropertyKind::String) {
       throw std::invalid_argument{

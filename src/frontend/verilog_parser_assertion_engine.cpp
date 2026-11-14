@@ -12,6 +12,10 @@
 
 #include "verilog_parser_internal.hpp"
 #include "verilog_parser_assertion_support.hpp"
+#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/source.hpp"
+#include "fsim/frontend/token.hpp"
 
 #include <algorithm>
 #include <functional>
@@ -21,6 +25,13 @@
 #include <set>
 #include <string>
 #include <unordered_set>
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <span>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 namespace fsim::frontend {
 namespace {

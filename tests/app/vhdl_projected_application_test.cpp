@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/semantic/vhdl_hir.hpp"
+#include "fsim/runtime/simir.hpp"
 #include "fsim/app/design_artifact.hpp"
 
 #include "fsim/runtime/scheduler.hpp"
@@ -17,13 +20,11 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <limits>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <system_error>
-#include <stdexcept>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -371,7 +372,7 @@ void verify_invalid_rejection(
   {
     std::ofstream output(source, std::ios::binary);
     output << R"(
-entity invalid_rejection is
+library ieee; use ieee.std_logic_1164.all; entity invalid_rejection is
 end entity;
 architecture rtl of invalid_rejection is
   signal result : std_logic;
@@ -398,7 +399,7 @@ end architecture;
   {
     std::ofstream output(inexact_source, std::ios::binary);
     output << R"(
-entity inexact_rejection is
+library ieee; use ieee.std_logic_1164.all; entity inexact_rejection is
 end entity;
 architecture rtl of inexact_rejection is
   signal result : std_logic;
@@ -429,7 +430,7 @@ end architecture;
   {
     std::ofstream output(unordered_source, std::ios::binary);
     output << R"(
-entity unordered_waveform is
+library ieee; use ieee.std_logic_1164.all; entity unordered_waveform is
 end entity;
 architecture rtl of unordered_waveform is
   signal result : std_logic;
@@ -1091,7 +1092,7 @@ int main() {
     // FSIM-CONFORMANCE CF-VHDL-TRANSACTION-001 source=SRC-IEEE-P1076 expectation=execute
     std::ofstream output(source, std::ios::binary);
     output << R"(
-entity vhdl_projected is
+library ieee; use ieee.std_logic_1164.all; entity vhdl_projected is
 end entity;
 
 architecture rtl of vhdl_projected is

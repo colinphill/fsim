@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+wide d0 a at 1000000 fs clk='1' delayed='0' event=false
+wide d0 b at 1000000 fs clk='1' delayed='1' event=true
+wide d1 at 1500000 fs delayed='0'
+wide d0 a at 2000000 fs clk='0' delayed='1' event=false
+wide d0 b at 2000000 fs clk='0' delayed='0' event=true
+wide d1 at 2500000 fs delayed='1'
+wide d0 a at 3000000 fs clk='1' delayed='0' event=false
+wide d0 b at 3000000 fs clk='1' delayed='1' event=true
+wide d1 at 3500000 fs delayed='0'
+wide d1 at 4500000 fs delayed='1'

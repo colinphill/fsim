@@ -5,7 +5,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <concepts>
 #include <cstddef>
 #include <functional>
 #include <initializer_list>

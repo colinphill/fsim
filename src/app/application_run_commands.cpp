@@ -4,15 +4,11 @@
 #include "application_vpi_foreign.hpp"
 #include "application_dpi_foreign.hpp"
 #include "application_foreign_run_state.hpp"
-#include "application_trace_control.hpp"
-#include "application_trace_hierarchy.hpp"
-#include "application_trace_observation.hpp"
 #include "application_workspace_store.hpp"
 #if defined(FSIM_ENABLE_ALLOCATION_PROFILING)
 #  include "allocation_profile.hpp"
 #endif
-#include "fsim/runtime/fst_value_encoder.hpp"
-#include "fsim/runtime/fst_writer.hpp"
+#include "fsim/runtime/vhdl_resolution_error.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/payload_checksum.hpp"
@@ -1052,6 +1048,9 @@ int run_built_project(
         }
         foreign_libraries->run_error(message);
         diagnostics.error("FSIM-RUN-0001", std::move(message));
+    } catch (const runtime::VhdlPartialNullSourceError& error) {
+        foreign_libraries->run_error(error.what());
+        diagnostics.error("FSIM-RUN-VHDLNULL-001", error.what());
     } catch (const std::exception& error) {
         foreign_libraries->run_error(error.what());
         diagnostics.error("FSIM-RUN-0002", error.what());

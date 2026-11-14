@@ -1,16 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fsim/app/sdf_observability.hpp"
+#include "fsim/app/sdf_effective_archive.hpp"
+#include "fsim/frontend/diagnostic.hpp"
+#include "fsim/frontend/source.hpp"
+#include "fsim/runtime/scheduler.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <iostream>
-#include <ranges>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
+#include <cstdint>
+#include <exception>
+#include <span>
+#include <utility>
 
 namespace {
 

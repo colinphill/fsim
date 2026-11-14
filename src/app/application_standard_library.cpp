@@ -4,6 +4,35 @@
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/compiler/object_cache.hpp"
+#include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/parser.hpp"
+#include "fsim/frontend/source.hpp"
+#include "fsim/frontend/token.hpp"
+#include "fsim/library/artifact.hpp"
+#include "fsim/project/project.hpp"
+#include "fsim/semantic/compiled_design.hpp"
+#include "fsim/semantic/vhdl_hir.hpp"
+#include "fsim/support/environment.hpp"
+#include <algorithm>
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <filesystem>
+#include <ios>
+#include <iterator>
+#include <map>
+#include <optional>
+#include <set>
+#include <span>
+#include <string>
+#include <string_view>
+#include <tuple>
+#include <utility>
+#include <vector>
 
 namespace fsim::app::application_detail {
 
@@ -901,9 +930,9 @@ end context ieee_std_context;
             : std::string { };
         const auto declaration_projection = dependency
             + "package " + std::string { package } + " is\n" + copyright
-            + members + "end package " + std::string { package } + ";\n";
+            + members + "end " + std::string { package } + ";\n";
         const auto body_projection = "package body " + std::string { package } + " is\n"
-            + "end package body " + std::string { package } + ";\n";
+            + "end " + std::string { package } + ";\n";
         std::vector<std::pair<std::filesystem::path, std::string_view>> sources;
         sources.emplace_back(declaration_path, declaration_projection);
         if (!body_path.empty()) {

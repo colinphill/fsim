@@ -2,7 +2,6 @@
 #include "fsim/frontend/systemverilog_standard_package.hpp"
 
 #include <array>
-#include <ranges>
 
 namespace fsim::frontend {
 namespace {

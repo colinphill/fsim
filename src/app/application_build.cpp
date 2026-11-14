@@ -16,10 +16,46 @@
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
-#include "fsim/semantic/compiled_design_normalization.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/app/trace_api.hpp"
+#include "fsim/app/trace_archive.hpp"
+#include "fsim/artifact/coverage_identity.hpp"
+#include "fsim/compiler/object_cache.hpp"
+#include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/elaboration/coverage_inventory.hpp"
+#include "fsim/elaboration/elaborator.hpp"
+#include "fsim/frontend/coverage_source_control.hpp"
+#include "fsim/frontend/token.hpp"
+#include "fsim/library/source_mapping.hpp"
+#include "fsim/project/project.hpp"
+#include "fsim/semantic/model.hpp"
+#include "fsim/semantic/systemverilog_class_specialization.hpp"
+#include "fsim/semantic/vhdl_hir.hpp"
+#include "fsim/systemc/hierarchy.hpp"
+#include "fsim/systemc/incremental.hpp"
+#include "fsim/systemc/plugin_compiler.hpp"
 
 #include <fstream>
 #include <set>
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <exception>
+#include <filesystem>
+#include <functional>
+#include <ios>
+#include <iterator>
+#include <limits>
+#include <map>
+#include <memory>
+#include <optional>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <utility>
+#include <vector>
 
 
 namespace fsim::app {
@@ -998,6 +1034,22 @@ std::optional<BuiltProject> build_checked_project(
         [&](const auto& specialization) {
           return !generated_class_is_selected(specialization);
         });
+    // The specializations of types whose actuals read the parameters of
+    // their instance (IEEE 1800-2023 8.25, 23.2.2) join the design's.
+    if (elaborated.instance_class_specializations) {
+        for (const auto& specialization :
+            *elaborated.instance_class_specializations) {
+            if (std::ranges::none_of(
+                    checked->compiled_systemverilog_class_specializations,
+                    [&](const auto& known) {
+                        return known.specialization_identity
+                            == specialization.specialization_identity;
+                    })) {
+                checked->compiled_systemverilog_class_specializations
+                    .push_back(specialization);
+            }
+        }
+    }
     for (const auto& selection :
         elaborated.selected_systemverilog_classes) {
         if (std::ranges::none_of(

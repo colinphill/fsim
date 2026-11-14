@@ -1,10 +1,32 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "application_event_type.hpp"
 #include "application_internal.hpp"
 #include "application_vpi_statements.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 #include "fsim/support/index_distance.hpp"
 #include "fsim/semantic/systemverilog_structure_image.hpp"
 #include "fsim/runtime/output_format.hpp"
 #include "fsim/runtime/vpi_type_descriptor.hpp"
+#include "../runtime/simir_process_program.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/elaboration/elaborator.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/systemverilog_scalars.hpp"
+#include "fsim/frontend/token.hpp"
+#include "fsim/runtime/logic.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_container_value.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include "fsim/runtime/systemverilog_scalar.hpp"
+#include "fsim/runtime/vpi_abi.h"
+#include "fsim/runtime/vpi_object.hpp"
+#include "fsim/runtime/vpi_time.hpp"
+#include "fsim/runtime/vpi_types.hpp"
+#include "fsim/runtime/vpi_value.hpp"
+#include "fsim/semantic/design_ir.hpp"
+#include "fsim/semantic/model.hpp"
+#include "fsim/semantic/systemverilog_hir.hpp"
 
 #include <algorithm>
 #include <array>
@@ -19,9 +41,20 @@
 #include <memory>
 #include <ranges>
 #include <set>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <variant>
+#include <cstddef>
+#include <cstdint>
+#include <map>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <utility>
+#include <vector>
 
 namespace fsim::app::application_detail {
 namespace {
@@ -151,18 +184,22 @@ namespace {
                                == semantic::Language::system_verilog)
                     && candidate.library + "::" + candidate.name == identity;
             });
-        if (revision == project.verilog_unit_revisions.end()
-            || profile == project.verilog_unit_compatibility_profiles.end()
-            || unit == project.semantics.units().end()) {
+        if (unit == project.semantics.units().end()) {
             return;
         }
-        type.language = vpi_profile_language(revision->second);
+        // The unit's identity is what every recorded member of it (its
+        // typedefs, formal typespecs, parameters) is keyed by.
         type.semantic_unit_id = unit->id.value();
         type.source_id = unit->source.value();
         type.semantic_unit = std::string { identity };
+        apply_vpi_source(type, project, unit->source);
+        if (revision == project.verilog_unit_revisions.end()
+            || profile == project.verilog_unit_compatibility_profiles.end()) {
+            return;
+        }
+        type.language = vpi_profile_language(revision->second);
         type.standard = frontend::to_string(revision->second);
         type.compatibility_profile = profile->second;
-        apply_vpi_source(type, project, unit->source);
     }
 
     // A VHDL instance's provenance as a VPI scope of a mixed design: its
@@ -477,6 +514,27 @@ namespace {
         return path.find_last_of('.');
     }
 
+    // The start of a hierarchical path's last segment. An escaped
+    // identifier runs from its backslash to the white space that ends it
+    // (IEEE 1800-2023 5.6.1), so a period inside it separates nothing; an
+    // elaborator name may embed one after a prefix
+    // (`$declaration_initializer_\a.b `).
+    [[nodiscard]] std::size_t path_leaf_begin(const std::string_view path)
+    {
+        std::size_t begin { };
+        for (std::size_t index = 0U; index < path.size(); ++index) {
+            if (path[index] == '\\') {
+                while (index < path.size()
+                    && std::isspace(static_cast<unsigned char>(path[index])) == 0) {
+                    ++index;
+                }
+            } else if (path[index] == '.') {
+                begin = index + 1U;
+            }
+        }
+        return begin;
+    }
+
     // A VPI name for a design object. A simple identifier holds no period
     // or white space, so a name that does (an internal net derived from an
     // escaped port name) is published as an escaped identifier (IEEE
@@ -491,7 +549,7 @@ namespace {
                })) {
             return std::string { name };
         }
-        return '\\' + std::string { name };
+        return '\\' + std::string { name } + ' ';
     }
 
     [[nodiscard]] runtime::SystemVerilogVpiDirection vpi_direction(
@@ -761,7 +819,7 @@ namespace {
             return std::nullopt;
         }
         const bool implicit_type
-            = declaration.type->target.spelling == "implicit" || typedef_type;
+            = declaration.type->implicit || typedef_type;
         if (!implicit_type
             && (!declaration.type->executable_width
                 || *declaration.type->executable_width != width
@@ -1495,6 +1553,7 @@ namespace {
                 std::move(descriptor.source),
                 std::move(descriptor.type),
                 descriptor.ordinal,
+                std::move(descriptor.name_prefix),
             });
         if (!created) {
             const auto existing = registry.find(identity);
@@ -1568,7 +1627,7 @@ void defer_child(runtime::SystemVerilogVpiObjectRegistry& registry,
     const BuiltProject& project,
     const semantic::design::ProcessOccurrence& process,
     const fsim_vpi_handle_v1 parent, std::string name,
-    const std::string& path)
+    const std::string& path, std::string name_prefix = { })
 {
     const auto& specialization = project.design_ir.specializations().at(
         process.specialization.value());
@@ -1582,7 +1641,22 @@ void defer_child(runtime::SystemVerilogVpiObjectRegistry& registry,
     apply_vpi_source(process_type, project, process.source);
     descriptor.type = process_type;
     auto published_name = std::move(name);
-    for (std::uint32_t collision = 0U;; ++collision) {
+    // An elaborator process named after an escaped declaration
+    // (`$declaration_initializer_\a.b `) holds the escaped identifier's
+    // period or terminating white space, which a simple identifier cannot
+    // (IEEE 1800-2023 5.6.1): it is published under its process number, as
+    // the elaborator's other unnamed processes are.
+    if (published_name.starts_with('$')
+        && std::ranges::any_of(published_name, [](const char character) {
+               return character == '.'
+                   || std::isspace(static_cast<unsigned char>(character)) != 0;
+           })) {
+        published_name = "$process_" + std::to_string(process.runtime_index);
+    }
+    descriptor.name_prefix = std::move(name_prefix);
+    // A checker-expanded assertion's name is unique under its prefix.
+    for (std::uint32_t collision = 0U; descriptor.name_prefix.empty();
+        ++collision) {
         const auto sibling = registry.find_child(parent, published_name);
         if (sibling.error
             == runtime::SystemVerilogVpiObjectError::NotFound) {
@@ -1690,17 +1764,21 @@ void publish_recorded_vpi_parameter(
     const semantic::design::ParameterValue parameter {
         name, identity, identity, declaration_id
     };
-    auto decoded = decode_vpi_parameter(
-        parameter, *declaration, semantic::Language::system_verilog);
+    // An unpacked structure or union typespec decides the shape first: the
+    // declaration's own type form may be unresolved where the typedef is
+    // found only by the elaborator (a package's typedef), and the canonical
+    // value alone reads as a vector (IEEE 1800-2023 37.28).
+    auto decoded = decode_vpi_aggregate_parameter(identity, *declaration,
+        typespec.get(), semantic::Language::system_verilog);
     if (!decoded) {
-        decoded = decode_vpi_aggregate_parameter(identity, *declaration,
-            typespec.get(), semantic::Language::system_verilog);
+        decoded = decode_vpi_parameter(
+            parameter, *declaration, semantic::Language::system_verilog);
     }
     if (!decoded) {
         return;
     }
     if (declaration->initializer && declaration->type
-        && declaration->type->target.spelling == "implicit") {
+        && declaration->type->implicit) {
         const auto* const initializer
             = project.systemverilog_hir.find_expression(
                 *declaration->initializer);
@@ -1938,11 +2016,39 @@ void publish_vpi_generate_blocks(
             blocks(blocks, process->statements, full_path, scope_handle);
         }
     }
+    // The clocking blocks the generate block declares are scopes beneath it
+    // and their clockvars children of each block (IEEE 1800-2023 37.48,
+    // 27.6). The foreign view finds a block's declaration by its source.
+    for (const auto& block : match->region->clocking_blocks) {
+        if (registry.find_child(scope_handle, vpi_identifier(block.name))) {
+            continue;
+        }
+        runtime::SystemVerilogVpiObjectDescriptor descriptor;
+        descriptor.kind = runtime::SystemVerilogVpiObjectKind::ClockingBlock;
+        descriptor.parent = scope_handle;
+        descriptor.name = vpi_identifier(block.name);
+        descriptor.type = scope_type;
+        apply_vpi_source(*descriptor.type, project, block.source);
+        const auto block_path = full_path + "." + block.name;
+        const auto handle
+            = create_checked(registry, std::move(descriptor), block_path);
+        for (const auto& signal : block.signals) {
+            runtime::SystemVerilogVpiObjectDescriptor io;
+            io.kind = runtime::SystemVerilogVpiObjectKind::ClockingIo;
+            io.parent = handle;
+            io.name = vpi_identifier(signal.name.spelling);
+            io.type = scope_type;
+            apply_vpi_source(*io.type, project, signal.source);
+            (void)create_checked(registry, std::move(io),
+                block_path + "." + signal.name.spelling);
+        }
+    }
 }
 
-// The number of block and fork scopes publish_vpi_generate_blocks creates
-// directly beneath the generate scope at `relative` of a unit: the named
-// blocks its processes hold outside any other named block, one per name.
+// The number of block, fork and clocking block scopes
+// publish_vpi_generate_blocks creates directly beneath the generate scope at
+// `relative` of a unit: the named blocks its processes hold outside any other
+// named block and the clocking blocks it declares, one per name.
 std::uint32_t count_vpi_generate_blocks(const BuiltProject& project,
     const std::uint32_t unit, const std::string_view relative,
     const semantic::DeclarationId active)
@@ -1982,6 +2088,9 @@ std::uint32_t count_vpi_generate_blocks(const BuiltProject& project,
                 process_id)) {
             visit(visit, process->statements);
         }
+    }
+    for (const auto& block : match->region->clocking_blocks) {
+        names.insert(block.name);
     }
     return static_cast<std::uint32_t>(names.size());
 }
@@ -2234,6 +2343,32 @@ void materialize_vpi_generate_scopes(
 
 } // namespace
 
+std::optional<std::pair<runtime::SystemVerilogVpiStoredValue, bool>>
+decode_recorded_vpi_class_parameter(const semantic::sv::Hir& hir,
+    const std::string& name, const std::string& identity,
+    const semantic::DeclarationId declaration_id,
+    const runtime::SystemVerilogVpiTypespec* const typespec)
+{
+    const auto* const declaration = hir.find_declaration(declaration_id);
+    if (declaration == nullptr || identity.empty()) {
+        return std::nullopt;
+    }
+    const semantic::design::ParameterValue parameter {
+        name, identity, identity, declaration_id
+    };
+    // As for a recorded package parameter (publish_recorded_vpi_parameter).
+    auto decoded = decode_vpi_aggregate_parameter(identity, *declaration,
+        typespec, semantic::Language::system_verilog);
+    if (!decoded) {
+        decoded = decode_vpi_parameter(
+            parameter, *declaration, semantic::Language::system_verilog);
+    }
+    if (!decoded) {
+        return std::nullopt;
+    }
+    return std::pair { std::move(decoded->value), decoded->type.is_signed };
+}
+
 SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
     const BuiltProject& project,
     const runtime::simir::Interpreter& interpreter)
@@ -2361,6 +2496,18 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
     // separate VPI object.
     std::set<std::string, std::less<>> function_scope_paths;
     std::set<std::string, std::less<>> clocking_block_paths;
+    // The generate block occurrences each instance's elaboration recorded,
+    // by instance path: their clocking blocks are scopes too (27.6, 37.48).
+    std::unordered_map<std::string_view,
+        const std::remove_cvref_t<decltype(
+            project.design.specializations().front().vpi_generate_scopes)>*>
+        instance_generate_scopes;
+    for (const auto& specialization : project.design.specializations()) {
+        if (!specialization.vpi_generate_scopes.empty()) {
+            instance_generate_scopes.emplace(
+                specialization.instance, &specialization.vpi_generate_scopes);
+        }
+    }
     std::unordered_map<std::uint32_t, const semantic::sv::Statement*>
         hir_statements;
     std::unordered_map<std::uint32_t, const semantic::sv::Process*>
@@ -2550,6 +2697,23 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
                 create_checked(*result.registry, std::move(scope), path));
             clocking_block_paths.insert(path);
         }
+        // Those of the instance's generate blocks are published with their
+        // generate scope (publish_vpi_generate_blocks); their sample and
+        // drive storage is the elaborator's as well.
+        if (const auto recorded = instance_generate_scopes.find(instance_path);
+            recorded != instance_generate_scopes.end()) {
+            for (const auto& scope : *recorded->second) {
+                const auto match = vpi_generate_region_at(
+                    unit.generates, scope.path, scope.region);
+                if (!match) {
+                    continue;
+                }
+                for (const auto& block : match->region->clocking_blocks) {
+                    clocking_block_paths.insert(
+                        instance_path + "." + scope.path + "." + block.name);
+                }
+            }
+        }
     };
     const auto publish_instance = [&](const auto& self,
                                       const auto& instance)
@@ -2702,6 +2866,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             scope_type.default_net_kind = nettype.empty()
                 ? runtime::SystemVerilogVpiNetKind::Wire
                 : vpi_net_kind(nettype);
+            scope_type.default_decay_time = unit->default_decay_time;
             scope_type.unconnected_drive = unit->unconnected_drive
                     == semantic::sv::UnconnectedDrive::pull_zero
                 ? runtime::SystemVerilogVpiUnconnectedDrive::Pull0
@@ -3139,7 +3304,8 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             property_typespecs;
         for (const auto& elaborated : project.design.specializations()) {
             for (const auto& named : elaborated.vpi_class_property_typespecs) {
-                if (named.package == declaration_identity && named.typespec) {
+                if (named.package == declaration_identity && named.typespec
+                    && named.specialization.empty()) {
                     property_typespecs.emplace(named.name, named.typespec);
                 }
             }
@@ -3168,20 +3334,22 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
                 property.type = vpi_descriptor_type(
                     class_descriptor.children[index]);
                 property.type->language = class_profile;
-                // A virtual interface property's type is an interface
-                // typespec (IEEE 1800-2023 37.29).
-                if (const auto& declared = source.properties[index].type;
-                    declared.virtual_interface && !declared.container_form
-                    && declared.unpacked_dimensions.empty()) {
-                    property.type->typespec = std::make_shared<
-                        const runtime::SystemVerilogVpiTypespec>(
-                        runtime::make_systemverilog_vpi_interface_typespec(
-                            declared.interface_type, declared.interface_modport,
-                            { }));
+                // An event property, however its type is spelled, is a named
+                // event (IEEE 1800-2023 6.18, 15.5, 37.17).
+                if (!source.properties[index].type.container_form
+                    && application_detail::type_is_event(
+                        project.systemverilog_hir,
+                        source.properties[index].type)) {
+                    property.type->category
+                        = runtime::SystemVerilogVpiValueCategory::Event;
+                    property.type->width = 0U;
+                    property.type->is_signed = false;
+                    property.type->descriptor.reset();
                 }
                 // The descriptor of a built-in element array may already have
-                // derived a scalar typespec; the declared array typespec
-                // replaces it (a virtual interface property is not recorded).
+                // derived a scalar typespec; the declared typespec replaces
+                // it, and a virtual interface property's is an interface
+                // typespec (IEEE 1800-2023 37.29, 37.30).
                 if (const auto recorded
                     = property_typespecs.find(source.properties[index].name);
                     recorded != property_typespecs.end()) {
@@ -3340,14 +3508,17 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
                     }
                 }
             }
-            auto decoded = decode_vpi_parameter(
-                parameter, *declaration, specialization.language);
-            if (!decoded
-                && specialization.language
-                    == semantic::Language::system_verilog) {
-                decoded = decode_vpi_aggregate_parameter(parameter.identity,
-                    *declaration, named_typespec.get(),
-                    specialization.language);
+            // An unpacked structure or union typespec decides the shape
+            // first (37.28), as for a recorded parameter.
+            auto decoded = specialization.language
+                    == semantic::Language::system_verilog
+                ? decode_vpi_aggregate_parameter(parameter.identity,
+                      *declaration, named_typespec.get(),
+                      specialization.language)
+                : std::nullopt;
+            if (!decoded) {
+                decoded = decode_vpi_parameter(
+                    parameter, *declaration, specialization.language);
             }
             // A SystemVerilog parameter of a type the registry does not
             // model yet (a type parameter, another aggregate) stays
@@ -3369,7 +3540,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             // An untyped parameter keeps its string literal's constant
             // type (IEEE 1800-2023 6.20.2, 37.32).
             if (declaration->initializer && declaration->type
-                && declaration->type->target.spelling == "implicit") {
+                && declaration->type->implicit) {
                 const auto* const initializer
                     = project.systemverilog_hir.find_expression(
                         *declaration->initializer);
@@ -3420,6 +3591,12 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
     std::unordered_map<std::pair<fsim_vpi_handle_v1, std::string>,
         std::pair<runtime::simir::SignalId, fsim_vpi_handle_v1>, SiblingHash>
         published_siblings;
+    // The published object of each array of named events, by its scope and
+    // declared name (IEEE 1800-2023 7.4, 37.43),
+    // with the first of the places its elements take in declaration order.
+    std::map<std::pair<fsim_vpi_handle_v1, std::string>,
+        std::pair<fsim_vpi_handle_v1, std::uint64_t>>
+        published_event_arrays;
     objects.reserve(project.design_ir.objects().size());
     published_paths.reserve(project.design_ir.objects().size());
     published_siblings.reserve(project.design_ir.objects().size());
@@ -3820,6 +3997,59 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         const bool nettype_net
             = !signal_info.systemverilog_net_type.empty()
             && nettype_names.contains(signal_info.systemverilog_net_type);
+        std::optional<std::uint64_t> element_place;
+        // An element of an array of named events is a child of the array's
+        // own object, which the first element publishes from the
+        // declaration (IEEE 1800-2023 7.4, 37.43); the elements follow in
+        // declaration order.
+        if (category == runtime::SystemVerilogVpiValueCategory::Event
+            && signal_info.vpi_event_array) {
+            const auto& declared_array = *signal_info.vpi_event_array;
+            const auto array_key
+                = std::pair { object_parent, declared_array.name };
+            auto array_handle = fsim_vpi_handle_v1 { };
+            std::uint64_t first_place { };
+            if (const auto found = published_event_arrays.find(array_key);
+                found != published_event_arrays.end()) {
+                array_handle = found->second.first;
+                first_place = found->second.second;
+            } else {
+                if (!path.ends_with(object.name)) {
+                    throw std::logic_error {
+                        "VPI event array element '" + path
+                        + "' is not named by its declaration"
+                    };
+                }
+                const auto& declared_range
+                    = declared_array.typespec->ranges.front();
+                first_place = result.registry->reserve_ordinals(
+                    static_cast<std::uint64_t>(
+                        declared_range.left <= declared_range.right
+                            ? declared_range.right - declared_range.left
+                            : declared_range.left - declared_range.right)
+                    + 1U);
+                runtime::SystemVerilogVpiObjectDescriptor array;
+                array.kind = runtime::SystemVerilogVpiObjectKind::
+                    NamedEventArray;
+                array.parent = object_parent;
+                array.name = vpi_identifier(declared_array.name);
+                array.type = runtime::SystemVerilogVpiTypeInfo { };
+                array.type->language
+                    = vpi_profile_language(project, specialization);
+                array.type->typespec = declared_array.typespec;
+                apply_vpi_specialization_provenance(
+                    *array.type, project, specialization);
+                apply_vpi_source(*array.type, project, object.source);
+                array_handle = create_checked(*result.registry,
+                    std::move(array),
+                    path.substr(0U, path.size() - object.name.size())
+                        + declared_array.name);
+                published_event_arrays.emplace(
+                    array_key, std::pair { array_handle, first_place });
+            }
+            object_parent = array_handle;
+            element_place = first_place + declared_array.position;
+        }
         runtime::SystemVerilogVpiObjectDescriptor descriptor;
         descriptor.kind
             = category == runtime::SystemVerilogVpiValueCategory::Event
@@ -3833,6 +4063,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             ? runtime::SystemVerilogVpiObjectKind::Net
             : runtime::SystemVerilogVpiObjectKind::Variable;
         descriptor.parent = object_parent;
+        descriptor.ordinal = element_place;
         descriptor.name = vpi_identifier(object.name);
         const auto direction = port == ports.end()
             ? runtime::SystemVerilogVpiDirection::None
@@ -4343,35 +4574,44 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             process.specialization.value());
         const auto& instance = project.design_ir.instances().at(
             specialization.instance.value());
-        const auto path = vpi_occurrence_path(instance, process.name);
+        auto path = vpi_occurrence_path(instance, process.name);
         const semantic::sv::ConcurrentAssertion* assertion_source { };
         const auto unit = std::ranges::find(
             project.systemverilog_hir.units(), specialization.unit,
             &semantic::sv::Unit::id);
+        // The statement the elaborator recorded for an assertion process
+        // (37.49).
         if (specialization.language
                 == semantic::Language::system_verilog
-            && unit != project.systemverilog_hir.units().end()) {
-            const auto process_leaf = process.name.find_last_of('.');
-            const auto local_name = process_leaf == std::string::npos
-                ? std::string_view { process.name }
-                : std::string_view { process.name }.substr(process_leaf + 1U);
+            && unit != project.systemverilog_hir.units().end()
+            && process.assertion) {
             assertion_source = semantic::sv::find_concurrent_assertion(
-                *unit, local_name);
+                *unit, *process.assertion);
         }
         runtime::SystemVerilogVpiObjectDescriptor descriptor;
         descriptor.kind = runtime::SystemVerilogVpiObjectKind::Process;
         descriptor.parent = instances.at(specialization.instance.value());
-        const auto leaf = path.find_last_of('.');
-        descriptor.name = leaf == std::string::npos
-            ? path
-            : path.substr(leaf + 1U);
+        const auto leaf_begin = path_leaf_begin(path);
+        const auto leaf
+            = leaf_begin == 0U ? std::string::npos : leaf_begin - 1U;
+        descriptor.name = path.substr(leaf_begin);
         const auto asserted = specialization.language
                 == semantic::Language::system_verilog
             && (process.observed || assertion_source != nullptr);
         const auto instance_path = vpi_scope_path(instance);
-        // An asserted process is published now, and with it the generate
-        // scope holding it or named like it.
-        if (asserted) {
+        // An assertion a checker instance expanded belongs to the module
+        // that instantiates the checker, under its name in the checker
+        // (`top.u_chk.ca`, IEEE 1800-2023 17.2); the checker instance is no
+        // scope of its own.
+        const bool checker_expanded = assertion_source != nullptr
+            && !assertion_source->checker_instance.empty();
+        if (checker_expanded) {
+            descriptor.name = assertion_source->checker_name;
+            path = instance_path + "." + assertion_source->checker_instance
+                + "." + assertion_source->checker_name;
+        } else if (asserted) {
+            // An asserted process is published now, and with it the
+            // generate scope holding it or named like it.
             ensure_recorded_generate_scope(
                 instance_path, path, descriptor.parent);
             if (leaf != std::string::npos) {
@@ -4383,7 +4623,9 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         // Another process of a generate scope that holds no published
         // object is created with the scope.
         const RecordedGenerateScope* holder { };
-        if (const auto matching_scope = published_scopes.find(path);
+        if (checker_expanded) {
+            // Placed under the instantiating module above.
+        } else if (const auto matching_scope = published_scopes.find(path);
             matching_scope != published_scopes.end()) {
             if (descriptor.name != "<process>") {
                 descriptor.parent = matching_scope->second;
@@ -4429,7 +4671,9 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         }
         const auto process_handle = create_systemverilog_vpi_process(
             *result.registry, project, process, descriptor.parent,
-            std::move(descriptor.name), path);
+            std::move(descriptor.name), path,
+            checker_expanded ? assertion_source->checker_instance
+                             : std::string { });
         {
             runtime::SystemVerilogVpiObjectDescriptor assertion;
             assertion.kind
@@ -4449,13 +4693,8 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             const auto assertion_handle = create_checked(
                 *result.registry, std::move(assertion),
                 path + ".$assertion");
-            result.assertions.insert_or_assign(
-                process.name, assertion_handle);
-            result.assertions.insert_or_assign(path, assertion_handle);
-            if (assertion_source != nullptr) {
-                result.assertions.insert_or_assign(
-                    assertion_source->name, assertion_handle);
-            }
+            result.assertion_occurrences.insert_or_assign(
+                assertion_handle, process_index);
         }
     }
 
@@ -5086,6 +5325,12 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
                 port.high_expression = actual->expression->value();
                 port.has_high_expression = true;
                 port.high_scope = find_object(instance_path.substr(0U, scope_end));
+            }
+            // The object a ref port's reference object stands for: the
+            // variable the instantiation connects (IEEE 1800-2023 37.15
+            // details 1 and 3).
+            if (port.ref && !port.interface_port && port.high_conn != 0U) {
+                port.actual = port.high_conn;
             }
             // The interface or modport an interface port refers to
             // (IEEE 1800-2023 37.15).

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include "fsim/app/application.hpp"
 #include "fsim/diagnostic/diagnostic.hpp"
 #include "fsim/project/project.hpp"
 #include "fsim/systemc/incremental.hpp"

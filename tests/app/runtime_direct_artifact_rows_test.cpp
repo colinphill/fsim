@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "runtime_direct_artifact_rows_test_support.hpp"
+#include "fsim/runtime/simir.hpp"
+
+#include "fsim/app/artifact_schema.hpp"
 
 #include <cassert>
-#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <utility>
@@ -94,7 +96,7 @@ void test_tagged_fork_runtime_roundtrip()
 
 void test_schema_and_direct_row_roundtrip()
 {
-    assert(fsim::app::kRuntimeStateSchema == 108U);
+    assert(fsim::app::kRuntimeStateSchema == 126U);
     const auto source_bytes = encode_startup_metadata_design();
     assert(source_bytes.has_value());
     const auto wire_payload = read_runtime_wire_payload(*source_bytes);

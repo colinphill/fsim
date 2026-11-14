@@ -3,6 +3,9 @@
 
 #include <algorithm>
 #include <array>
+#include <deque>
+#include <map>
+#include <mutex>
 #include <set>
 #include <unordered_map>
 #include <tuple>
@@ -1099,7 +1102,91 @@ const TypeDefinition* Hir::find_type(const TypeId id) const noexcept
 
 const Expression* Hir::find_expression(const ExpressionId id) const noexcept
 {
-    return find_by_id(expressions_, id);
+    if (const auto* record = find_by_id(expressions_, id)) {
+        return record;
+    }
+    return find_interned_constant(id);
+}
+
+struct Hir::InternedConstants {
+    std::mutex lock;
+    std::deque<Expression> records;
+    std::map<std::pair<ExpressionKind, std::string>, std::size_t> index;
+};
+
+namespace {
+std::mutex interned_creation_lock;
+}
+
+ExpressionId Hir::intern_constant(
+    const ExpressionKind kind, std::string text) const
+{
+    {
+        const std::lock_guard guard { interned_creation_lock };
+        if (!interned_) {
+            interned_ = std::make_shared<InternedConstants>();
+        }
+    }
+    const std::lock_guard guard { interned_->lock };
+    auto key = std::pair { kind, std::move(text) };
+    if (const auto found = interned_->index.find(key);
+        found != interned_->index.end()) {
+        return interned_->records[found->second].id;
+    }
+    Expression record;
+    record.id = ExpressionId::from_index(static_cast<std::uint32_t>(
+        interned_constant_base + interned_->records.size()));
+    record.kind = kind;
+    record.text = key.second;
+    if (kind == ExpressionKind::string_literal) {
+        record.decoded_string = key.second;
+    }
+    // A real value (IEEE 1800-2023 6.12): a decimal with a point or an
+    // exponent, kept with its exact decimal digits as a source literal is.
+    if (kind == ExpressionKind::integer_literal
+        && key.second.find_first_of(".eE") != std::string::npos) {
+        std::string digits;
+        std::int64_t exponent { };
+        bool fraction { };
+        bool in_exponent { };
+        std::string exponent_text;
+        for (const char character : key.second) {
+            if (in_exponent) {
+                exponent_text += character;
+            } else if (character == '.') {
+                fraction = true;
+            } else if (character == 'e' || character == 'E') {
+                in_exponent = true;
+            } else if (character != '-' && character != '+') {
+                digits += character;
+                exponent -= fraction ? 1 : 0;
+            }
+        }
+        if (!exponent_text.empty()) {
+            exponent += std::stoll(exponent_text);
+        }
+        record.decimal_literal = DecimalLiteral {
+            DecimalLiteralKind::real, digits, exponent, { } };
+        record.scalar_kind = ScalarKind::real;
+        record.signed_value = true;
+    }
+    record.folded = true;
+    interned_->index.emplace(std::move(key), interned_->records.size());
+    interned_->records.push_back(std::move(record));
+    return interned_->records.back().id;
+}
+
+const Expression* Hir::find_interned_constant(
+    const ExpressionId id) const noexcept
+{
+    if (!id.valid() || id.value() < interned_constant_base || !interned_) {
+        return nullptr;
+    }
+    const std::lock_guard guard { interned_->lock };
+    const auto position = id.value() - interned_constant_base;
+    return position < interned_->records.size()
+        ? &interned_->records[position]
+        : nullptr;
 }
 const std::vector<Expression>& Hir::expressions() const noexcept {
     return expressions_;
@@ -1285,6 +1372,7 @@ NamedPackedDimensions compose_named_packed_dimensions(
         reference.composed_over = reference.target;
         reference.target.target = { };
         reference.target.spelling = shape->four_state ? "logic" : "bit";
+        reference.named = false;
     } else if (shape->target.target.valid()) {
         reference.target.target = shape->target.target;
     }

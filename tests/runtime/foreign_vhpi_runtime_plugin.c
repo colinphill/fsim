@@ -216,8 +216,8 @@ static void start(const vhpiCbDataT* data)
     printf("#c capabilities=%d\n",
         vhpi_get(vhpiCapabilitiesP, vhpi_handle(vhpiTool, NULL))
             == (vhpiProvidesHierarchy | vhpiProvidesStaticAccess
-                | vhpiProvidesPostAnalysis | vhpiProvidesForeignModel
-                | vhpiProvidesAdvancedForeignModel));
+                | vhpiProvidesConnectivity | vhpiProvidesPostAnalysis
+                | vhpiProvidesForeignModel | vhpiProvidesAdvancedForeignModel));
     // A short buffer yields the size it needs (IEEE 1076-2019 23.19).
     memset(&value, 0, sizeof value);
     value.format = vhpiBinStrVal;

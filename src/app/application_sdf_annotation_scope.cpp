@@ -3,7 +3,6 @@
 #include "sdf_diagnostic.hpp"
 
 #include <algorithm>
-#include <ranges>
 #include <unordered_map>
 #include <utility>
 

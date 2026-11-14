@@ -1005,7 +1005,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-VHDL-UNSUPPORTED-020` | error | A generate branch contains an item outside the bounded constant, local-signal, assignment, process, instance, and nested-generate subset. |
 | `FSIM-VHDL-UNSUPPORTED-022` | error | A package declaration item is outside the bounded constant, type, subtype, or function subset. |
 | `FSIM-VHDL-UNSUPPORTED-024` | error | A context declaration contains an item other than a library clause, use clause, or context reference. |
-| `FSIM-VHDL-UNSUPPORTED-025` | error | A `null` waveform element appears outside a guarded concurrent signal assignment. |
+| `FSIM-VHDL-UNSUPPORTED-025` | retired | Formerly: a `null` waveform element outside a guarded concurrent signal assignment. Elaboration now diagnoses every null waveform element in a concurrent signal assignment (IEEE 1076-2019 11.6, VHDLGUARD-004); the code is no longer emitted. |
 | `FSIM-VHDL-UNSUPPORTED-026` | error | A bounded VHDL type or record element is outside the architecture-local, non-nested packed record subset. |
 | `FSIM-VHDL-UNSUPPORTED-027` | error | A built-in scalar or vector subtype carries multiple array constraints. |
 | `FSIM-VHDL-UNSUPPORTED-028` | error | A VHDL interface type generic uses classified or default-like syntax outside the VHDL-2008 unclassified `type T` form. |
@@ -1091,6 +1091,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SV-PP-054` | error | `` `resetall`` appears inside a design element (IEEE 1800-2017 22.3). |
 | `FSIM-SV-PP-055` | error | `` `define`` names a compiler directive, which is a predefined macro name that cannot be redefined (IEEE 1800-2017 22.5.1). |
 | `FSIM-SV-PP-056` | error | `` `pragma`` has no pragma name (IEEE 1800-2017 22.11). |
+| `FSIM-SV-PP-057` | error | `` `default_decay_time`` has no integer constant, real constant or `infinite` argument (IEEE 1800-2023 E.2). |
 
 ### Verilog/SystemVerilog syntax
 
@@ -1619,6 +1620,10 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SV-SEM-471` | error | The clocking event of a procedural concurrent assertion uses an automatic variable of the procedure (IEEE 1800-2023 16.14.6). |
 | `FSIM-SV-SEM-472` | error | A concurrent assertion outside a procedure, whose property has local variables, has no clocking event: neither its property nor its sequences give a clock and the scope has no default clocking, so no clock can be inferred (IEEE 1800-2023 16.16, 16.14.6). |
 | `FSIM-SV-SEM-473` | error | A sampled value function other than `$sampled` (`$past`, `$rose`, `$fell`, `$stable`, `$changed`) in a disable condition (`disable iff`, `default disable iff`) or in a clock expression of an assertion, sequence or property has no clocking argument: there it shall be explicitly clocked, not take an inferred clock (IEEE 1800-2023 16.9.3, 16.12, 16.15). |
+| `FSIM-SV-SEM-474` | error | A concurrent assertion or expect property uses a form IEEE 1800-2023 makes illegal: a sequence match item attached to a subsequence that admits an empty match (16.10), a local variable referenced in an abort condition (16.12.14), a disable condition (16.12) or a clocking event (16.10), a property without a unique semantic leading clock, or one that takes no clock from its statement, a default clocking or a procedure and is not a sequence or property instance (16.16.1 e, f), or `not` or a strong operator applied to an instance of a recursive property (16.12.17 Restriction 1). |
+| `FSIM-SV-SEM-475` | error | The body of a sequence or property declaration is not a sequence or property expression (IEEE 1800-2023 16.8, 16.12): reported for every declaration, also one no assertion instantiates; the message gives the parser's reason. |
+| `FSIM-SV-SEM-476` | error | A read of a sequence's end point (`s.triggered`, `s.matched`, `@s`; IEEE 1800-2023 16.13.5, 16.13.6, 9.4.2.4) cannot be evaluated: the sequence has no clocking event, its sequence is outside the forms the monitor evaluates, or sequences depend on each other circularly through triggered (16.13.6); or an event term `name(...)` whose actuals are not expressions (event expressions or sequences, 16.8) names no sequence. |
+| `FSIM-SV-SEM-477` | error | A named sequence depends on itself through its instances: the directed graph whose edges run from a sequence to each sequence its declaration (body, clock or default actual argument) instances, and from the sequence of an instance to each sequence one of that instance's actual arguments instances, has a cycle (IEEE 1800-2023 16.8); or a property declaration breaks a restriction on recursive properties (16.12.17, F.7): `not` or a strong operator applied to an instance from which a recursive property is reached (Restriction 1), `disable iff` in a recursive property (2), a cycle of recursive instances without a positive advance in time (3), or an actual argument of a recursive instance that reads a formal argument without being one or being bound to a local variable formal argument (4). |
 | `FSIM-SV-SEM-201` | error | An executable concurrent-property clock is not one direct design-unit object with an optional edge. |
 | `FSIM-SV-SEM-203` | error | A covergroup declaration is used outside SystemVerilog-2017. |
 | `FSIM-SV-SEM-204` | error | A covergroup closing name does not match its declaration name. |
@@ -1831,7 +1836,7 @@ scheduler.
 | `FSIM-SV-SEM-059` | error | A function closing name does not match its declaration name. |
 | `FSIM-SV-SEM-060` | error | A bounded function repeats or conflicts with a local declaration. |
 | `FSIM-SV-SEM-061` | error | A bounded function assignment target does not have an identifier root. |
-| `FSIM-SV-SEM-063` | error | A bounded function assignment is nonblocking or contains a procedural timing/event control. |
+| `FSIM-SV-SEM-063` | error | A function assignment has an intra-assignment delay or event control (IEEE 1800-2023 13.4.4); a nonblocking assignment is allowed (10.4.2). |
 | `FSIM-SV-SEM-064` | error | A bounded function contains a timing control, event statement, or task statement. |
 | `FSIM-SV-SEM-066` | error | A module or package declares the same bounded function name more than once. |
 | `FSIM-SV-SEM-067` | error | A bounded task repeats an argument name. |
@@ -2064,7 +2069,7 @@ scheduler.
 | `FSIM-ELAB-GEN-001` | error | A conditional-generate expression cannot be evaluated for its specialization. |
 | `FSIM-ELAB-GEN-002` | error | A loop-generate initial value cannot be evaluated for its specialization. |
 | `FSIM-ELAB-GEN-003` | error | A loop-generate continuation condition cannot be evaluated. |
-| `FSIM-ELAB-GEN-004` | error | A loop generate exceeds the bounded one-million-iteration elaboration limit. |
+| `FSIM-ELAB-GEN-004` | error | A SystemVerilog loop generate exceeds the bounded one-million-iteration elaboration limit. |
 | `FSIM-ELAB-GEN-005` | error | A loop-generate iteration expression cannot be evaluated. |
 | `FSIM-ELAB-GEN-006` | error | A loop-generate iteration does not advance its variable. |
 | `FSIM-ELAB-GEN-007` | error | A nested loop-generate variable shadows an enclosing constant in the bounded executable slice. |
@@ -2106,8 +2111,9 @@ scheduler.
 | `FSIM-ELAB-SVNETTYPE-001` | error | A SystemVerilog nettype resolution function is not visible with an executable body. |
 | `FSIM-ELAB-SVNETTYPE-002` | error | A SystemVerilog nettype resolution function is ambiguous or has conflicting visible bodies. |
 | `FSIM-ELAB-SVNETTYPE-003` | error | A SystemVerilog nettype resolution function does not accept one dynamic array of the net base type and return that base type. |
-| `FSIM-ELAB-SVNETTYPE-004` | error | A SystemVerilog nettype resolution function uses a body outside the retained deterministic resolution forms. |
+| `FSIM-ELAB-SVNETTYPE-004` | error | A net of a user-defined nettype cannot be resolved: its resolution function cannot be lowered as a resolver program, or the elements of an array of such nets (one whose dimensions are not fixed constant ranges) cannot be resolved as separate nets. |
 | `FSIM-ELAB-SVNETTYPE-005` | error | A built-in net data type is not four-state integral or a fixed aggregate recursively composed of valid net types. |
+| `FSIM-ELAB-SVNETTYPE-006` | error | A net of a nettype declared without a resolution function has more than one driver (IEEE 1800-2023 6.6.7). |
 | `FSIM-ELAB-SVALIAS-001` | error | A SystemVerilog alias terminal is not a locally static packed-net lvalue, selects an invalid range, or names a variable. |
 | `FSIM-ELAB-SVALIAS-002` | error | A SystemVerilog alias terminal does not name a packed net in its declaration region. |
 | `FSIM-ELAB-SVALIAS-003` | error | SystemVerilog alias terminals have different bit lengths or incompatible net/data types. |
@@ -2263,7 +2269,7 @@ scheduler.
 | `FSIM-ELAB-VHFILE-014` | error | An element of a VHDL array or record type is of a file or protected type (IEEE 1076-2008 5.3.1). |
 | `FSIM-ELAB-VHFILE-015` | error | The element of a VHDL file type is a multidimensional array (IEEE 1076-2008 5.5.1). |
 | `FSIM-ELAB-VHFILE-016` | error | A VHDL generic constant or signal port is of a file type (IEEE 1076-2008 6.5.2). |
-| `FSIM-ELAB-VHTEXTIO-001` | error | `readline` or `writeline` does not have one text-file and one writable `line` actual. |
+| `FSIM-ELAB-VHTEXTIO-001` | error | `readline` or `writeline` does not have one file of `std.textio.text` and one writable `line` actual. |
 | `FSIM-ELAB-VHTEXTIO-002` | error | A selected TextIO `read` or `write` line actual is not writable. |
 | `FSIM-ELAB-VHTEXTIO-003` | error | A TextIO `read` or `write` profile has an invalid actual count or no value actual. |
 | `FSIM-ELAB-VHTEXTIO-004` | error | A TextIO `read` value is not a writable bounded scalar, or an `hread`/`oread` value is not a writable bounded `bit_vector` or `std_ulogic_vector` (a `std_ulogic` selection needs static bounds). |
@@ -2528,10 +2534,12 @@ scheduler.
 | `FSIM-ELAB-VHDLCASE-011` | error | A VHDL case choice names a variable or signal; choices must be locally static (IEEE 1076-2008 10.9). |
 | `FSIM-ELAB-VHDLGUARD-001` | error | A guarded concurrent assignment has no enclosing Boolean block guard or no retained assignment leaf. |
 | `FSIM-ELAB-VHDLGUARD-002` | error | A guarded driver disconnection targets a local or non-nine-state signal. |
+| `FSIM-ELAB-VHDLGUARD-003` | error | A null waveform element targets a signal that is not guarded. |
+| `FSIM-ELAB-VHDLGUARD-004` | error | A null waveform element appears in a concurrent signal assignment, guarded or not (IEEE 1076-2019 11.6). |
 | `FSIM-ELAB-VHENUM-001` | error | A contextual VHDL enumeration type has no matching identifier or character literal. |
 | `FSIM-ELAB-VHENUM-002` | error | Assignment or comparison mixes values from different nominal VHDL enumeration types. |
 | `FSIM-ELAB-VHENUM-003` | error | An operator that is not defined for VHDL enumeration values was applied to an enumeration object. |
-| `FSIM-ELAB-VHENUM-004` | error | A character literal fits the formals of more than one visible overload of a call, so its type is ambiguous (IEEE 1076-2019 12.5). |
+| `FSIM-ELAB-VHENUM-004` | error | A character or string literal fits the formals of more than one visible overload of a call, so its type is ambiguous (IEEE 1076-2019 12.5). |
 | `FSIM-ELAB-VHINIT-001` | error | A VHDL signal initializer is not a statically foldable value compatible with the signal subtype. |
 | `FSIM-ELAB-VHINIT-002` | error | The initial value of a VHDL signal, variable or constant is of another nominal composite type than the object, or of a statically constrained array subtype whose lengths differ from the object's (IEEE 1076-2019 14.4.2.5). |
 | `FSIM-ELAB-VHENUMATTR-001` | error | A VHDL enumeration scalar attribute has an invalid prefix, arity, argument type, result context, or executable ordinal range. |
@@ -2852,6 +2860,7 @@ scheduler.
 | `FSIM-ELAB-SVSPEC-018` | error | A timing-check event-based or remain-active flag is not a static two-state value. |
 | `FSIM-ELAB-SVSPEC-019` | error | A controlled timing-check event lacks its required edge or contains an invalid scalar transition descriptor. |
 | `FSIM-ELAB-SVA-001` | error | A generated concurrent-property monitor call has malformed operands. |
+| `FSIM-ELAB-SVA-002` | error | A local variable of a concurrent property or sequence has the chandle type: a local's type is one IEEE 1800-2023 16.6 allows in assertion expressions, which shall not reference chandle variables (16.6, 16.10). |
 | `FSIM-ELAB-GENERIC-001` | error | A VHDL generic actual is unknown, missing, excessive, or cannot target the selected SystemC factory. |
 | `FSIM-ELAB-GENERIC-002` | error | A VHDL generic receives more than one actual. |
 | `FSIM-ELAB-GENERIC-003` | error | A positional VHDL generic actual follows a named actual. |
@@ -3063,6 +3072,7 @@ scheduler.
 | `FSIM-RUN-ASSERT-0001` | assertion severity | A false HDL assertion stopped a CLI simulation; the diagnostic retains its source location and message. |
 | `FSIM-HDL-REPORT` | report severity | A VHDL report or SystemVerilog severity task was emitted through a command or Tcl output stream. |
 | `FSIM-RUN-DELTA-0001` | error | Simulation exceeded `max_deltas`; the message includes pending processes and recent signals. |
+| `FSIM-RUN-VHDLNULL-001` | error | A source of a resolved VHDL signal, a composite, has null and non-null subelements: a null transaction reached part of a resolved composite signal's driver (IEEE 1076-2019 14.7.3.2). The run stops on every engine. |
 | `FSIM-RUN-VHENV-001` | error | A VHDL-2019 simulator status is outside the portable host-process range 0 through 255. |
 | `FSIM-VCD-0001` | error | The trace output directory could not be created. |
 | `FSIM-VCD-0002` | error | The VCD trace file could not be opened. |

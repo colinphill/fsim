@@ -147,16 +147,36 @@ add_library(
 fsim_configure_library(fsim_vpi_reference_cpp_plugin)
 target_include_directories(
   fsim_vpi_reference_cpp_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
-target_compile_definitions(
-  fsim_runtime_tests
-  PRIVATE FSIM_DPI_ONLY_PLUGIN_PATH="$<TARGET_FILE:fsim_foreign_dpi_types_plugin>"
-          FSIM_VHPI_TEST_PLUGIN_PATH="$<TARGET_FILE:fsim_vhpi_test_plugin>"
-          FSIM_VHPI_REFERENCE_C_PLUGIN_PATH="$<TARGET_FILE:fsim_vhpi_reference_c_plugin>"
-          FSIM_VHPI_REFERENCE_CPP_PLUGIN_PATH="$<TARGET_FILE:fsim_vhpi_reference_cpp_plugin>"
-          FSIM_VPI_TEST_PLUGIN_PATH="$<TARGET_FILE:fsim_vpi_test_plugin>"
-          FSIM_VPI_STANDARD_STARTUP_PLUGIN_PATH="$<TARGET_FILE:fsim_vpi_standard_startup_plugin>"
-          FSIM_VPI_REFERENCE_C_PLUGIN_PATH="$<TARGET_FILE:fsim_vpi_reference_c_plugin>"
-          FSIM_VPI_REFERENCE_CPP_PLUGIN_PATH="$<TARGET_FILE:fsim_vpi_reference_cpp_plugin>"
+# Plug-in paths lie in this build tree, which differs between checkouts: only
+# the sources that load the plug-ins get them, so the other runtime test
+# sources compile the same in each checkout and share the compiler cache.
+set_property(
+  SOURCE runtime_vhpi_tests.cpp runtime_vpi_tests.cpp
+  APPEND PROPERTY COMPILE_DEFINITIONS
+    FSIM_DPI_ONLY_PLUGIN_PATH="$<TARGET_FILE:fsim_foreign_dpi_types_plugin>"
+)
+set_property(
+  SOURCE runtime_vhpi_tests.cpp
+  APPEND PROPERTY COMPILE_DEFINITIONS
+    FSIM_VHPI_TEST_PLUGIN_PATH="$<TARGET_FILE:fsim_vhpi_test_plugin>"
+)
+set_property(
+  SOURCE runtime_vhpi_reference_plugin_tests.cpp
+  APPEND PROPERTY COMPILE_DEFINITIONS
+    FSIM_VHPI_REFERENCE_C_PLUGIN_PATH="$<TARGET_FILE:fsim_vhpi_reference_c_plugin>"
+    FSIM_VHPI_REFERENCE_CPP_PLUGIN_PATH="$<TARGET_FILE:fsim_vhpi_reference_cpp_plugin>"
+)
+set_property(
+  SOURCE runtime_vpi_tests.cpp
+  APPEND PROPERTY COMPILE_DEFINITIONS
+    FSIM_VPI_TEST_PLUGIN_PATH="$<TARGET_FILE:fsim_vpi_test_plugin>"
+    FSIM_VPI_STANDARD_STARTUP_PLUGIN_PATH="$<TARGET_FILE:fsim_vpi_standard_startup_plugin>"
+)
+set_property(
+  SOURCE runtime_vpi_reference_plugin_tests.cpp
+  APPEND PROPERTY COMPILE_DEFINITIONS
+    FSIM_VPI_REFERENCE_C_PLUGIN_PATH="$<TARGET_FILE:fsim_vpi_reference_c_plugin>"
+    FSIM_VPI_REFERENCE_CPP_PLUGIN_PATH="$<TARGET_FILE:fsim_vpi_reference_cpp_plugin>"
 )
 add_dependencies(
   fsim_runtime_tests fsim_foreign_dpi_types_plugin
@@ -1028,9 +1048,11 @@ function(fsim_add_foreign_conformance_test FSIM_NAME FSIM_INTERFACE
   # simulate`; the case then runs on the debug
   # engine only. ENVIRONMENT lists NAME=value entries every step runs with,
   # and RERUN_ENVIRONMENT more entries for a second `fsim simulate` that must
-  # print the same trace.
+  # print the same trace. UVM_ROOT names a UVM 1.2 kit whose uvm_pkg compiles
+  # into library `uvm` before the sources, which see its src directory; the
+  # case is then labelled uvm.
   cmake_parse_arguments(PARSE_ARGV 9 FSIM_OPTION ""
-    "MESSAGE;SDF;ELABORATE_MESSAGE;COMPILE_MESSAGE;DPI_HEADER;ELABORATE_ARGS;COMPILE_ARGS;DEBUG_COMMANDS;TOP"
+    "MESSAGE;SDF;ELABORATE_MESSAGE;COMPILE_MESSAGE;DPI_HEADER;ELABORATE_ARGS;COMPILE_ARGS;DEBUG_COMMANDS;TOP;UVM_ROOT"
     "ENVIRONMENT;RERUN_ENVIRONMENT")
   # TOP names the unit to elaborate (default `top`), e.g. a configuration.
   set(FSIM_TOP_UNIT top)
@@ -1081,11 +1103,16 @@ function(fsim_add_foreign_conformance_test FSIM_NAME FSIM_INTERFACE
         "-DFSIM_DEBUG_COMMANDS=${FSIM_DEBUG_COMMANDS_PATH}"
         "-DFSIM_ENVIRONMENT=${FSIM_ENVIRONMENT_TEXT}"
         "-DFSIM_RERUN_ENVIRONMENT=${FSIM_RERUN_ENVIRONMENT_TEXT}"
+        "-DFSIM_UVM_ROOT=${FSIM_OPTION_UVM_ROOT}"
         "-DFSIM_WORK_DIR=${PROJECT_BINARY_DIR}/tests/foreign/${FSIM_NAME}-${FSIM_ENGINE}"
         -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunForeignConformanceCase.cmake")
     set_tests_properties(
       fsim.foreign.${FSIM_NAME}.${FSIM_ENGINE}
       PROPERTIES LABELS "fast;foreign;${FSIM_INTERFACE};conformance;linux")
+    if(NOT "${FSIM_OPTION_UVM_ROOT}" STREQUAL "")
+      set_property(TEST fsim.foreign.${FSIM_NAME}.${FSIM_ENGINE}
+        APPEND PROPERTY LABELS uvm)
+    endif()
   endforeach()
 endfunction()
 fsim_add_foreign_conformance_test(
@@ -1203,6 +1230,18 @@ fsim_add_foreign_conformance_test(
   vpi-mipd-split-early-sdf vpi foreign_vpi_mipd_split.sv
   foreign_vpi_mipd_split_early.expected "" fsim_foreign_vpi_mipd_split_early_plugin
   "" "" "" SDF foreign_vpi_mipd_split_early.sdf)
+# A foreign deposit, force and release of nets of a user-defined nettype
+# (IEEE 1800-2023 6.6.7, 38.34): a deposit holds until the net resolves
+# again, a force over driver changes, and a release restores the resolution.
+add_library(fsim_foreign_vpi_nettype_put_plugin SHARED
+  foreign_vpi_nettype_put_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_nettype_put_plugin)
+target_link_libraries(fsim_foreign_vpi_nettype_put_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_nettype_put_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-nettype-put vpi foreign_vpi_nettype_put.sv
+  foreign_vpi_nettype_put.expected "" fsim_foreign_vpi_nettype_put_plugin)
 # A foreign write (deposit, force, release) of a net whose load has per-source
 # INTERCONNECT delays reaches the load after the smallest delay of its sources
 # for each bit's transition (the group-mode shadows carry only the sources'
@@ -1238,6 +1277,18 @@ target_include_directories(
 fsim_add_foreign_conformance_test(
   vpi-classes vpi foreign_vpi_classes.sv foreign_vpi_classes.expected ""
   fsim_foreign_vpi_classes_plugin)
+# Mailbox and semaphore objects, an inline constraint, a task through an
+# interface port and a specialization's properties (IEEE 1800-2023 37.32,
+# 37.33, 37.41, 37.42).
+add_library(fsim_foreign_vpi_class_sync_plugin SHARED
+  foreign_vpi_class_sync_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_class_sync_plugin)
+target_link_libraries(fsim_foreign_vpi_class_sync_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_class_sync_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-class-sync vpi foreign_vpi_class_sync.sv foreign_vpi_class_sync.expected
+  "--foreign-probes" fsim_foreign_vpi_class_sync_plugin)
 # Virtual interface variables and interface typespecs (IEEE 1800-2023
 # 37.29, 37.30).
 add_library(fsim_foreign_vpi_virtual_interfaces_plugin SHARED
@@ -1249,7 +1300,7 @@ target_include_directories(
   PRIVATE "${PROJECT_SOURCE_DIR}/include")
 fsim_add_foreign_conformance_test(
   vpi-virtual-interfaces vpi foreign_vpi_virtual_interfaces.sv
-  foreign_vpi_virtual_interfaces.expected ""
+  foreign_vpi_virtual_interfaces.expected "--foreign-probes"
   fsim_foreign_vpi_virtual_interfaces_plugin)
 # An array of virtual interfaces (IEEE 1800-2023 37.29 example 1).
 add_library(fsim_foreign_vpi_virtual_array_plugin SHARED
@@ -1511,6 +1562,44 @@ fsim_add_foreign_conformance_test(
 fsim_add_foreign_conformance_test(
   mixed-model mixed "foreign_mixed_model.vhd|foreign_mixed_model.sv"
   foreign_mixed_model.expected "" fsim_foreign_mixed_model_plugin)
+# A VPI plug-in drives a mixed design's clock through top-level ports nothing
+# in the design drives, with zero-delay inertial puts as cocotb does: the
+# VHDL register stage woken by the edge reads the SystemVerilog stage's value
+# from before the edge's nonblocking update (IEEE 1800-2023 4.4.2, 38.34;
+# IEEE 1076-2019 14.7.5.3).
+add_library(fsim_foreign_vpi_mixed_clock_plugin SHARED
+  foreign_vpi_mixed_clock_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_mixed_clock_plugin)
+target_link_libraries(fsim_foreign_vpi_mixed_clock_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_mixed_clock_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-mixed-clock vpi
+  "foreign_vpi_mixed_clock.vhd@2008|foreign_vpi_mixed_clock.sv"
+  foreign_vpi_mixed_clock.expected "" fsim_foreign_vpi_mixed_clock_plugin)
+# Zero-delay inertial puts of a string variable, as cocotb writes it: each
+# put that changes the value wakes its event control (IEEE 1800-2023 9.4.2,
+# 38.34).
+add_library(fsim_foreign_vpi_string_put_plugin SHARED
+  foreign_vpi_string_put_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_string_put_plugin)
+target_link_libraries(fsim_foreign_vpi_string_put_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_string_put_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-string-put vpi foreign_vpi_string_put.sv foreign_vpi_string_put.expected
+  "" fsim_foreign_vpi_string_put_plugin)
+# A variable with an escaped identifier and an initializer does not end the
+# iteration of its module's scopes (IEEE 1800-2023 5.6.1, 37.10).
+add_library(fsim_foreign_vpi_escaped_scope_plugin SHARED
+  foreign_vpi_escaped_scope_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_escaped_scope_plugin)
+target_link_libraries(fsim_foreign_vpi_escaped_scope_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_escaped_scope_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-escaped-scope vpi foreign_vpi_escaped_scope.sv
+  foreign_vpi_escaped_scope.expected "" fsim_foreign_vpi_escaped_scope_plugin)
 # PLI 1.0 TF routines of IEEE 1364-2001 clause 25, registered through
 # the PLI 1.0 task table; the plusarg feeds mc_scan_plusargs.
 add_library(fsim_foreign_pli_tf_core_plugin SHARED
@@ -1633,6 +1722,17 @@ target_include_directories(
 fsim_add_foreign_conformance_test(
   vpi-late-watch vpi foreign_vpi_late_watch.sv foreign_vpi_late_watch.expected
   "" fsim_foreign_vpi_late_watch_plugin)
+# Each blocking write that changes a watched variable is its own value
+# change, a write of a wide variable one change (IEEE 1800-2023 38.36.1).
+add_library(fsim_foreign_vpi_each_write_plugin SHARED
+  foreign_vpi_each_write_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_each_write_plugin)
+target_link_libraries(fsim_foreign_vpi_each_write_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_each_write_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-each-write vpi foreign_vpi_each_write.sv foreign_vpi_each_write.expected
+  "" fsim_foreign_vpi_each_write_plugin)
 # The connection list of an instance array, typedef parameters of a generate
 # scope, and value-change watches on string array elements and string class
 # properties (IEEE 1800-2023 37.11, 37.28, 37.85, 38.36.1).
@@ -1839,6 +1939,33 @@ fsim_add_foreign_conformance_test(
   vpi-formal-types vpi foreign_vpi_formal_types.sv
   foreign_vpi_formal_types.expected ""
   fsim_foreign_vpi_formal_types_plugin)
+# The typespec of a formal or result of a class or container type, and the
+# ranges of one declared with a typedef (IEEE 1800-2023 37.41, 37.25).
+add_library(fsim_foreign_vpi_formal_containers_plugin SHARED
+  foreign_vpi_formal_containers_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_formal_containers_plugin)
+target_link_libraries(
+  fsim_foreign_vpi_formal_containers_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_formal_containers_plugin
+  PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-formal-containers vpi foreign_vpi_formal_containers.sv
+  foreign_vpi_formal_containers.expected ""
+  fsim_foreign_vpi_formal_containers_plugin)
+# The class typespec of a handle whose parameterized class type reads the
+# parameters of its module is the instance's specialization (IEEE 1800-2023
+# 8.25, 23.2.2, 37.32).
+add_library(fsim_foreign_vpi_class_instance_plugin SHARED
+  foreign_vpi_class_instance_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_class_instance_plugin)
+target_link_libraries(fsim_foreign_vpi_class_instance_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_class_instance_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-class-instance vpi foreign_vpi_class_instance.sv
+  foreign_vpi_class_instance.expected ""
+  fsim_foreign_vpi_class_instance_plugin)
 # The typespec chain of packed dimensions declared over a typedef keeps the
 # typedef's name (IEEE 1800-2023 7.4.1, 37.25).
 add_library(fsim_foreign_vpi_typedef_chain_plugin SHARED
@@ -1886,6 +2013,20 @@ target_include_directories(
 fsim_add_foreign_conformance_test(
   vpi-assertions vpi foreign_vpi_assertions.sv
   foreign_vpi_assertions.expected "" fsim_foreign_vpi_assertions_plugin)
+# The VPI callbacks of the design's assertion control tasks (IEEE 1800-2023
+# 20.11 Table 20-8, 39.4.1, 39.4.2).
+add_library(fsim_foreign_vpi_assertion_control_tasks_plugin SHARED
+  foreign_vpi_assertion_control_tasks_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_assertion_control_tasks_plugin)
+target_link_libraries(fsim_foreign_vpi_assertion_control_tasks_plugin
+  PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_assertion_control_tasks_plugin PRIVATE
+  "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-assertion-control-tasks vpi foreign_vpi_assertion_control_tasks.sv
+  foreign_vpi_assertion_control_tasks.expected ""
+  fsim_foreign_vpi_assertion_control_tasks_plugin)
 # The failing expression of a rejected attempt (IEEE 1800-2023 39.4.2).
 add_library(fsim_foreign_vpi_assertions_failexpr_plugin SHARED
   foreign_vpi_assertions_failexpr_plugin.c)
@@ -2000,6 +2141,105 @@ fsim_add_foreign_conformance_test(
 fsim_add_foreign_conformance_test(
   vpi-stmt-noprobe vpi foreign_vpi_stmt.sv foreign_vpi_stmt_noprobe.expected
   "" fsim_foreign_vpi_stmt_plugin)
+# cbValueChange on class object properties and its exclusions (IEEE
+# 1800-2023 37.33, 38.36.1).
+add_library(fsim_foreign_vpi_class_watch_plugin SHARED
+  foreign_vpi_class_watch_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_class_watch_plugin)
+target_link_libraries(fsim_foreign_vpi_class_watch_plugin PRIVATE fsim_tf)
+target_include_directories(fsim_foreign_vpi_class_watch_plugin
+  PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-class-watch vpi foreign_vpi_class_watch.sv
+  foreign_vpi_class_watch.expected "" fsim_foreign_vpi_class_watch_plugin)
+# cbStmt and frames of the tasks and functions of other instances (IEEE
+# 1800-2023 38.36.1.1, 37.43).
+add_library(fsim_foreign_vpi_stmt_instances_plugin SHARED
+  foreign_vpi_stmt_instances_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_stmt_instances_plugin)
+target_link_libraries(fsim_foreign_vpi_stmt_instances_plugin PRIVATE fsim_tf)
+target_include_directories(fsim_foreign_vpi_stmt_instances_plugin
+  PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-stmt-instances vpi foreign_vpi_stmt_instances.sv
+  foreign_vpi_stmt_instances.expected "--foreign-probes"
+  fsim_foreign_vpi_stmt_instances_plugin)
+# The value of a cast operation (IEEE 1800-2023 6.24.1, 37.78 vpiCastOp).
+add_library(fsim_foreign_vpi_cast_values_plugin SHARED
+  foreign_vpi_cast_values_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_cast_values_plugin)
+target_link_libraries(fsim_foreign_vpi_cast_values_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_cast_values_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-cast-values vpi foreign_vpi_cast_values.sv
+  foreign_vpi_cast_values.expected "" fsim_foreign_vpi_cast_values_plugin)
+# Casts to typedefs, increments, streaming, struct member selects, alias
+# statements, unpacked formals and primitive terminals (IEEE 1800-2023
+# 37.35, 37.41, 37.59, 37.76).
+add_library(fsim_foreign_vpi_expr_rows_plugin SHARED
+  foreign_vpi_expr_rows_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_expr_rows_plugin)
+target_link_libraries(fsim_foreign_vpi_expr_rows_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_expr_rows_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-expr-rows vpi foreign_vpi_expr_rows.sv
+  foreign_vpi_expr_rows.expected "" fsim_foreign_vpi_expr_rows_plugin)
+# `default disable iff and `default_decay_time of a module (IEEE 1800-2023
+# 16.15, E.2, 37.5).
+add_library(fsim_foreign_vpi_directives_plugin SHARED
+  foreign_vpi_directives_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_directives_plugin)
+target_link_libraries(fsim_foreign_vpi_directives_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_directives_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-directives vpi foreign_vpi_directives.sv
+  foreign_vpi_directives.expected "" fsim_foreign_vpi_directives_plugin)
+# A clocking block named through a virtual interface (IEEE 1800-2023 37.48).
+add_library(fsim_foreign_vpi_vif_clocking_plugin SHARED
+  foreign_vpi_vif_clocking_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_vif_clocking_plugin)
+target_link_libraries(fsim_foreign_vpi_vif_clocking_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_vif_clocking_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-vif-clocking vpi foreign_vpi_vif_clocking.sv
+  foreign_vpi_vif_clocking.expected "" fsim_foreign_vpi_vif_clocking_plugin)
+# A DPI import of the compilation-unit scope (IEEE 1800-2023 3.12.1, 37.42).
+add_library(fsim_foreign_vpi_unit_dpi_plugin SHARED
+  foreign_vpi_unit_dpi_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_unit_dpi_plugin)
+target_link_libraries(fsim_foreign_vpi_unit_dpi_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_unit_dpi_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-unit-dpi vpi foreign_vpi_unit_dpi.sv
+  foreign_vpi_unit_dpi.expected "" fsim_foreign_vpi_unit_dpi_plugin)
+# The typespec of a cast to a typedef is the visible typedef's (IEEE
+# 1800-2023 6.24.1, 26.3, 37.59).
+add_library(fsim_foreign_vpi_cast_types_plugin SHARED
+  foreign_vpi_cast_types_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_cast_types_plugin)
+target_link_libraries(fsim_foreign_vpi_cast_types_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_cast_types_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-cast-types vpi foreign_vpi_cast_types.sv
+  foreign_vpi_cast_types.expected "" fsim_foreign_vpi_cast_types_plugin)
+# cbDisable on a block a process left and waits outside of (IEEE 1800-2023
+# 9.6.2, 38.36.1): only an active block runs the callback.
+add_library(fsim_foreign_vpi_disable_exit_plugin SHARED
+  foreign_vpi_disable_exit_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_disable_exit_plugin)
+target_link_libraries(fsim_foreign_vpi_disable_exit_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_disable_exit_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-disable-exit vpi foreign_vpi_disable_exit.sv
+  foreign_vpi_disable_exit.expected "--foreign-probes"
+  fsim_foreign_vpi_disable_exit_plugin)
 # Frames, threads and cbCreateObj, on the compiled kernel with the execution
 # probes, and their refusal without (IEEE 1800-2023 37.43, 37.44, 38.36.1).
 add_library(fsim_foreign_vpi_frames_plugin SHARED foreign_vpi_frames_plugin.c)
@@ -2013,6 +2253,38 @@ fsim_add_foreign_conformance_test(
 fsim_add_foreign_conformance_test(
   vpi-frames-threads-noprobe vpi foreign_vpi_frames.sv
   foreign_vpi_frames_noprobe.expected "" fsim_foreign_vpi_frames_plugin)
+# The frames of calls in continuous assignments (IEEE 1800-2023 37.43
+# detail 1, 38.36.1).
+add_library(fsim_foreign_vpi_frames_assign_plugin SHARED
+  foreign_vpi_frames_assign_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_frames_assign_plugin)
+target_link_libraries(fsim_foreign_vpi_frames_assign_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_frames_assign_plugin PRIVATE
+  "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-frames-assign vpi foreign_vpi_frames_assign.sv
+  foreign_vpi_frames_assign.expected "--foreign-probes"
+  fsim_foreign_vpi_frames_assign_plugin)
+# The frames of a nettype's resolution function, whose origin is the net
+# (IEEE 1800-2023 37.43 detail 6, 6.6.7).
+add_library(fsim_foreign_vpi_frames_nettype_plugin SHARED
+  foreign_vpi_frames_nettype_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_frames_nettype_plugin)
+target_link_libraries(fsim_foreign_vpi_frames_nettype_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_frames_nettype_plugin PRIVATE
+  "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-frames-nettype vpi foreign_vpi_frames_nettype.sv
+  foreign_vpi_frames_nettype.expected "--foreign-probes"
+  fsim_foreign_vpi_frames_nettype_plugin)
+# A user function call with constant arguments runs, so its frame is seen
+# (IEEE 1800-2023 13.4.3, 37.43).
+fsim_add_foreign_conformance_test(
+  vpi-frame-folded vpi foreign_vpi_frame_folded.sv
+  foreign_vpi_frame_folded.expected "--foreign-probes"
+  fsim_foreign_vpi_frames_plugin)
 # The automatic variables of a frame and cbStmt on a task of another instance
 # called by a hierarchical name, on both engines (IEEE 1800-2023 37.43,
 # 38.36.1.1).
@@ -2025,6 +2297,103 @@ target_include_directories(
 fsim_add_foreign_conformance_test(
   vpi-frame-vars vpi foreign_vpi_frame_vars.sv foreign_vpi_frame_vars.expected
   "--foreign-probes" fsim_foreign_vpi_frame_vars_plugin)
+# The frames of methods the simulation's UVM services run (static methods of
+# a class derived from the UVM library): starts, ends, relations, automatic
+# variables read and written while live, on both engines (IEEE 1800-2023
+# 37.43, 38.36.1); without --foreign-probes no frame is reported.
+add_library(fsim_foreign_vpi_frames_host_plugin SHARED
+  foreign_vpi_frames_host_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_frames_host_plugin)
+target_link_libraries(fsim_foreign_vpi_frames_host_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_frames_host_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+# The same on the frames of a plain class's static methods, which run as
+# generated code: vpiStmt and vpiOrigin in method bodies, cbStmt on a method's
+# statements (IEEE 1800-2023 37.31, 37.41, 37.43).
+fsim_add_foreign_conformance_test(
+  vpi-frames-class vpi foreign_vpi_frames_class.sv
+  foreign_vpi_frames_class.expected "--foreign-probes"
+  fsim_foreign_vpi_frames_host_plugin)
+if(FSIM_UVM_1_2_SOURCE_DIR)
+  fsim_add_foreign_conformance_test(
+    vpi-frames-host vpi foreign_vpi_frames_host.sv
+    foreign_vpi_frames_host.expected "--foreign-probes"
+    fsim_foreign_vpi_frames_host_plugin "" "" ""
+    COMPILE_ARGS "--standard 2017 -I ${FSIM_UVM_1_2_SOURCE_DIR}/src"
+    UVM_ROOT "${FSIM_UVM_1_2_SOURCE_DIR}")
+  fsim_add_foreign_conformance_test(
+    vpi-frames-host-noprobe vpi foreign_vpi_frames_host.sv
+    foreign_vpi_frames_host_noprobe.expected ""
+    fsim_foreign_vpi_frames_host_plugin "" "" ""
+    COMPILE_ARGS "--standard 2017 -I ${FSIM_UVM_1_2_SOURCE_DIR}/src"
+    UVM_ROOT "${FSIM_UVM_1_2_SOURCE_DIR}")
+endif()
+# An automatic event triggered by a put, and the strings of the outer
+# activations of a recursive task (IEEE 1800-2023 37.43, 38.34).
+add_library(fsim_foreign_vpi_frame_outer_plugin SHARED
+  foreign_vpi_frame_outer_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_frame_outer_plugin)
+target_link_libraries(fsim_foreign_vpi_frame_outer_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_frame_outer_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-frame-outer vpi foreign_vpi_frame_outer.sv foreign_vpi_frame_outer.expected
+  "--foreign-probes" fsim_foreign_vpi_frame_outer_plugin)
+# An automatic event array and the call a frame was activated from (IEEE
+# 1800-2023 37.43).
+add_library(fsim_foreign_vpi_frame_events_plugin SHARED
+  foreign_vpi_frame_events_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_frame_events_plugin)
+target_link_libraries(fsim_foreign_vpi_frame_events_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_frame_events_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-frame-events vpi foreign_vpi_frame_events.sv
+  foreign_vpi_frame_events.expected "--foreign-probes"
+  fsim_foreign_vpi_frame_events_plugin)
+# Arrays of events, in the language (IEEE 1800-2023 6.17, 7.4, 15.5): the
+# plug-in only loads.
+add_library(fsim_foreign_event_arrays_plugin SHARED
+  foreign_event_arrays_plugin.c)
+fsim_configure_library(fsim_foreign_event_arrays_plugin)
+target_link_libraries(fsim_foreign_event_arrays_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_event_arrays_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  sv-event-arrays vpi foreign_event_arrays.sv foreign_event_arrays.expected
+  "" fsim_foreign_event_arrays_plugin)
+# An array of events with far bounds and a class-scoped typedef event property
+# through VPI (IEEE 1800-2023 7.4, 6.18, 37.43).
+add_library(fsim_foreign_vpi_event_arrays_plugin SHARED
+  foreign_vpi_event_arrays_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_event_arrays_plugin)
+target_link_libraries(fsim_foreign_vpi_event_arrays_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_event_arrays_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-event-arrays vpi foreign_vpi_event_arrays.sv
+  foreign_vpi_event_arrays.expected "" fsim_foreign_vpi_event_arrays_plugin)
+# The arguments of a system function call over automatic variables, read on
+# demand (IEEE 1800-2023 37.42 detail 7, 37.43).
+add_library(fsim_foreign_vpi_sysfunc_args_plugin SHARED
+  foreign_vpi_sysfunc_args_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_sysfunc_args_plugin)
+target_link_libraries(fsim_foreign_vpi_sysfunc_args_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_sysfunc_args_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-sysfunc-args vpi foreign_vpi_sysfunc_args.sv
+  foreign_vpi_sysfunc_args.expected "--foreign-probes"
+  fsim_foreign_vpi_sysfunc_args_plugin)
+# vpiWith of an array locator method call (IEEE 1800-2023 7.12.1, 37.42).
+add_library(fsim_foreign_vpi_with_plugin SHARED foreign_vpi_with_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_with_plugin)
+target_link_libraries(fsim_foreign_vpi_with_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_with_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-with vpi foreign_vpi_with.sv foreign_vpi_with.expected ""
+  fsim_foreign_vpi_with_plugin)
 # The value of a user function call: what it returned at its last evaluation,
 # only with the execution probes (IEEE 1800-2023 37.42, 38.15).
 add_library(fsim_foreign_vpi_func_values_plugin SHARED
@@ -2041,6 +2410,146 @@ fsim_add_foreign_conformance_test(
   vpi-func-values-noprobe vpi foreign_vpi_func_values.sv
   foreign_vpi_func_values_noprobe.expected ""
   fsim_foreign_vpi_func_values_plugin)
+# The value of a system function with state: what it returned at its last
+# evaluation, only with the execution probes (IEEE 1800-2023 38.15, 37.58).
+add_library(fsim_foreign_vpi_sysfunc_values_plugin SHARED
+  foreign_vpi_sysfunc_values_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_sysfunc_values_plugin)
+target_link_libraries(fsim_foreign_vpi_sysfunc_values_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_sysfunc_values_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-sysfunc-values vpi foreign_vpi_sysfunc_values.sv
+  foreign_vpi_sysfunc_values.expected "--foreign-probes"
+  fsim_foreign_vpi_sysfunc_values_plugin)
+fsim_add_foreign_conformance_test(
+  vpi-sysfunc-values-noprobe vpi foreign_vpi_sysfunc_values.sv
+  foreign_vpi_sysfunc_values_noprobe.expected ""
+  fsim_foreign_vpi_sysfunc_values_plugin)
+# Virtual interface variables of generate scopes, packages and classes, arrays,
+# typedefs and initializers (IEEE 1800-2023 37.29, 37.30).
+add_library(fsim_foreign_vpi_virtual_more_plugin SHARED
+  foreign_vpi_virtual_more_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_virtual_more_plugin)
+target_link_libraries(fsim_foreign_vpi_virtual_more_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_virtual_more_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-virtual-more vpi foreign_vpi_virtual_more.sv
+  foreign_vpi_virtual_more.expected ""
+  fsim_foreign_vpi_virtual_more_plugin)
+# The parameter assigns of an interface typespec: every parameter of the
+# interface, the actuals evaluated where the type is written (IEEE 1800-2023
+# 37.30, 37.32 detail 3).
+add_library(fsim_foreign_vpi_virtual_params_plugin SHARED
+  foreign_vpi_virtual_params_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_virtual_params_plugin)
+target_link_libraries(fsim_foreign_vpi_virtual_params_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_virtual_params_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-virtual-params vpi foreign_vpi_virtual_params.sv
+  foreign_vpi_virtual_params.expected ""
+  fsim_foreign_vpi_virtual_params_plugin)
+# A virtual interface type designates the interface of the library of the
+# unit that writes it, not another library's interface of the same name
+# (IEEE 1800-2023 3.13, 25.9, 33).
+add_library(fsim_foreign_vpi_virtual_lib_plugin SHARED
+  foreign_vpi_virtual_lib_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_virtual_lib_plugin)
+target_link_libraries(fsim_foreign_vpi_virtual_lib_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_virtual_lib_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-virtual-lib vpi
+  "foreign_vpi_virtual_lib_a.sv#liba|foreign_vpi_virtual_lib_b.sv#libb"
+  foreign_vpi_virtual_lib.expected ""
+  fsim_foreign_vpi_virtual_lib_plugin "" OFF "" TOP libb.cfg)
+# The variables of a package: found by name, listed, read, written and
+# watched (IEEE 1800-2023 37.10, 37.17, 37.29).
+add_library(fsim_foreign_vpi_package_vars_plugin SHARED
+  foreign_vpi_package_vars_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_package_vars_plugin)
+target_link_libraries(fsim_foreign_vpi_package_vars_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_package_vars_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-package-vars vpi foreign_vpi_package_vars.sv
+  foreign_vpi_package_vars.expected ""
+  fsim_foreign_vpi_package_vars_plugin)
+# Work a plug-in schedules from cbStartOfSimulation runs in the time-zero
+# cycle, after static initialization (IEEE 1800-2023 38.36.3, 6.21, 10.5).
+add_library(fsim_foreign_vpi_start_work_plugin SHARED
+  foreign_vpi_start_work_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_start_work_plugin)
+target_link_libraries(fsim_foreign_vpi_start_work_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_start_work_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-start-work vpi foreign_vpi_start_work.sv
+  foreign_vpi_start_work.expected ""
+  fsim_foreign_vpi_start_work_plugin)
+# The drivers of nets driven by primitive outputs, continuous assignments and
+# module output ports (IEEE 1800-2023 37.21, 37.35).
+add_library(fsim_foreign_vpi_primitive_drivers_plugin SHARED
+  foreign_vpi_primitive_drivers_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_primitive_drivers_plugin)
+target_link_libraries(fsim_foreign_vpi_primitive_drivers_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_primitive_drivers_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-primitive-drivers vpi foreign_vpi_primitive_drivers.sv
+  foreign_vpi_primitive_drivers.expected ""
+  fsim_foreign_vpi_primitive_drivers_plugin)
+# Gate instance arrays with parameter bounds (IEEE 1800-2023 28.3.6, 37.35).
+add_library(fsim_foreign_vpi_gate_arrays_plugin SHARED
+  foreign_vpi_gate_arrays_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_gate_arrays_plugin)
+target_link_libraries(fsim_foreign_vpi_gate_arrays_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_gate_arrays_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-gate-arrays vpi foreign_vpi_gate_arrays.sv
+  foreign_vpi_gate_arrays.expected ""
+  fsim_foreign_vpi_gate_arrays_plugin)
+# Stateful system function calls at the same line and column of two files.
+add_library(fsim_foreign_vpi_sysfunc_files_plugin SHARED
+  foreign_vpi_sysfunc_files_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_sysfunc_files_plugin)
+target_link_libraries(fsim_foreign_vpi_sysfunc_files_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_sysfunc_files_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-sysfunc-paths vpi
+  "foreign_vpi_sysfunc_files_a.sv|foreign_vpi_sysfunc_files_b.sv|lib_a/sysfunc_dir.sv>lib_a/sysfunc_dir.sv|lib_b/sysfunc_dir.sv>lib_b/sysfunc_dir.sv"
+  foreign_vpi_sysfunc_files.expected "--foreign-probes"
+  fsim_foreign_vpi_sysfunc_files_plugin)
+# Reference objects: ref ports, their uses and selects, ref formals (IEEE
+# 1800-2023 37.15).
+add_library(fsim_foreign_vpi_ref_objs_plugin SHARED
+  foreign_vpi_ref_objs_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_ref_objs_plugin)
+target_link_libraries(fsim_foreign_vpi_ref_objs_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_ref_objs_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-ref-objs vpi foreign_vpi_ref_objs.sv foreign_vpi_ref_objs.expected
+  "--foreign-probes" fsim_foreign_vpi_ref_objs_plugin)
+# A select of a user function call's result (IEEE 1800-2023 37.59, 37.42).
+add_library(fsim_foreign_vpi_call_select_plugin SHARED
+  foreign_vpi_call_select_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_call_select_plugin)
+target_link_libraries(fsim_foreign_vpi_call_select_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_call_select_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-call-select vpi foreign_vpi_call_select.sv
+  foreign_vpi_call_select.expected "--foreign-probes"
+  fsim_foreign_vpi_call_select_plugin)
+fsim_add_foreign_conformance_test(
+  vpi-call-select-noprobe vpi foreign_vpi_call_select.sv
+  foreign_vpi_call_select_noprobe.expected ""
+  fsim_foreign_vpi_call_select_plugin)
 # Property and sequence declarations, formals, specs, instances and the
 # operations of their expressions (IEEE 1800-2023 37.50-37.54).
 add_library(fsim_foreign_vpi_properties_plugin SHARED
@@ -2052,6 +2561,30 @@ target_include_directories(
 fsim_add_foreign_conformance_test(
   vpi-properties vpi foreign_vpi_properties.sv foreign_vpi_properties.expected
   "" fsim_foreign_vpi_properties_plugin)
+# Let declarations and let expressions (IEEE 1800-2023 37.12, 37.57).
+add_library(fsim_foreign_vpi_let_plugin SHARED foreign_vpi_let_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_let_plugin)
+target_link_libraries(fsim_foreign_vpi_let_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_let_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-let vpi foreign_vpi_let.sv foreign_vpi_let.expected ""
+  fsim_foreign_vpi_let_plugin)
+# Expression values and vpiDecompile through the same dump: array query
+# functions, string operations (IEEE 1800-2023 20.7, 6.16, 37.59).
+fsim_add_foreign_conformance_test(
+  vpi-expression-values vpi foreign_vpi_expression_values.sv
+  foreign_vpi_expression_values.expected "" fsim_foreign_vpi_let_plugin)
+# The match items of sequence operands (IEEE 1800-2023 16.10, 37.54).
+add_library(fsim_foreign_vpi_match_items_plugin SHARED
+  foreign_vpi_match_items_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_match_items_plugin)
+target_link_libraries(fsim_foreign_vpi_match_items_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_match_items_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-match-items vpi foreign_vpi_match_items.sv
+  foreign_vpi_match_items.expected "" fsim_foreign_vpi_match_items_plugin)
 # Clocked properties, multiclock sequence expressions and case properties
 # (IEEE 1800-2023 37.52, 37.56).
 add_library(fsim_foreign_vpi_properties_clocked_plugin SHARED
@@ -2358,6 +2891,229 @@ target_include_directories(
 fsim_add_foreign_conformance_test(
   vhpi-connectivity vhpi foreign_vhpi_connectivity.vhd
   foreign_vhpi_connectivity.expected "" fsim_foreign_vhpi_connectivity_plugin)
+# Local loads and contributors of implicit signals (IEEE 1076-2019 16.2.4,
+# 19.12.2.2, 19.12.2.3).
+add_library(fsim_foreign_vhpi_implicit_loads_plugin SHARED
+  foreign_vhpi_implicit_loads_plugin.c)
+fsim_configure_library(fsim_foreign_vhpi_implicit_loads_plugin)
+target_link_libraries(fsim_foreign_vhpi_implicit_loads_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vhpi_implicit_loads_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vhpi-implicit-loads vhpi foreign_vhpi_implicit_loads.vhd
+  foreign_vhpi_implicit_loads.expected ""
+  fsim_foreign_vhpi_implicit_loads_plugin)
+# Transaction and value-change callbacks on drivers of scalar subelements
+# (IEEE 1076-2019 14.7.2, 14.7.3.1, 21.3.2.2, 21.3.2.5).
+add_library(fsim_foreign_vhpi_driver_callbacks_plugin SHARED
+  foreign_vhpi_driver_callbacks_plugin.c)
+fsim_configure_library(fsim_foreign_vhpi_driver_callbacks_plugin)
+target_link_libraries(fsim_foreign_vhpi_driver_callbacks_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vhpi_driver_callbacks_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vhpi-driver-callbacks vhpi foreign_vhpi_driver_callbacks.vhd
+  foreign_vhpi_driver_callbacks.expected ""
+  fsim_foreign_vhpi_driver_callbacks_plugin)
+# The drivers of a guarded block's unlabeled concurrent statements (IEEE
+# 1076-2019 11.6, 14.7.2), past the block's implicit GUARD driver.
+fsim_add_foreign_conformance_test(
+  vhpi-guarded-drivers vhpi foreign_vhpi_guarded_drivers.vhd
+  foreign_vhpi_guarded_drivers.expected ""
+  fsim_foreign_vhpi_driver_callbacks_plugin)
+# Forcing, releasing and watching variables (IEEE 1076-2019 22.5.2,
+# 21.3.2.2-4).
+add_library(fsim_foreign_vhpi_variable_force_plugin SHARED
+  foreign_vhpi_variable_force_plugin.c)
+fsim_configure_library(fsim_foreign_vhpi_variable_force_plugin)
+target_link_libraries(fsim_foreign_vhpi_variable_force_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vhpi_variable_force_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vhpi-variable-force vhpi foreign_vhpi_variable_force.vhd
+  foreign_vhpi_variable_force.expected ""
+  fsim_foreign_vhpi_variable_force_plugin)
+# The frames of two call sites of one recursive procedure in a process, read
+# through the call objects (IEEE 1076-2019 14.6 b).
+add_library(fsim_foreign_vhpi_call_sites_plugin SHARED
+  foreign_vhpi_call_sites_plugin.c)
+fsim_configure_library(fsim_foreign_vhpi_call_sites_plugin)
+target_link_libraries(fsim_foreign_vhpi_call_sites_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vhpi_call_sites_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vhpi-call-sites vhpi foreign_vhpi_call_sites.vhd
+  foreign_vhpi_call_sites.expected "--foreign-probes"
+  fsim_foreign_vhpi_call_sites_plugin)
+# The frames of call sites that run the same frame, or different ones, and of
+# calls inside the body of another subprogram (IEEE 1076-2019 14.6 b).
+add_library(fsim_foreign_vhpi_call_sites_shared_plugin SHARED
+  foreign_vhpi_call_sites_shared_plugin.c)
+fsim_configure_library(fsim_foreign_vhpi_call_sites_shared_plugin)
+target_link_libraries(fsim_foreign_vhpi_call_sites_shared_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vhpi_call_sites_shared_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vhpi-call-sites-shared vhpi foreign_vhpi_call_sites_shared.vhd
+  foreign_vhpi_call_sites_shared.expected "--foreign-probes"
+  fsim_foreign_vhpi_call_sites_shared_plugin)
+add_library(fsim_foreign_vhpi_call_nested_plugin SHARED
+  foreign_vhpi_call_nested_plugin.c)
+fsim_configure_library(fsim_foreign_vhpi_call_nested_plugin)
+target_link_libraries(fsim_foreign_vhpi_call_nested_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vhpi_call_nested_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vhpi-call-nested vhpi foreign_vhpi_call_nested.vhd
+  foreign_vhpi_call_nested.expected "--foreign-probes"
+  fsim_foreign_vhpi_call_nested_plugin)
+# The frames of calls of a package function from two processes, the second
+# running the replayed body (IEEE 1076-2019 14.6 b).
+add_library(fsim_foreign_vhpi_call_memo_plugin SHARED
+  foreign_vhpi_call_memo_plugin.c)
+fsim_configure_library(fsim_foreign_vhpi_call_memo_plugin)
+target_link_libraries(fsim_foreign_vhpi_call_memo_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vhpi_call_memo_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vhpi-call-memo vhpi foreign_vhpi_call_memo.vhd
+  foreign_vhpi_call_memo.expected "--foreign-probes"
+  fsim_foreign_vhpi_call_memo_plugin)
+# A deposit of a 100-bit vector into the local of an outer activation of a
+# recursive procedure (IEEE 1076-2019 14.6 b, 22.5.2).
+add_library(fsim_foreign_vhpi_call_wide_plugin SHARED
+  foreign_vhpi_call_wide_plugin.c)
+fsim_configure_library(fsim_foreign_vhpi_call_wide_plugin)
+target_link_libraries(fsim_foreign_vhpi_call_wide_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vhpi_call_wide_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vhpi-call-wide vhpi foreign_vhpi_call_wide.vhd
+  foreign_vhpi_call_wide.expected "--foreign-probes"
+  fsim_foreign_vhpi_call_wide_plugin)
+# Calls the simulation cycle makes (resolution functions) and calls of a
+# concurrent assignment (IEEE 1076-2019 14.7.3.2, 19.4.3, 19.10).
+add_library(fsim_foreign_vhpi_call_implicit_plugin SHARED
+  foreign_vhpi_call_implicit_plugin.c)
+fsim_configure_library(fsim_foreign_vhpi_call_implicit_plugin)
+target_link_libraries(fsim_foreign_vhpi_call_implicit_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vhpi_call_implicit_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vhpi-call-implicit vhpi foreign_vhpi_call_implicit.vhd
+  foreign_vhpi_call_implicit.expected "--foreign-probes"
+  fsim_foreign_vhpi_call_implicit_plugin)
+# The parameter of a `for` loop of a process (IEEE 1076-2019 10.10, 14.6 a).
+add_library(fsim_foreign_vhpi_process_loop_plugin SHARED
+  foreign_vhpi_process_loop_plugin.c)
+fsim_configure_library(fsim_foreign_vhpi_process_loop_plugin)
+target_link_libraries(fsim_foreign_vhpi_process_loop_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vhpi_process_loop_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vhpi-process-loop vhpi foreign_vhpi_process_loop.vhd
+  foreign_vhpi_process_loop.expected "--foreign-probes"
+  fsim_foreign_vhpi_process_loop_plugin)
+# Transactions and changes of the first simulation cycle reach callbacks
+# registered at the start of the simulation (IEEE 1076-2019 14.7.5.3,
+# 21.3.2.5), also an assignment of the value a signal holds.
+add_library(fsim_foreign_vhpi_transaction_time_zero_plugin SHARED
+  foreign_vhpi_transaction_time_zero_plugin.c)
+fsim_configure_library(fsim_foreign_vhpi_transaction_time_zero_plugin)
+target_link_libraries(
+  fsim_foreign_vhpi_transaction_time_zero_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vhpi_transaction_time_zero_plugin
+  PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vhpi-transaction-time-zero vhpi foreign_vhpi_transaction_time_zero.vhd
+  foreign_vhpi_transaction_time_zero.expected ""
+  fsim_foreign_vhpi_transaction_time_zero_plugin)
+# The frame of a call of a procedure whose body is declared apart from its
+# specification (IEEE 1076-2019 4.8, 14.6 b).
+add_library(fsim_foreign_vhpi_call_body_apart_plugin SHARED
+  foreign_vhpi_call_body_apart_plugin.c)
+fsim_configure_library(fsim_foreign_vhpi_call_body_apart_plugin)
+target_link_libraries(fsim_foreign_vhpi_call_body_apart_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vhpi_call_body_apart_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vhpi-call-body-apart vhpi foreign_vhpi_call_body_apart.vhd
+  foreign_vhpi_call_body_apart.expected "--foreign-probes"
+  fsim_foreign_vhpi_call_body_apart_plugin)
+# The frame of a concurrent procedure call (IEEE 1076-2019 11.4, 14.6 b).
+add_library(fsim_foreign_vhpi_conc_call_frame_plugin SHARED
+  foreign_vhpi_conc_call_frame_plugin.c)
+fsim_configure_library(fsim_foreign_vhpi_conc_call_frame_plugin)
+target_link_libraries(fsim_foreign_vhpi_conc_call_frame_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vhpi_conc_call_frame_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vhpi-conc-call-frame vhpi foreign_vhpi_conc_call_frame.vhd
+  foreign_vhpi_conc_call_frame.expected "--foreign-probes"
+  fsim_foreign_vhpi_conc_call_frame_plugin)
+# A force of a variable a subprogram call elaborated lasts as long as its
+# activation (IEEE 1076-2019 14.6, 22.5.2).
+add_library(fsim_foreign_vhpi_call_force_plugin SHARED
+  foreign_vhpi_call_force_plugin.c)
+fsim_configure_library(fsim_foreign_vhpi_call_force_plugin)
+target_link_libraries(fsim_foreign_vhpi_call_force_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vhpi_call_force_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vhpi-call-force vhpi foreign_vhpi_call_force.vhd
+  foreign_vhpi_call_force.expected "--foreign-probes"
+  fsim_foreign_vhpi_call_force_plugin)
+# Value-change callbacks on the variables of a running process: the watch
+# lasts until the last callback on a variable is removed, and a watch or a
+# deposit made by a callback while the process runs takes effect at once
+# (IEEE 1076-2019 21.3.2.2, 22.5.2).
+add_library(fsim_foreign_vhpi_variable_hooks_plugin SHARED
+  foreign_vhpi_variable_hooks_plugin.c)
+fsim_configure_library(fsim_foreign_vhpi_variable_hooks_plugin)
+target_link_libraries(fsim_foreign_vhpi_variable_hooks_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vhpi_variable_hooks_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vhpi-variable-hooks vhpi foreign_vhpi_variable_hooks.vhd
+  foreign_vhpi_variable_hooks.expected ""
+  fsim_foreign_vhpi_variable_hooks_plugin)
+# Generate statement occurrences that hold no signal, instance or process
+# (IEEE 1076-2019 14.5.3, 19.4.2).
+add_library(fsim_foreign_vhpi_empty_generate_plugin SHARED
+  foreign_vhpi_empty_generate_plugin.c)
+fsim_configure_library(fsim_foreign_vhpi_empty_generate_plugin)
+target_link_libraries(fsim_foreign_vhpi_empty_generate_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vhpi_empty_generate_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vhpi-empty-generate vhpi foreign_vhpi_empty_generate.vhd
+  foreign_vhpi_empty_generate.expected ""
+  fsim_foreign_vhpi_empty_generate_plugin)
+# The bookkeeping behind 'LAST_VALUE adds no signal VHPI can list or name
+# (IEEE 1076-2019 16.2.4, 23.2).
+add_library(fsim_foreign_vhpi_history_hidden_plugin SHARED
+  foreign_vhpi_history_hidden_plugin.c)
+fsim_configure_library(fsim_foreign_vhpi_history_hidden_plugin)
+target_link_libraries(fsim_foreign_vhpi_history_hidden_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vhpi_history_hidden_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vhpi-history-hidden vhpi foreign_vhpi_history_hidden.vhd
+  foreign_vhpi_history_hidden.expected ""
+  fsim_foreign_vhpi_history_hidden_plugin)
+# A VHPI deposit makes the signal active, also when it leaves the value (IEEE
+# 1076-2019 14.7.3.1, 22.5.3).
+add_library(fsim_foreign_vhpi_deposit_history_plugin SHARED
+  foreign_vhpi_deposit_history_plugin.c)
+fsim_configure_library(fsim_foreign_vhpi_deposit_history_plugin)
+target_link_libraries(fsim_foreign_vhpi_deposit_history_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vhpi_deposit_history_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vhpi-deposit-history vhpi foreign_vhpi_deposit_history.vhd
+  foreign_vhpi_deposit_history.expected ""
+  fsim_foreign_vhpi_deposit_history_plugin)
 # Relations of the class diagrams: component and subprogram declarations of
 # calls, driven signals, range bounds, simulated nets, libraries and design
 # units (IEEE 1076-2019 19.4, 19.10, 19.12).
@@ -2490,6 +3246,20 @@ fsim_add_foreign_conformance_test(
   vhpi-shared-variable vhpi foreign_vhpi_shared_variable.vhd
   foreign_vhpi_shared_variable.expected ""
   fsim_foreign_vhpi_shared_variable_plugin "" "" "" COMPILE_ARGS "--standard 93")
+# A shared variable of a VHDL-93 design is read and updated while it runs
+# (IEEE 1076-1993 4.3.1.3, IEEE 1076-2019 22.5.2).
+add_library(fsim_foreign_vhpi_shared_variable_live_plugin SHARED
+  foreign_vhpi_shared_variable_live_plugin.c)
+fsim_configure_library(fsim_foreign_vhpi_shared_variable_live_plugin)
+target_link_libraries(
+  fsim_foreign_vhpi_shared_variable_live_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vhpi_shared_variable_live_plugin
+  PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vhpi-shared-variable-live vhpi foreign_vhpi_shared_variable_live.vhd
+  foreign_vhpi_shared_variable_live.expected ""
+  fsim_foreign_vhpi_shared_variable_live_plugin "" "" "" COMPILE_ARGS "--standard 93")
 # The port map of a binding indication with parts of ports as formal and
 # actual parts (IEEE 1076-2019 7.3.2.3, 6.5.7.1).
 add_library(fsim_foreign_vhpi_binding_parts_plugin SHARED
@@ -2603,6 +3373,20 @@ fsim_add_foreign_conformance_test(
   "foreign_vhpi_stable_mixed.vhd|foreign_vhpi_stable_mixed.sv"
   foreign_vhpi_stable_mixed.expected "" fsim_foreign_vhpi_stable_mixed_plugin)
 
+# The initialization phase of a VHDL top level over a SystemVerilog leaf
+# (IEEE 1076-2019 14.7.5.2, 14.7.5.3, 21.3.7.5, 21.3.7.6): the callbacks that
+# open the simulation see the initial values, as in a VHDL-only design.
+add_library(fsim_foreign_vhpi_mixed_init_plugin SHARED
+  foreign_vhpi_mixed_init_plugin.c)
+fsim_configure_library(fsim_foreign_vhpi_mixed_init_plugin)
+target_link_libraries(fsim_foreign_vhpi_mixed_init_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vhpi_mixed_init_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vhpi-mixed-init vhpi
+  "foreign_vhpi_mixed_init.sv|foreign_vhpi_mixed_init.vhd"
+  foreign_vhpi_mixed_init.expected "" fsim_foreign_vhpi_mixed_init_plugin)
+
 # Save and restart (IEEE 1800-2023 D.9) on the compiled kernel and the
 # reference interpreter: `simulate --save-at/--save-file` and `--restart`, and
 # $save and $incsave from the design. The saving run prints what an
@@ -2612,8 +3396,12 @@ set(FSIM_SAVE_RESTART_FIXTURES
   "${PROJECT_SOURCE_DIR}/tests/fixtures/systemverilog/save_restart")
 function(fsim_add_save_restart_test FSIM_NAME FSIM_ENGINE FSIM_SOURCE
     FSIM_EXPECTED)
-  cmake_parse_arguments(PARSE_ARGV 4 FSIM_OPTION "TRACE_ONLY;ELABORATE_PLUGIN" ""
-    "SAVE_ARGS;RESTARTS;REJECT;COMMON_ARGS")
+  cmake_parse_arguments(PARSE_ARGV 4 FSIM_OPTION "TRACE_ONLY;ELABORATE_PLUGIN"
+    "TOP" "SAVE_ARGS;RESTARTS;REJECT;COMMON_ARGS;COMPILE_ARGS")
+  if(NOT FSIM_OPTION_TOP)
+    set(FSIM_OPTION_TOP top)
+  endif()
+  list(JOIN FSIM_OPTION_COMPILE_ARGS "," FSIM_COMPILE_ARGS_TEXT)
   # Lists reach the runner joined by commas, so no semicolon is split.
   list(JOIN FSIM_OPTION_SAVE_ARGS "," FSIM_SAVE_ARGS_TEXT)
   list(JOIN FSIM_OPTION_RESTARTS "," FSIM_RESTARTS_TEXT)
@@ -2625,7 +3413,8 @@ function(fsim_add_save_restart_test FSIM_NAME FSIM_ENGINE FSIM_SOURCE
       "${CMAKE_COMMAND}"
       "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
       "-DFSIM_SOURCE=${FSIM_SAVE_RESTART_FIXTURES}/${FSIM_SOURCE}"
-      "-DFSIM_TOP=top"
+      "-DFSIM_TOP=${FSIM_OPTION_TOP}"
+      "-DFSIM_COMPILE_ARGS=${FSIM_COMPILE_ARGS_TEXT}"
       "-DFSIM_ENGINE=${FSIM_ENGINE}"
       "-DFSIM_EXPECTED=${FSIM_SAVE_RESTART_FIXTURES}/${FSIM_EXPECTED}"
       "-DFSIM_SAVE_ARGS=${FSIM_SAVE_ARGS_TEXT}"
@@ -2646,6 +3435,14 @@ foreach(FSIM_ENGINE IN ITEMS v4 interpreter)
     SAVE_ARGS --save-at 50ns --save-file cli.state
     RESTARTS
       "cli.state=${FSIM_SAVE_RESTART_FIXTURES}/save_restart_cli.restart.expected")
+  # Nets of user-defined nettypes (IEEE 1800-2023 6.6.7): a save at the end
+  # of time zero holds their time-zero resolutions, which a restart does not
+  # repeat.
+  fsim_add_save_restart_test(nettype ${FSIM_ENGINE}
+    save_restart_nettype.sv save_restart_nettype.expected
+    SAVE_ARGS --save-at 0ns --save-file nettype.state
+    RESTARTS
+      "nettype.state=${FSIM_SAVE_RESTART_FIXTURES}/save_restart_nettype.restart.expected")
   # Associative arrays with a default (IEEE 1800-2023 7.9.11): the default
   # from a declaration and one assigned before the save, read after a
   # restart.
@@ -2654,6 +3451,13 @@ foreach(FSIM_ENGINE IN ITEMS v4 interpreter)
     SAVE_ARGS --save-at 50ns --save-file assoc_default.state
     RESTARTS
       "assoc_default.state=${FSIM_SAVE_RESTART_FIXTURES}/save_restart_assoc_default.restart.expected")
+  # A live object of a class specialization bound to a pooled constant
+  # (8.25, 6.22.1) survives a save and a restart in a fresh process.
+  fsim_add_save_restart_test(pool-class ${FSIM_ENGINE}
+    save_restart_pool_class.sv save_restart_pool_class.expected
+    SAVE_ARGS --save-at 50ns --save-file pool_class.state
+    RESTARTS
+      "pool_class.state=${FSIM_SAVE_RESTART_FIXTURES}/save_restart_pool_class.restart.expected")
   fsim_add_save_restart_test(task ${FSIM_ENGINE}
     save_restart_task.sv save_restart_task.expected
     RESTARTS
@@ -2667,6 +3471,15 @@ foreach(FSIM_ENGINE IN ITEMS v4 interpreter)
     REJECT
       "--save-at|50ns=FSIM-SAVE-0020"
       "--restart|save_restart_cli.sv=FSIM-SAVE-0015")
+  # The history of a kernel-owned VHDL signal (IEEE 1076-2019 16.2.4, 20.7):
+  # 'LAST_EVENT, 'LAST_ACTIVE and 'LAST_VALUE read after a restart count from
+  # the events and transactions before the save.
+  fsim_add_save_restart_test(vhdl-history ${FSIM_ENGINE}
+    save_restart_vhdl_history.vhd save_restart_vhdl_history.expected
+    TOP work.top COMPILE_ARGS --standard 2008
+    SAVE_ARGS --save-at 20ns --save-file vhdl_history.state
+    RESTARTS
+      "vhdl_history.state=${FSIM_SAVE_RESTART_FIXTURES}/save_restart_vhdl_history.restart.expected")
 endforeach()
 
 # Foreign libraries across a save and a restart (IEEE 1800-2023 38.9, 38.31,
@@ -2685,6 +3498,12 @@ fsim_configure_library(fsim_foreign_vhpi_save_session_plugin)
 target_link_libraries(fsim_foreign_vhpi_save_session_plugin PRIVATE fsim_tf)
 target_include_directories(
   fsim_foreign_vhpi_save_session_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+add_library(fsim_foreign_vhpi_save_variable_plugin SHARED
+  foreign_vhpi_save_variable_plugin.c)
+fsim_configure_library(fsim_foreign_vhpi_save_variable_plugin)
+target_link_libraries(fsim_foreign_vhpi_save_variable_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vhpi_save_variable_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
 add_library(fsim_foreign_pli_tf_save_plugin SHARED
   foreign_pli_tf_save_plugin.c)
 fsim_configure_library(fsim_foreign_pli_tf_save_plugin)
@@ -2709,6 +3528,15 @@ foreach(FSIM_ENGINE IN ITEMS v4 interpreter)
     SAVE_ARGS --save-at 50ns --save-file foreign.state
     RESTARTS
       "foreign.state=${FSIM_SAVE_RESTART_FIXTURES}/save_restart_foreign_vhpi.restart.expected")
+  # A variable forced through VHPI stays forced across a save and a restart
+  # (IEEE 1076-2019 22.5.2): the force is state of the simulation.
+  fsim_add_save_restart_test(foreign-vhpi-variable ${FSIM_ENGINE}
+    save_restart_foreign_variable.vhd save_restart_foreign_variable.expected
+    TRACE_ONLY
+    COMMON_ARGS --vhpi $<TARGET_FILE:fsim_foreign_vhpi_save_variable_plugin>
+    SAVE_ARGS --save-at 50ns --save-file variable.state
+    RESTARTS
+      "variable.state=${FSIM_SAVE_RESTART_FIXTURES}/save_restart_foreign_variable.restart.expected")
   # $reset(1, 7): the design starts over at time zero with the reset count and
   # value kept (IEEE 1800-2023 D.8).
   fsim_add_save_restart_test(reset ${FSIM_ENGINE}
@@ -2717,6 +3545,10 @@ foreach(FSIM_ENGINE IN ITEMS v4 interpreter)
   # discarded: "pkg init" appears once.
   fsim_add_save_restart_test(reset-package-init ${FSIM_ENGINE}
     reset_package_init.sv reset_package_init.expected)
+  # $reset of a design whose initial procedure starts in the compiled
+  # kernel's late activation of time zero: it starts again after the reset.
+  fsim_add_save_restart_test(reset-late-start ${FSIM_ENGINE}
+    reset_late_start.sv reset_late_start.expected TRACE_ONLY)
 endforeach()
 
 # A delayed vpi_put_value that is still pending at the save lands at its time
@@ -2788,17 +3620,20 @@ endforeach()
 # A UVM testbench across $save, $restart and $reset (IEEE 1800-2023 D.8, D.9;
 # task #188). The services' state (components, phases, objections,
 # configuration, report counts, the sequencer handshake) is written in the
-# "app.uvm" section; the governed UVM 2020.3.1 library is compiled once per
-# test into a library the test maps. The source saves at t=1 and t=18 of the
-# run phase, with the objection raised and the sequence running, and each
-# restart must print the rest of the uninterrupted run; the reset test restarts
-# the whole test at t=18 and must print a fresh run's report.
+# "app.uvm" section; the governed UVM library is compiled once per release, by
+# the release's uvm-shared-library fixture, into a library every test of that
+# release maps. The source saves at t=1 and t=18 of the run phase, with the
+# objection raised and the sequence running, and each restart must print the
+# rest of the uninterrupted run; the reset test restarts the whole test at t=18
+# and must print a fresh run's report.
 function(fsim_add_uvm_save_restart_test FSIM_NAME FSIM_ENGINE FSIM_RELEASE
     FSIM_ROOT FSIM_SOURCE FSIM_EXPECTED)
-  cmake_parse_arguments(PARSE_ARGV 6 FSIM_OPTION "NORMALIZE_IDS" "" "RESTARTS")
+  cmake_parse_arguments(
+    PARSE_ARGV 6 FSIM_OPTION "NORMALIZE_IDS;NO_EXECUTOR" "" "RESTARTS")
   list(JOIN FSIM_OPTION_RESTARTS "," FSIM_RESTARTS_TEXT)
   set(FSIM_TEST_NAME
     fsim.systemverilog.save-restart.${FSIM_NAME}-${FSIM_RELEASE}.${FSIM_ENGINE})
+  string(MAKE_C_IDENTIFIER "fsim_uvm_library_${FSIM_RELEASE}" FSIM_LIBRARY_FIXTURE)
   add_test(
     NAME ${FSIM_TEST_NAME}
     COMMAND
@@ -2812,10 +3647,13 @@ function(fsim_add_uvm_save_restart_test FSIM_NAME FSIM_ENGINE FSIM_RELEASE
       "-DFSIM_UVM_ROOT=${FSIM_ROOT}"
       "-DFSIM_UVM_RELEASE=${FSIM_RELEASE}"
       "-DFSIM_NORMALIZE_IDS=${FSIM_OPTION_NORMALIZE_IDS}"
+      "-DFSIM_NO_EXECUTOR=${FSIM_OPTION_NO_EXECUTOR}"
       "-DFSIM_WORK_DIR=${PROJECT_BINARY_DIR}/tests/save-restart/${FSIM_NAME}-${FSIM_RELEASE}-${FSIM_ENGINE}"
+      "-DFSIM_UVM_LIBRARY_DIR=${PROJECT_BINARY_DIR}/tests/save-restart/uvm-shared-library-${FSIM_RELEASE}"
       -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunUvmSaveRestartCase.cmake")
   set_tests_properties(${FSIM_TEST_NAME}
-    PROPERTIES LABELS "slow;systemverilog;uvm;save-restart" TIMEOUT 1800)
+    PROPERTIES LABELS "slow;systemverilog;uvm;save-restart" TIMEOUT 1800
+      FIXTURES_REQUIRED "${FSIM_LIBRARY_FIXTURE}")
 endfunction()
 # Each governed release, with its library compiled on its own and mapped
 # (the separate-library flow of the corpus runner). The native services print
@@ -2829,6 +3667,23 @@ foreach(FSIM_UVM_RELEASE_NAME IN ITEMS 1.2 2020.3.1)
   if(NOT FSIM_UVM_RELEASE_ROOT)
     continue()
   endif()
+  # The release's library, compiled once for all of its cases.
+  string(MAKE_C_IDENTIFIER "fsim_uvm_library_${FSIM_UVM_RELEASE_NAME}"
+    FSIM_LIBRARY_FIXTURE)
+  add_test(
+    NAME fsim.systemverilog.save-restart.uvm-shared-library-${FSIM_UVM_RELEASE_NAME}
+    COMMAND
+      "${CMAKE_COMMAND}"
+      "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+      "-DFSIM_UVM_ROOT=${FSIM_UVM_RELEASE_ROOT}"
+      "-DFSIM_UVM_RELEASE=${FSIM_UVM_RELEASE_NAME}"
+      "-DFSIM_UVM_LIBRARY_ONLY=ON"
+      "-DFSIM_WORK_DIR=${PROJECT_BINARY_DIR}/tests/save-restart/uvm-shared-library-${FSIM_UVM_RELEASE_NAME}"
+      -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunUvmSaveRestartCase.cmake")
+  set_tests_properties(
+    fsim.systemverilog.save-restart.uvm-shared-library-${FSIM_UVM_RELEASE_NAME}
+    PROPERTIES LABELS "slow;systemverilog;uvm;save-restart" TIMEOUT 1800
+      FIXTURES_SETUP "${FSIM_LIBRARY_FIXTURE}")
   foreach(FSIM_ENGINE IN ITEMS v4 interpreter)
     fsim_add_uvm_save_restart_test(uvm ${FSIM_ENGINE}
       ${FSIM_UVM_RELEASE_NAME} "${FSIM_UVM_RELEASE_ROOT}"
@@ -2855,9 +3710,29 @@ foreach(FSIM_UVM_RELEASE_NAME IN ITEMS 1.2 2020.3.1)
     fsim_add_uvm_save_restart_test(uvm-root-methods ${FSIM_ENGINE}
       ${FSIM_UVM_RELEASE_NAME} "${FSIM_UVM_RELEASE_ROOT}"
       uvm_root_methods.sv uvm_root_methods.expected NORMALIZE_IDS)
+    # print_topology with a tree, a line and a derived tree printer.
+    fsim_add_uvm_save_restart_test(uvm-printer-kinds ${FSIM_ENGINE}
+      ${FSIM_UVM_RELEASE_NAME} "${FSIM_UVM_RELEASE_ROOT}"
+      uvm_printer_kinds.sv uvm_printer_kinds.expected NORMALIZE_IDS)
     fsim_add_uvm_save_restart_test(uvm-singleton-getters ${FSIM_ENGINE}
       ${FSIM_UVM_RELEASE_NAME} "${FSIM_UVM_RELEASE_ROOT}"
       uvm_singleton_getters.sv uvm_singleton_getters.expected)
+    # The constructors of classes deriving from the library, run by the
+    # creating process: run_test, factory creates and `new`.
+    fsim_add_uvm_save_restart_test(uvm-constructors ${FSIM_ENGINE}
+      ${FSIM_UVM_RELEASE_NAME} "${FSIM_UVM_RELEASE_ROOT}"
+      uvm_constructors.sv uvm_constructors.expected)
+    # Functions of classes deriving from the library run as compiled code:
+    # the host class executor runs none of the design's class code.
+    fsim_add_uvm_save_restart_test(uvm-user-functions ${FSIM_ENGINE}
+      ${FSIM_UVM_RELEASE_NAME} "${FSIM_UVM_RELEASE_ROOT}"
+      uvm_user_functions.sv uvm_user_functions.expected NO_EXECUTOR)
+    # A user driver calls methods on `req`, the REQ property it inherits from
+    # uvm_driver #(pkt): the receiver's class is the one the extends clause
+    # binds REQ to (IEEE 1800-2023 8.25, 8.13).
+    fsim_add_uvm_save_restart_test(uvm-driver-req ${FSIM_ENGINE}
+      ${FSIM_UVM_RELEASE_NAME} "${FSIM_UVM_RELEASE_ROOT}"
+      uvm_driver_req.sv uvm_driver_req.expected NO_EXECUTOR)
   endforeach()
 endforeach()
 # The separate-library flow alone, UVM 1.2: uvm_top = uvm_root::get() and the
@@ -2873,6 +3748,39 @@ if(FSIM_UVM_1_2_SOURCE_DIR)
       uvm_singleton_variables.expected)
   endforeach()
 endif()
+# Factory type overrides applied by type_id::create, with the constructors of
+# the overriding classes run by the creating process. uvm_factory::get() reads
+# the core service the library keeps (IEEE 1800.2-2020 F.4.1.3), which is the
+# default one of the native services in both releases.
+foreach(FSIM_UVM_RELEASE_NAME IN ITEMS 1.2 2020.3.1)
+  if(FSIM_UVM_RELEASE_NAME STREQUAL "1.2")
+    set(FSIM_UVM_RELEASE_ROOT "${FSIM_UVM_1_2_SOURCE_DIR}")
+  else()
+    set(FSIM_UVM_RELEASE_ROOT "${FSIM_UVM_2020_3_1_SOURCE_DIR}")
+  endif()
+  if(NOT FSIM_UVM_RELEASE_ROOT)
+    continue()
+  endif()
+  foreach(FSIM_ENGINE IN ITEMS v4 interpreter)
+    fsim_add_uvm_save_restart_test(uvm-factory-overrides ${FSIM_ENGINE}
+      ${FSIM_UVM_RELEASE_NAME} "${FSIM_UVM_RELEASE_ROOT}"
+      uvm_factory_overrides.sv uvm_factory_overrides.expected)
+    # A create through a parameterized class's type_id makes the
+    # specialization the type expression denotes.
+    fsim_add_uvm_save_restart_test(uvm-param-registry-create ${FSIM_ENGINE}
+      ${FSIM_UVM_RELEASE_NAME} "${FSIM_UVM_RELEASE_ROOT}"
+      uvm_param_registry_create.sv uvm_param_registry_create.expected)
+    # The bare name denotes the default specialization (IEEE 1800-2023 8.25).
+    fsim_add_uvm_save_restart_test(uvm-param-registry-bare ${FSIM_ENGINE}
+      ${FSIM_UVM_RELEASE_NAME} "${FSIM_UVM_RELEASE_ROOT}"
+      uvm_param_registry_bare.sv uvm_param_registry_bare.expected)
+    # The create is recognized by what X's type_id denotes, not by its
+    # spelling: a typedef of a class, and a user class with its own type_id.
+    fsim_add_uvm_save_restart_test(uvm-registry-typedef-nested ${FSIM_ENGINE}
+      ${FSIM_UVM_RELEASE_NAME} "${FSIM_UVM_RELEASE_ROOT}"
+      uvm_registry_typedef_nested.sv uvm_registry_typedef_nested.expected)
+  endforeach()
+endforeach()
 # 1800.2-2020.3.1 declares uvm_top and uvm_cmdline_proc as plain variables
 # that the getters assign.
 if(FSIM_UVM_2020_3_1_SOURCE_DIR)
@@ -2928,6 +3836,57 @@ fsim_add_scope_task_test(list elaboration scope_tasks_list.sv
 fsim_add_scope_task_test(literal elaboration scope_tasks_literal.sv
   ELABORATE_MESSAGE "FSIM-ELAB-SVSCOPE-001")
 
+# Nets of user-defined nettypes (IEEE 1800-2023 6.6.7, 6.7.3): resolution
+# functions of packed, real, struct and unpacked-array types, nettypes of a
+# package, the compilation unit and a class static function, undriven nets,
+# ports, force, and arrays of nettype nets, on the reference interpreter and
+# the compiled kernel.
+set(FSIM_NETTYPE_FIXTURES
+  "${PROJECT_SOURCE_DIR}/tests/fixtures/systemverilog/nettype")
+foreach(FSIM_ENGINE IN ITEMS v4 interpreter)
+  foreach(FSIM_CASE IN ITEMS
+      array_type_ports_force
+      class_static_function
+      driver_view
+      function_result_fields
+      function_result_reads
+      net_array
+      net_array_event
+      package_scope
+      packed_struct
+      packed_struct_drivers
+      packed_sum
+      ports
+      real_array
+      real_array_force
+      real_average
+      struct_array
+      struct_drivers
+      struct_lrm
+      struct_or
+      two_state_array
+      undriven
+      unit_scope
+      unresolved_array
+    )
+    string(REPLACE "_" "-" FSIM_CASE_NAME "${FSIM_CASE}")
+    set(FSIM_NAME fsim.systemverilog.nettype.${FSIM_CASE_NAME}.${FSIM_ENGINE})
+    add_test(
+      NAME ${FSIM_NAME}
+      COMMAND
+        "${CMAKE_COMMAND}"
+        "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+        "-DFSIM_SOURCE=${FSIM_NETTYPE_FIXTURES}/${FSIM_CASE}.sv"
+        "-DFSIM_TOP=top"
+        "-DFSIM_ENGINE=${FSIM_ENGINE}"
+        "-DFSIM_EXPECTED=${FSIM_NETTYPE_FIXTURES}/${FSIM_CASE}.expected"
+        "-DFSIM_WORK_DIR=${PROJECT_BINARY_DIR}/tests/nettype/${FSIM_CASE}-${FSIM_ENGINE}"
+        -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunScopeTaskCase.cmake")
+    set_tests_properties(${FSIM_NAME}
+      PROPERTIES LABELS "fast;systemverilog;nettype")
+  endforeach()
+endforeach()
+
 # A pre_randomize or post_randomize that cannot complete is an error of the
 # run, not a randomization failure (IEEE 1800-2023 18.6.1, 18.6.3): the run
 # stops naming the class, the callback and the cause, on the reference
@@ -2952,18 +3911,42 @@ foreach(FSIM_ENGINE IN ITEMS v4 interpreter)
       PROPERTIES LABELS "fast;systemverilog;randomize;negative")
   endforeach()
 endforeach()
+# A callback whose process killed itself there (IEEE 1800-2023 9.7) has
+# ended: a later run error of another process names no callback (18.6.1).
+foreach(FSIM_ENGINE IN ITEMS v4 interpreter)
+  set(FSIM_NAME fsim.systemverilog.randomize-callback-error.killed.${FSIM_ENGINE})
+  add_test(
+    NAME ${FSIM_NAME}
+    COMMAND
+      "${CMAKE_COMMAND}"
+      "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+      "-DFSIM_SOURCE=${FSIM_RANDOMIZE_CALLBACK_FIXTURES}/killed_callback_error.sv"
+      "-DFSIM_TOP=top"
+      "-DFSIM_ENGINE=${FSIM_ENGINE}"
+      "-DFSIM_SIMULATE_MESSAGE=error[FSIM-RUN-0002]: null or stale SystemVerilog class handle"
+      "-DFSIM_WORK_DIR=${PROJECT_BINARY_DIR}/tests/randomize-callback-error/killed-${FSIM_ENGINE}"
+      -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunScopeTaskCase.cmake")
+  set_tests_properties(${FSIM_NAME}
+    PROPERTIES LABELS "fast;systemverilog;randomize;negative")
+endforeach()
 
-# Statements and expressions in pre_randomize and post_randomize, which run
-# outside generated code, behave as they do in a module: an immediate
+# Statements and expressions in pre_randomize and post_randomize, which
+# randomize() calls as generated code, behave as they do in a module: an immediate
 # assertion (and one in a method they call) runs its action blocks, reports
 # the default $error when it fails without an else block, follows
 # $assertoff/$asserton/$assertcontrol, and the callback goes on after the
 # failure, so randomize() still returns 1 (IEEE 1800-2023 16.3, 18.6.1,
 # 20.11); pure integral expressions (selects, concatenation, ?:, ==?,
 # inside, casez/casex, $bits, $clog2, the 20.9 bit vector functions) give
-# the values the same expressions give in a module.
+# the values the same expressions give in a module; so do case inside,
+# select and member targets, disable, $cast, the enumeration and string
+# methods (class_statements), and real values, streaming and packed member
+# selects (class_values); the run's services (time, random numbers,
+# plusargs, files, $monitoroff, $assertoff, event triggers, $sampled) act
+# on the run (class_run_services, with plusargs).
 foreach(FSIM_ENGINE IN ITEMS v4 interpreter)
-  foreach(FSIM_CASE IN ITEMS immediate_assertions pure_expressions)
+  foreach(FSIM_CASE IN ITEMS immediate_assertions pure_expressions
+      class_statements class_values class_run_services)
     string(REPLACE "_" "-" FSIM_CASE_NAME "${FSIM_CASE}")
     set(FSIM_NAME fsim.systemverilog.randomize-${FSIM_CASE_NAME}.${FSIM_ENGINE})
     add_test(
@@ -2975,9 +3958,73 @@ foreach(FSIM_ENGINE IN ITEMS v4 interpreter)
         "-DFSIM_TOP=top"
         "-DFSIM_ENGINE=${FSIM_ENGINE}"
         "-DFSIM_EXPECTED=${FSIM_RANDOMIZE_CALLBACK_FIXTURES}/${FSIM_CASE}.expected"
+        "-DFSIM_SIMULATE_ARGS=+fsim_bb5|+count=12|+name=widget"
         "-DFSIM_WORK_DIR=${PROJECT_BINARY_DIR}/tests/randomize-${FSIM_CASE_NAME}/${FSIM_ENGINE}"
         -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunScopeTaskCase.cmake")
     set_tests_properties(${FSIM_NAME}
       PROPERTIES LABELS "fast;systemverilog;randomize")
+  endforeach()
+endforeach()
+
+# Classes of design element instances and generate scopes, and class types
+# named through parameters: a specialization whose actuals read the
+# instance's parameters is the instance's (IEEE 1800-2023 8.25, 23.2.2); the
+# callbacks and methods of a class declared in a module or a generate block
+# run as generated code in the scope that made the class (6.22, 27.4); a
+# method called on a member of a class type parameter runs the bound class's
+# (8.25). No call enters the host class executor.
+set(FSIM_CLASS_SCOPE_FIXTURES
+  "${PROJECT_SOURCE_DIR}/tests/fixtures/systemverilog/class_scopes")
+foreach(FSIM_ENGINE IN ITEMS v4 interpreter)
+  foreach(FSIM_CASE IN ITEMS instance_specializations scope_callbacks
+      type_parameter_member type_equivalence value_kinds block_import
+      inherited_type_parameter negative_value real_value real_typedef
+      real_functions real_package_scopes real_constant_functions
+      hierarchical_handles default_specialization_typename implicit_typedef
+      hierarchical_scopes class_members_lowered class_scope_typedefs)
+    string(REPLACE "_" "-" FSIM_CASE_NAME "${FSIM_CASE}")
+    set(FSIM_NAME fsim.systemverilog.class-scopes-${FSIM_CASE_NAME}.${FSIM_ENGINE})
+    add_test(
+      NAME ${FSIM_NAME}
+      COMMAND
+        "${CMAKE_COMMAND}"
+        "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+        "-DFSIM_SOURCE=${FSIM_CLASS_SCOPE_FIXTURES}/${FSIM_CASE}.sv"
+        "-DFSIM_TOP=top"
+        "-DFSIM_ENGINE=${FSIM_ENGINE}"
+        "-DFSIM_EXPECTED=${FSIM_CLASS_SCOPE_FIXTURES}/${FSIM_CASE}.expected"
+        "-DFSIM_NO_CLASS_EXECUTOR=1"
+        "-DFSIM_WORK_DIR=${PROJECT_BINARY_DIR}/tests/class-scopes-${FSIM_CASE_NAME}/${FSIM_ENGINE}"
+        -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunScopeTaskCase.cmake")
+    set_tests_properties(${FSIM_NAME}
+      PROPERTIES LABELS "fast;systemverilog;class")
+  endforeach()
+endforeach()
+
+# Values in module processes and automatic tasks follow the LRM: an
+# enumeration $cast takes the source's own value (IEEE 1800-2023 6.24.2), a
+# block-local real or integral initializer converts as an assignment does
+# (6.12.2), and the sampled value of an automatic variable is its current
+# value (16.5.1).
+set(FSIM_PROCEDURAL_VALUE_FIXTURES
+  "${PROJECT_SOURCE_DIR}/tests/fixtures/systemverilog/procedural_values")
+foreach(FSIM_ENGINE IN ITEMS v4 interpreter)
+  foreach(FSIM_CASE IN ITEMS module_typename module_values
+      constant_function_selects)
+    string(REPLACE "_" "-" FSIM_CASE_NAME "${FSIM_CASE}")
+    set(FSIM_NAME fsim.systemverilog.procedural-${FSIM_CASE_NAME}.${FSIM_ENGINE})
+    add_test(
+      NAME ${FSIM_NAME}
+      COMMAND
+        "${CMAKE_COMMAND}"
+        "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+        "-DFSIM_SOURCE=${FSIM_PROCEDURAL_VALUE_FIXTURES}/${FSIM_CASE}.sv"
+        "-DFSIM_TOP=top"
+        "-DFSIM_ENGINE=${FSIM_ENGINE}"
+        "-DFSIM_EXPECTED=${FSIM_PROCEDURAL_VALUE_FIXTURES}/${FSIM_CASE}.expected"
+        "-DFSIM_WORK_DIR=${PROJECT_BINARY_DIR}/tests/procedural-${FSIM_CASE_NAME}/${FSIM_ENGINE}"
+        -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunScopeTaskCase.cmake")
+    set_tests_properties(${FSIM_NAME}
+      PROPERTIES LABELS "fast;systemverilog")
   endforeach()
 endforeach()

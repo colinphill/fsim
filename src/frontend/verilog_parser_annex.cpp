@@ -2,7 +2,6 @@
 #include "verilog_parser_internal.hpp"
 
 #include <array>
-#include <ranges>
 
 namespace fsim::frontend {
 namespace {

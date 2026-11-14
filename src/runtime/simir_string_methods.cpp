@@ -1,9 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 #include "fsim/support/vhdl_time.hpp"
 #include "fsim/runtime/string_methods.hpp"
 #include "fsim/runtime/systemverilog_string.hpp"
 #include "simir_internal.hpp"
+#include "fsim/runtime/logic.hpp"
+#include "fsim/runtime/output_format.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include "fsim/runtime/systemverilog_scalar.hpp"
 
 #include <algorithm>
 #include <array>
@@ -12,6 +19,13 @@
 #include <cmath>
 #include <cstdlib>
 #include <optional>
+#include <cstdint>
+#include <limits>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <vector>
 
 namespace fsim::runtime::simir {
 namespace {
@@ -795,6 +809,10 @@ void execute_string_format(
                   { }, { }, *value_tick, time_format,
                   operation.use_timeformat_width,
                   operation.minimum_width,
+                  operation.left_justify, operation.zero_pad)
+            : has_unknown_bits(packed_value)
+            ? make_unknown_time_output({ }, { }, packed_value, time_format,
+                  operation.use_timeformat_width, operation.minimum_width,
                   operation.left_justify, operation.zero_pad)
             : make_formatted_output(
                   { }, { }, OutputFormat::decimal, packed_value,

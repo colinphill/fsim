@@ -162,6 +162,146 @@ frontend::SystemVerilogPackageMember compiled_package_member(
     return Member::none;
 }
 
+std::optional<frontend::SystemVerilogPackageAssertions>
+compiled_package_assertions(const semantic::CompiledDesign& design,
+    const std::string_view library, const std::string_view package,
+    std::vector<semantic::SourceFile>& files)
+{
+    const auto record_file = [&](const semantic::SourceSpanId id) {
+        const auto& spans = design.semantics.source_spans();
+        const auto& sources = design.semantics.source_files();
+        if (!id.valid() || id.value() >= spans.size()) {
+            return;
+        }
+        const auto file = spans[id.value()].file;
+        if (!file.valid() || file.value() >= sources.size()
+            || std::ranges::any_of(files, [&](const semantic::SourceFile& known) {
+                   return known.physical_name
+                       == sources[file.value()].physical_name;
+               })) {
+            return;
+        }
+        files.push_back(sources[file.value()]);
+    };
+    const auto tokens = [&](const semantic::sv::Unit& provider) {
+        frontend::SystemVerilogPackageAssertions result;
+        for (const auto& declaration : provider.assertion_declarations) {
+            if (declaration.kind
+                == semantic::sv::AssertionDeclarationKind::checker) {
+                continue;
+            }
+            const bool sequence = declaration.kind
+                == semantic::sv::AssertionDeclarationKind::sequence;
+            const auto name_span
+                = frontend_source_span(design.semantics, declaration.name_source);
+            const auto word = [&](const std::string_view text,
+                                  const frontend::TokenKind kind
+                                  = frontend::TokenKind::Identifier) {
+                frontend::Token token;
+                token.kind = kind;
+                token.text = std::string { text };
+                token.span = name_span;
+                return token;
+            };
+            record_file(declaration.name_source);
+            for (const auto& token : declaration.header_tokens) {
+                record_file(token.source);
+            }
+            for (const auto& token : declaration.body_tokens) {
+                record_file(token.source);
+            }
+            std::vector<frontend::Token> source;
+            source.reserve(declaration.header_tokens.size()
+                + declaration.body_tokens.size() + 4U);
+            source.push_back(word(sequence ? "sequence" : "property"));
+            source.push_back(word(declaration.name));
+            for (const auto& token : declaration.header_tokens) {
+                source.push_back(frontend_source_token(design.semantics, token));
+            }
+            source.push_back(word(";", frontend::TokenKind::Semicolon));
+            for (const auto& token : declaration.body_tokens) {
+                source.push_back(frontend_source_token(design.semantics, token));
+            }
+            source.push_back(word(sequence ? "endsequence" : "endproperty"));
+            result.sources.push_back(std::move(source));
+        }
+        return result;
+    };
+    const semantic::CompiledDesignResolver resolver { design, { } };
+    if (const auto provider = resolver.find_systemverilog_package(
+            library_name(library), package)) {
+        if (provider->systemverilog == nullptr) {
+            return std::nullopt;
+        }
+        return tokens(*provider->systemverilog);
+    }
+    if (package.find("::") != std::string_view::npos) {
+        return std::nullopt;
+    }
+    // Provider ambiguity is diagnosed during analysis, as for the members.
+    for (const auto& provider : design.systemverilog_units()) {
+        if (provider.kind == semantic::sv::UnitKind::package
+            && provider.name == package) {
+            return tokens(provider);
+        }
+    }
+    return std::nullopt;
+}
+
+frontend::SourceSpan frontend_source_span(
+    const semantic::Model& semantics, const semantic::SourceSpanId id)
+{
+    frontend::SourceSpan output;
+    if (!id.valid() || id.value() >= semantics.source_spans().size()) {
+        return output;
+    }
+    const auto& input = semantics.source_spans()[id.value()];
+    if (!input.file.valid()
+        || input.file.value() >= semantics.source_files().size()) {
+        return output;
+    }
+    const auto& file = semantics.source_files()[input.file.value()];
+    output.source_name
+        = input.logical_name.empty() ? file.physical_name : input.logical_name;
+    output.physical_source_name = file.physical_name;
+    output.begin = { static_cast<std::size_t>(input.begin.offset),
+        static_cast<std::size_t>(input.begin.line),
+        static_cast<std::size_t>(input.begin.column) };
+    output.end = { static_cast<std::size_t>(input.end.offset),
+        static_cast<std::size_t>(input.end.line),
+        static_cast<std::size_t>(input.end.column) };
+    std::vector<std::string> expansion_stack;
+    auto expansion = input.expansion;
+    while (expansion && expansion->valid()
+        && expansion->value() < semantics.expansions().size()) {
+        const auto& record = semantics.expansions()[expansion->value()];
+        expansion_stack.push_back(record.description);
+        expansion = record.parent;
+    }
+    for (auto iterator = expansion_stack.rbegin();
+         iterator != expansion_stack.rend(); ++iterator) {
+        output.expansion_stack.push_back(*iterator);
+    }
+    return output;
+}
+
+frontend::Token frontend_source_token(
+    const semantic::Model& semantics, const semantic::sv::SourceToken& input)
+{
+    auto kind = frontend::TokenKind::EndOfFile;
+    if (input.kind
+        <= static_cast<std::uint16_t>(frontend::TokenKind::EndOfFile)) {
+        kind = static_cast<frontend::TokenKind>(input.kind);
+    }
+    auto source_span = frontend_source_span(semantics, input.source);
+    auto expansion_stack = source_span.expansion_stack;
+    auto output = frontend::Token { kind, input.text, std::move(source_span),
+        std::move(expansion_stack) };
+    output.generated_text
+        = static_cast<frontend::GeneratedTextKind>(input.generated_text);
+    return output;
+}
+
 std::vector<CompiledSourceUnitIdentity> compiled_source_unit_identities(
     CompilationWorkspace& checked, const project::Config& config,
     const std::span<const ParsedSourceUnitOwner> owners)

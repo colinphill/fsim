@@ -1,11 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/semantic/systemverilog_class_specialization.hpp"
+#include "fsim/semantic/compiled_design_resolver.hpp"
+#include "fsim/semantic/compiled_design_specialization.hpp"
 #include "fsim/semantic/systemverilog_structure_image.hpp"
 #include "fsim/semantic/systemverilog_type_state.hpp"
 #include "fsim/support/index_distance.hpp"
 #include "fsim/support/stack_growth.hpp"
 
 #include <algorithm>
+#include <bit>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <charconv>
@@ -14,6 +18,7 @@
 #include <map>
 #include <ranges>
 #include <set>
+#include <span>
 #include <unordered_map>
 #include <unordered_set>
 #include <sstream>
@@ -49,11 +54,37 @@ std::optional<std::int64_t> integer_literal(const std::string_view text)
     return value;
 }
 
+// The decimal text of a double that reads back as the same value, with a
+// point or an exponent so it is a real literal.
+std::string real_text(const double value)
+{
+    char text[40];
+    std::snprintf(text, sizeof text, "%.17g", value);
+    std::string result { text };
+    if (result.find_first_of(".eEn") == std::string::npos) {
+        result += ".0";
+    }
+    return result;
+}
+
+// The identity of a real value: its IEEE 754 binary64 bit pattern, so equal
+// values are one specialization however they are spelled (IEEE 1800-2023
+// 6.22.1, 8.25).
+std::string real_canonical(const double value)
+{
+    char text[24];
+    std::snprintf(text, sizeof text, "%016llx",
+        static_cast<unsigned long long>(std::bit_cast<std::uint64_t>(value)));
+    return std::string { "real:" } + text;
+}
+
 struct ValueBinding {
     std::string display;
     std::string canonical;
     std::optional<std::int64_t> integer;
     std::optional<bool> boolean;
+    // A real value (IEEE 1800-2023 6.12, 6.20.2).
+    std::optional<double> real;
     std::optional<ExpressionId> expression;
     // The bindings `expression` reads that only the evaluating
     // specialization provides: its parameters and localparams.
@@ -67,6 +98,9 @@ struct TypeBinding {
 
 struct Environment {
     std::map<DeclarationId, ValueBinding> values;
+    // Actuals folded in the design element instance being lowered, by the
+    // expression of the actual.
+    std::map<ExpressionId, ValueBinding> instance_actuals;
     std::map<TypeId, TypeBinding> types;
 };
 
@@ -179,7 +213,8 @@ public:
     // evaluated in specialization `context`'s parameter environment (none:
     // constant actuals only), materialized when new.
     std::optional<std::string> demand(const TypeReference& type,
-        const std::string_view context, const SourceSpanId source)
+        const std::string_view context, const SourceSpanId source,
+        const std::span<const ClassInstanceActual> instance_actuals)
     {
         if (!type.class_specialization.empty()) {
             return type.class_specialization;
@@ -192,8 +227,43 @@ public:
         const auto environment = environments_.find(context);
         const auto owner = materialized_.find(context);
         const auto errors = result_.errors.size();
+        // Actuals that read the instantiating design element's parameters
+        // have the values folded in that instance (IEEE 1800-2023 8.25,
+        // 23.2.2), each bound to a literal of the design's pool.
+        Environment instance;
+        if (!instance_actuals.empty()) {
+            if (environment != environments_.end()) {
+                instance = environment->second;
+            }
+            for (const auto& actual : instance_actuals) {
+                ValueBinding bound;
+                bound.display = actual.text;
+                if (actual.real) {
+                    bound.real = std::strtod(actual.text.c_str(), nullptr);
+                    bound.canonical = real_canonical(*bound.real);
+                    bound.expression = hir_.intern_constant(
+                        ExpressionKind::integer_literal, actual.text);
+                } else if (actual.string) {
+                    bound.canonical = "string:" + encoded(actual.text);
+                    bound.expression = hir_.intern_constant(
+                        ExpressionKind::string_literal, actual.text);
+                } else if (actual.logic) {
+                    bound.canonical = "logic:" + encoded(actual.text);
+                    bound.expression = hir_.intern_constant(
+                        ExpressionKind::logic_literal, actual.text);
+                } else {
+                    bound.canonical = "integer:" + actual.text;
+                    bound.integer = integer_literal(actual.text);
+                    bound.expression = hir_.intern_constant(
+                        ExpressionKind::integer_literal, actual.text);
+                }
+                instance.instance_actuals.insert_or_assign(
+                    actual.expression, std::move(bound));
+            }
+        }
         auto identity = nested_specialization(*target, type,
-            environment == environments_.end() ? empty : environment->second,
+            !instance_actuals.empty() ? instance
+            : environment == environments_.end() ? empty : environment->second,
             owner == materialized_.end()
                 ? type.class_identity
                 : result_.specializations[owner->second]
@@ -660,12 +730,81 @@ private:
         return selected;
     }
 
+    // An expression of the design or an interned constant.
+    const Expression* expression_record(const ExpressionId id) const
+    {
+        if (const auto* record = record_for(expressions_, id)) {
+            return record;
+        }
+        return hir_.find_interned_constant(id);
+    }
+
+    // The real type (`real`, `shortreal` or `realtime`) a parameter type is
+    // after typedef resolution, also through a type parameter the class's
+    // environment binds (IEEE 1800-2023 6.12, 6.18, 6.20.2, 8.25); empty for
+    // any other type.
+    std::string_view real_family(
+        const TypeReference& type, const Environment& environment) const
+    {
+        std::set<TypeId> active;
+        const TypeReference* current = &type;
+        for (;;) {
+            if (!current->target.target.valid()) {
+                const std::string_view spelling { current->target.spelling };
+                if (spelling == "real" || spelling == "shortreal"
+                    || spelling == "realtime") {
+                    return spelling;
+                }
+                return { };
+            }
+            const auto id = current->target.target;
+            if (!active.insert(id).second) {
+                return { };
+            }
+            if (const auto bound = environment.types.find(id);
+                bound != environment.types.end()) {
+                current = &bound->second.type;
+                continue;
+            }
+            const auto* definition = record_for(types_, id);
+            if (definition == nullptr) {
+                return { };
+            }
+            current = &definition->base;
+        }
+    }
+
+    void fold_real_to_pool(ValueBinding& folded) const
+    {
+        folded.display = real_text(*folded.real);
+        folded.canonical = real_canonical(*folded.real);
+        folded.expression = hir_.intern_constant(
+            ExpressionKind::integer_literal, folded.display);
+        folded.context.clear();
+    }
+
+    // A value folded from operators over other values has no literal of its
+    // own: it is bound to the pool's literal for the value, so the binding
+    // reads the same in every unit (IEEE 1800-2023 8.25).
+    void fold_to_pool(ValueBinding& folded) const
+    {
+        folded.display = std::to_string(*folded.integer);
+        folded.canonical = "integer:" + folded.display;
+        folded.expression = hir_.intern_constant(
+            ExpressionKind::integer_literal, folded.display);
+        folded.context.clear();
+    }
+
     std::optional<ValueBinding> value(
         const ExpressionId id, const Environment& environment,
         const std::string_view owner, const SourceSpanId source,
         std::set<ExpressionId>& active)
     {
-        const auto* expression = record_for(expressions_, id);
+        if (const auto found = environment.instance_actuals.find(id);
+            found != environment.instance_actuals.end()) {
+            return found->second;
+        }
+        const auto* expression = expression_record(id);
         if (expression == nullptr || !active.insert(id).second) {
             report(ClassSpecializationErrorKind::unresolved_constant,
                 std::string { owner }, source,
@@ -738,6 +877,18 @@ private:
         resolved.display = expression->decoded_string.value_or(
             expression->text);
         resolved.expression = id;
+        if (expression->kind == ExpressionKind::integer_literal
+            && expression->decimal_literal
+            && expression->decimal_literal->kind == DecimalLiteralKind::real) {
+            // A real literal: the double nearest its decimal digits.
+            const auto& decimal = *expression->decimal_literal;
+            resolved.real = std::strtod((decimal.digits + "e"
+                + std::to_string(decimal.decimal_exponent)).c_str(), nullptr);
+            resolved.display = real_text(*resolved.real);
+            resolved.canonical = real_canonical(*resolved.real);
+            release();
+            return resolved;
+        }
         if (expression->kind == ExpressionKind::integer_literal) {
             resolved.integer = integer_literal(expression->text);
             if (!resolved.integer) {
@@ -781,11 +932,102 @@ private:
             release();
             return resolved;
         }
+        // The real math functions of IEEE 1800-2023 20.8.2 and the real
+        // conversions of 20.5 are constant functions (11.2.1) when their
+        // arguments are constant.
+        if (expression->kind == ExpressionKind::call
+            && expression->text.starts_with('$')
+            && !expression->operands.empty()
+            && expression->operands.size() <= 2U) {
+            static const std::map<std::string_view, double (*)(double)>
+                unary_functions {
+                    { "$ln", [](double x) { return std::log(x); } },
+                    { "$log10", [](double x) { return std::log10(x); } },
+                    { "$exp", [](double x) { return std::exp(x); } },
+                    { "$sqrt", [](double x) { return std::sqrt(x); } },
+                    { "$floor", [](double x) { return std::floor(x); } },
+                    { "$ceil", [](double x) { return std::ceil(x); } },
+                    { "$sin", [](double x) { return std::sin(x); } },
+                    { "$cos", [](double x) { return std::cos(x); } },
+                    { "$tan", [](double x) { return std::tan(x); } },
+                    { "$asin", [](double x) { return std::asin(x); } },
+                    { "$acos", [](double x) { return std::acos(x); } },
+                    { "$atan", [](double x) { return std::atan(x); } },
+                    { "$sinh", [](double x) { return std::sinh(x); } },
+                    { "$cosh", [](double x) { return std::cosh(x); } },
+                    { "$tanh", [](double x) { return std::tanh(x); } },
+                    { "$asinh", [](double x) { return std::asinh(x); } },
+                    { "$acosh", [](double x) { return std::acosh(x); } },
+                    { "$atanh", [](double x) { return std::atanh(x); } },
+                    { "$itor", [](double x) { return x; } },
+                };
+            static const std::map<std::string_view, double (*)(double, double)>
+                binary_functions {
+                    { "$pow", [](double x, double y) { return std::pow(x, y); } },
+                    { "$atan2",
+                        [](double x, double y) { return std::atan2(x, y); } },
+                    { "$hypot",
+                        [](double x, double y) { return std::hypot(x, y); } },
+                };
+            const auto real_operand = [&](const ExpressionId operand)
+                -> std::optional<double> {
+                const auto folded = value(operand, environment, owner,
+                    expression->source, active);
+                if (!folded) {
+                    return std::nullopt;
+                }
+                resolved.context.insert(resolved.context.end(),
+                    folded->context.begin(), folded->context.end());
+                if (folded->real) {
+                    return folded->real;
+                }
+                if (folded->integer) {
+                    return static_cast<double>(*folded->integer);
+                }
+                return std::nullopt;
+            };
+            const auto unary_function = unary_functions.find(expression->text);
+            const auto binary_function = binary_functions.find(expression->text);
+            if (unary_function != unary_functions.end()
+                && expression->operands.size() == 1U) {
+                if (const auto x = real_operand(expression->operands.front())) {
+                    resolved.real = unary_function->second(*x);
+                }
+            } else if (binary_function != binary_functions.end()
+                && expression->operands.size() == 2U) {
+                const auto x = real_operand(expression->operands[0]);
+                const auto y = real_operand(expression->operands[1]);
+                if (x && y) {
+                    resolved.real = binary_function->second(*x, *y);
+                }
+            } else if (expression->text == "$rtoi"
+                && expression->operands.size() == 1U) {
+                if (const auto x = real_operand(expression->operands.front())) {
+                    resolved.integer = static_cast<std::int64_t>(std::trunc(*x));
+                    fold_to_pool(resolved);
+                    release();
+                    return resolved;
+                }
+            }
+            if (resolved.real) {
+                fold_real_to_pool(resolved);
+                release();
+                return resolved;
+            }
+        }
         if (expression->kind == ExpressionKind::unary
             && expression->operands.size() == 1U) {
             const auto operand = value(
                 expression->operands.front(), environment, owner,
                 expression->source, active);
+            if (operand && operand->real
+                && (expression->text == "+" || expression->text == "-")) {
+                resolved.real = expression->text == "-" ? -*operand->real
+                                                        : *operand->real;
+                fold_real_to_pool(resolved);
+                release();
+                return resolved;
+            }
             if (operand && operand->integer) {
                 resolved.context = operand->context;
                 if (expression->text == "+") {
@@ -796,8 +1038,7 @@ private:
                     resolved.integer = ~*operand->integer;
                 }
                 if (resolved.integer) {
-                    resolved.display = std::to_string(*resolved.integer);
-                    resolved.canonical = "integer:" + resolved.display;
+                    fold_to_pool(resolved);
                     release();
                     return resolved;
                 }
@@ -809,6 +1050,27 @@ private:
                 owner, expression->source, active);
             const auto right = value(expression->operands[1], environment,
                 owner, expression->source, active);
+            if (left && right && (left->real || right->real)
+                && (left->real || left->integer)
+                && (right->real || right->integer)) {
+                const auto lhs = left->real
+                    ? *left->real : static_cast<double>(*left->integer);
+                const auto rhs = right->real
+                    ? *right->real : static_cast<double>(*right->integer);
+                if (expression->text == "+")
+                    resolved.real = lhs + rhs;
+                else if (expression->text == "-")
+                    resolved.real = lhs - rhs;
+                else if (expression->text == "*")
+                    resolved.real = lhs * rhs;
+                else if (expression->text == "/")
+                    resolved.real = lhs / rhs;
+                if (resolved.real) {
+                    fold_real_to_pool(resolved);
+                    release();
+                    return resolved;
+                }
+            }
             if (left && right && left->integer && right->integer) {
                 resolved.context = left->context;
                 resolved.context.insert(resolved.context.end(),
@@ -832,8 +1094,7 @@ private:
                 else if (expression->text == ">>" && rhs >= 0 && rhs < 64)
                     resolved.integer = lhs >> static_cast<unsigned>(rhs);
                 if (resolved.integer) {
-                    resolved.display = std::to_string(*resolved.integer);
-                    resolved.canonical = "integer:" + resolved.display;
+                    fold_to_pool(resolved);
                     release();
                     return resolved;
                 }
@@ -870,6 +1131,67 @@ private:
             resolved.canonical = "pattern:{" + items + "}";
             release();
             return resolved;
+        }
+        // A cast to an integer atom type or to a width (`int'(42)`,
+        // `byte'(8)`, `4'(9)`) is a constant expression of its operand's
+        // value converted to that type (IEEE 1800-2023 6.24.1, 8.25).
+        if (expression->kind == ExpressionKind::call
+            && expression->text.starts_with("@sv-cast:")
+            && expression->operands.size() == 1U) {
+            const auto name = std::string_view { expression->text }.substr(
+                std::string_view { "@sv-cast:" }.size());
+            std::optional<std::pair<unsigned, bool>> target;
+            if (name == "byte") {
+                target = std::pair { 8U, true };
+            } else if (name == "shortint") {
+                target = std::pair { 16U, true };
+            } else if (name == "int" || name == "integer") {
+                target = std::pair { 32U, true };
+            } else if (name == "longint") {
+                target = std::pair { 64U, true };
+            } else if (!name.empty()
+                && std::ranges::all_of(name, [](const char character) {
+                       return character >= '0' && character <= '9';
+                   })
+                && name.size() <= 2U) {
+                const auto width = static_cast<unsigned>(
+                    std::stoul(std::string { name }));
+                if (width > 0U && width <= 64U) {
+                    target = std::pair { width, false };
+                }
+            }
+            const auto operand = target
+                ? value(expression->operands.front(), environment, owner,
+                      expression->source, active)
+                : std::nullopt;
+            // A real operand converts by rounding to the nearest integer,
+            // ties away from zero (6.12.2).
+            std::optional<std::int64_t> integral;
+            if (operand && operand->real) {
+                if (std::isfinite(*operand->real)
+                    && std::fabs(*operand->real) < 9.2e18) {
+                    integral = std::llround(*operand->real);
+                }
+            } else if (operand) {
+                integral = operand->integer;
+            }
+            if (integral && (target->second || *integral >= 0)) {
+                auto bits = static_cast<std::uint64_t>(*integral);
+                if (target->first < 64U) {
+                    const auto mask
+                        = (std::uint64_t { 1 } << target->first) - 1U;
+                    bits &= mask;
+                    if (target->second
+                        && (bits >> (target->first - 1U)) != 0U) {
+                        bits |= ~mask;
+                    }
+                }
+                resolved.context = operand->context;
+                resolved.integer = static_cast<std::int64_t>(bits);
+                fold_to_pool(resolved);
+                release();
+                return resolved;
+            }
         }
         release();
         report(ClassSpecializationErrorKind::unresolved_constant,
@@ -995,6 +1317,41 @@ private:
     std::string type_identity(const TypeReference& type) const
     {
         std::ostringstream identity;
+        // A class type is its class, or the specialization its actuals
+        // select, however a unit spelled it and whatever handle width that
+        // unit recorded: an explicit class actual and the same class as a
+        // type parameter's default make one specialization (IEEE 1800-2023
+        // 6.22.1, 8.25), within a unit and across separately compiled ones.
+        if (type.value_form == TypeForm::class_handle
+            && !type.class_identity.empty() && !type.container_form
+            && type.unpacked_dimensions.empty()
+            && type.container_element_types.empty()
+            && !type.associative_index && !type.packed_range
+            && !type.virtual_interface && type.interface_type.empty()) {
+            const auto* target = class_for(type.class_identity);
+            identity << "class-type:"
+                     << encoded(target != nullptr
+                             ? class_declaration_identity(*target)
+                             : type.class_identity);
+            if (!type.class_specialization.empty()) {
+                identity << ":specialization="
+                         << encoded(type.class_specialization);
+            }
+            for (const auto& actual : type.interface_parameter_actuals) {
+                identity << ":interface-actual="
+                         << encoded(actual.formal.value_or(std::string { }));
+                if (actual.expression) {
+                    identity << ":expression="
+                             << actual.expression->value();
+                } else if (actual.type) {
+                    identity << ":type="
+                             << encoded(type_identity(*actual.type));
+                } else {
+                    identity << ":default";
+                }
+            }
+            return identity.str();
+        }
         std::string target_identity = type.target.spelling;
         if (type.target.target.valid()) {
             const auto* definition = record_for(types_, type.target.target);
@@ -1532,32 +1889,6 @@ private:
             if (found != predefined.end()) {
                 return found->second;
             }
-            // An unlinked package-scoped typedef (`P::T`) names the one
-            // typedef of that name.
-            const auto separator = type.target.spelling.rfind("::");
-            if (separator != std::string::npos) {
-                const auto name = std::string_view { type.target.spelling }
-                    .substr(separator + 2U);
-                const TypeDefinition* unique { };
-                bool ambiguous { };
-                for (const auto& [id, definition] : types_) {
-                    (void)id;
-                    if (definition != nullptr && definition->name == name) {
-                        ambiguous = ambiguous || unique != nullptr;
-                        unique = definition;
-                    }
-                }
-                if (unique != nullptr && !ambiguous
-                    && active.insert(unique->id).second) {
-                    const auto width = unique->members.empty()
-                        ? storage_width(unique->base, active)
-                        : std::nullopt;
-                    active.erase(unique->id);
-                    if (width) {
-                        return width;
-                    }
-                }
-            }
         }
         if (!type.target.target.valid()
             || !active.insert(type.target.target).second) {
@@ -1740,6 +2071,26 @@ private:
                             + "' has no locally constant actual or default");
                     return std::nullopt;
                 }
+                // A real value parameter holds its actual converted to real
+                // (IEEE 1800-2023 6.20.2, 6.12.2): an integer becomes the
+                // nearest double, a shortreal the nearest float.
+                const auto real_kind = parameter.type
+                    ? real_family(*parameter.type, result.environment)
+                    : std::string_view { };
+                if (!real_kind.empty()) {
+                    if (!resolved->real && resolved->integer) {
+                        resolved->real
+                            = static_cast<double>(*resolved->integer);
+                        resolved->integer.reset();
+                    }
+                    if (resolved->real) {
+                        if (real_kind == "shortreal") {
+                            resolved->real = static_cast<double>(
+                                static_cast<float>(*resolved->real));
+                        }
+                        fold_real_to_pool(*resolved);
+                    }
+                }
                 // A value parameter of an explicit integral type holds its
                 // actual converted to that type, so actuals equal after
                 // conversion name one specialization (IEEE 1800-2017
@@ -1748,7 +2099,7 @@ private:
                     && (!parameter.type->target.spelling.empty()
                         || parameter.type->packed_range)) {
                     const auto* literal = resolved->expression
-                        ? record_for(expressions_, *resolved->expression)
+                        ? expression_record(*resolved->expression)
                         : nullptr;
                     std::optional<std::uint64_t> bits;
                     if (resolved->integer) {
@@ -1804,6 +2155,13 @@ private:
                 }
                 retained.expression = resolved->expression;
                 retained.context_bindings = resolved->context;
+                if (retained.expression) {
+                    if (const auto* pooled = hir_.find_interned_constant(
+                            *retained.expression)) {
+                        retained.constant_kind = pooled->kind;
+                        retained.constant_text = pooled->text;
+                    }
+                }
                 retained.display_identity = resolved->display;
                 retained.canonical_identity = "value{" + resolved->canonical
                     + "}";
@@ -2080,7 +2438,7 @@ private:
     bool expression_references_resolve(
         const ExpressionId id, std::set<ExpressionId>& active) const
     {
-        const auto* expression = record_for(expressions_, id);
+        const auto* expression = expression_record(id);
         if (expression == nullptr) {
             return false;
         }
@@ -2321,6 +2679,7 @@ private:
         output.final_method = input.final_method;
         output.external = input.external;
         output.defined = input.defined;
+        output.uvm_role = input.uvm_role;
         output.source = input.source;
         output.origin = input.origin;
         if (declaration->callable->function) {
@@ -2388,35 +2747,29 @@ private:
         return output;
     }
 
+    // The virtual-method slots of a specialization: those of the
+    // specialization it extends, which its methods inherit, and one more for
+    // each virtual method its declaration adds. The slots follow the base
+    // the specialization extends (IEEE 1800-2023 8.20, 8.25): a class that
+    // extends a type parameter (`class P #(type IF) extends IF`) inherits
+    // the actual's methods, so its own take the slots after them.
     std::map<std::string, std::uint32_t> virtual_slots(
-        const ClassDeclaration& declaration)
+        const ClassDeclaration& declaration,
+        const std::span<const SpecializedClassMethod> inherited)
     {
-        const auto identity = class_declaration_identity(declaration);
-        if (const auto found = slot_tables_.find(identity);
-            found != slot_tables_.end()) {
-            return found->second;
-        }
-        if (!active_slot_tables_.insert(identity).second) {
-            report(ClassSpecializationErrorKind::inheritance_cycle,
-                identity, declaration.source,
-                "class virtual-method inheritance is cyclic");
-            return { };
-        }
         std::map<std::string, std::uint32_t> slots;
-        if (declaration.base) {
-            if (const auto* base = relation_target(
-                    *declaration.base, declaration)) {
-                slots = virtual_slots(*base);
-            }
-        }
         std::uint32_t next { };
-        for (const auto& [profile, slot] : slots) {
-            (void)profile;
-            if (slot == std::numeric_limits<std::uint32_t>::max()) {
-                next = slot;
-                break;
+        for (const auto& method : inherited) {
+            if (!method.virtual_slot) {
+                continue;
             }
-            next = std::max(next, static_cast<std::uint32_t>(slot + 1U));
+            slots.emplace(method.declared_profile_identity, *method.virtual_slot);
+            if (*method.virtual_slot == std::numeric_limits<std::uint32_t>::max()) {
+                next = *method.virtual_slot;
+            } else if (next != std::numeric_limits<std::uint32_t>::max()) {
+                next = std::max(next,
+                    static_cast<std::uint32_t>(*method.virtual_slot + 1U));
+            }
         }
         for (const auto& method : declaration.methods) {
             if (method.kind == ClassMethodKind::constructor) {
@@ -2430,14 +2783,12 @@ private:
             }
             if (next == std::numeric_limits<std::uint32_t>::max()) {
                 report(ClassSpecializationErrorKind::layout_overflow,
-                    identity, method.source,
+                    class_declaration_identity(declaration), method.source,
                     "class virtual-method slot domain is exhausted");
                 continue;
             }
             slots.emplace(method.profile_identity, next++);
         }
-        active_slot_tables_.erase(identity);
-        slot_tables_.emplace(identity, slots);
         return slots;
     }
 
@@ -2616,6 +2967,7 @@ private:
         output.declaration_identity = identity;
         output.specialization_identity = bound->specialization_identity;
         output.parameters = bound->parameters;
+        output.uvm_role = declaration.uvm_role;
         output.source = declaration.source;
         output.origin = declaration.origin;
         add_source_dependencies(output, declaration);
@@ -2787,6 +3139,7 @@ private:
             retained.constant = property.constant;
             retained.parameter = property.parameter;
             retained.enumeration_domain = property.enumeration_domain;
+            retained.uvm_role = property.uvm_role;
             retained.source = property.source;
             retained.origin = property.origin;
             if (property.static_storage) {
@@ -2806,7 +3159,7 @@ private:
             output.properties.push_back(std::move(retained));
         }
 
-        const auto slots = virtual_slots(declaration);
+        const auto slots = virtual_slots(declaration, output.methods);
         for (const auto& input : declaration.methods) {
             std::optional<std::uint32_t> slot;
             if (const auto found = slots.find(input.profile_identity);
@@ -2940,9 +3293,6 @@ private:
     // Each specialization's parameter environment, for later demands.
     std::map<std::string, Environment, std::less<>> environments_;
     std::size_t specializations_created_ { };
-    std::map<std::string, std::map<std::string, std::uint32_t>, std::less<>>
-        slot_tables_;
-    std::set<std::string, std::less<>> active_slot_tables_;
     std::map<DeclarationId, ExpressionId> parameter_properties_;
     std::set<DeclarationId> class_parameters_;
     // Names of type parameters, and canonical identities of class
@@ -3032,7 +3382,8 @@ void ClassSpecializationIndex::index_from(const std::size_t first)
 std::optional<ClassSpecializationId> ClassSpecializationIndex::specialize(
     const TypeReference& type,
     const std::optional<ClassSpecializationId> context,
-    const SourceSpanId source)
+    const SourceSpanId source,
+    const std::span<const ClassInstanceActual> instance_actuals)
 {
     if (!type.class_specialization.empty()) {
         return find(type.class_specialization);
@@ -3053,15 +3404,16 @@ std::optional<ClassSpecializationId> ClassSpecializationIndex::specialize(
         context && *context < first
             ? std::string_view { at(*context).specialization_identity }
             : std::string_view { },
-        source);
+        source, instance_actuals);
     index_from(first);
     static const bool trace
         = std::getenv("FSIM_SV_CLASS_SPEC_TRACE") != nullptr;
     if (trace) {
         std::fprintf(stderr, "[fsim-sv-class-spec] demand %s actuals=%zu "
-                             "context=%s -> %s\n",
+                             "instance=%zu context=%s -> %s\n",
             type.class_identity.c_str(),
             type.interface_parameter_actuals.size(),
+            instance_actuals.size(),
             context && *context < first
                 ? at(*context).specialization_identity.c_str()
                 : "-",
@@ -3347,6 +3699,145 @@ CompiledBindingFrame ClassSpecializationIndex::binding_frame(
         current = base(*current);
     }
     return frame;
+}
+
+std::vector<ClassInstanceActual> class_instance_actuals(
+    const SpecializedHirUnit& unit, const TypeReference& type,
+    const std::function<std::optional<double>(ExpressionId)>& real_value)
+{
+    std::vector<ClassInstanceActual> values;
+    if (type.class_identity.empty()
+        || type.interface_parameter_actuals.empty()) {
+        return values;
+    }
+    const auto& design = unit.design();
+    const auto class_parameter = [&](const DeclarationId id) {
+        return std::ranges::any_of(design.systemverilog_hir.classes(),
+            [&](const ClassDeclaration& candidate) {
+                return std::ranges::any_of(candidate.parameters,
+                    [&](const ClassParameter& parameter) {
+                        return parameter.declaration == id;
+                    });
+            });
+    };
+    // Whether the expression reads a parameter of the instance. Each
+    // expression is visited once, so the walk ends on any finite graph.
+    std::set<ExpressionId> visited;
+    std::function<bool(ExpressionId)> reads_instance_parameter;
+    reads_instance_parameter = [&](const ExpressionId id) {
+        if (!visited.insert(id).second) {
+            return false;
+        }
+        const auto record = unit.find_expression(id);
+        if (!record || record->systemverilog == nullptr) {
+            return false;
+        }
+        const auto& expression = *record->systemverilog;
+        // A name linking left unbound (a constant of the compilation unit,
+        // declared by another object) is looked up where it is used.
+        std::optional<DeclarationId> selected = expression.referenced_name
+            ? expression.referenced_name->selected
+            : std::nullopt;
+        if (!selected && expression.kind == ExpressionKind::name
+            && expression.referenced_name) {
+            selected = CompiledDesignResolver { unit }
+                           .resolve_systemverilog_expression(id)
+                           .unique();
+        }
+        if (selected) {
+            const auto declaration = *selected;
+            const auto view = unit.find_declaration(declaration);
+            if (view && view->systemverilog != nullptr
+                && (view->systemverilog->form == DeclarationForm::parameter
+                    || view->systemverilog->form
+                        == DeclarationForm::local_parameter)
+                && !class_parameter(declaration)) {
+                return true;
+            }
+        }
+        // A call of a user constant function (IEEE 1800-2023 13.4.3) folds
+        // in the instance, where the function's body is available.
+        if (expression.kind == ExpressionKind::call
+            && !expression.text.empty() && expression.text.front() != '$'
+            && expression.text.front() != '@'
+            && expression.text.front() != '.') {
+            return true;
+        }
+        return std::ranges::any_of(expression.operands,
+            [&](const ExpressionId operand) {
+                return reads_instance_parameter(operand);
+            });
+    };
+    std::function<void(const TypeReference&)> walk_type;
+    walk_type = [&](const TypeReference& reference) {
+        for (const auto& actual : reference.interface_parameter_actuals) {
+            if (actual.type) {
+                walk_type(*actual.type);
+            }
+            if (!actual.expression) {
+                continue;
+            }
+            visited.clear();
+            if (!reads_instance_parameter(*actual.expression)) {
+                continue;
+            }
+            // The whole actual folds in this instance: a real value, an
+            // integral value, a string, else a four-state one.
+            if (const auto real = real_value
+                    ? real_value(*actual.expression)
+                    : std::nullopt) {
+                values.push_back({ *actual.expression, false, false, true,
+                    real_text(*real) });
+            } else if (const auto value
+                = unit.evaluate_integral_expression(*actual.expression)) {
+                values.push_back({ *actual.expression, false, false, false,
+                    std::to_string(*value) });
+            } else if (const auto text
+                = unit.evaluate_string_expression(*actual.expression)) {
+                values.push_back({ *actual.expression, false, true, false, *text });
+            } else if (const auto bits
+                = unit.evaluate_systemverilog_bits_expression(
+                    *actual.expression)) {
+                values.push_back({ *actual.expression, true, false, false,
+                    std::to_string(bits->size()) + "'b" + *bits });
+            }
+        }
+    };
+    walk_type(type);
+    return values;
+}
+
+std::vector<ClassSpecialization> portable_class_specializations(
+    const std::span<const ClassSpecialization> specializations)
+{
+    std::vector<ClassSpecialization> result(
+        specializations.begin(), specializations.end());
+    const auto pooled = [](const ExpressionId id) {
+        return id.valid() && id.value() >= interned_constant_base;
+    };
+    for (auto& specialization : result) {
+        for (auto& parameter : specialization.parameters) {
+            if (parameter.expression && pooled(*parameter.expression)) {
+                parameter.expression.reset();
+            }
+            std::erase_if(parameter.context_bindings,
+                [&](const auto& binding) { return pooled(binding.second); });
+        }
+    }
+    return result;
+}
+
+void reintern_class_constants(
+    const std::span<ClassSpecialization> specializations, const Hir& hir)
+{
+    for (auto& specialization : specializations) {
+        for (auto& parameter : specialization.parameters) {
+            if (parameter.constant_kind != ExpressionKind::invalid) {
+                parameter.expression = hir.intern_constant(
+                    parameter.constant_kind, parameter.constant_text);
+            }
+        }
+    }
 }
 
 ClassSpecializationResult specialize_classes(

@@ -1,11 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include "application_workspace_store_internal.hpp"
 
 #include "fsim/support/sqlite_database.hpp"
+#include "application_workspace_store.hpp"
+#include "fsim/library/artifact.hpp"
+#include <cstddef>
+#include <optional>
+#include <string>
+#include <string_view>
 
-#include <array>
 
 namespace fsim::app::workspace::detail {
 

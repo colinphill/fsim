@@ -17,7 +17,7 @@ entity top is
 end entity;
 
 architecture test of top is
-  constant vec : std_logic_vector(3 downto 0) := to_x01z("1ZHL");
+  constant vec : std_logic_vector(3 downto 0) := to_x01z(std_ulogic_vector'("1ZHL"));
   constant bit_of_one : bit := to_bit('1');
   constant x_of_z : std_ulogic := to_x01('Z');
   constant z_kept : std_ulogic := to_x01z('Z');
@@ -107,11 +107,13 @@ begin
     u <= u + '1';
     wait for 1 ns;
     report "vitlit add " & to_string(u);
-    -- Overloads chosen by the call's result type, and a literal that only
-    -- one condition operator accepts are not ambiguous (12.5).
-    r := to_x01('1');
+    -- TO_X01 has a STD_ULOGIC and a BIT overload, both returning X01 (a
+    -- STD_ULOGIC subtype), so the character literal alone does not choose
+    -- one (12.5): a qualified expression names the actual's type (9.3.5).
+    -- A literal that only one condition operator accepts is not ambiguous.
+    r := to_x01(std_ulogic'('1'));
     report "vitlit to_x01 std_ulogic " & std_logic'image(r);
-    bt := to_x01('1');
+    bt := to_bit(to_x01(bit'('1')));
     report "vitlit to_x01 bit " & bit'image(bt);
     b := ?? 'H';
     report "vitlit condition " & boolean'image(b);

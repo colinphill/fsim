@@ -7,6 +7,8 @@
 # reference evaluator and compared) must equal package_use_visibility.expected,
 # with and without TOP's use clauses for SYM_B and IEEE.VITAL_MEMORY.
 
+include("${CMAKE_CURRENT_LIST_DIR}/../../../cmake/FsimTestWorkspace.cmake")
+
 if(NOT DEFINED FSIM_EXECUTABLE OR NOT EXISTS "${FSIM_EXECUTABLE}")
   message(FATAL_ERROR "FSIM_EXECUTABLE must name the built fsim command")
 endif()
@@ -44,7 +46,7 @@ endfunction()
 function(check_variant VARIANT SOURCE)
   string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef workspace_id)
   set(case_dir "${CMAKE_CURRENT_BINARY_DIR}/fsim-package-use-${VARIANT}-${workspace_id}")
-  file(MAKE_DIRECTORY "${case_dir}")
+  fsim_test_workspace("${case_dir}")
   file(WRITE "${case_dir}/package_use_visibility.vhd" "${SOURCE}")
   run_fsim_step("${case_dir}" compile compile -q --standard 2008 package_use_visibility.vhd)
   run_fsim_step("${case_dir}" elaborate elaborate -q work.top --no-aot)
@@ -71,3 +73,6 @@ if("${without_uses}" STREQUAL "${source_text}")
   message(FATAL_ERROR "the fixture has no SYM_B and VITAL_MEMORY use clauses to remove")
 endif()
 check_variant(without_uses "${without_uses}")
+
+# Passed: remove this run's workspaces (a failure above keeps them).
+fsim_test_workspace_cleanup()

@@ -9,6 +9,8 @@
 # workspace directories, whose paths order the compiled objects differently,
 # and every one must report the same.
 
+include("${CMAKE_CURRENT_LIST_DIR}/../../../cmake/FsimTestWorkspace.cmake")
+
 if(NOT DEFINED FSIM_EXECUTABLE OR NOT EXISTS "${FSIM_EXECUTABLE}")
   message(FATAL_ERROR "FSIM_EXECUTABLE must name the built fsim command")
 endif()
@@ -48,7 +50,7 @@ foreach(workspace IN ITEMS a bb ccc dddd)
   string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef workspace_id)
   set(case_dir
     "${CMAKE_CURRENT_BINARY_DIR}/fsim-intrinsic-literal-${workspace}-${workspace_id}")
-  file(MAKE_DIRECTORY "${case_dir}")
+  fsim_test_workspace("${case_dir}")
   configure_file("${FSIM_FIXTURE_DIR}/intrinsic_literal_context.vhd"
     "${case_dir}/intrinsic_literal_context.vhd" COPYONLY)
   run_fsim_step("${case_dir}" compile
@@ -69,3 +71,6 @@ foreach(workspace IN ITEMS a bb ccc dddd)
     endif()
   endforeach()
 endforeach()
+
+# Passed: remove this run's workspaces (a failure above keeps them).
+fsim_test_workspace_cleanup()

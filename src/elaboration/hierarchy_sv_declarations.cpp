@@ -10,13 +10,11 @@
 #include "hierarchy_sv_constant_evaluator.hpp"
 
 #include <algorithm>
-#include <array>
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <optional>
-#include <ranges>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -89,20 +87,9 @@ std::shared_ptr<const runtime::SystemVerilogVpiTypespec> vpi_typespec(
     const semantic::sv::Declaration& declaration,
     const semantic::sv::TypeReference& type)
 {
-    // A virtual interface variable's type is an interface typespec, named
-    // by its typedef when it was declared through one (IEEE 1800-2023
-    // 37.29, 37.30).
-    if (type.virtual_interface && !type.container_form
-        && type.unpacked_dimensions.empty()) {
-        const auto typedef_name = type.target.target.valid()
-                && type.target.spelling != type.interface_type
-            ? std::string_view { type.target.spelling }
-            : std::string_view { };
-        return std::make_shared<const runtime::SystemVerilogVpiTypespec>(
-            runtime::make_systemverilog_vpi_interface_typespec(
-                type.interface_type, type.interface_modport, typedef_name));
-    }
-    if (!type.target.target.valid()
+    // A virtual interface variable's type is an interface typespec (IEEE
+    // 1800-2023 37.29, 37.30), which the typespec builder derives.
+    if (!type.virtual_interface && !type.target.target.valid()
         && builtin_type_spelling(type.target.spelling)
         && type.packed_dimensions.size() <= 1U
         && type.unpacked_dimensions.empty() && !type.container_form) {
@@ -954,6 +941,46 @@ std::string HierarchyBuilder::collect_user_system_task_arguments(
                 continue;
             }
             const auto& statement = *record->systemverilog;
+            // A variable of the process body that a nonblocking assignment
+            // writes is static storage like a named block's (IEEE 1800-2023
+            // 6.21, 10.4.2): its update lands in the NBA region, after the
+            // process has moved on, so it is a design object, not a register
+            // of the process.
+            if (statement.kind == semantic::sv::StatementKind::assignment
+                && statement.assignment_kind
+                    == semantic::sv::AssignmentKind::nonblocking
+                && statement.target) {
+                const auto root = [&](const auto& walk,
+                                      const semantic::ExpressionId target)
+                    -> void {
+                    const auto expression
+                        = specialization.find_expression(target);
+                    if (!expression || expression->systemverilog == nullptr) {
+                        return;
+                    }
+                    const auto& source = *expression->systemverilog;
+                    if (source.kind == semantic::sv::ExpressionKind::name) {
+                        user_system_task_arguments_.insert(source.text);
+                    } else if ((source.kind
+                                    == semantic::sv::ExpressionKind::index
+                                || source.kind
+                                    == semantic::sv::ExpressionKind::slice
+                                || source.kind
+                                    == semantic::sv::ExpressionKind::
+                                        concatenation)
+                        && !source.operands.empty()) {
+                        for (const auto operand : source.operands) {
+                            walk(walk, operand);
+                            if (source.kind
+                                != semantic::sv::ExpressionKind::
+                                    concatenation) {
+                                break;
+                            }
+                        }
+                    }
+                };
+                root(root, *statement.target);
+            }
             if (statement.kind == semantic::sv::StatementKind::task_call) {
                 if (design_.user_system_task(statement.task.spelling)
                     == nullptr) {
@@ -1024,13 +1051,9 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_static_storage(
         }
         const bool string = compiled_systemverilog_string_declaration(
             specialization, source);
-        const bool event_array
-            = source.type
-            && source.type->container_form
-                == semantic::sv::TypeForm::static_array
-            && source.type->container_element_types.size() == 1U
-            && source.type->container_element_types.front()
-                    .target.spelling == "event";
+        const bool event_array = source.type
+            && hierarchy_sv_type_layout_detail::systemverilog_event_array_type(
+                specialization, *source.type, source.scope);
         const auto container
             = hierarchy_sv_type_layout_detail::systemverilog_container_type(
                 specialization, *source.type);
@@ -1193,6 +1216,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_static_storage(
 
 std::shared_ptr<const runtime::SystemVerilogVpiTypespec>
 HierarchyBuilder::specialized_class_typespec(
+    const semantic::SpecializedHirUnit& instance,
     const semantic::sv::Declaration& declaration,
     std::shared_ptr<const runtime::SystemVerilogVpiTypespec> typespec)
 {
@@ -1209,12 +1233,24 @@ HierarchyBuilder::specialized_class_typespec(
         classes = std::make_shared<semantic::sv::ClassSpecializationIndex>(
             compiled_->semantics, compiled_->systemverilog_hir);
     }
-    const auto selected = classes->for_declaration(declaration.id);
+    // Actuals that read the instance's parameters select the instance's
+    // specialization (IEEE 1800-2023 8.25, 23.2.2).
+    const auto instance_values
+        = semantic::sv::class_instance_actuals(instance, *declaration.type,
+              [&](const semantic::ExpressionId id) {
+                  return evaluate_hir_systemverilog_real(instance, id);
+              });
+    const auto selected = instance_values.empty()
+        ? classes->for_declaration(declaration.id)
+        : classes->specialize(
+              *declaration.type, std::nullopt, declaration.source,
+              instance_values);
     if (!selected) {
         return typespec;
     }
     auto named = *typespec;
     named.name = classes->at(*selected).specialization_identity;
+    named.class_identity = named.name;
     return std::make_shared<const runtime::SystemVerilogVpiTypespec>(
         std::move(named));
 }
@@ -1424,14 +1460,14 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
             : Logic4::zero;
     };
     const auto register_resolution = [&](const SignalId id) {
-        if (!declaration.type
-                ->systemverilog_resolution_function.empty()) {
-            resolver_by_signal_.insert_or_assign(
-                id,
-                declaration.type
-                    ->systemverilog_resolution_function);
-        }
+        register_systemverilog_nettype_net(id, declaration, materialization);
     };
+    // A net of a user-defined nettype starts at its data type's default,
+    // not z (IEEE 1800-2023 6.7.3).
+    const bool user_nettype_net = declaration.type
+        && systemverilog_user_nettype(*declaration.type,
+            net_legality_type_resolver, declaration.scope)
+               .has_value();
     if (declaration.form != Form::port
         && declaration.form != Form::net
         && declaration.form != Form::variable) {
@@ -1479,9 +1515,16 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
     constexpr std::string_view initializer_prefix {
         "$declaration_initializer_"
     };
+    // A package variable's initializer that is not an elaboration constant
+    // runs as a package startup action, before any procedure starts (IEEE
+    // 1800-2023 6.8, 6.21, 10.5); the materializers below report it through
+    // package_object_initializer_pending_.
+    const bool package_object_initializer = declaration.initializer
+        && declaration.form == Form::variable
+        && package_object_initializer_allowed_;
     const bool declaration_initializer_process = declaration.initializer
         && declaration.form == Form::variable
-        && std::ranges::any_of(unit.processes,
+        && (package_object_initializer || std::ranges::any_of(unit.processes,
             [&](const semantic::ProcessId process_id) {
                 const auto process = compiled_->find_process(process_id);
                 if (!process || process->systemverilog == nullptr) {
@@ -1494,7 +1537,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                     && process_name.starts_with(initializer_prefix)
                     && process_name.substr(initializer_prefix.size())
                         == declaration.name;
-            });
+            }));
     if (compiled_systemverilog_string_declaration(
             working_specialization, declaration)) {
         return materialize_compiled_systemverilog_string_declaration(
@@ -1757,13 +1800,10 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
             return false;
         }
     }
-    const bool event_array
-        = declaration.type
-        && declaration.type->container_form
-            == semantic::sv::TypeForm::static_array
-        && declaration.type->container_element_types.size() == 1U
-        && declaration.type->container_element_types.front()
-                .target.spelling == "event";
+    const auto event_array = declaration.type
+        ? hierarchy_sv_type_layout_detail::systemverilog_event_array_type(
+              working_specialization, *declaration.type, declaration.scope)
+        : std::nullopt;
     if (event_array) {
         const auto full_name
             = materialized_path + "." + declaration.name;
@@ -1776,8 +1816,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                     *compiled_, declaration.source));
             return false;
         }
-        if (declaration.type->unpacked_dimensions.size() != 1U
-            || declaration.type->container_element_types.size() != 1U) {
+        if (event_array->unpacked_dimensions.size() != 1U) {
             report(
                 "FSIM-ELAB-SVEVENT-014",
                 "this implementation supports fixed one-dimensional named "
@@ -1786,8 +1825,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                     *compiled_, declaration.source));
             return true;
         }
-        const auto& dimension
-            = declaration.type->unpacked_dimensions.front();
+        const auto& dimension = event_array->unpacked_dimensions.front();
         const auto boundary = [&](
                                    const std::optional<std::int64_t> value,
                                    const std::optional<semantic::ExpressionId>
@@ -1817,14 +1855,13 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
         const auto right = *right_value;
         const auto count = static_cast<std::uint64_t>(
             left <= right ? right - left + 1 : left - right + 1);
-        if (count > maximum_compiled_event_array_elements
-            || count > std::numeric_limits<SignalId>::max()
+        if (count > std::numeric_limits<SignalId>::max()
             || design_.signals_.size()
                 > std::numeric_limits<SignalId>::max() - count) {
             report(
                 "FSIM-ELAB-SVCONTAINER-020",
-                "named event array exceeds the bounded event-signal "
-                "materialization or dispatch limit",
+                "named event array has more elements than the design "
+                "can number as signals",
                 compiled_source_span(
                     *compiled_, declaration.source));
             return true;
@@ -1833,6 +1870,24 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
             *compiled_, declaration.source);
         const auto step = left <= right ? std::int64_t { 1 }
                                         : std::int64_t { -1 };
+        // The array as VPI describes it: its range orders the elements.
+        VpiEventArrayDeclaration array_declaration;
+        array_declaration.name = declaration.name;
+        {
+            runtime::SystemVerilogVpiTypespec array_spec;
+            array_spec.kind = runtime::SystemVerilogVpiTypespecKind::Array;
+            array_spec.array_kind = runtime::SystemVerilogVpiArrayKind::Static;
+            array_spec.ranges.push_back({ left, right });
+            runtime::SystemVerilogVpiTypespec element_spec;
+            element_spec.kind = runtime::SystemVerilogVpiTypespecKind::Event;
+            array_spec.element.push_back(std::move(element_spec));
+            array_declaration.typespec = std::make_shared<
+                const runtime::SystemVerilogVpiTypespec>(
+                std::move(array_spec));
+        }
+        auto& array_elements = design_.event_array_by_name_[full_name];
+        array_elements.clear();
+        array_elements.reserve(static_cast<std::size_t>(count));
         for (auto index = left;; index += step) {
             const auto index_text = std::to_string(index);
             const auto element_name
@@ -1846,6 +1901,13 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
             info.type_name = "event";
             info.source_domain = frontend::ValueDomain::Logic4;
             info.declaration_span = span;
+            {
+                auto member = array_declaration;
+                member.position = static_cast<std::uint32_t>(
+                    left <= right ? index - left : left - index);
+                info.vpi_event_array = std::make_shared<
+                    const VpiEventArrayDeclaration>(std::move(member));
+            }
             Signal signal {
                 element_name,
                 PackedLogic4(1U, Logic4::zero),
@@ -1860,6 +1922,8 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
             signal.event_variable = true;
             design_.signal_info_.push_back(std::move(info));
             design_.signals_.push_back(std::move(signal));
+            array_elements.emplace_back(
+                static_cast<std::int32_t>(index), signal_id);
             const auto source_name
                 = declaration.name + "[" + index_text + "]";
             const auto stable_name
@@ -1979,7 +2043,8 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                         *compiled_, declaration.source));
                 return false;
             }
-        } else if (declaration.initializer && executable_container_type) {
+        } else if (declaration.initializer && executable_container_type
+            && !package_object_initializer_forced_) {
             auto element_type = *declaration.type;
             element_type.unpacked_dimensions.clear();
             element_type.container_form.reset();
@@ -1990,6 +2055,9 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
         }
         const bool procedural_initializer = !initial_container
             && declaration_initializer_process;
+        if (procedural_initializer && package_object_initializer) {
+            package_object_initializer_pending_ = true;
+        }
         if (declaration.initializer && !initial_container
             && !procedural_initializer) {
             report(
@@ -2089,14 +2157,17 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
             });
         if (declaration.type) {
             auto& recorded = design_.container_object_info_.back();
+            // An array of nets of a user-defined nettype is a net array
+            // (IEEE 1800-2023 6.6.7, 37.17).
             recorded.net = declaration.form == Form::net
-                || !net_type_for(declaration, *declaration.type).empty();
+                || !net_type_for(declaration, *declaration.type).empty()
+                || user_nettype_net;
             auto element = *declaration.type;
             element.unpacked_dimensions.clear();
             recorded.vpi_element_type = vpi_declared_aggregate(
                 working_specialization, declaration, element,
                 type->element_width);
-            recorded.vpi_typespec = specialized_class_typespec(declaration,
+            recorded.vpi_typespec = specialized_class_typespec(working_specialization, declaration,
                 vpi_typespec(
                     working_specialization, declaration, *declaration.type));
         }
@@ -2250,9 +2321,11 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
         }
         const auto declared_net_type = net_type_for(
             declaration, *declaration.type);
+        // An array of nets of a user-defined nettype is a net too (IEEE
+        // 1800-2023 6.6.7).
         const bool net_bridge
             = declaration.form == Form::net
-            || !declared_net_type.empty();
+            || !declared_net_type.empty() || user_nettype_net;
         const bool variable_bridge
             = !net_bridge
             && (declaration.form == Form::variable
@@ -2318,10 +2391,10 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                     working_specialization, declaration, *declaration.type,
                     info.width);
             }
-            info.vpi_typespec = specialized_class_typespec(declaration,
+            info.vpi_typespec = specialized_class_typespec(working_specialization, declaration,
                 vpi_typespec(
                     working_specialization, declaration, *declaration.type));
-            const auto initial_value = net_bridge
+            const auto initial_value = net_bridge && !user_nettype_net
                 ? net_initial_for(domain, net_type)
                 : domain == frontend::ValueDomain::Logic4
                 ? Logic4::x
@@ -2332,7 +2405,8 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
             const auto& initial_object
                 = design_.container_objects_.at(id).initial_value;
             const bool initialized_bridge
-                = (declaration.initializer || array_actual || variable_bridge)
+                = (declaration.initializer || array_actual || variable_bridge
+                      || user_nettype_net)
                 && container_signal_bridge_width(initial_object.type)
                     == bridge_width;
             Signal signal {
@@ -2607,7 +2681,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
     }
     info.vpi_declared_type = vpi_declared_aggregate(
         working_specialization, declaration, *declaration.type, info.width);
-    info.vpi_typespec = specialized_class_typespec(declaration,
+    info.vpi_typespec = specialized_class_typespec(working_specialization, declaration,
         vpi_typespec(
             working_specialization, declaration, *declaration.type));
     info.is_port = declaration.form == Form::port;
@@ -2618,10 +2692,11 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
     const auto four_state
         = domain == frontend::ValueDomain::Logic4;
     // An input port net floats until it is connected (23.3.3).
-    auto initial = declaration.form == Form::net
-            || (declaration.form == Form::port
-                && direction == frontend::PortDirection::Input
-                && !net_type.empty())
+    auto initial = !user_nettype_net
+            && (declaration.form == Form::net
+                || (declaration.form == Form::port
+                    && direction == frontend::PortDirection::Input
+                    && !net_type.empty()))
         ? net_initial_for(domain, net_type)
         : four_state
         ? Logic4::x

@@ -608,7 +608,7 @@ gives fsim's result in each case checked.
 ## Resolution functions and default values (batch 31)
 
 - A VHDL resolution function other than the `return a or b` / `and` forms
-  makes its signal `ResolutionKind::vhdl_user_function`. After all processes
+  makes its signal `ResolutionKind::user_function`. After all processes
   are lowered, `validate_process_drivers` knows each signal's driving
   processes; a resolver program is then lowered per signal, in the scope
   that declared the signal (the binding keeps a copy of that
@@ -1390,9 +1390,9 @@ gives fsim's result in each case checked.
 - Radix formats (`%h`, `%b`, ...) of a string variable print it as `%s`.
 - Hierarchical event triggers (`-> top.u.e`) reach the bound event.
 - `` `pragma protect `` without a keyword is accepted and ignored.
-- A nettype whose resolution function is outside the retained forms
-  raises `FSIM-ELAB-SVNETTYPE-004` only when a net of that type is
-  declared, not at the nettype declaration.
+- A nettype whose nets cannot be resolved raises `FSIM-ELAB-SVNETTYPE-004`
+  only when a net of that type is declared, not at the nettype
+  declaration.
 - The time-zero late start from batch 46 is narrowed: it applies only to a
   process with no static sensitivity and no event wait that reads a signal
   still settling (a resolved net, or one driven by a process with static

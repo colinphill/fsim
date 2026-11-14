@@ -339,6 +339,12 @@ bool HierarchyBuilder::lower_compiled_vhdl_generated_processes(
                     canonicalize_process_operations(
                         occurrence->common, instance);
                     specialization.processes.push_back(instance.id);
+                    // The statement it was lowered from names the process (VHPI
+                    // vhpiEqProcessStmt, IEEE 1076-2019 11.1).
+                    if (statement && statement->vhdl != nullptr) {
+                        specialization.statement_sources.emplace_back(
+                            instance.id, statement->vhdl->source);
+                    }
                     design_.append_process_instance_record(
                         std::move(occurrence->common), std::move(instance));
                 } else {
@@ -348,6 +354,12 @@ bool HierarchyBuilder::lower_compiled_vhdl_generated_processes(
                         = architecture.compatibility_profile;
                     canonicalize_process_operations(process_instance);
                     specialization.processes.push_back(process_instance.id);
+                    // The statement it was lowered from names the process (VHPI
+                    // vhpiEqProcessStmt, IEEE 1076-2019 11.1).
+                    if (statement && statement->vhdl != nullptr) {
+                        specialization.statement_sources.emplace_back(
+                            process_instance.id, statement->vhdl->source);
+                    }
                     design_.append_process_record(
                         std::move(process_instance));
                 }
@@ -377,6 +389,12 @@ bool HierarchyBuilder::lower_compiled_vhdl_generated_processes(
                 = architecture.compatibility_profile;
             canonicalize_process_operations(*lowered);
             specialization.processes.push_back(lowered->id);
+            // The statement it was lowered from names the process (VHPI
+            // vhpiEqProcessStmt, IEEE 1076-2019 11.1).
+            if (statement && statement->vhdl != nullptr) {
+                specialization.statement_sources.emplace_back(
+                    lowered->id, statement->vhdl->source);
+            }
             design_.append_process_record(std::move(*lowered));
             append_generated_vhdl_processes(
                 generated_lowerer, architecture, specialization);

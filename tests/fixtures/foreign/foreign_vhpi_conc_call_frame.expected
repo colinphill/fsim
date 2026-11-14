@@ -1,0 +1,11 @@
+#c call=1
+#c body=1
+#c probe at 0 frame=1
+#c   var k=3
+#c probe at 0 frame=1
+#c   var k=3
+#c probe at 2000000 frame=1
+#c   var k=3
+#c o=22
+#c probe at 4000000 frame=1
+#c   var k=3

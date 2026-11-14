@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "frontend_test_support.hpp"
 
-#include "fsim/frontend/frontend.hpp"
 #include "fsim/frontend/input_format.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/parser.hpp"
+#include "fsim/frontend/source.hpp"
+#include "fsim/frontend/token.hpp"
 
 #include <algorithm>
 #include <stdexcept>

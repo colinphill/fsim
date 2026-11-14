@@ -13,9 +13,9 @@
 namespace fsim::runtime::simir {
 namespace {
 
-static_assert(static_cast<std::uint8_t>(ResolutionKind::sv_user_first)
+static_assert(static_cast<std::uint8_t>(ResolutionKind::user_function)
     == static_cast<std::uint8_t>(
-        SignalDriverInventoryResolution::sv_user_first));
+        SignalDriverInventoryResolution::user_function));
 static_assert(static_cast<std::uint8_t>(ValueKind::logic9)
     == static_cast<std::uint8_t>(SignalDriverInventoryValueKind::logic9));
 static_assert(static_cast<std::uint8_t>(RegionDriverClass::unknown)

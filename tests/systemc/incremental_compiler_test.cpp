@@ -4,8 +4,9 @@
 #include "fsim/artifact/container.hpp"
 
 #include "fsim/diagnostic/diagnostic.hpp"
-#include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
+#include "fsim/project/project.hpp"
+#include "fsim/systemc/scv.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -21,6 +22,8 @@
 #include <utility>
 #include <vector>
 
+#include <cstddef>
+#include <system_error>
 #if defined(_WIN32)
 #include <process.h>
 #else

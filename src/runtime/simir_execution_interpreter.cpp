@@ -1,29 +1,49 @@
 // SPDX-License-Identifier: Apache-2.0
 
+#include "fsim/runtime/foreign_call_process.hpp"
 #include "fsim/runtime/file_scanning.hpp"
-#include "fsim/runtime/scope_randomize.hpp"
 #include "fsim/runtime/simir_coverage.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 #include "fsim/runtime/string_methods.hpp"
 #include "fsim/runtime/systemverilog_string.hpp"
-#include "fsim/support/environment.hpp"
-#include "fsim/support/path.hpp"
 #include "simir_container_helpers.hpp"
 #include "simir_execution_context.hpp"
 #include "simir_execution_shared.hpp"
 #include "simir_internal.hpp"
 #include "simir_signal_attributes.hpp"
+#include "fsim/runtime/code_coverage.hpp"
+#include "fsim/runtime/logic.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include "fsim/runtime/systemverilog_scalar.hpp"
+#include "simir_operation_kinds.hpp"
 
 #include <algorithm>
-#include <bit>
-#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
-#include <numeric>
 #include <stdexcept>
 #include <string_view>
-
+#include <array>
+#include <cstdint>
+#include <exception>
+#include <functional>
+#include <limits>
+#include <optional>
+#include <string>
+#include <type_traits>
+#include <utility>
+#include <vector>
+#include "fsim/runtime/scope_randomize.hpp"
+#include "fsim/support/environment.hpp"
+#include "fsim/support/path.hpp"
+#include <bit>
+#include <charconv>
+#include <numeric>
 #include <boost/multiprecision/cpp_int.hpp>
+
 
 namespace fsim::runtime::simir {
 
@@ -381,6 +401,39 @@ void Interpreter::Impl::note_interpreted_execute(const ProcessId id)
     }
 }
 
+namespace {
+
+// After an operation of a process whose variables the debug interface
+// forces or watches: an assignment leaves the forced elements as they are
+// (IEEE 1076-2019 22.5.2), put back here, and a watcher sees each change of
+// the variable (21.3.2.2). The others are unchanged and report nothing.
+template <typename ImplT, typename ProcessT>
+void note_debug_local_stores(ImplT& impl, ProcessT& process)
+{
+    if (process.id >= impl.debug_local_hooked.size()
+        || impl.debug_local_hooked[process.id] == 0U) {
+        return;
+    }
+    for (std::size_t index = 0U; index < impl.debug_local_hooks.size(); ++index) {
+        const auto owner = impl.debug_local_hooks[index].owner;
+        const auto reg = impl.debug_local_hooks[index].reg;
+        if (owner != process.id || !process.frame
+            || reg >= process.frame->registers.size()) {
+            continue;
+        }
+        auto value = process.frame->registers[reg];
+        if (value.width() != impl.debug_local_hooks[index].forced.width()) {
+            continue;
+        }
+        if (impl.apply_debug_local_forces(owner, reg, value)) {
+            impl.write_process_register(process, reg, value);
+        }
+        impl.report_debug_local_value(owner, reg, value);
+    }
+}
+
+} // namespace
+
 void Interpreter::Impl::execute(ProcessId id)
 {
     // The changes the process's statements make are its writes.
@@ -538,6 +591,9 @@ void Interpreter::Impl::execute(ProcessId id)
                 }
                 const bool boundary
                     = execute_operation(process, instruction, op);
+                if (!debug_local_hooked.empty()) [[unlikely]] {
+                    note_debug_local_stores(*this, process);
+                }
                 if constexpr (requires { RegisterId { op.destination }; }) {
                     if (operation_budget && !boundary && process.frame
                         && op.destination
@@ -837,11 +893,13 @@ bool Interpreter::Impl::execute_operation(ProcessState& process,
             ++process.pc;
         } else if constexpr (
             std::is_same_v<OperationType, ClassStaticMethodCall>) {
-            if (try_vhdl_disconnect_call(process.id, op.method_identity)) {
-                ++process.pc;
-                return;
-            }
             ProcessContainerAccess access { *this, process };
+            // A DPI call names its position for the disable protocol (IEEE
+            // 1800-2023 35.9), as the boundary dispatch's and the compiled
+            // kernel's do; an operation the kernel hosts here is one of its
+            // member's operations.
+            DpiCallProcess::set_position(
+                static_cast<std::uint32_t>(instruction));
             if (const auto* error = run_class_operation(access, op, process.id)) {
                 fail(process, error);
             }
@@ -1442,7 +1500,8 @@ bool Interpreter::Impl::execute_operation(ProcessState& process,
             for (const auto& element : op.elements) {
                 elements.push_back(
                     { get_register(process, element.source),
-                        projected_element_delay(process, element) });
+                        projected_element_delay(process, element),
+                        element.null });
             }
             const auto rejection = projected_rejection(
                 op.rejection, elements);
@@ -1507,7 +1566,8 @@ bool Interpreter::Impl::execute_operation(ProcessState& process,
             for (const auto& element : op.elements) {
                 elements.push_back(
                     { get_register(process, element.source),
-                        projected_element_delay(process, element) });
+                        projected_element_delay(process, element),
+                        element.null });
             }
             const auto rejection = projected_rejection(
                 op.rejection, elements);
@@ -1676,7 +1736,8 @@ bool Interpreter::Impl::execute_operation(ProcessState& process,
             for (const auto& element : op.elements) {
                 elements.push_back(
                     { get_register(process, element.source),
-                        projected_element_delay(process, element) });
+                        projected_element_delay(process, element),
+                        element.null });
             }
             const auto rejection = projected_rejection(
                 op.rejection, elements);
@@ -1708,6 +1769,9 @@ bool Interpreter::Impl::execute_operation(ProcessState& process,
             (void)op;
             boundary = true;
         } else if constexpr (std::is_same_v<OperationType, EventAlias>) {
+            (void)op;
+            boundary = true;
+        } else if constexpr (std::is_same_v<OperationType, EventArrayElement>) {
             (void)op;
             boundary = true;
         } else if constexpr (std::is_same_v<OperationType, WaitSensitivity>) {
@@ -1938,11 +2002,17 @@ bool Interpreter::Impl::execute_operation(ProcessState& process,
                     op.signed_decimal, op.time_unit_femtoseconds,
                     time_format, op.scalar_kind);
             }
+            const auto& shown = get_register(process, op.source);
             auto text = tick
                 ? make_time_output(op.prefix, op.suffix, *tick,
                       time_format,
                       op.minimum_width == 0
                           && !op.suppress_leading_zero,
+                      op.minimum_width, op.left_justify, op.zero_pad)
+                : op.format == OutputFormat::time && has_unknown_bits(shown)
+                ? make_unknown_time_output(op.prefix, op.suffix, shown,
+                      time_format,
+                      op.minimum_width == 0 && !op.suppress_leading_zero,
                       op.minimum_width, op.left_justify, op.zero_pad)
                 : make_formatted_output(
                 op.prefix,
@@ -2354,6 +2424,9 @@ std::uint32_t Interpreter::Impl::hosted_step(ProcessState& process,
         = std::as_const(process.program().operations())[instruction];
     const bool boundary
         = execute_operation(process, instruction, operation_get<Op>(operation));
+    if (!debug_local_hooked.empty()) [[unlikely]] {
+        note_debug_local_stores(*this, process);
+    }
     if (boundary && !continue_after_boundary(process, operation, instruction)) {
         return static_kernel_detail::operation_tier_stop;
     }

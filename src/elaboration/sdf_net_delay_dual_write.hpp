@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include "fsim/elaboration/elaborator.hpp"
 
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_ids.hpp"
 #include <cstddef>
 #include <utility>
 #include <vector>

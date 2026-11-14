@@ -1,11 +1,28 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "simir_internal.hpp"
-#include "simir_static_kernel.hpp"
-#include "simir_static_kernel_state.hpp"
 
+#include "fsim/runtime/simir_interpreter.hpp"
 #include "fsim/runtime/simir_shared_body_scan.hpp"
 #include "fsim/semantic/sva_plan.hpp"
+#include "fsim/runtime/logic.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include "fsim/runtime/sva_engine.hpp"
+#include "simir_process_program.hpp"
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
+#include "simir_static_kernel.hpp"
+#include "simir_static_kernel_state.hpp"
 
 namespace fsim::runtime::simir {
 

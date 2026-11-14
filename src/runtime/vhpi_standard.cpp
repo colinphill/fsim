@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/vhpi_bridge.h"
 
-#include <array>
 #include <vector>
 #include <atomic>
 #include <cctype>

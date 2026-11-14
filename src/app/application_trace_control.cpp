@@ -2,6 +2,10 @@
 #include "application_trace_control.hpp"
 
 #include "application_trace_observation.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include "fsim/runtime/trace_model.hpp"
 
 #include <algorithm>
 #include <array>
@@ -9,6 +13,11 @@
 #include <set>
 #include <stdexcept>
 #include <string_view>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <span>
+#include <string>
 
 namespace fsim::app::application_detail {
 namespace {

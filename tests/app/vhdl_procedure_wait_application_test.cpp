@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/runtime/simir.hpp"
 #include "fsim/runtime/vcd_writer.hpp"
 
 #include <algorithm>
@@ -202,7 +204,7 @@ int main()
         // FSIM-CONFORMANCE CF-VHDL-WAIT-001 source=SRC-IEEE-P1076 expectation=execute
         std::ofstream output(source);
         output << R"(
-entity wait_child is
+library ieee; use ieee.std_logic_1164.all; entity wait_child is
   generic (timeout : time := 3 ns);
   port (
     trigger : in boolean;
@@ -252,7 +254,7 @@ begin
   end process;
 end architecture;
 
-entity procedure_waits is end entity;
+library ieee; use ieee.std_logic_1164.all; entity procedure_waits is end entity;
 architecture rtl of procedure_waits is
   constant from_fs : time := 1000000 fs;
   constant from_ps : time := 1000 ps;
@@ -388,7 +390,7 @@ end architecture;
     {
         std::ofstream output(auto_source);
         output << R"(
-entity auto_time is end entity;
+library ieee; use ieee.std_logic_1164.all; entity auto_time is end entity;
 architecture rtl of auto_time is
   signal done : std_logic;
 begin

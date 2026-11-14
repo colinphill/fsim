@@ -1,0 +1,25 @@
+#c top.r drivers 2
+#c top.v drivers 2
+#c top.t drivers 1
+#c top.i drivers 1
+#c transaction :top:r(1) by _P2 at 0 fs: 0
+#c transaction :top:r(0) by _P2 at 0 fs: 1
+#c change :top:r(0) by _P2 at 0 fs: 1
+#c transaction :top:v(1) by _P0 at 0 fs: ?
+#c transaction :top:v(0) by _P0 at 0 fs: ?
+#c transaction :top:r(1) by _P2 at 1000000 fs: 1
+#c change :top:r(1) by _P2 at 1000000 fs: 1
+#c transaction :top:r(0) by _P2 at 1000000 fs: 1
+#c transaction :top:v(1) by _P0 at 1000000 fs: 1
+#c change :top:v(1) by _P0 at 1000000 fs: 1
+#c transaction :top:v(0) by _P0 at 1000000 fs: 0
+#c change :top:v(0) by _P0 at 1000000 fs: 0
+#c transaction :top:t by _P1 at 1000000 fs: 1
+#c change :top:t by _P1 at 1000000 fs: 1
+#c transaction :top:i by _P3 at 1000000 fs: 111
+#c change :top:i by _P3 at 1000000 fs: 111
+#c transaction :top:r(1) by _P2 at 2000000 fs: 0
+#c change :top:r(1) by _P2 at 2000000 fs: 0
+#c transaction :top:r(0) by _P2 at 2000000 fs: 1
+#c transaction :top:v(1) by _P0 at 2000000 fs: ?
+#c transaction :top:v(0) by _P0 at 2000000 fs: ?

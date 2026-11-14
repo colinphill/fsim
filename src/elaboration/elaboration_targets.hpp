@@ -2,13 +2,13 @@
 #pragma once
 
 #include "fsim/elaboration/elaborator.hpp"
+#include "fsim/semantic/compiled_design.hpp"
 
 #include <cstdint>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
-#include <utility>
 #include <vector>
 
 namespace fsim::elaboration::elaboration_detail {
@@ -129,14 +129,16 @@ struct CompiledSystemVerilogUnitMatch {
     bool ambiguous { };
 };
 
-/// Resolve exactly one non-external SystemVerilog module in a logical
-/// library. Keeping this lookup here gives configuration, bind, and ordinary
-/// target selection one canonical module-selection policy.
+/// Resolve exactly one non-external SystemVerilog cell (a module,
+/// interface or program, IEEE 1800-2023 33.2.1) in a logical library.
+/// Keeping this lookup here gives configuration, bind, and ordinary target
+/// selection one canonical cell-selection policy.
 [[nodiscard]] CompiledSystemVerilogUnitMatch
-find_exact_systemverilog_module(
+find_exact_systemverilog_cell(
     const semantic::CompiledDesign& compiled,
     std::string_view library,
     std::string_view name);
+
 
 struct UnitResolutionCandidate {
     std::optional<std::string> systemc_target;

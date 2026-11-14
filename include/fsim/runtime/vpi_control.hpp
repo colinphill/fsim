@@ -235,6 +235,12 @@ public:
     [[nodiscard]] SystemVerilogVpiAssertionApiError observe(
         fsim_vpi_handle_v1 object,
         SystemVerilogVpiAssertionEvent event);
+    /// Count one outcome when no assertion callback is registered: the
+    /// statistics only, without an event to dispatch.
+    [[nodiscard]] SystemVerilogVpiAssertionApiError count(
+        fsim_vpi_handle_v1 object,
+        SystemVerilogVpiAssertionKind kind,
+        SystemVerilogVpiAssertionOutcome outcome);
     [[nodiscard]] SystemVerilogVpiAssertionStatusResult status(
         fsim_vpi_handle_v1 object) const;
     [[nodiscard]] std::size_t observed_assertions() const;

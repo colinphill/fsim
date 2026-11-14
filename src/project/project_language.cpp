@@ -1,21 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/project/project.hpp"
 
-#include "../diagnostic/artifact_identity.hpp"
-#include "fsim/support/path.hpp"
 
 #include <algorithm>
 #include <array>
-#include <charconv>
 #include <cctype>
-#include <fstream>
-#include <limits>
 #include <optional>
-#include <sstream>
 #include <string>
-#include <system_error>
-#include <unordered_set>
-#include <utility>
 
 namespace fsim::project {
 namespace {

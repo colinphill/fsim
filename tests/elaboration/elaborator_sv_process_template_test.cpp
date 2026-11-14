@@ -1,8 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_test_support.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 #include "fsim/support/environment.hpp"
 #include "../../src/app/application_runtime_path_codec.hpp"
 #include "../../src/elaboration/elaborated_design_process_access.hpp"
+#include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/elaboration/elaborator.hpp"
+#include "fsim/frontend/parser.hpp"
+#include "fsim/frontend/token.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include "fsim/runtime/simir_shared_vector.hpp"
 
 #include <cassert>
 #include <cstdio>
@@ -15,6 +25,9 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <algorithm>
+#include <stdlib.h>
+#include <utility>
 
 namespace fsim::tests::elaboration {
 namespace {
@@ -724,11 +737,13 @@ endmodule
     assert(custom_actual != custom_formal);
     assert(uwire_actual != uwire_formal);
     assert(initial_state.signals.at(custom_actual).resolution
-        == ResolutionKind::sv_user_first);
+        == ResolutionKind::user_function);
     assert(initial_state.signals.at(uwire_actual).resolution
         == ResolutionKind::none);
+    // A net of a user-defined nettype starts at its data type's default
+    // (IEEE 1800-2023 6.7.3).
     assert(initial_state.signals.at(custom_actual).initial_value
-            .to_msb_string() == "ZZZZ");
+            .to_msb_string() == "XXXX");
     assert(initial_state.signals.at(uwire_actual).initial_value
             .to_msb_string() == "ZZZZ");
     // A variable's declaration initializer is its value before time zero

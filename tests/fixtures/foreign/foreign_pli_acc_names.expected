@@ -8,3 +8,16 @@
 #c path found
 #c path reversed none
 #c path other net none
+#c bit path found
+#c bit path other bit none
+#c bit path whole port none
+#c bit path replace ok=1
+#c input bit fetch ok=1 3.0 4.0
+#c bit path fetch ok=1 3.0 4.0
+#c inout path found
+#c inout path reversed found
+#c inout path replace ok=1
+#c inout input fetch ok=1 5.0 6.0
+#c inout path fetch ok=1 5.0 6.0
+#c pad top.p1 io=1 t=10
+#c pad top.p2 io=1 t=15

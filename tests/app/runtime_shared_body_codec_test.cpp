@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "../../src/app/application_design_artifact_codec_internal.hpp"
+#include "fsim/runtime/simir.hpp"
 #include "../../src/app/application_hierarchy_path_codec.hpp"
 #include "../../src/app/application_runtime_path_codec.hpp"
 

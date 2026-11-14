@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "application_workflow_test_support.hpp"
 #include "../api/api_workspace_support.hpp"
 
 #include "fsim/app/application.hpp"
-#include "fsim/cli/driver.hpp"
+#include "fsim/app/built_project.hpp"
 #include "fsim/runtime/fst_compression.hpp"
 
 #include <algorithm>

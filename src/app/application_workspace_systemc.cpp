@@ -10,7 +10,6 @@
 #include <algorithm>
 #include <ostream>
 #include <set>
-#include <string_view>
 #include <utility>
 
 namespace fsim::app::application_detail {

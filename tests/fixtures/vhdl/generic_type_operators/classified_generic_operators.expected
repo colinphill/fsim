@@ -9,3 +9,10 @@ cgop user level < called
 cgop level less true
 cgop user level = called
 cgop level same false
+cgop user count maximum called
+cgop count larger 42
+cgop count smaller 3
+cgop count image count5
+cgop integer larger 7
+cgop integer smaller 3
+cgop integer image 5

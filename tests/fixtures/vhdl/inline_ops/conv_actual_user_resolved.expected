@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+wide event w=0 at 0
+wide event w=7 at 0
+wide w=7 p=8 at 0.5
+wide event w=8 at 1
+wide w=8 p=9 at 1.5
+wide event w=18 at 2
+wide w=18 p=19 at 2.5

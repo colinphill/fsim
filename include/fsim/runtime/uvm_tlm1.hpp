@@ -8,7 +8,6 @@
 #include "fsim/runtime/uvm_phase.hpp"
 
 #include <limits>
-#include <compare>
 #include <cstddef>
 #include <cstdint>
 #include <deque>

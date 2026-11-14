@@ -1,14 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include "fsim/app/sdf_path_timing.hpp"
 
+#include "fsim/app/sdf_target_plan.hpp"
+#include "fsim/app/sdf_value_policy.hpp"
+#include "fsim/elaboration/elaborator.hpp"
+#include "fsim/frontend/diagnostic.hpp"
+#include "fsim/frontend/sdf.hpp"
+#include "fsim/frontend/source.hpp"
+#include "fsim/runtime/scheduler.hpp"
 #include <cstddef>
 #include <memory>
 #include <span>
 #include <string>
 #include <string_view>
 #include <vector>
+#include <cstdint>
 
 namespace fsim::app {
 

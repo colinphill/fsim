@@ -73,8 +73,44 @@ std::optional<RegisterId> Lowerer::lower_hir_sva_call(
             operation.guard_count = static_cast<std::uint32_t>(*index);
             result_width = found->second[operation.guard_count];
         }
-        if (answer) {
-            const auto value = lower_hir_expression(call.operands[2], 0U);
+        if (answer && hir_expression_is_string(call.operands[2], hir_process_scope_)) {
+            // A string local's value is answered as its number in the
+            // site's string table, which a new value joins.
+            const auto text = lower_hir_string_expression(call.operands[2]);
+            if (!text) {
+                return std::nullopt;
+            }
+            const auto table = sva_string_table(operation.site);
+            const auto known = allocate_register(32U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(
+                ContainerExists { known, table.numbers, *text, true });
+            const auto present = resize_register(known, 1U, false);
+            const auto branch = process_.operations.size();
+            process_.operations.emplace_back(Branch { });
+            const auto missing
+                = static_cast<InstructionIndex>(process_.operations.size());
+            const auto next = allocate_register(32U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(ContainerSize { next, table.numbers });
+            ContainerWrite numbered { table.numbers, *text, next };
+            numbered.string_index = true;
+            process_.operations.emplace_back(std::move(numbered));
+            ContainerStringWrite value { table.values, next, *text, false,
+                false, false, { }, false };
+            process_.operations.emplace_back(std::move(value));
+            const auto joined
+                = static_cast<InstructionIndex>(process_.operations.size());
+            process_.operations[branch] = Branch { present, joined, missing,
+                UnknownBranchPolicy::when_false };
+            const auto found = allocate_register(32U, frontend::ValueDomain::Bit2);
+            ContainerRead read { found, table.numbers, *text };
+            read.string_index = true;
+            process_.operations.emplace_back(std::move(read));
+            operation.guards = found;
+            operation.guard_count = 32U;
+        } else if (answer) {
+            // A real local's value is answered as its bits (16.10).
+            const auto value = lower_hir_expression(call.operands[2], 0U,
+                hir_systemverilog_scalar_kind(call.operands[2]));
             if (!value) {
                 return std::nullopt;
             }
@@ -196,15 +232,41 @@ std::optional<RegisterId> Lowerer::lower_hir_sva_call(
         // the monitor's threads and the process's local reads.
         if (!decoded->locals.empty()) {
             auto& widths = sva_local_widths_[operation.site];
+            auto& kinds = sva_local_kinds_[operation.site];
             widths.clear();
+            kinds.clear();
             for (std::size_t index = 0; index < decoded->locals.size(); ++index) {
-                const auto witness
-                    = lower_hir_expression(call.operands[witnesses + index], 0U);
-                if (!witness) {
+                const auto& operand = call.operands[witnesses + index];
+                const auto kind = hir_systemverilog_scalar_kind(operand);
+                if (kind == frontend::SystemVerilogScalarKind::Chandle) {
+                    // A local's type is one 16.6 allows in an assertion
+                    // expression, which excludes chandle (16.10). The
+                    // site's local reads still find a width, so the error
+                    // is reported once.
+                    widths.assign(decoded->locals.size(), 64U);
+                    kinds.assign(decoded->locals.size(),
+                        frontend::SystemVerilogScalarKind::None);
+                    report("FSIM-ELAB-SVA-002",
+                        "a local variable of a concurrent property has the "
+                        "chandle type, which assertion expressions shall not "
+                        "reference (IEEE 1800-2023 16.6, 16.10)",
+                        hir_source_span(call.source));
                     return std::nullopt;
                 }
-                const auto width
-                    = static_cast<std::uint32_t>(register_width(*witness));
+                kinds.push_back(kind);
+                std::uint32_t width = 32U;
+                if (hir_expression_is_string(operand, hir_process_scope_)) {
+                    // A string local holds its value's number (16.10).
+                    sva_string_locals_.emplace(operation.site,
+                        static_cast<std::uint32_t>(index));
+                    static_cast<void>(sva_string_table(operation.site));
+                } else {
+                    const auto witness = lower_hir_expression(operand, 0U, kind);
+                    if (!witness) {
+                        return std::nullopt;
+                    }
+                    width = static_cast<std::uint32_t>(register_width(*witness));
+                }
                 decoded->locals[index].width = width;
                 widths.push_back(width);
             }
@@ -218,6 +280,61 @@ std::optional<RegisterId> Lowerer::lower_hir_sva_call(
     return expected_width != 0U && expected_width != result_width
         ? resize_register(result, expected_width, !local)
         : result;
+}
+
+const Lowerer::SvaStringTable& Lowerer::sva_string_table(
+    const std::uint32_t site)
+{
+    const auto [entry, inserted] = sva_string_tables_.try_emplace(site);
+    if (inserted) {
+        ContainerType numbers;
+        numbers.element_kind = ContainerElementKind::Packed;
+        numbers.element_width = 32U;
+        numbers.two_state = true;
+        numbers.associative = true;
+        numbers.string_indices = true;
+        ContainerType values;
+        values.element_kind = ContainerElementKind::String;
+        values.associative = true;
+        values.index_width = 32U;
+        values.two_state_indices = true;
+        values.signed_indices = false;
+        entry->second = SvaStringTable { allocate_container_register(numbers),
+            allocate_container_register(values) };
+    }
+    return entry->second;
+}
+
+std::optional<StringRegisterId> Lowerer::lower_hir_sva_string_local(
+    const semantic::sv::Expression& call)
+{
+    const auto site = call.operands.size() == 3U
+        ? hir_constant_integer(call.operands[0])
+        : std::nullopt;
+    const auto index = call.operands.size() == 3U
+        ? hir_constant_integer(call.operands[2])
+        : std::nullopt;
+    if (!site || !index || *site < 0 || *index < 0
+        || !sva_string_locals_.contains({ static_cast<std::uint32_t>(*site),
+            static_cast<std::uint32_t>(*index) })) {
+        report("FSIM-ELAB-SVA-001",
+            "the generated concurrent-property monitor call " + call.text
+                + " is malformed",
+            hir_source_span(call.source));
+        return std::nullopt;
+    }
+    // The local's words hold its value's number in the site's string
+    // table (lower_hir_sva_call).
+    const auto number = lower_hir_sva_call(call, 32U);
+    if (!number) {
+        return std::nullopt;
+    }
+    const auto& table = sva_string_table(static_cast<std::uint32_t>(*site));
+    const auto destination = allocate_string_register();
+    ContainerStringRead read { destination, table.values, *number, false,
+        false, false, { } };
+    process_.operations.emplace_back(std::move(read));
+    return destination;
 }
 
 std::optional<RegisterId> Lowerer::lower_hir_assertion_control_call(

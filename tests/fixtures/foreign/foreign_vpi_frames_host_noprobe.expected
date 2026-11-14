@@ -1,0 +1,9 @@
+#c twice vpiFunction body vpiBegin line 19
+#c refused cbStmt line 19
+#c refused cbStmt line 19
+#c refused cbStmt line 20
+#c refused cbStmt line 21
+#c refused cbStartOfFrame: vpi_register_cb: cbStartOfFrame needs the execution probes of simulate --foreign-probes (configuration key simulate.foreign_probes)
+#c refused cbEndOfFrame: vpi_register_cb: cbEndOfFrame needs the execution probes of simulate --foreign-probes (configuration key simulate.foreign_probes)
+#c quad q! 6 5a 1
+#c result 12

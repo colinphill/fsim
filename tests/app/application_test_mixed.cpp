@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_test_support.hpp"
+#include "fsim/app/built_project.hpp"
 
-#include "fsim/systemc/hierarchy.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -10,10 +10,8 @@
 #include <iostream>
 #include <iterator>
 #include <sstream>
-#include <stdexcept>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -46,7 +44,7 @@ endmodule
 {
   std::ofstream output(library_search_leaf_source);
   output << R"(
-entity library_search_leaf is
+library ieee; use ieee.std_logic_1164.all; entity library_search_leaf is
   port (result : out std_logic);
 end entity;
 architecture rtl of library_search_leaf is
@@ -1025,14 +1023,18 @@ verify_generated_behavior(
 verify_generated_behavior(
     generated_guarded_behavior_vhdl_config,
     {"enabled", "guarded_scope.guard"},
-    {"0", "1", "1", "1", "XXX", "X11", "0", "0", "0", "0"},
-    9,
+    // The values the source derives (IEEE 1076-2019 11.6, 14.7.3.2).
+    {"0", "1", "1", "1", "X", "XXXX0", "X11X0", "111X0", "0", "0", "0", "0",
+     "0"},
+    12,
     7);
 verify_generated_behavior(
     generated_guarded_behavior_vhdl_o0_config,
     {"enabled", "guarded_scope.guard"},
-    {"0", "1", "1", "1", "XXX", "X11", "0", "0", "0", "0"},
-    9,
+    // The values the source derives (IEEE 1076-2019 11.6, 14.7.3.2).
+    {"0", "1", "1", "1", "X", "XXXX0", "X11X0", "111X0", "0", "0", "0", "0",
+     "0"},
+    12,
     7);
 
 std::ifstream generated_callable_source_input(

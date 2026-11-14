@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/elaboration/elaborator.hpp"
 
 #include <algorithm>
 #include <array>
@@ -254,6 +257,9 @@ config configured;
   instance configured_top.left use fast.leaf;
   instance configured_top.lanes[1].generated use fast.leaf;
   cell leaf liblist slow;
+  // A liblist is inherited downward (IEEE 1800-2023 33.4.1.5): the
+  // monitor bound into a slow leaf names its library.
+  cell monitor use work.monitor;
 endconfig : configured
 )");
     write_source(
@@ -569,6 +575,101 @@ endmodule
     }
 }
 
+void test_systemverilog_configuration_inheritance(
+    const std::filesystem::path& directory)
+{
+    // A liblist of an instance clause is inherited by the instances below
+    // it (IEEE 1800-2023 33.4.1.5); a use clause naming no library takes
+    // the library of the parent cell (33.4.1.6); a configuration selects
+    // interfaces like modules, both being cells (33.2.1). Each wrong choice
+    // is a cell of the same name whose `selected` is 0.
+    const auto work_source = directory / "config-inherit-work.sv";
+    const auto lib_a_source = directory / "config-inherit-liba.sv";
+    const auto lib_b_source = directory / "config-inherit-libb.sv";
+    write_source(
+        work_source,
+        R"(module leaf; logic selected; initial selected = 1'b0; endmodule
+module other; logic selected; initial selected = 1'b0; endmodule
+interface ifc; logic selected; initial selected = 1'b0; endinterface
+module top;
+  mid u();
+  ifc i();
+  initial begin
+    #1;
+    $finish;
+  end
+endmodule
+config inherit;
+  design work.top;
+  default liblist work;
+  instance top.u liblist liba;
+  instance top.u.w use other;
+  instance top.i use libb.ifc;
+endconfig
+)" );
+    write_source(
+        lib_a_source,
+        R"(module mid;
+  leaf l();
+  leaf w();
+endmodule
+module leaf; logic selected; initial selected = 1'b1; endmodule
+module other; logic selected; initial selected = 1'b1; endmodule
+)" );
+    write_source(
+        lib_b_source,
+        R"(interface ifc; logic selected; initial selected = 1'b1; endinterface
+module other; logic selected; initial selected = 1'b0; endmodule
+)" );
+
+    fsim::project::Config config;
+    config.base_directory = directory;
+    config.project.name = "sv-config-inheritance";
+    config.project.top = "sv:work.inherit";
+    config.project.time_resolution = "1ns";
+    config.build.cache_path = directory / "config-inheritance-cache";
+    config.run.max_deltas = 1000;
+    add_source(config, "work", work_source, "2023");
+    add_source(config, "liba", lib_a_source, "2023");
+    add_source(config, "libb", lib_b_source, "2023");
+
+    for (const auto engine : { fsim::app::SimulationEngine::interpreter,
+             fsim::app::SimulationEngine::compiled }) {
+        fsim::diagnostic::Engine diagnostics;
+        auto project = fsim::app::build_project(config, diagnostics);
+        if (!project) {
+            print_diagnostics(diagnostics);
+        }
+        assert(project);
+        const auto library = [&](const std::string_view instance) {
+            const auto found = std::ranges::find_if(
+                project->design.specializations(),
+                [&](const auto& candidate) {
+                    return candidate.instance == instance;
+                });
+            assert(found != project->design.specializations().end());
+            return found->library;
+        };
+        assert(library("top.u") == "liba");
+        assert(library("top.u.l") == "liba");
+        assert(library("top.u.w") == "liba");
+        assert(library("top.i") == "libb");
+        std::vector<fsim::runtime::simir::SignalId> selected;
+        for (const auto* path :
+            { "top.u.l.selected", "top.u.w.selected", "top.i.selected" }) {
+            const auto signal = project->design.find_signal(path);
+            assert(signal);
+            selected.push_back(*signal);
+        }
+        fsim::app::Simulation simulation(std::move(*project), 1000, engine);
+        const auto result = simulation.run();
+        assert(result.status == fsim::runtime::RunStatus::stopped);
+        for (const auto signal : selected) {
+            assert(simulation.read_signal(signal).to_msb_string() == "1");
+        }
+    }
+}
+
 void test_systemverilog_2023_bind_mapping(
     const std::filesystem::path& directory,
     const fsim::project::Optimization optimization)
@@ -854,6 +955,7 @@ int main()
     test_hierarchy(directory.path, fsim::project::Optimization::o0);
     test_hierarchy(directory.path, fsim::project::Optimization::o2);
     test_effective_process_template_identity(directory.path);
+    test_systemverilog_configuration_inheritance(directory.path);
     test_systemverilog_2023_bind_mapping(
         directory.path, fsim::project::Optimization::o0);
     test_systemverilog_2023_bind_mapping(

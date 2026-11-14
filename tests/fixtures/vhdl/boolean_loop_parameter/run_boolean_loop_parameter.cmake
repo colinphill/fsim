@@ -11,6 +11,8 @@
 # FSIM_KERNEL_VERIFY (every run replayed on the reference evaluator and
 # compared) must equal boolean_loop_parameter.expected.
 
+include("${CMAKE_CURRENT_LIST_DIR}/../../../cmake/FsimTestWorkspace.cmake")
+
 if(NOT DEFINED FSIM_EXECUTABLE OR NOT EXISTS "${FSIM_EXECUTABLE}")
   message(FATAL_ERROR "FSIM_EXECUTABLE must name the built fsim command")
 endif()
@@ -29,7 +31,7 @@ string(STRIP "${expected}" expected)
 string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef workspace_id)
 set(case_dir
   "${CMAKE_CURRENT_BINARY_DIR}/fsim-boolean-loop-${workspace_id}")
-file(MAKE_DIRECTORY "${case_dir}")
+fsim_test_workspace("${case_dir}")
 configure_file("${FSIM_FIXTURE_DIR}/boolean_loop_parameter.vhd"
   "${case_dir}/boolean_loop_parameter.vhd" COPYONLY)
 
@@ -67,3 +69,6 @@ foreach(run IN ITEMS interpreter kernel verified)
       "workspace: ${case_dir}")
   endif()
 endforeach()
+
+# Passed: remove this run's workspaces (a failure above keeps them).
+fsim_test_workspace_cleanup()

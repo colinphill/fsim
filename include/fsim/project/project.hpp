@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include "fsim/diagnostic/diagnostic.hpp"
 
 #include <cstdint>
 #include <filesystem>

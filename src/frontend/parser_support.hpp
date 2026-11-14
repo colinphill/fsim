@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include "fsim/frontend/parser.hpp"
 #include "fsim/frontend/token.hpp"
-#include "fsim/support/vhdl_identifier.hpp"
 
 #include <cstddef>
 #include <cstdint>

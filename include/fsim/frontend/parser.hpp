@@ -4,6 +4,7 @@
 #include "fsim/frontend/design.hpp"
 #include "fsim/frontend/diagnostic.hpp"
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -137,6 +138,19 @@ using SystemVerilogPackageMemberLookup = std::function<
     SystemVerilogPackageMember(
         std::string_view package, std::string_view member)>;
 
+// The sequence and property declarations of a SystemVerilog package parsed
+// or compiled apart from the unit that imports them (IEEE 1800-2023 26.3,
+// 16.8, 16.12): those of a package an earlier group parsed as they are, and
+// those of a compiled package as their source tokens (name, header, `;`,
+// body and end keyword after the `sequence` or `property` keyword in
+// `keywords`), which the importing parser parses again.
+struct SystemVerilogPackageAssertions {
+  std::vector<SystemVerilogAssertionDeclaration> declarations;
+  std::vector<std::vector<Token>> sources;
+};
+using SystemVerilogPackageAssertionLookup = std::function<
+    std::optional<SystemVerilogPackageAssertions>(std::string_view package)>;
+
 // The members of parsed packages: those each declares, and those it exports
 // from the packages it imports (IEEE 1800-2023 26.3, 26.6). A package not
 // held here is answered by a lookup of compiled packages.
@@ -150,10 +164,16 @@ public:
   [[nodiscard]] SystemVerilogPackageMember find(std::string_view package,
       std::string_view member,
       const SystemVerilogPackageMemberLookup& fallback) const;
+  // The sequence and property declarations of a recorded package, else the
+  // fallback's answer.
+  [[nodiscard]] std::optional<SystemVerilogPackageAssertions> assertions(
+      std::string_view package,
+      const SystemVerilogPackageAssertionLookup& fallback) const;
 
 private:
   struct Package {
     std::unordered_map<std::string, SystemVerilogPackageMember> members;
+    std::vector<SystemVerilogAssertionDeclaration> assertion_declarations;
     std::vector<SystemVerilogImport> imports;
     std::vector<SystemVerilogExport> exports;
     std::unordered_set<std::string> wildcard_references;
@@ -216,6 +236,12 @@ using VhdlConditionalIdentifiers
     StandardRevision standard_revision,
     std::string_view compatibility_profile,
     SystemVerilogPackageMemberLookup package_member_lookup);
+[[nodiscard]] ParseResult parse_verilog(
+    LexResult lexed,
+    StandardRevision standard_revision,
+    std::string_view compatibility_profile,
+    SystemVerilogPackageMemberLookup package_member_lookup,
+    SystemVerilogPackageAssertionLookup package_assertion_lookup);
 
 // The statement `run_test(name)` of the UVM library expanded onto the native
 // UVM services (IEEE 1800.2-2020 F.3.1.2): the phases before and after run
@@ -223,8 +249,19 @@ using VhdlConditionalIdentifiers
 // process of the calling thread, which ends the simulation when the phase
 // ends. The block is parsed onto the call's source line, so it reports
 // there. On failure `diagnostic` holds the parser's first message.
+// The library declarations the block names, as the caller resolved them by
+// their recorded roles (support::UvmRole): the package-qualified names of
+// uvm_phase and uvm_component, and the component's phase methods in the
+// order build, connect, end_of_elaboration, start_of_simulation, run,
+// extract, check, report, final.
+struct UvmRunTestNames {
+    std::string phase_class;
+    std::string component_class;
+    std::array<std::string, 9U> phase_methods;
+};
 [[nodiscard]] std::optional<Statement> uvm_run_test_statement(
     const SourceSpan& call, std::optional<Expression> test_name,
+    const UvmRunTestNames& names,
     StandardRevision standard_revision, std::string& diagnostic);
 
 }  // namespace fsim::frontend

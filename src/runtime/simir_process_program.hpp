@@ -2,10 +2,8 @@
 #pragma once
 
 #include "fsim/runtime/simir.hpp"
-#include "fsim/runtime/simir_driver_inventory.hpp"
 #include "fsim/support/atomic_shared_ptr.hpp"
 
-#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -31,6 +29,7 @@ struct ProcessProgramTemplate {
     std::vector<DebugLocal> debug_locals;
     std::vector<DebugLocal> call_results;
     std::vector<DebugLocal> frame_locals;
+    CallFrameMap call_frames;
     std::vector<DebugStringLocal> debug_string_locals;
     std::vector<DebugContainerLocal> debug_container_locals;
     CopyOnWriteVector<ContainerType> container_register_types;
@@ -189,6 +188,7 @@ public:
     [[nodiscard]] const std::vector<DebugLocal>& debug_locals() const noexcept;
     [[nodiscard]] const std::vector<DebugLocal>& call_results() const noexcept;
     [[nodiscard]] const std::vector<DebugLocal>& frame_locals() const noexcept;
+    [[nodiscard]] const CallFrameMap& call_frames() const noexcept;
     [[nodiscard]] const std::vector<DebugStringLocal>&
         debug_string_locals() const noexcept;
     [[nodiscard]] const std::vector<DebugContainerLocal>&
@@ -349,7 +349,7 @@ public:
     /// inspects or mutates interpreter state it must call
     /// Interpreter::prepare_output_callback_observation().
     static void set_trusted_text_report_hook(
-        Interpreter& interpreter, Interpreter::ReportHook hook);
+        Interpreter& interpreter, ReportHook hook);
     /// Install fused-cone metadata before start. `dormant` lists members that
     /// never execute while fused.
     static void install_fused_cones(Interpreter& interpreter,

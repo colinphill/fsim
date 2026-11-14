@@ -6,7 +6,13 @@
 #include "fsim/semantic/compiled_design_resolver.hpp"
 #include "fsim/support/active_set.hpp"
 #include "hierarchy_sv_constant_evaluator.hpp"
-#include "hierarchy_sv_parameters_internal.hpp"
+#include "fsim/frontend/systemverilog_scalars.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/simir_container_value.hpp"
+#include "fsim/runtime/vpi_types.hpp"
+#include "fsim/semantic/compiled_design_specialization.hpp"
+#include "fsim/semantic/model.hpp"
+#include "fsim/semantic/systemverilog_hir.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -18,6 +24,12 @@
 #include <string_view>
 #include <unordered_set>
 #include <utility>
+#include <cstddef>
+#include <optional>
+#include <stdexcept>
+#include <vector>
+#include "hierarchy_sv_parameters_internal.hpp"
+#include "virtual_interface_definition.hpp"
 
 namespace fsim::elaboration::hierarchy_sv_type_layout_detail {
 using namespace runtime::simir;
@@ -476,13 +488,16 @@ systemverilog_vpi_declared_type(
         return expression ? sized_range_bound(specialization, *expression)
                           : value;
     };
-    const auto scope_of = [&](const semantic::sv::TypeDefinition& record) {
+    // A type's declaration scope resolves its names; an anonymous record
+    // written in place resolves them where it is used (IEEE 1800-2023 26.3).
+    const auto scope_of = [&](const semantic::sv::TypeDefinition& record,
+                              const semantic::ScopeId use_scope) {
         const auto declaration = record.declaration.valid()
             ? specialization.find_declaration(record.declaration)
             : std::nullopt;
         return declaration && declaration->systemverilog != nullptr
             ? declaration->systemverilog->scope
-            : specialization.scope();
+            : use_scope;
     };
     support::ActiveSet<semantic::sv::TypeReference> shape_active;
     const auto shape = [&](const auto& self,
@@ -571,7 +586,7 @@ systemverilog_vpi_declared_type(
         }
         std::optional<Descriptor> element;
         if (record != nullptr) {
-            const auto record_scope = scope_of(*record);
+            const auto record_scope = scope_of(*record, use_scope);
             switch (record->form) {
             case Form::alias:
             case Form::type_parameter:
@@ -752,13 +767,18 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
         }
         return runtime::SystemVerilogVpiRange { *left, *right };
     };
-    const auto scope_of = [&](const semantic::sv::TypeDefinition& record) {
+    // The scope that resolves the names in a type's definition: its
+    // declaration's, else (an anonymous structure, union or enumeration
+    // written in place) the scope it is used in, where a wildcard import
+    // makes a member's type visible (IEEE 1800-2023 26.3).
+    const auto scope_of = [&](const semantic::sv::TypeDefinition& record,
+                              const semantic::ScopeId use_scope) {
         const auto declaration = record.declaration.valid()
             ? specialization.find_declaration(record.declaration)
             : std::nullopt;
         return declaration && declaration->systemverilog != nullptr
             ? declaration->systemverilog->scope
-            : specialization.scope();
+            : use_scope;
     };
     // The bits of an integral or packed typespec.
     const auto bits = [](const auto& self, const Typespec& type) -> std::uint64_t {
@@ -848,19 +868,104 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
             (void)drop(named.ranges);
         }
     };
+    // The interface typespec of `virtual interface_name#(actuals).modport`,
+    // with the value of every parameter of the interface in declaration
+    // order (IEEE 1800-2023 37.30 vpiParamAssign, by the rule of 37.32
+    // detail 3): the actual the type gives it, taken by its formal's name or
+    // by position as the association states (23.10) and evaluated where the
+    // type is written, else the default the parameter was declared with,
+    // evaluated in the interface with the actuals applied. The interface is
+    // the definition the link step resolved the type to (3.13, 33), not a
+    // unit of the same name.
+    const auto interface_typespec
+        = [&](const semantic::sv::TypeReference& input) {
+              std::vector<runtime::SystemVerilogVpiParamAssign> assigns;
+              const auto& design = specialization.design();
+              const auto* const unit = virtual_interface_definition(
+                  design, specialization.unit(), input);
+              if (unit != nullptr) {
+                  const auto& hir = design.systemverilog_hir;
+                  struct Formal {
+                      const semantic::sv::Declaration* declaration { };
+                      semantic::DeclarationId id;
+                      std::optional<std::int64_t> actual;
+                  };
+                  std::vector<Formal> formals;
+                  std::size_t ordinal { };
+                  for (const auto declaration_id : unit->declarations) {
+                      const auto* const declaration
+                          = hir.find_declaration(declaration_id);
+                      if (declaration == nullptr
+                          || declaration->form
+                              != semantic::sv::DeclarationForm::parameter) {
+                          continue;
+                      }
+                      const auto position = ordinal++;
+                      std::optional<std::int64_t> value;
+                      const auto& actuals = input.interface_parameter_actuals;
+                      for (std::size_t index { }; index < actuals.size();
+                           ++index) {
+                          if (actuals[index].formal
+                                  && !actuals[index].formal->empty()
+                              ? *actuals[index].formal == declaration->name
+                              : index == position) {
+                              value = actuals[index].kind
+                                      == semantic::sv::ActualKind::expression
+                                      && actuals[index].expression
+                                  ? specialization.evaluate_integral_expression(
+                                        *actuals[index].expression)
+                                  : std::nullopt;
+                          }
+                      }
+                      formals.push_back({ declaration, declaration_id, value });
+                  }
+                  std::vector<semantic::SpecializedHirActualIdentity> applied;
+                  for (const auto& formal : formals) {
+                      if (formal.actual) {
+                          applied.push_back({ formal.id,
+                              std::to_string(*formal.actual) });
+                      }
+                  }
+                  const auto interface = semantic::make_specialized_hir_unit(
+                      design, unit->id, applied);
+                  for (const auto& formal : formals) {
+                      auto value = formal.actual;
+                      if (!value && interface
+                          && formal.declaration->initializer) {
+                          value = interface->evaluate_integral_expression(
+                              *formal.declaration->initializer);
+                      }
+                      if (value) {
+                          assigns.push_back({ formal.declaration->name, *value });
+                      }
+                  }
+              }
+              return runtime::make_systemverilog_vpi_interface_typespec(
+                  input.interface_type, input.interface_modport,
+                  std::string_view { }, std::move(assigns));
+          };
     support::ActiveSet<semantic::sv::TypeReference> build_active;
     const auto build = [&](const auto& self,
                            const semantic::sv::TypeReference& input,
                            const semantic::ScopeId use_scope,
                            const unsigned depth) -> std::optional<Typespec> {
-        // A virtual interface is only the element of a fixed array here
-        // (below); a scalar one has its typespec from the declaration.
-        if (input.type_of
-            || (input.virtual_interface && input.unpacked_dimensions.empty()
-                && !input.container_form)
-            || (input.virtual_interface && input.container_form
-                && *input.container_form != Form::static_array)) {
+        if (input.type_of) {
             return std::nullopt;
+        }
+        // A virtual interface's typespec is an interface typespec, named by
+        // the typedef it was declared through (IEEE 1800-2023 37.29, 37.30);
+        // the typedef is the type identity's record, never a spelling.
+        if (input.virtual_interface && input.unpacked_dimensions.empty()
+            && !input.container_form) {
+            auto interface = interface_typespec(input);
+            if (const auto definition = input.target.target.valid()
+                    ? specialization.find_type(input.target.target)
+                    : std::nullopt;
+                definition && definition->systemverilog != nullptr
+                && definition->systemverilog->form == Form::alias) {
+                interface.name = definition->systemverilog->name;
+            }
+            return interface;
         }
         // A type that names itself again has no typespec.
         if (!build_active.enter(input)) {
@@ -952,18 +1057,8 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
                 element.value_form.reset();
             }
             // The element of an array of virtual interfaces is an interface
-            // typespec, named by its typedef when it was declared through
-            // one (IEEE 1800-2023 37.29 example 1, 37.30).
-            auto inner = element.virtual_interface
-                ? std::optional<Typespec> {
-                      runtime::make_systemverilog_vpi_interface_typespec(
-                          element.interface_type, element.interface_modport,
-                          element.target.target.valid()
-                                  && element.target.spelling
-                                      != element.interface_type
-                              ? std::string_view { element.target.spelling }
-                              : std::string_view { }) }
-                : support::with_stack([&] { return self(self, element, use_scope, depth + 1U); });
+            // typespec (IEEE 1800-2023 37.29 example 1, 37.30).
+            auto inner = support::with_stack([&] { return self(self, element, use_scope, depth + 1U); });
             if (!inner) {
                 return std::nullopt;
             }
@@ -1068,6 +1163,9 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
                 handle.name = input.class_specialization.empty()
                     ? spelling
                     : input.class_specialization;
+                handle.class_identity = input.class_specialization.empty()
+                    ? input.class_identity
+                    : input.class_specialization;
                 return handle;
             }
             // The built-in classes of package std (15.4, 15.3, 9.7).
@@ -1115,7 +1213,7 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
             builtin.ranges = std::move(dimensions);
             return builtin;
         }
-        const auto record_scope = scope_of(*record);
+        const auto record_scope = scope_of(*record, use_scope);
         std::optional<Typespec> named;
         // A typedef of an unpacked array (7.4.2), or of packed dimensions
         // over a named structure or union (7.4.1): an array named by it.
@@ -1293,6 +1391,7 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
                 // dimensions, is an alias of it (37.25 details 1, 6).
                 if (!named->name.empty()
                     || (named->ranges.empty() && named->kind != Kind::Array
+                        && named->kind != Kind::Interface
                         && named->kind != Kind::PackedArray
                         && named->kind != Kind::Struct
                         && named->kind != Kind::Union
@@ -1378,6 +1477,9 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
                 Typespec handle;
                 handle.kind = Kind::Class;
                 handle.name = record->name;
+                handle.class_identity = record->base.class_specialization.empty()
+                    ? record->base.class_identity
+                    : record->base.class_specialization;
                 named = std::move(handle);
                 break;
             }
@@ -1995,27 +2097,75 @@ std::optional<ContainerType> systemverilog_container_type(
             || !result->aggregate_value)) {
         return std::nullopt;
     }
-    if (!result) {
-        return std::nullopt;
-    }
-    try {
-        static_cast<void>(default_container_value(*result));
-    } catch (const std::length_error&) {
-        // A one-dimensional packed array beyond the dense budget stores only
-        // its written elements.
-        if (!runtime::simir::sparse_container_eligible(*result)) {
-            return std::nullopt;
-        }
-        result->sparse = true;
-        try {
-            static_cast<void>(default_container_value(*result));
-        } catch (const std::exception&) {
-            return std::nullopt;
-        }
-    } catch (const std::exception&) {
+    if (!result || !materialize_container_storage(*result)) {
         return std::nullopt;
     }
     return result;
+}
+
+bool materialize_container_storage(runtime::simir::ContainerType& type)
+{
+    try {
+        static_cast<void>(default_container_value(type));
+    } catch (const std::length_error&) {
+        // A one-dimensional packed array beyond the dense budget stores only
+        // its written elements.
+        if (!runtime::simir::sparse_container_eligible(type)) {
+            return false;
+        }
+        type.sparse = true;
+        try {
+            static_cast<void>(default_container_value(type));
+        } catch (const std::exception&) {
+            type.sparse = false;
+            return false;
+        }
+    } catch (const std::exception&) {
+        return false;
+    }
+    return true;
+}
+
+std::optional<semantic::sv::TypeReference> systemverilog_event_array_type(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::sv::TypeReference& reference,
+    const semantic::ScopeId scope)
+{
+    const semantic::CompiledDesignResolver resolver { specialization };
+    auto array = reference;
+    if (!array.container_form) {
+        // Only a type written as a name can denote an array typedef.
+        if (!array.named) {
+            return std::nullopt;
+        }
+        auto underlying = resolver.underlying_systemverilog_type(
+            reference, scope);
+        if (!underlying || !underlying->container_form) {
+            return std::nullopt;
+        }
+        array = std::move(*underlying);
+    }
+    if (array.container_form != semantic::sv::TypeForm::static_array
+        || array.container_element_types.size() != 1U) {
+        return std::nullopt;
+    }
+    // `event` is a keyword (IEEE 1800-2023 6.17), so its spelling is the
+    // type; any other element names a typedef that may denote it.
+    const auto& element = array.container_element_types.front();
+    if (element.target.spelling == "event") {
+        return array;
+    }
+    if (!element.named || element.container_form) {
+        return std::nullopt;
+    }
+    const auto underlying = resolver.underlying_systemverilog_type(
+        element, scope);
+    if (!underlying || underlying->target.spelling != "event"
+        || underlying->container_form) {
+        return std::nullopt;
+    }
+    array.container_element_types.front() = *underlying;
+    return array;
 }
 
 } // namespace fsim::elaboration::hierarchy_sv_type_layout_detail

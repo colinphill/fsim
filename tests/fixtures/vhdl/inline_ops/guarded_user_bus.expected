@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+wide bus gb=14 at 0
+wide bus gb=27 at 0
+wide bus gb=20 at 2
+wide bus gb=50 at 6
+wide bus gb=0 at 9
+wide bus end gb=0

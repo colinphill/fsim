@@ -16,7 +16,6 @@
 namespace fsim::semantic {
 namespace {
 
-constexpr std::size_t maximum_generate_iterations = 1'000'000U;
 
 std::string append_path(
     const std::string_view parent, const std::string_view component)
@@ -86,8 +85,14 @@ private:
         const ExpressionId expression,
         const std::span<const SpecializedHirNamedIdentity> identities) const
     {
-        return working_unit(identities).evaluate_integral_expression(
-            expression);
+        // A STD_ULOGIC selector or choice compares by its position (IEEE
+        // 1076-2019 11.8, 16.7): all nine values, not only '0' and '1'.
+        const auto unit = working_unit(identities);
+        if (const auto position
+            = unit.evaluate_vhdl_position(expression, nullptr)) {
+            return position;
+        }
+        return unit.evaluate_integral_expression(expression);
     }
 
     [[nodiscard]] std::optional<SpecializedHirVhdlPackedValue>
@@ -214,6 +219,29 @@ private:
         result_.error = std::move(message);
         result_.error_source = source;
         return false;
+    }
+
+    // The first literal in an expression that analysis marked as fitting
+    // several overloads (IEEE 1076-2019 12.5): it has no type, so no value.
+    [[nodiscard]] std::optional<SourceSpanId> ambiguous_literal(
+        const ExpressionId id) const
+    {
+        const auto expression = unit_.find_expression(id);
+        if (!expression || expression->vhdl == nullptr) {
+            return std::nullopt;
+        }
+        const auto& source = *expression->vhdl;
+        if ((source.kind == vhdl::ExpressionKind::logic_literal
+                || source.kind == vhdl::ExpressionKind::string_literal)
+            && source.resolved_builtin_type == "@ambiguous-literal") {
+            return source.source;
+        }
+        for (const auto operand : source.operands) {
+            if (const auto found = ambiguous_literal(operand)) {
+                return found;
+            }
+        }
+        return std::nullopt;
     }
 
     void append_occurrence(const vhdl::GenerateRegion& region,
@@ -473,21 +501,8 @@ private:
                 literal_descending = limit->second;
             }
         }
-        const auto [low, high] = literal_descending
-            ? std::pair { literal_limit.value_or(0), *initial }
-            : std::pair { *initial, literal_limit.value_or(0) };
-        if (literal_limit && high > low
-            && static_cast<std::uint64_t>(high)
-                    - static_cast<std::uint64_t>(low)
-                >= maximum_generate_iterations) {
-            return reject("FSIM-ELAB-GEN-004",
-                "compiled VHDL loop-generate exceeds the bounded "
-                "1,000,000-iteration elaboration limit",
-                region.source);
-        }
 
         auto value = *initial;
-        std::size_t count { };
         std::set<std::int64_t> visited_values;
         while (true) {
             auto iteration_identities = std::vector<
@@ -514,12 +529,6 @@ private:
                 return reject("FSIM-ELAB-GEN-014",
                     "compiled VHDL loop-generate revisits genvar value '"
                         + std::to_string(value) + "'",
-                    region.source);
-            }
-            if (count++ == maximum_generate_iterations) {
-                return reject("FSIM-ELAB-GEN-004",
-                    "compiled VHDL loop-generate exceeds the bounded "
-                    "1,000,000-iteration elaboration limit",
                     region.source);
             }
 
@@ -736,6 +745,13 @@ private:
             }
             const auto condition = evaluate(*region.condition, identities);
             if (!condition) {
+                if (const auto ambiguous = ambiguous_literal(*region.condition)) {
+                    return reject("FSIM-ELAB-VHENUM-004",
+                        "a literal in the conditional-generate condition is "
+                        "ambiguous: it fits more than one overload of the "
+                        "call",
+                        *ambiguous);
+                }
                 return reject("FSIM-ELAB-GEN-001",
                     "cannot evaluate compiled VHDL conditional-generate "
                     "condition",

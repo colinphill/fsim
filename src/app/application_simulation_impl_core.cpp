@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_simulation_internal.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
+#include "fsim/runtime/vpi_control.hpp"
 
 #include "../elaboration/hierarchy_sv_constant_evaluator.hpp"
 
@@ -7,13 +9,101 @@
 #include "fsim/semantic/systemverilog_structure_image.hpp"
 #include "fsim/support/index_distance.hpp"
 #include "fsim/support/native_filesystem.hpp"
-#include "fsim/support/uvm_identity.hpp"
+#include "application_class_execution.hpp"
+#include "application_internal.hpp"
+#include "application_uvm_registry.hpp"
+#include "fsim/app/application.hpp"
+#include "fsim/app/design_artifact.hpp"
+#include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/runtime/class_heap.hpp"
+#include "fsim/runtime/class_methods.hpp"
+#include "fsim/runtime/class_randomize.hpp"
+#include "fsim/runtime/constraint_solver.hpp"
+#include "fsim/runtime/logic.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/scheduler_events.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_container_value.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include "fsim/runtime/sva_storage.hpp"
+#include "fsim/runtime/uvm_command_line.hpp"
+#include "fsim/runtime/uvm_component.hpp"
+#include "fsim/runtime/uvm_registry.hpp"
+#include "fsim/runtime/vpi_abi.h"
+#include "fsim/runtime/vpi_callback.hpp"
+#include "fsim/runtime/vpi_object.hpp"
+#include "fsim/runtime/vpi_system.hpp"
+#include "fsim/runtime/vpi_types.hpp"
+#include "fsim/runtime/vpi_value.hpp"
+#include "fsim/semantic/design_ir.hpp"
+#include "fsim/semantic/model.hpp"
+#include "fsim/semantic/systemverilog_class_specialization.hpp"
+#include "fsim/semantic/systemverilog_hir.hpp"
+#include "fsim/support/path.hpp"
 
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <ranges>
+#include <cstddef>
+#include <cstdint>
+#include <cstdlib>
+#include <exception>
+#include <filesystem>
+#include <functional>
+#include <ios>
+#include <iostream>
+#include <iterator>
+#include <limits>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <set>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <unordered_map>
+#include <utility>
+#include <variant>
+#include <vector>
 
 namespace fsim::app {
+
+namespace {
+
+// The value of UVM_IMPLEMENTATION, the last literal of the library's
+// uvm_port_type_e (IEEE 1800.2-2020 F.2.1.4), found by the type's recorded
+// role; empty when the design does not declare it or a literal of the type
+// has an explicit value.
+[[nodiscard]] std::optional<std::uint64_t> uvm_port_implementation_value(
+    const semantic::sv::Hir& hir)
+{
+    for (const auto& unit : hir.units()) {
+        if (!support::uvm_library(unit.uvm_role))
+            continue;
+        for (const auto id : unit.declarations) {
+            const auto* declaration = hir.find_declaration(id);
+            if (declaration == nullptr
+                || declaration->uvm_role != support::UvmRole::port_type_enum
+                || !declaration->declared_type)
+                continue;
+            const auto* type = hir.find_type(*declaration->declared_type);
+            if (type == nullptr || type->enumeration_literals.empty()
+                || std::ranges::any_of(type->enumeration_literals,
+                    [](const auto& literal) { return literal.value.has_value(); }))
+                return std::nullopt;
+            return type->enumeration_literals.size() - 1U;
+        }
+    }
+    return std::nullopt;
+}
+
+} // namespace
 
 [[nodiscard]] std::filesystem::path Simulation::Impl::coverage_database_file(
     const std::string_view filename) const
@@ -709,8 +799,22 @@ void Simulation::Impl::add_constraint_state_variables(
     const std::span<const std::string> names,
     const std::span<const runtime::PackedLogic4> actuals,
     const std::span<const runtime::SystemVerilogConstraintTemplate>
-        source_constraints)
+        source_constraints,
+    const std::optional<runtime::simir::ProcessId> calling_process,
+    const bool callbacks_lowered)
 {
+    // The generated code ran pre_randomize and runs post_randomize; the
+    // objects that join the solve are the ones its call collected.
+    const LoweredRandomizeCall* const lowered = callbacks_lowered
+        && !lowered_randomize_calls.empty()
+        && lowered_randomize_calls.back().handle == handle
+        ? &lowered_randomize_calls.back()
+        : nullptr;
+    if (callbacks_lowered && lowered == nullptr) {
+        throw std::logic_error {
+            "randomize() solve outside its lowered call"
+        };
+    }
     constexpr std::string_view inline_value_prefix = "@inline-value:";
     std::vector<std::string> selected_names;
     std::vector<runtime::PackedLogic4> inline_values;
@@ -825,42 +929,12 @@ void Simulation::Impl::add_constraint_state_variables(
     const auto prior_properties = object.properties;
     const auto callback_on = [&](const runtime::SystemVerilogClassHandle target,
                                  const std::string_view name) {
-        const auto* method = class_hir_execution.method_named(target, name);
-        if (method == nullptr)
-            return;
-        // The class that declares the callback, a compilation-unit scope
-        // named without its digest.
-        auto owner = method->owner_identity;
-        if (const auto unit = owner.find("$unit@");
-            unit != std::string::npos) {
-            const auto end = owner.find("::", unit);
-            owner.erase(unit + 5U,
-                end == std::string::npos ? end : end - unit - 5U);
-        }
-        const auto returns_void = !method->return_type
-            || method->return_type->target.spelling == "void";
-        if (method->kind != semantic::sv::ClassMethodKind::function
-            || method->static_method || !method->formals.empty()
-            || !returns_void) {
-            throw std::invalid_argument { std::string { name }
-                + " of class '" + owner
-                + "' must be a nonstatic zero-argument void function" };
-        }
-        std::vector<runtime::PackedLogic4> actuals;
-        std::vector<std::string> string_actuals;
-        // A callback that cannot complete is an error of the run, not a
-        // randomization failure, which only an unsatisfiable solve is
-        // (IEEE 1800-2023 18.6.1, 18.6.3).
-        try {
-            (void)class_hir_execution.invoke_function(
-                *method, target, actuals, string_actuals, { }, { });
-        } catch (const std::exception& error) {
-            throw std::runtime_error { std::string { name } + " of class '"
-                + owner + "' failed in randomize(): " + error.what() };
-        }
+        run_randomize_callback(target, name, calling_process);
     };
     const auto callback = [&](const std::string_view name) {
-        callback_on(handle, name);
+        if (lowered == nullptr) {
+            callback_on(handle, name);
+        }
     };
     try {
         callback("pre_randomize");
@@ -871,8 +945,9 @@ void Simulation::Impl::add_constraint_state_variables(
     // Objects reached through class-handle properties join the solve; rand
     // handles extend randomization to theirs, whose pre_randomize runs after
     // the parent's (IEEE 1800-2017 18.5.9, 18.6.1).
-    auto members = runtime::systemverilog_class_randomize_members(
-        class_heap, handle);
+    auto members = lowered != nullptr
+        ? lowered->members
+        : runtime::systemverilog_class_randomize_members(class_heap, handle);
     std::vector<std::pair<runtime::SystemVerilogClassHandle,
         std::vector<runtime::SystemVerilogClassPropertyValue>>>
         prior_members;
@@ -880,7 +955,7 @@ void Simulation::Impl::add_constraint_state_variables(
         for (const auto& member : members) {
             prior_members.emplace_back(member.handle,
                 class_heap.object(member.handle).properties);
-            if (member.randomized) {
+            if (member.randomized && lowered == nullptr) {
                 callback_on(member.handle, "pre_randomize");
             }
         }
@@ -1903,7 +1978,7 @@ void Simulation::Impl::add_constraint_state_variables(
         try {
             callback("post_randomize");
             for (const auto& member : members) {
-                if (member.randomized) {
+                if (member.randomized && lowered == nullptr) {
                     callback_on(member.handle, "post_randomize");
                 }
             }
@@ -1918,6 +1993,148 @@ void Simulation::Impl::add_constraint_state_variables(
     }
     return runtime::PackedLogic4::from_aval_bval(
         32, result.language_result(), 0);
+}
+
+void Simulation::Impl::run_randomize_callback(
+    const runtime::SystemVerilogClassHandle target,
+    const std::string_view name,
+    const std::optional<runtime::simir::ProcessId> calling_process)
+{
+    if (target == 0U) {
+        return;
+    }
+    const auto* method = class_hir_execution.method_named(target, name);
+    if (method == nullptr)
+        return;
+    const auto owner = randomize_callback_owner(*method);
+    const auto returns_void = !method->return_type
+        || method->return_type->target.spelling == "void";
+    if (method->kind != semantic::sv::ClassMethodKind::function
+        || method->static_method || !method->formals.empty()
+        || !returns_void) {
+        throw std::invalid_argument { std::string { name }
+            + " of class '" + owner
+            + "' must be a nonstatic zero-argument void function" };
+    }
+    std::vector<runtime::PackedLogic4> actuals;
+    std::vector<std::string> string_actuals;
+    // A callback that cannot complete is an error of the run, not a
+    // randomization failure, which only an unsatisfiable solve is
+    // (IEEE 1800-2023 18.6.1, 18.6.3).
+    try {
+        // The callbacks run in the process that called randomize()
+        // (18.6.1), whose random number stream they draw from (18.14).
+        (void)class_hir_execution.invoke_function(*method, target,
+            actuals, string_actuals, { }, { }, { }, calling_process);
+    } catch (const std::exception& error) {
+        throw std::runtime_error { std::string { name } + " of class '"
+            + owner + "' failed in randomize(): " + error.what() };
+    }
+}
+
+std::string Simulation::Impl::randomize_callback_owner(
+    const semantic::sv::SpecializedClassMethod& method)
+{
+    auto owner = method.owner_identity;
+    if (const auto unit = owner.find("$unit@");
+        unit != std::string::npos) {
+        const auto end = owner.find("::", unit);
+        owner.erase(unit + 5U,
+            end == std::string::npos ? end : end - unit - 5U);
+    }
+    return owner;
+}
+
+std::string Simulation::Impl::randomize_callback_error(
+    std::string message) const
+{
+    // A callback that cannot complete is an error of the run, not a
+    // randomization failure, which only an unsatisfiable solve is
+    // (IEEE 1800-2023 18.6.1, 18.6.3).
+    for (const auto& context :
+        std::ranges::reverse_view { randomize_callback_contexts }) {
+        const auto* method
+            = class_hir_execution.method_named(context.target, context.name);
+        if (method == nullptr) {
+            continue;
+        }
+        message = context.name + " of class '"
+            + randomize_callback_owner(*method)
+            + "' failed in randomize(): " + message;
+    }
+    return message;
+}
+
+runtime::PackedLogic4 Simulation::Impl::invoke_lowered_randomize_step(
+    const runtime::simir::ProcessId process,
+    const runtime::SystemVerilogClassHandle handle,
+    const std::string_view step,
+    const std::span<const runtime::PackedLogic4> actuals)
+{
+    const auto done = runtime::PackedLogic4::from_aval_bval(1U, 0U, 0U);
+    if (step.starts_with("@randomize-callback-enter:")) {
+        randomize_callback_contexts.push_back({ process, handle,
+            std::string { step.substr(step.find(':') + 1U) } });
+        return done;
+    }
+    if (step == "@randomize-callback-leave") {
+        if (randomize_callback_contexts.empty()
+            || randomize_callback_contexts.back().process != process) {
+            throw std::logic_error {
+                "randomize() callback left outside its lowered call" };
+        }
+        randomize_callback_contexts.pop_back();
+        return done;
+    }
+    // A kill (IEEE 1800-2023 9.7) that ends the killing process ends the
+    // randomize() calls and callbacks it is in: they are set aside before
+    // the kill and come back only when the kill returns.
+    if (step == "@process-kill-begin") {
+        killing_randomize_state = KilledRandomizeState {
+            process,
+            std::exchange(lowered_randomize_calls, { }),
+            std::exchange(randomize_callback_contexts, { }),
+        };
+        return done;
+    }
+    if (step == "@process-kill-end") {
+        if (!killing_randomize_state
+            || killing_randomize_state->process != process) {
+            throw std::logic_error { "process kill returned unmatched" };
+        }
+        lowered_randomize_calls = std::move(killing_randomize_state->calls);
+        randomize_callback_contexts
+            = std::move(killing_randomize_state->contexts);
+        killing_randomize_state.reset();
+        return done;
+    }
+    if (step == "@randomize-begin") {
+        // The object itself must exist (8.4); the objects reached through
+        // its handles are taken after its pre_randomize ran (18.6.1).
+        (void)class_heap.object(handle);
+        auto members
+            = runtime::systemverilog_class_randomize_members(class_heap, handle);
+        const auto count = members.size();
+        lowered_randomize_calls.push_back({ handle, std::move(members) });
+        return runtime::PackedLogic4::from_aval_bval(32U, count, 0U);
+    }
+    if (lowered_randomize_calls.empty()
+        || lowered_randomize_calls.back().handle != handle) {
+        throw std::logic_error { "randomize() step outside its lowered call" };
+    }
+    if (step == "@randomize-end") {
+        lowered_randomize_calls.pop_back();
+        return runtime::PackedLogic4::from_aval_bval(1U, 0U, 0U);
+    }
+    const auto& members = lowered_randomize_calls.back().members;
+    const auto index = actuals.empty() ? members.size()
+                                       : actuals.front().low_word().aval;
+    // A member reached through a handle that is not rand joins the solve
+    // without its callbacks (18.5.9).
+    const auto member = index < members.size() && members[index].randomized
+        ? members[index].handle
+        : runtime::SystemVerilogClassHandle { };
+    return runtime::PackedLogic4::from_aval_bval(64U, member, 0U);
 }
 
 [[nodiscard]] bool Simulation::Impl::static_constraint(
@@ -2282,8 +2499,8 @@ std::string Simulation::Impl::static_property_specialization(
     for (const auto& property : specialization.properties) {
         if (!property.static_storage) {
             descriptor.properties.push_back(
-                class_property_descriptor(
-                    property, built.systemverilog_hir, true));
+                class_property_descriptor(property, built.systemverilog_hir,
+                    true, &built.design.class_container_types()));
         }
     }
     const auto declaration = std::ranges::find(
@@ -2307,6 +2524,19 @@ std::string Simulation::Impl::static_property_specialization(
     return class_heap.allocate(descriptor);
 }
 
+std::string Simulation::Impl::service_construct_identity(
+    const std::string_view specialization)
+{
+    const auto& selected = class_specialization(specialization);
+    if (support::uvm_library(selected.uvm_role)
+        || !is_systemverilog_uvm_type(
+            built.compiled_systemverilog_class_specializations, selected,
+            support::UvmRole::object)) {
+        return std::string { specialization };
+    }
+    return "@service-construct:" + std::string { specialization };
+}
+
 [[nodiscard]] runtime::SystemVerilogClassHandle Simulation::Impl::construct_class(
     const std::string_view specialization_identity,
     const std::string_view declared_type,
@@ -2322,12 +2552,38 @@ std::string Simulation::Impl::static_property_specialization(
     // `@no-constructor:` allocates the object for a constructor the
     // elaborated process runs itself.
     constexpr std::string_view lowered_constructor { "@no-constructor:" };
-    const bool run_constructor
-        = !specialization_identity.starts_with(lowered_constructor);
-    const auto identity = run_constructor
+    // `@api-construct:` allocates a UVM object for the API: its constructor
+    // chain runs as generated code in the dispatch process.
+    constexpr std::string_view api_constructor { "@api-construct:" };
+    // `@service-construct:` is the same for a host service a design process
+    // can call (clone, the factory): inside the running design the calling
+    // process runs the chain, so the object waits for it.
+    constexpr std::string_view service_constructor { "@service-construct:" };
+    const bool service_chain
+        = specialization_identity.starts_with(service_constructor);
+    bool api_chain = service_chain
+        || specialization_identity.starts_with(api_constructor);
+    bool run_constructor
+        = !api_chain && !specialization_identity.starts_with(lowered_constructor);
+    const auto identity = api_chain
+        ? specialization_identity.substr(service_chain
+              ? service_constructor.size() : api_constructor.size())
+        : run_constructor
         ? specialization_identity
         : specialization_identity.substr(lowered_constructor.size());
     const auto& specialization = class_specialization(identity);
+    // A construction the host makes outside the running design (the API,
+    // the factory's and clone services called from the host) runs the
+    // object's constructor chain as generated code in the dispatch process.
+    // One made inside a running process cannot enter the scheduler again.
+    if (run_constructor && interpreter && !interpreter->scheduler().running()
+        && !support::uvm_library(specialization.uvm_role)
+        && is_systemverilog_uvm_type(
+            built.compiled_systemverilog_class_specializations,
+            specialization, support::UvmRole::object)) {
+        api_chain = true;
+        run_constructor = false;
+    }
     ClassOwnerParameterValues owner_parameters;
     std::optional<runtime::simir::ProcessId> owner_process_context;
     bool owner_context_available { };
@@ -2536,7 +2792,8 @@ std::string Simulation::Impl::static_property_specialization(
     // A lowered constructor chain runs in the allocating process: its
     // completion point announces the object (cbCreateObj, IEEE 1800-2023
     // 38.36.1), so the object waits here for it.
-    if (foreign_probes && class_created_hook && !run_constructor) {
+    if (foreign_probes && class_created_hook && !run_constructor
+        && !api_chain) {
         constructed_classes.push_back(handle);
     }
     const auto before = packed_class_snapshot();
@@ -2546,93 +2803,87 @@ std::string Simulation::Impl::static_property_specialization(
     const auto component_specialization = is_systemverilog_uvm_type(
             built.compiled_systemverilog_class_specializations,
             specialization,
-            "uvm_component")
+            support::UvmRole::component)
         && !is_systemverilog_uvm_type(
             built.compiled_systemverilog_class_specializations,
             specialization,
-            "uvm_root");
-    bool object_initialized { };
-    bool automatic_root_created { };
-    runtime::SystemVerilogUvmRootHandle automatic_root { };
-    std::string automatic_root_identity;
+            support::UvmRole::root);
+    UvmBaseConstruction uvm_base;
+    uvm_base.component = component_specialization;
+    auto& object_initialized = uvm_base.object_initialized;
+    auto& automatic_root_created = uvm_base.automatic_root_created;
+    auto& automatic_root = uvm_base.automatic_root;
+    auto& automatic_root_identity = uvm_base.automatic_root_identity;
+    // A lowered constructor chain of a class deriving from the library makes
+    // the UVM base state when it reaches the library's constructor
+    // (`@uvm-construct-base`), from the actuals of `super.new` (IEEE
+    // 1800.2-2020 5.3.2, 13.1.2). The simulation allocates the library's own
+    // objects without their constructors and makes their state here.
+    const bool deferred_uvm_base = (!run_constructor || api_chain)
+        && !support::uvm_library(specialization.uvm_role)
+        && is_systemverilog_uvm_type(
+            built.compiled_systemverilog_class_specializations,
+            specialization, support::UvmRole::object);
     try {
-        if (is_systemverilog_uvm_type(
-                built.compiled_systemverilog_class_specializations,
-                specialization,
-                "uvm_object")) {
-            // The class of a generated scope or design element instance is
-            // registered when its first object is made.
-            ensure_systemverilog_uvm_object_type(specialization, uvm_objects);
-            uvm_objects.initialize(handle);
-            object_initialized = true;
-            std::size_t name_index { };
-            if (!actual_names.empty()) {
-                const auto found = std::ranges::find(actual_names, "name");
-                if (found != actual_names.end()) {
-                    name_index = static_cast<std::size_t>(
-                        std::distance(actual_names.begin(), found));
-                }
-            }
-            if (name_index < string_actuals.size()
-                && !string_actuals[name_index].empty()) {
-                uvm_objects.set_name(handle, string_actuals[name_index]);
-            }
-        }
-        // A TLM port's second constructor argument is its parent, and an
-        // imp's is the object implementing it.
-        if (is_systemverilog_uvm_type(
-                built.compiled_systemverilog_class_specializations,
-                specialization, "uvm_port_base")
-            && actuals.size() > 1U && actuals[1].low_word().bval == 0U) {
-            uvm_tlm_owners[handle] = actuals[1].low_word().aval;
-        }
-        if (component_specialization) {
-            std::size_t name_index { };
-            std::size_t parent_index { 1U };
-            if (!actual_names.empty()) {
-                const auto named_index = [&](const std::string_view name,
-                                             const std::size_t fallback) {
-                    const auto found = std::ranges::find(actual_names, name);
-                    return found == actual_names.end()
-                        ? fallback
-                        : static_cast<std::size_t>(
-                              std::distance(actual_names.begin(), found));
-                };
-                name_index = named_index("name", 0U);
-                parent_index = named_index("parent", 1U);
-            }
-            std::string name = name_index < string_actuals.size()
-                ? string_actuals[name_index]
-                : std::string { };
-            if (name.empty()) {
-                name = "COMP_" + std::to_string(uvm_objects.instance_id(handle));
-            }
-            const auto parent = parent_index < actuals.size()
-                ? actuals[parent_index].low_word().aval
-                : runtime::SystemVerilogClassHandle { };
-            auto root = requested_root;
-            if (parent == 0 && root == 0) {
-                automatic_root_identity = allocation_scope.empty()
-                    ? "$simulation"
-                    : std::string { allocation_scope };
-                automatic_root_created = !uvm_roots_by_scope.contains(automatic_root_identity);
-                root = component_root(allocation_scope);
-                automatic_root = root;
-            }
-            uvm_components.initialize(handle, std::move(name), parent, root);
-            construct_uvm_component_ports(specialization, handle,
-                allocation_scope);
+        if (deferred_uvm_base) {
+            uvm_pending_constructions.insert_or_assign(handle,
+                UvmPendingConstruction {
+                    std::string { allocation_scope }, requested_root, std::string { },
+                    runtime::SystemVerilogClassHandle { }, false });
+        } else {
+            construct_uvm_base(specialization, handle, actuals,
+                string_actuals, actual_names, allocation_scope,
+                requested_root, uvm_base);
         }
         // The UVM base state exists once `super.new` has run, so a
         // user-derived constructor may already report through it; the
         // simulation's UVM services stand in for the library constructors.
+        class_hir_execution.set_census_scope(std::string { allocation_scope }
+            + (interpreter && interpreter->scheduler().running()
+                    ? " in-run" : " idle"));
         if (run_constructor) {
             invoke_source_constructor(
                 specialization, handle, actuals, string_actuals, actual_names,
                 report_process);
+        } else if (api_chain) {
+            if (deferred_uvm_base) {
+                auto& pending = uvm_pending_constructions.at(handle);
+                pending.name = string_actuals.empty()
+                    ? std::string { } : std::string { string_actuals[0] };
+                pending.parent = actuals.size() > 1U
+                    ? actuals[1].low_word().aval
+                    : runtime::SystemVerilogClassHandle { };
+                if (service_chain && interpreter->scheduler().running()) {
+                    // The calling design process runs the generated chain
+                    // right after the service returns.
+                    if (foreign_probes && class_created_hook) {
+                        constructed_classes.push_back(handle);
+                    }
+                    // The service returns the object to its caller, which
+                    // needs its UVM state (registered, named) before the
+                    // chain runs; the chain then completes the construction.
+                    construct_uvm_base(specialization, handle, actuals,
+                        string_actuals, actual_names, allocation_scope,
+                        requested_root, uvm_base);
+                    pending.base_made = true;
+                } else if (!dispatch_uvm_api_construct(handle)) {
+                    throw std::runtime_error {
+                        "the constructor chain of class '"
+                        + std::string { identity }
+                        + "' does not lower to generated code"
+                    };
+                }
+            } else if (!uvm_base.object_initialized) {
+                // A library class has no generated constructor: the
+                // simulation makes its base state.
+                construct_uvm_base(specialization, handle, actuals,
+                    string_actuals, actual_names, allocation_scope,
+                    requested_root, uvm_base);
+            }
         }
     } catch (...) {
         class_owner_parameter_values.erase(handle);
+        uvm_pending_constructions.erase(handle);
         if (component_specialization) {
             if (uvm_components.contains(handle)) {
                 try {
@@ -2675,10 +2926,134 @@ std::string Simulation::Impl::static_property_specialization(
         notify_class_changes(before);
     // The constructor the simulation ran itself has completed (cbCreateObj,
     // IEEE 1800-2023 38.36.1).
-    if (foreign_probes && class_created_hook && run_constructor) {
+    if (foreign_probes && class_created_hook
+        && (run_constructor
+            || (api_chain
+                && !(service_chain && interpreter->scheduler().running())))) {
         class_created_hook(handle);
     }
     return handle;
+}
+
+void Simulation::Impl::construct_uvm_base(
+    const semantic::sv::ClassSpecialization& specialization,
+    const runtime::SystemVerilogClassHandle handle,
+    const std::span<const runtime::PackedLogic4> actuals,
+    const std::span<const std::string> string_actuals,
+    const std::span<const std::string> actual_names,
+    const std::string_view allocation_scope,
+    const runtime::SystemVerilogUvmRootHandle requested_root,
+    UvmBaseConstruction& state)
+{
+    if (is_systemverilog_uvm_type(
+            built.compiled_systemverilog_class_specializations,
+            specialization,
+            support::UvmRole::object)) {
+        // The class of a generated scope or design element instance is
+        // registered when its first object is made.
+        ensure_systemverilog_uvm_object_type(
+            built.compiled_systemverilog_class_specializations,
+            specialization, uvm_objects);
+        uvm_objects.initialize(handle);
+        state.object_initialized = true;
+        std::size_t name_index { };
+        if (!actual_names.empty()) {
+            const auto found = std::ranges::find(actual_names, "name");
+            if (found != actual_names.end()) {
+                name_index = static_cast<std::size_t>(
+                    std::distance(actual_names.begin(), found));
+            }
+        }
+        if (name_index < string_actuals.size()
+            && !string_actuals[name_index].empty()) {
+            uvm_objects.set_name(handle, string_actuals[name_index]);
+        }
+    }
+    // A TLM port's second constructor argument is its parent, and an
+    // imp's is the object implementing it.
+    if (is_systemverilog_uvm_type(
+            built.compiled_systemverilog_class_specializations,
+            specialization, support::UvmRole::port_base)
+        && actuals.size() > 1U && actuals[1].low_word().bval == 0U) {
+        uvm_tlm_owners[handle] = actuals[1].low_word().aval;
+        // uvm_port_base::new(name, parent, port_type, ...): the port type
+        // of an imp, the last literal of the library's uvm_port_type_e
+        // (UVM_IMPLEMENTATION, IEEE 1800.2-2020 5.4.2.1).
+        if (actuals.size() > 2U && actuals[2].low_word().bval == 0U) {
+            if (const auto implementation
+                = uvm_port_implementation_value(built.systemverilog_hir);
+                implementation
+                && actuals[2].low_word().aval == *implementation) {
+                uvm_tlm_implementations.insert(handle);
+            }
+        }
+    }
+    if (state.component) {
+        std::size_t name_index { };
+        std::size_t parent_index { 1U };
+        if (!actual_names.empty()) {
+            const auto named_index = [&](const std::string_view name,
+                                         const std::size_t fallback) {
+                const auto found = std::ranges::find(actual_names, name);
+                return found == actual_names.end()
+                    ? fallback
+                    : static_cast<std::size_t>(
+                          std::distance(actual_names.begin(), found));
+            };
+            name_index = named_index("name", 0U);
+            parent_index = named_index("parent", 1U);
+        }
+        std::string name = name_index < string_actuals.size()
+            ? string_actuals[name_index]
+            : std::string { };
+        if (name.empty()) {
+            name = "COMP_" + std::to_string(uvm_objects.instance_id(handle));
+        }
+        const auto parent = parent_index < actuals.size()
+            ? actuals[parent_index].low_word().aval
+            : runtime::SystemVerilogClassHandle { };
+        auto root = requested_root;
+        if (parent == 0 && root == 0) {
+            state.automatic_root_identity = allocation_scope.empty()
+                ? "$simulation"
+                : std::string { allocation_scope };
+            state.automatic_root_created = !uvm_roots_by_scope.contains(state.automatic_root_identity);
+            root = component_root(allocation_scope);
+            state.automatic_root = root;
+        }
+        uvm_components.initialize(handle, std::move(name), parent, root);
+        construct_uvm_component_ports(specialization, handle,
+            allocation_scope);
+    }
+}
+
+runtime::SystemVerilogClassHandle Simulation::Impl::allocate_uvm_lowered(
+    const runtime::SystemVerilogUvmTypeHandle wrapper,
+    const std::string_view lowered,
+    const runtime::SystemVerilogUvmRootHandle requested_root)
+{
+    const auto registered = uvm_registry.snapshot(wrapper);
+    bool listed { };
+    for (std::size_t begin { }; begin < lowered.size() && !listed;) {
+        auto end = lowered.find('\n', begin);
+        if (end == std::string_view::npos) {
+            end = lowered.size();
+        }
+        listed = lowered.substr(begin, end - begin)
+            == registered.specialization_identity;
+        begin = end + 1U;
+    }
+    if (!listed) {
+        return { };
+    }
+    return construct_class(
+        "@no-constructor:" + registered.specialization_identity,
+        registered.declaration_identity,
+        std::span<const runtime::PackedLogic4> { },
+        std::span<const std::string> { },
+        std::span<const std::string> { },
+        "$uvm-registry",
+        requested_root);
 }
 
 void Simulation::Impl::construct_uvm_component_ports(
@@ -2689,13 +3064,13 @@ void Simulation::Impl::construct_uvm_component_ports(
     // The ports the library constructors of uvm_driver and uvm_sequencer
     // create (IEEE 1800.2-2020 15.2, 15.5); the library constructors do not
     // run for a component the simulation's UVM services construct.
-    constexpr std::array<std::pair<std::string_view, std::string_view>, 4U>
-        ports { {
-            { "::uvm_driver", "seq_item_port" },
-            { "::uvm_driver", "rsp_port" },
-            { "::uvm_sequencer", "seq_item_export" },
-            { "::uvm_sequencer_param_base", "rsp_export" },
-        } };
+    // The port properties by their recorded roles (support::UvmRole).
+    constexpr std::array ports {
+        support::UvmRole::driver_seq_item_port,
+        support::UvmRole::driver_rsp_port,
+        support::UvmRole::sequencer_seq_item_export,
+        support::UvmRole::sequencer_rsp_export,
+    };
     const auto known = [&](const std::string_view identity) {
         return std::ranges::any_of(
             built.compiled_systemverilog_class_specializations,
@@ -2708,16 +3083,12 @@ void Simulation::Impl::construct_uvm_component_ports(
     for (const auto* current = &specialization; current != nullptr
          && visited.insert(current->specialization_identity).second;) {
         for (const auto& property : current->properties) {
-            const auto port = std::ranges::find_if(ports, [&](const auto& item) {
-                return property.name == item.second
-                    && property.owner_identity.ends_with(item.first);
-            });
+            const auto port = std::ranges::find(ports, property.uvm_role);
             const auto& type = property.type;
             const auto identity = !type.class_specialization.empty()
                 ? std::string_view { type.class_specialization }
                 : std::string_view { type.class_identity };
             if (port == ports.end()
-                || !support::is_uvm_library_identity(property.owner_identity)
                 || property.static_storage || identity.empty()
                 || !known(identity)) {
                 continue;
@@ -2732,7 +3103,7 @@ void Simulation::Impl::construct_uvm_component_ports(
                 runtime::PackedLogic4::from_aval_bval(64U, handle, 0U),
             };
             const std::array<std::string, 2U> names {
-                std::string { port->second }, std::string { } };
+                property.name, std::string { } };
             const auto created = construct_class(
                 "@no-constructor:" + std::string { identity },
                 class_specialization(identity).declaration_identity,
@@ -2962,10 +3333,28 @@ void Simulation::Impl::require_vpi_value(
         if (vpi_read_only_container_words.contains(update.object)) {
             return runtime::SystemVerilogVpiValueError::ReadOnly;
         }
-        const auto word = vpi_word_handles.find(update.object);
+        auto word = vpi_word_handles.find(update.object);
+        // An element of a net array is a net (IEEE 1800-2023 37.17): one
+        // with its own signal is forced and released as that signal is
+        // (10.6.2, 38.34); a deposit still writes the memory word.
         if (word != vpi_word_handles.end()) {
-            if (update.forced_value) {
-                return runtime::SystemVerilogVpiValueError::ReadOnly;
+            if (const auto element = vpi_handle_signals.find(update.object);
+                element != vpi_handle_signals.end()
+                && (update.forced_value
+                    || vpi_forced_signals.contains(element->second))) {
+                const auto object = vpi_registry->lookup(update.object);
+                if (object
+                    && object.value->kind
+                        == runtime::SystemVerilogVpiObjectKind::Net) {
+                    word = vpi_word_handles.end();
+                }
+            }
+        }
+        if (word != vpi_word_handles.end()) {
+            if (update.forced_value
+                || vpi_forced_words.contains(update.object)) {
+                return force_vpi_bridge_word(update, word->second.first,
+                    word->second.second);
             }
             auto value = vpi_container_value(word->second.first);
             // A word of a string container takes a string (IEEE 1800-2023
@@ -3095,6 +3484,48 @@ void Simulation::Impl::require_vpi_value(
     } catch (...) {
         return runtime::SystemVerilogVpiValueError::ResourceLimit;
     }
+}
+
+runtime::SystemVerilogVpiValueError Simulation::Impl::force_vpi_bridge_word(
+    const runtime::SystemVerilogVpiValueStateUpdate& update,
+    const runtime::simir::ContainerObjectId container,
+    const std::size_t ordinal)
+{
+    // A word of a variable array is not forced (IEEE 1800-2023 10.6.2); a
+    // word of a net array is a net (37.17), held here by the bridge.
+    const auto object = vpi_registry->lookup(update.object);
+    const auto bridge = interpreter->container_bridge_signal(container);
+    if (!object
+        || object.value->kind != runtime::SystemVerilogVpiObjectKind::Net
+        || !bridge) {
+        return runtime::SystemVerilogVpiValueError::ReadOnly;
+    }
+    auto value = vpi_container_value(container);
+    const auto count = runtime::simir::container_value_size(value);
+    const auto width
+        = interpreter->stored_signal_value_snapshot(*bridge).width();
+    if (count == 0U || ordinal >= count || width % count != 0U) {
+        return runtime::SystemVerilogVpiValueError::ReadOnly;
+    }
+    // Element 0 is in the most significant bits.
+    const auto element_width = width / count;
+    const auto offset = (count - 1U - ordinal) * element_width;
+    if (!update.forced_value) {
+        // A released net returns to its drivers' value (10.6.2).
+        vpi_forced_words.erase(update.object);
+        interpreter->release_signal_slice(*bridge, offset, element_width);
+        interpreter->rerun_kernel_drivers(*bridge);
+        return runtime::SystemVerilogVpiValueError::None;
+    }
+    value.elements.at(ordinal) = systemverilog_vpi_packed_value(
+        *update.forced_value, vpi_container_scalar_kinds.at(container),
+        vpi_container_categories.at(container));
+    const auto packed = runtime::simir::pack_container_signal_value(
+        value, false);
+    interpreter->force_signal_slice(
+        *bridge, packed.extract_bits(offset, element_width), offset);
+    vpi_forced_words.insert(update.object);
+    return runtime::SystemVerilogVpiValueError::None;
 }
 
 void Simulation::Impl::publish_vpi_stored_signal(const SignalId signal)
@@ -3260,9 +3691,44 @@ void Simulation::Impl::publish_vpi_driver(
     }
 }
 
+std::optional<runtime::simir::ContainerObjectId>
+Simulation::Impl::class_static_container_object(
+    const std::string_view identity, const std::string_view specialization) const
+{
+
+    if (!interpreter) {
+        return std::nullopt;
+    }
+    std::string storage { identity };
+    if (!specialization.empty()) {
+        try {
+            const auto& selected = class_specialization(specialization);
+            if (semantic::sv::has_own_static_storage(selected)) {
+                storage = selected.specialization_identity + "::"
+                    + std::string { static_property_parts(identity).second };
+            }
+        } catch (const std::exception&) {
+            return std::nullopt;
+        }
+    }
+    const auto found = class_static_containers.find(storage);
+    if (found == class_static_containers.end()) {
+        return std::nullopt;
+    }
+    return found->second;
+
+}
+
 void Simulation::Impl::publish_vpi_container(
     const runtime::simir::ContainerObjectId object)
 {
+    // A watched static array property of a class (IEEE 1800-2023 38.36.1).
+    if (const auto watched = class_static_container_watches.find(object);
+        watched != class_static_container_watches.end()
+        && class_static_container_change_hook) {
+        class_static_container_change_hook(
+            watched->second.first, watched->second.second);
+    }
     if (!vpi_runtime_updates_enabled) {
         return;
     }
@@ -3738,13 +4204,22 @@ void Simulation::Impl::publish_vpi_strings()
 }
 
 void Simulation::Impl::publish_vpi_assertion(
-    const ConcurrentAssertionEvent& event)
+    const ConcurrentAssertionEvent& event,
+    const std::optional<runtime::simir::ProcessId> design_process)
 {
-    if (!vpi_runtime_updates_enabled) {
+    if (!vpi_runtime_updates_enabled || !vpi_assertions) {
         return;
     }
-    const auto object = vpi_assertion_handles.find(event.process);
-    if (object == vpi_assertion_handles.end() || !vpi_assertions) {
+    const auto object = [&]() -> std::optional<fsim_vpi_handle_v1> {
+        if (design_process) {
+            if (const auto found = vpi_process_assertions.find(*design_process);
+                found != vpi_process_assertions.end()) {
+                return found->second;
+            }
+        }
+        return std::nullopt;
+    }();
+    if (!object) {
         return;
     }
     runtime::SystemVerilogVpiAssertionEvent published;
@@ -3768,19 +4243,28 @@ void Simulation::Impl::publish_vpi_assertion(
         : runtime::SystemVerilogVpiAssertionOutcome::Aborted;
     // Without an assertion callback the outcome only counts (vpiAssertion
     // statistics); its text is copied for a callback alone.
-    if (vpi_callbacks && vpi_callbacks->has_assertion_registrations()) {
-        published.name = event.name;
-        published.process = event.process;
-        published.instance_identity = event.instance_identity;
-        published.slot = event.slot;
-        published.source_span = event.source_span;
-        published.action_suppressed = event.action_suppressed;
-        published.attempt_start = event.attempt_start;
-        published.fail_line = event.fail_line;
-        published.fail_column = event.fail_column;
+    if (!vpi_callbacks || !vpi_callbacks->has_assertion_registrations()) {
+        const auto error = vpi_assertions->count(
+            *object, published.kind, published.outcome);
+        if (error != runtime::SystemVerilogVpiAssertionApiError::None) {
+            throw std::logic_error {
+                "live VPI assertion statistics failed with error "
+                + std::to_string(static_cast<unsigned>(error))
+            };
+        }
+        return;
     }
+    published.name = event.name;
+    published.process = event.process;
+    published.instance_identity = event.instance_identity;
+    published.slot = event.slot;
+    published.source_span = event.source_span;
+    published.action_suppressed = event.action_suppressed;
+    published.attempt_start = event.attempt_start;
+    published.fail_line = event.fail_line;
+    published.fail_column = event.fail_column;
     const auto error = vpi_assertions->observe(
-        object->second, std::move(published));
+        *object, std::move(published));
     if (error != runtime::SystemVerilogVpiAssertionApiError::None) {
         throw std::logic_error {
             "live VPI assertion callback dispatch failed with error "
@@ -3834,7 +4318,7 @@ void Simulation::Impl::publish_assertion_disabled(
     event.attempt_start = static_cast<runtime::SimulationTick>(start);
     // The callback may read values of the design.
     interpreter->prepare_output_callback_observation();
-    publish_vpi_assertion(event);
+    publish_vpi_assertion(event, design_process);
 }
 
 void Simulation::Impl::publish_assertion_step(
@@ -3868,12 +4352,22 @@ void Simulation::Impl::start_vpi(const bool restoring)
     // cbStartOfSimulation hears this one, the host services' own
     // registrations (the VHPI bridge) included; each service sets its phase
     // from the restart events instead (IEEE 1076-2019 20.8 NOTE 2).
+    // cbStartOfSimulation is the beginning of the time-zero cycle (38.36.3):
+    // the engine calls this once static initialization (package variable
+    // initializers included, 6.21, 10.5) is complete, so what a callback
+    // schedules or puts runs in that cycle.
     if (!restoring) {
-        const auto callback = vpi_callbacks->dispatch_lifecycle_now(
-            runtime::SystemVerilogVpiCallbackKind::StartOfSimulation);
-        if (callback != runtime::SystemVerilogVpiCallbackError::None) {
-            throw std::logic_error { "failed to dispatch VPI start callbacks" };
-        }
+        interpreter->set_start_of_simulation_hook([this] {
+            const auto callback = vpi_callbacks->dispatch_lifecycle_now(
+                runtime::SystemVerilogVpiCallbackKind::StartOfSimulation);
+            if (callback != runtime::SystemVerilogVpiCallbackError::None) {
+                throw std::logic_error {
+                    "failed to dispatch VPI start callbacks"
+                };
+            }
+            // The callbacks may have registered observers.
+            refresh_observation_hooks();
+        });
     }
     vpi_started = true;
 }

@@ -4,7 +4,6 @@
 #include "fsim/runtime/native_plugin_abi.h"
 #include "fsim/runtime/veriuser.h"
 
-#include <cstdint>
 #include <filesystem>
 #include <iostream>
 #include <string>

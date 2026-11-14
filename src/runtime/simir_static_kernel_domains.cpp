@@ -19,7 +19,13 @@
 // only if no enable changes at any delta of the edge's time step, including
 // after the edge, which this report does not prove (Phase 7 plan, gated
 // clocks).
-#include "simir_static_kernel_compiled_internal.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
+#include "fsim/runtime/logic.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include "simir_static_kernel.hpp"
+#include "simir_static_kernel_state.hpp"
 
 #include <algorithm>
 #include <iostream>
@@ -31,6 +37,11 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <type_traits>
+#include <utility>
 
 namespace fsim::runtime::simir {
 

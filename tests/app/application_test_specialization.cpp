@@ -1,21 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_test_support.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/semantic/design_ir.hpp"
 #include "path_test_support.hpp"
 
-#include "fsim/systemc/hierarchy.hpp"
 
 #include <algorithm>
 #include <cassert>
 #include <csignal>
 #include <fstream>
 #include <iostream>
-#include <iterator>
-#include <sstream>
-#include <stdexcept>
 #include <string>
 #include <string_view>
-#include <system_error>
-#include <tuple>
 #include <utility>
 #include <vector>
 

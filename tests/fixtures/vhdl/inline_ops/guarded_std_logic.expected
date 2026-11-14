@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+wide b='U' at 0
+wide q=UUUU at 0
+wide q=1010 at 0
+wide b='Z' at 1
+wide a b='Z' r='U' bd='Z'
+wide b='1' at 5
+wide b b='1' r='1' bd='Z'
+wide b='X' at 10
+wide c b='X' r='X' bd='Z'
+wide b='0' at 16
+wide d b='0' r='0' bd='Z'
+wide b='Z' at 21
+wide e b='Z' r='0' bd='Z'
+wide f b='Z' r='0' bd='-'
+wide q=10X0 at 30
+wide q=ZZ0Z at 32
+wide q=ZZZZ at 33
+wide q=0110 at 35
+wide q=ZZZZ at 36

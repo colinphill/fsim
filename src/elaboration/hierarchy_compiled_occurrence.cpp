@@ -4,7 +4,6 @@
 #include "elaborator_internal.hpp"
 
 #include <algorithm>
-#include <ranges>
 
 namespace fsim::elaboration::elaboration_detail {
 namespace {

@@ -7,13 +7,17 @@
 // in the same state. Lines marked "unverified" depend on scheduler and
 // kernel code this test does not read.
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/runtime/simir.hpp"
 
 #include "fsim/runtime/run_state_image.hpp"
 #include "../../src/app/application_foreign_run_state.hpp"
 #include "../../src/app/application_simulation_internal.hpp"
 #include "../../src/runtime/run_state_archive.hpp"
+#include "../../src/runtime/run_state_value_codecs.hpp"
 #include "fsim/runtime/run_state_sections.hpp"
 #include "fsim/runtime/scheduler_events.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 #include "fsim/runtime/vpi_callback.hpp"
 
 #include <algorithm>

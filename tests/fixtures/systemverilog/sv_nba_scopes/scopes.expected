@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+sns scopes static-before 0
+sns scopes r=8 g=1 t=100 count=0
+sns scopes next t=7 count=1
+sns scopes static-before 17
+sns scopes r=9 t=7 count=1
+sns scopes last t=8 count=2

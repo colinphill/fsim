@@ -52,7 +52,6 @@
 // the record format is documented at the encoder in sva_engine.cpp. A tick
 // writes every surviving attempt's new record into the alternate heap and
 // swaps the two, so records never grow in place.
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>

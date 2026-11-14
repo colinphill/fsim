@@ -4,7 +4,6 @@
 #include <algorithm>
 #include <iterator>
 #include <limits>
-#include <ranges>
 #include <set>
 
 namespace fsim::frontend {

@@ -448,11 +448,13 @@ bool remap_operation_signals(
             || std::is_same_v<Type, SignalStrengthText>
             || std::is_same_v<Type, WriteContainerObject>
             || std::is_same_v<Type, WriteContainerObjectElement>
+            || std::is_same_v<Type, WriteContainerObjectString>
             || std::is_same_v<Type, WaitOn>
             || std::is_same_v<Type, WaitPla>
             || std::is_same_v<Type, WaitOrder>
             || std::is_same_v<Type, EventTriggered>
-            || std::is_same_v<Type, EventAlias>) {
+            || std::is_same_v<Type, EventAlias>
+            || std::is_same_v<Type, EventArrayElement>) {
             // Names signals in ways this renaming does not cover.
             accepted = false;
         } else {
@@ -839,6 +841,12 @@ HierarchyBuilder::collect_generate_occurrences(const semantic::sv::Unit& unit,
                 occurrence.path = path;
             } else if (!path.empty()) {
                 occurrence.path = path + "." + occurrence.path;
+            }
+            // The scope that holds the generate moves with the path.
+            if (occurrence.parent_path.empty()) {
+                occurrence.parent_path = path;
+            } else if (!path.empty()) {
+                occurrence.parent_path = path + "." + occurrence.parent_path;
             }
         }
         return occurrences;
@@ -1906,7 +1914,7 @@ HierarchyBuilder::lower_cached_systemverilog_concurrent_statement(
         || lowered->string_register_count != 0U
         || lowered->container_register_count != 0U
         || !lowered->debug_locals.empty()
-        || !lowered->call_results.empty()
+        || runtime::simir::has_function_results(lowered->call_results)
         || !lowered->debug_string_locals.empty()
         || !lowered->debug_container_locals.empty()
         || !lowered->static_trigger_regions.empty()
@@ -2377,7 +2385,8 @@ bool HierarchyBuilder::remember_systemverilog_process_template(
             != ProcessSchedulingDomain::systemverilog
         || process.string_register_count != 0U
         || process.container_register_count != 0U
-        || ((!process.debug_locals.empty() || !process.call_results.empty())
+        || ((!process.debug_locals.empty()
+             || runtime::simir::has_function_results(process.call_results))
             && callable_invocation_after == callable_invocation_before)
         || !process.debug_string_locals.empty()
         || !process.debug_container_locals.empty()

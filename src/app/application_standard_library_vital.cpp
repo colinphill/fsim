@@ -1,9 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "application_internal.hpp"
-#include "fsim/support/path.hpp"
-#include "fsim/support/sha256.hpp"
 
+#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/source.hpp"
+#include "fsim/frontend/token.hpp"
 #include <limits>
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <tuple>
+#include <utility>
+#include <vector>
 
 namespace fsim::app::application_detail {
 namespace {

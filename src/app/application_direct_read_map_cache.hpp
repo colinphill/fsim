@@ -9,7 +9,6 @@
 #include <functional>
 #include <limits>
 #include <span>
-#include <vector>
 
 namespace fsim::app::application_detail {
 

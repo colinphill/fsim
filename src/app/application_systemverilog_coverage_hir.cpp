@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "application_compiled_environment.hpp"
 #include "application_internal.hpp"
 
 namespace fsim::app::application_detail {
@@ -238,68 +239,13 @@ public:
     [[nodiscard]] frontend::SourceSpan span(
         const semantic::SourceSpanId id) const
     {
-        frontend::SourceSpan output;
-        if (!id.valid()
-            || id.value() >= semantics_.source_spans().size()) {
-            return output;
-        }
-        const auto& input = semantics_.source_spans()[id.value()];
-        if (!input.file.valid()
-            || input.file.value()
-                >= semantics_.source_files().size()) {
-            return output;
-        }
-        const auto& file = semantics_.source_files()[input.file.value()];
-        output.source_name = input.logical_name.empty()
-            ? file.physical_name
-            : input.logical_name;
-        output.physical_source_name = file.physical_name;
-        output.begin = {
-            static_cast<std::size_t>(input.begin.offset),
-            static_cast<std::size_t>(input.begin.line),
-            static_cast<std::size_t>(input.begin.column)
-        };
-        output.end = {
-            static_cast<std::size_t>(input.end.offset),
-            static_cast<std::size_t>(input.end.line),
-            static_cast<std::size_t>(input.end.column)
-        };
-        std::vector<std::string> expansion_stack;
-        auto expansion = input.expansion;
-        while (expansion && expansion->valid()
-            && expansion->value()
-                < semantics_.expansions().size()) {
-            const auto& record = semantics_.expansions()[expansion->value()];
-            expansion_stack.push_back(record.description);
-            expansion = record.parent;
-        }
-        for (auto iterator = expansion_stack.rbegin();
-             iterator != expansion_stack.rend(); ++iterator) {
-            output.expansion_stack.push_back(*iterator);
-        }
-        return output;
+        return frontend_source_span(semantics_, id);
     }
 
     [[nodiscard]] frontend::Token token(
         const semantic::sv::SourceToken& input) const
     {
-        auto kind = frontend::TokenKind::EndOfFile;
-        if (input.kind
-            <= static_cast<std::uint16_t>(
-                frontend::TokenKind::EndOfFile)) {
-            kind = static_cast<frontend::TokenKind>(input.kind);
-        }
-        auto source_span = span(input.source);
-        auto expansion_stack = source_span.expansion_stack;
-        auto output = frontend::Token {
-            kind,
-            input.text,
-            std::move(source_span),
-            std::move(expansion_stack)
-        };
-        output.generated_text
-            = static_cast<frontend::GeneratedTextKind>(input.generated_text);
-        return output;
+        return frontend_source_token(semantics_, input);
     }
 
     [[nodiscard]] std::vector<frontend::Token> tokens(

@@ -1,7 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_test_support.hpp"
 #include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 #include "../../src/elaboration/elaborated_design_process_access.hpp"
+#include "../../src/runtime/simir_process_program.hpp"
+#include "fsim/elaboration/elaborator.hpp"
+#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/parser.hpp"
+#include "fsim/frontend/systemverilog_scalars.hpp"
+#include "fsim/frontend/token.hpp"
+#include "fsim/runtime/logic.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_ids.hpp"
 
 #include <algorithm>
 #include <array>
@@ -9,6 +21,14 @@
 #include <string>
 #include <unordered_set>
 #include <vector>
+#include <cassert>
+#include <cstddef>
+#include <cstdint>
+#include <iostream>
+#include <iterator>
+#include <optional>
+#include <string_view>
+#include <utility>
 
 namespace fsim::tests::elaboration {
 
@@ -3040,7 +3060,10 @@ end architecture;
             generated_design,
             "sv:work.generated_sv_local_function_after_genvar");
     assert(generated_sv_local_function_after_genvar.ok());
-    assert(std::ranges::none_of(
+    // A user function call outside a constant expression context runs when
+    // the expression does; elaboration keeps the call (IEEE 1800-2023
+    // 13.4.3, 10.3.2).
+    assert(std::ranges::any_of(
         generated_sv_local_function_after_genvar.design->processes(),
         [](const auto& process) {
           return std::ranges::any_of(

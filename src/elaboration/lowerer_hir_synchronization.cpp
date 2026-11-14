@@ -521,6 +521,17 @@ Lowerer::lower_hir_synchronization_expression(
             && declaration->systemverilog->type
         ? &*declaration->systemverilog->type
         : nullptr;
+    // A class property receiver (`m.try_get(t)` in a method, `c.m.num()`)
+    // has the property's type in the accessed specialization (IEEE
+    // 1800-2023 8.4, 15.4), as the statement form's receiver does.
+    std::optional<HirClassPropertyProfile> property_receiver;
+    if (receiver_type == nullptr) {
+        property_receiver = hir_class_property_profile(
+            source.operands.front());
+        if (property_receiver) {
+            receiver_type = &property_receiver->type;
+        }
+    }
     const bool mailbox = synchronization_type(receiver_type, "mailbox");
     const bool semaphore = synchronization_type(receiver_type, "semaphore");
     if (!mailbox && !semaphore) {

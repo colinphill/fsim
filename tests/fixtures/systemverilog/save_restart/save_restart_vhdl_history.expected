@@ -1,0 +1,4 @@
+save_restart_vhdl_history.vhd:32:5: note[FSIM-HDL-REPORT]: hist at 12000000 fs s='1' last_event=2000000 fs last_active=2000000 fs last_value='0'
+save_restart_vhdl_history.vhd:37:5: note[FSIM-HDL-REPORT]: hist at 22000000 fs s='1' last_event=12000000 fs last_active=12000000 fs last_value='0'
+save_restart_vhdl_history.vhd:42:5: note[FSIM-HDL-REPORT]: hist at 27000000 fs s='1' last_event=17000000 fs last_active=2000000 fs last_value='0'
+save_restart_vhdl_history.vhd:47:5: note[FSIM-HDL-REPORT]: hist at 36000000 fs s='0' last_event=1000000 fs last_active=1000000 fs last_value='1'

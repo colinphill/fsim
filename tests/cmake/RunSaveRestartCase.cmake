@@ -18,6 +18,9 @@
 # FSIM_ELABORATE_PLUGIN, when true, also passes FSIM_COMMON_ARGS to `fsim
 # elaborate` (a library that defines system tasks the source calls).
 #
+# FSIM_COMPILE_ARGS, when set, are further `compile` arguments (a VHDL source's
+# --standard); FSIM_TOP is then the VHDL design unit (work.top).
+#
 # FSIM_REJECT, when set, is a list of "ARGS...=MESSAGE" entries (arguments
 # separated by '|') that must fail with that message, after the saves.
 
@@ -32,7 +35,7 @@ endforeach()
 
 # The lists arrive comma-separated.
 foreach(FSIM_LIST IN ITEMS FSIM_SAVE_ARGS FSIM_RESTARTS FSIM_REJECT
-    FSIM_COMMON_ARGS)
+    FSIM_COMMON_ARGS FSIM_COMPILE_ARGS)
   if(DEFINED ${FSIM_LIST})
     string(REPLACE "," ";" ${FSIM_LIST} "${${FSIM_LIST}}")
   endif()
@@ -79,7 +82,7 @@ function(fsim_compare FSIM_STEP_NAME FSIM_EXPECTED_FILE)
   endif()
 endfunction()
 
-fsim_step(compile 0 compile "${FSIM_SOURCE_NAME}")
+fsim_step(compile 0 compile ${FSIM_COMPILE_ARGS} "${FSIM_SOURCE_NAME}")
 # FSIM_ELABORATE_PLUGIN: a PLI 1.0 task ($tf_probe) is defined by the library,
 # so `fsim elaborate` loads it too (as RunForeignConformanceCase.cmake does).
 if(FSIM_ELABORATE_PLUGIN)

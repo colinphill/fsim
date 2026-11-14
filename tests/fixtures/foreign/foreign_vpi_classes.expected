@@ -3,30 +3,48 @@
 #c Base extends type=- base=- base-type=-
 #c Base derived Derived
 #c Base method get type=vpiFunction method=1 virtual=1 vis=public automatic=1 scope=Base
+#c Base method-parts get io= return=vpiIntVar pk::Base.get.get size=32 stmt=-
 #c Base method set type=vpiFunction method=1 virtual=1 vis=public automatic=1 scope=Base
+#c Base method-parts set io=[vpiIODecl pk::Base.set.v dir=1 size=32 scope=set] return=- - size=0 stmt=vpiAssignment
 #c Base method new type=vpiFunction method=1 virtual=0 vis=public automatic=1 scope=Base
+#c Base method-parts new io= return=- - size=0 stmt=-
 #c Base variable hidden type=vpiIntVar vis=protected automatic=1 rand=none value-format=none
 #c Base variable count type=vpiIntVar vis=public automatic=0 rand=none value-format=none
 #c Base variable id type=vpiBitVar vis=public automatic=1 rand=rand value-format=none
 #c Base parameter W type=vpiParameter local=0
 #c Base parameter LP type=vpiParameter local=1
+#c Base parameter-value W type=vpiParameter value=4 typespec=vpiIntTypespec
+#c Base parameter-value LP type=vpiParameter value=3 typespec=vpiIntTypespec
 #c Base typedef word_t type=vpiIntTypespec
 #c Base constraints=0
 #c Base typespec Base type=vpiClassTypespec class-type=3 defn=Base extends=- variables=3 methods=3 parameters=2
+#c Base Base parameter-value W type=vpiParameter value=4 typespec=vpiIntTypespec
+#c Base Base parameter-value LP type=vpiParameter value=3 typespec=vpiIntTypespec
+#c Base Base param-assign W lhs-type=vpiParameter rhs=vpiConstant
 #c Base typespec Base#(8) type=vpiClassTypespec class-type=3 defn=Base extends=- variables=3 methods=3 parameters=2
+#c Base Base#(8) parameter-value W type=vpiParameter value=8 typespec=vpiIntTypespec
+#c Base Base#(8) parameter-value LP type=vpiParameter value=7 typespec=vpiIntTypespec
+#c Base Base#(8) param-assign W lhs-type=vpiParameter rhs=vpiConstant
 #c pk declares Derived
 #c Derived defn type=vpiClassDefn full=pk::Derived virtual=0 automatic=1 line=1 scope=pk value-format=none
 #c Derived extends type=vpiExtends base=Base base-type=vpiClassTypespec
 #c Derived method get type=vpiFunction method=1 virtual=1 vis=public automatic=1 scope=Derived
+#c Derived method-parts get io= return=vpiIntVar pk::Derived.get.get size=32 stmt=vpiReturn
 #c Derived variable item type=vpiIntVar vis=public automatic=1 rand=none value-format=none
-#c Derived parameter T type=vpiParameter local=0
+#c Derived parameter T type=vpiTypeParameter local=0
+#c Derived parameter-value T type=vpiTypeParameter value=none typespec=vpiIntTypespec
 #c Derived constraints=0
 #c Derived typespec Derived#(byte) type=vpiClassTypespec class-type=3 defn=Derived extends=Base#(8) variables=1 methods=1 parameters=1
+#c Derived Derived#(byte) parameter-value T type=vpiTypeParameter value=none typespec=vpiByteTypespec
+#c Derived Derived#(byte) param-assign T lhs-type=vpiTypeParameter rhs=vpiByteTypespec
 #c Derived typespec Derived type=vpiClassTypespec class-type=3 defn=Derived extends=Base#(8) variables=1 methods=1 parameters=1
+#c Derived Derived parameter-value T type=vpiTypeParameter value=none typespec=vpiIntTypespec
+#c Derived Derived param-assign T lhs-type=vpiTypeParameter rhs=vpiIntTypespec
 #c top declares Local
 #c Local defn type=vpiClassDefn full=top.Local virtual=0 automatic=1 line=1 scope=top value-format=none
 #c Local extends type=- base=- base-type=-
 #c Local method twice type=vpiFunction method=1 virtual=0 vis=public automatic=1 scope=Local
+#c Local method-parts twice io= return=vpiIntVar top.Local.twice.twice size=32 stmt=vpiReturn
 #c Local variable x type=vpiIntVar vis=public automatic=1 rand=none value-format=none
 #c Local constraints=0
 #c Local typespec Local type=vpiClassTypespec class-type=3 defn=Local extends=- variables=1 methods=1 parameters=0

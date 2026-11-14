@@ -2,8 +2,9 @@
 #pragma once
 
 #include "fsim/runtime/packed_value.hpp"
-#include "fsim/runtime/simir.hpp"
 #include "fsim/runtime/trace_model.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir_ids.hpp"
 
 #include <cstddef>
 #include <cstdint>

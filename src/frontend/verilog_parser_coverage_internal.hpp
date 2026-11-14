@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include "verilog_parser_assertion_support.hpp"
-#include "verilog_parser_internal.hpp"
 
+#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/token.hpp"
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -12,6 +13,7 @@
 #include <string_view>
 #include <unordered_map>
 #include <vector>
+#include <cstddef>
 
 namespace fsim::frontend::coverage_parser_detail {
 

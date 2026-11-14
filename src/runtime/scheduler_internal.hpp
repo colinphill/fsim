@@ -17,6 +17,12 @@
 #include <type_traits>
 #include <utility>
 #include <variant>
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <vector>
 
 namespace fsim::runtime {
 

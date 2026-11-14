@@ -111,6 +111,7 @@ function(fsim_require_nested_portable_tokens path)
 endfunction()
 
 set(FSIM_DESIGN_HEADER "${FSIM_SOURCE_DIR}/include/fsim/app/design_artifact.hpp")
+set(FSIM_SCHEMA_HEADER "${FSIM_SOURCE_DIR}/include/fsim/app/artifact_schema.hpp")
 set(FSIM_DESIGN_CODEC
   "${FSIM_SOURCE_DIR}/src/app/application_design_artifact_codec.cpp")
 set(FSIM_DESIGN_CODEC_INTERNAL
@@ -120,15 +121,16 @@ set(FSIM_COMPILED_HIR_CODEC
 set(FSIM_DESIGN_TEST
   "${FSIM_SOURCE_DIR}/tests/app/application_test_artifact_phases.cpp")
 fsim_require_nested_portable_tokens("${FSIM_DESIGN_HEADER}"
-  "kRuntimeStateSchema = 108"
-  "kSemanticStateSchema = 5"
-  "kDesignIrStateSchema = 8"
-  "kCompiledHirBundleSchema = 3"
-  "kCompiledHirDecodeBudgetBytes"
-  "kSystemVerilogConstraintHirStateSchema = 24"
+  "kCompiledHirDecodeBudgetBytes")
+fsim_require_nested_portable_tokens("${FSIM_SCHEMA_HEADER}"
+  "kRuntimeStateSchema = 126"
+  "kSemanticStateSchema = 6"
+  "kDesignIrStateSchema = 12"
+  "kCompiledHirBundleSchema = 6"
+  "kSystemVerilogConstraintHirStateSchema = 32"
   "kSystemVerilogCoverageStateSchema = 7"
   "kSystemVerilogUvmStateSchema = 3"
-  "kVhdlHirStateSchema = 13")
+  "kVhdlHirStateSchema = 15")
 fsim_require_nested_portable_tokens("${FSIM_DESIGN_CODEC_INTERNAL}"
   "support::with_stack([&] { write(value); })"
   "design state string exceeds the payload"
@@ -142,13 +144,13 @@ fsim_require_nested_portable_tokens("${FSIM_DESIGN_CODEC}"
   "deserialize<runtime::SystemVerilogCoverageState>"
   "coverage state is inconsistent with compiled HIR")
 fsim_require_nested_portable_tokens("${FSIM_DESIGN_TEST}"
-  "kRuntimeStateSchema == 108"
-  "kDesignIrStateSchema == 8"
-  "kCompiledHirBundleSchema == 3"
-  "kSystemVerilogConstraintHirStateSchema == 24"
+  "kRuntimeStateSchema == 126"
+  "kDesignIrStateSchema == 12"
+  "kCompiledHirBundleSchema == 6"
+  "kSystemVerilogConstraintHirStateSchema == 32"
   "kSystemVerilogCoverageStateSchema == 7"
   "kSystemVerilogUvmStateSchema == 3"
-  "kVhdlHirStateSchema == 13"
+  "kVhdlHirStateSchema == 15"
   "future-coverage-state.bin"
   "truncated-coverage-state.bin"
   "future_uvm")

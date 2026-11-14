@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+sns nest assoc-queue same-step 1 2
+sns nest assoc-queue next-step 10 20 3
+sns nest assoc-queue sampled 7 8 6 6
+sns nest queue-queue same-step 1 1
+sns nest queue-queue delayed 2 3
+sns nest cont same-step 0
+sns nest cont next-step 0 2 6
+sns nest queue-queue final 4 5
+sns nest assoc-assoc 9
+sns nest member same-step 0
+sns nest member next-step 2 9 tag=1

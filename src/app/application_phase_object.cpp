@@ -7,7 +7,6 @@
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
 #include "fsim/support/path.hpp"
-#include "fsim/support/payload_checksum.hpp"
 #include "fsim/support/sha256.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
 
@@ -624,15 +623,15 @@ application_detail::load_object_workspace(
   application_detail::install_compiled_class_specializations(
       checked, diagnostics, validate_uvm_surface);
   if (selected_release != project::SystemVerilogUvmRelease::none) {
-    const auto has_class = [&](const std::string_view suffix) {
+    const auto has_class = [&](const support::UvmRole role) {
       return std::ranges::any_of(
           checked.compiled_systemverilog_class_specializations,
           [&](const auto& specialization) {
-            return specialization.declaration_identity.ends_with(suffix);
+            return specialization.uvm_role == role;
           });
     };
-    const bool has_uvm_object = has_class("::uvm_object");
-    const bool has_ieee_policy = has_class("::uvm_policy");
+    const bool has_uvm_object = has_class(support::UvmRole::object);
+    const bool has_ieee_policy = has_class(support::UvmRole::policy);
     const auto compatibility
         = project::systemverilog_uvm_compatibility(selected_release);
       if (validate_uvm_surface && (!has_uvm_object

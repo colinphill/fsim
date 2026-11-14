@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include "fsim/frontend/design.hpp"
 
+#include "fsim/frontend/design_core.hpp"
 #include <cstdint>
 #include <limits>
 #include <string>

@@ -3,11 +3,9 @@
 // each level's type and typedef name, for packed dimensions declared over a
 // typedef (7.4.1).
 // Lines starting with "#c " form the checked trace.
-#include "fsim/runtime/dpi_plugin_abi.h"
 #include "fsim/runtime/vpi_abi.h"
 #include "sv_vpi_user.h"
 
-#include <stdio.h>
 #include <string.h>
 
 static const char* name_of(vpiHandle object)

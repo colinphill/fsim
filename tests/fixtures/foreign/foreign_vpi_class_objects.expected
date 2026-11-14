@@ -9,6 +9,8 @@
 #c property next type=vpiClassVar full=- value=none class-obj=set objid-set=1
 #c property w type=vpiIntVar full=- value=read class-obj=null objid-set=0
 #c property arr type=vpiRegArray full=- value=none class-obj=null objid-set=0
+#c property grid type=vpiRegArray full=- value=none class-obj=null objid-set=0
+#c property recs type=vpiRegArray full=- value=none class-obj=null objid-set=0
 #c property count type=vpiIntVar full=set value=read class-obj=null objid-set=0
 #c put value value=9
 #c object methods=0 parameters=0 constraints=8
@@ -72,6 +74,36 @@
 #c       node vpiConstant const=vpiIntConst text=3 size=32 value=3
 #c       node vpiConstant const=vpiIntConst text=0 size=32 value=0
 #c     node vpiConstant const=other-const text=4'ha size=4 value=10
+#c item vpiOperation soft=0 parent=vpiConstraint
+#c   node vpiOperation op=vpiGtOp operands=2
+#c     node vpiVarSelect constant-select=1
+#c       node vpiVarSelect constant-select=1
+#c         node vpiRefObj name=grid
+#c         node vpiConstant const=vpiIntConst text=1 size=32 value=1
+#c       node vpiConstant const=vpiIntConst text=2 size=32 value=2
+#c     node vpiConstant const=vpiIntConst text=0 size=32 value=0
+#c item vpiOperation soft=0 parent=vpiConstraint
+#c   node vpiOperation op=vpiEqOp operands=2
+#c     node vpiBitSelect constant-select=1
+#c       node vpiVarSelect constant-select=1
+#c         node vpiVarSelect constant-select=1
+#c           node vpiRefObj name=grid
+#c           node vpiConstant const=vpiIntConst text=1 size=32 value=1
+#c         node vpiConstant const=vpiIntConst text=2 size=32 value=2
+#c       node vpiConstant const=vpiIntConst text=3 size=32 value=3
+#c     node vpiConstant const=vpiIntConst text=1 size=32 value=1
+#c item vpiOperation soft=0 parent=vpiConstraint
+#c   node vpiOperation op=vpiGtOp operands=2
+#c     node vpiVarSelect constant-select=1
+#c       node vpiRefObj name=recs[1].m
+#c       node vpiConstant const=vpiIntConst text=2 size=32 value=2
+#c     node vpiConstant const=vpiIntConst text=5 size=32 value=5
+#c item vpiOperation soft=0 parent=vpiConstraint
+#c   node vpiOperation op=vpiEqOp operands=2
+#c     node vpiBitSelect constant-select=1
+#c       node vpiRefObj name=recs[0].f
+#c       node vpiConstant const=vpiIntConst text=3 size=32 value=3
+#c     node vpiConstant const=vpiIntConst text=1 size=32 value=1
 #c sizechange aa size=1 value=1
 #c sizechange s size=5 value=5
 #c reclaim typespec type=vpiClassObj objid-set=1 typespec=Item

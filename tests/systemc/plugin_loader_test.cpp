@@ -7,7 +7,6 @@
 #include "fsim/runtime/trace_model.hpp"
 #include "fsim/semantic/hierarchy_path.hpp"
 
-#include <algorithm>
 #include <array>
 #include <cassert>
 #include <filesystem>

@@ -149,7 +149,8 @@ CollectionResult collect_occurrences(
                     = generated_path(current_path, local_path);
                 auto shared = std::make_shared<const semantic::SpecializedHirUnit>(
                     std::move(occurrence_specialization));
-                result.occurrences.push_back({ &generate, occurrence_path, shared });
+                result.occurrences.push_back({ &generate, occurrence_path, shared,
+                    static_cast<std::int64_t>(value), current_path });
                 for (const auto& nested : generate.nested) {
                     if (!self(self, nested, occurrence_path, *shared)) {
                         return false;
@@ -358,7 +359,8 @@ CollectionResult collect_occurrences(
                 current_path, transparent ? "" : generate.label);
             result.occurrences.push_back({ &generate, nested_parent,
                 std::make_shared<const semantic::SpecializedHirUnit>(
-                    parent_specialization) });
+                    parent_specialization),
+                0, current_path });
         }
         for (const auto& nested : generate.nested) {
             const bool same_alternative

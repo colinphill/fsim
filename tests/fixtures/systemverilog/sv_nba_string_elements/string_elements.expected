@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+sns start fx=f0,f1,f2 md=m00,m01,m10,m11 dy=d0,d1 q=q0,q1,- ai=1,seven,- as=1,kay,-
+sns same-step fx=f0,f1,f2 md=m00,m01,m10,m11 dy=d0,d1 q=q0,q1,- ai=1,seven,- as=1,kay,-
+sns next-step fx=one,two,y md=m00,M01,M10,m11 dy=d0,D1 q=Q0,q1,- ai=2,SEVEN,nine as=2,KAY,jay
+sns before-delay fx=one,two,y md=m00,M01,M10,m11 dy=d0,D1 q=Q0,q1,- ai=2,SEVEN,nine as=2,KAY,jay
+sns after-delay fx=late,two,y md=m00,M01,M10,m11 dy=d0,D1 q=Q0,q1,- ai=2,SEVEN,nine as=2,KAY,jay

@@ -152,8 +152,9 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_string_declaration(
             erase();
             return result;
         };
-        const auto evaluated = evaluate_string(
-            evaluate_string, *declaration.initializer);
+        const auto evaluated = package_object_initializer_forced_
+            ? std::optional<std::string> { }
+            : evaluate_string(evaluate_string, *declaration.initializer);
         // A runtime initializer (`$sformatf("%m")`) runs as the
         // declaration's time-zero initializer process (IEEE 1800-2023 6.8).
         if (!evaluated && !procedural_initializer) {
@@ -163,6 +164,9 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_string_declaration(
                     + "' has a non-static initializer",
                 declaration_span);
             return false;
+        }
+        if (!evaluated && procedural_initializer) {
+            package_object_initializer_pending_ = true;
         }
         initial_value = evaluated.value_or(std::string { });
     }

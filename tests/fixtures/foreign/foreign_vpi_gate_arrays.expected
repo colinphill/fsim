@@ -1,0 +1,77 @@
+#c slow4 sampled 1010
+#c slow4 sampled 0010
+#c top.c4 internal scopes=0
+#c top.c4 array inv_up type=111 size=4 left=0 right=3
+#c top.c4 top.c4.inv_up[0] delays rise=0 fall=0 output-drivers=1
+#c top.c4 element top.c4.inv_up[0] index=0 value=1 parent=c4
+#c top.c4 top.c4.inv_up[1] delays rise=0 fall=0 output-drivers=1
+#c top.c4 element top.c4.inv_up[1] index=1 value=1 parent=c4
+#c top.c4 top.c4.inv_up[2] delays rise=0 fall=0 output-drivers=1
+#c top.c4 element top.c4.inv_up[2] index=2 value=0 parent=c4
+#c top.c4 top.c4.inv_up[3] delays rise=0 fall=0 output-drivers=1
+#c top.c4 element top.c4.inv_up[3] index=3 value=1 parent=c4
+#c top.c4 array buf_dn type=111 size=4 left=3 right=0
+#c top.c4 top.c4.buf_dn[3] delays rise=0 fall=0 output-drivers=1
+#c top.c4 element top.c4.buf_dn[3] index=3 value=0 parent=c4
+#c top.c4 top.c4.buf_dn[2] delays rise=0 fall=0 output-drivers=1
+#c top.c4 element top.c4.buf_dn[2] index=2 value=0 parent=c4
+#c top.c4 top.c4.buf_dn[1] delays rise=0 fall=0 output-drivers=1
+#c top.c4 element top.c4.buf_dn[1] index=1 value=1 parent=c4
+#c top.c4 top.c4.buf_dn[0] delays rise=0 fall=0 output-drivers=1
+#c top.c4 element top.c4.buf_dn[0] index=0 value=0 parent=c4
+#c top.c4 array buf_slow type=111 size=4 left=0 right=3
+#c top.c4 top.c4.buf_slow[0] delays rise=8 fall=9 output-drivers=1
+#c top.c4 element top.c4.buf_slow[0] index=0 value=0 parent=c4
+#c top.c4 top.c4.buf_slow[1] delays rise=2 fall=3 output-drivers=1
+#c top.c4 element top.c4.buf_slow[1] index=1 value=0 parent=c4
+#c top.c4 top.c4.buf_slow[2] delays rise=2 fall=3 output-drivers=1
+#c top.c4 element top.c4.buf_slow[2] index=2 value=1 parent=c4
+#c top.c4 top.c4.buf_slow[3] delays rise=2 fall=3 output-drivers=1
+#c top.c4 element top.c4.buf_slow[3] index=3 value=0 parent=c4
+#c top.c3 internal scopes=0
+#c top.c3 array inv_up type=111 size=3 left=2 right=4
+#c top.c3 top.c3.inv_up[2] delays rise=0 fall=0 output-drivers=1
+#c top.c3 element top.c3.inv_up[2] index=2 value=1 parent=c3
+#c top.c3 top.c3.inv_up[3] delays rise=0 fall=0 output-drivers=1
+#c top.c3 element top.c3.inv_up[3] index=3 value=0 parent=c3
+#c top.c3 top.c3.inv_up[4] delays rise=0 fall=0 output-drivers=1
+#c top.c3 element top.c3.inv_up[4] index=4 value=1 parent=c3
+#c top.c3 array buf_dn type=111 size=3 left=4 right=2
+#c top.c3 top.c3.buf_dn[4] delays rise=0 fall=0 output-drivers=1
+#c top.c3 element top.c3.buf_dn[4] index=4 value=0 parent=c3
+#c top.c3 top.c3.buf_dn[3] delays rise=0 fall=0 output-drivers=1
+#c top.c3 element top.c3.buf_dn[3] index=3 value=1 parent=c3
+#c top.c3 top.c3.buf_dn[2] delays rise=0 fall=0 output-drivers=1
+#c top.c3 element top.c3.buf_dn[2] index=2 value=0 parent=c3
+#c top.c3 array buf_slow type=111 size=3 left=2 right=4
+#c top.c3 top.c3.buf_slow[2] delays rise=2 fall=3 output-drivers=1
+#c top.c3 element top.c3.buf_slow[2] index=2 value=0 parent=c3
+#c top.c3 top.c3.buf_slow[3] delays rise=2 fall=3 output-drivers=1
+#c top.c3 element top.c3.buf_slow[3] index=3 value=1 parent=c3
+#c top.c3 top.c3.buf_slow[4] delays rise=2 fall=3 output-drivers=1
+#c top.c3 element top.c3.buf_slow[4] index=4 value=0 parent=c3
+#c top.e internal scopes=0
+#c top.e array \inv.a[0] type=111 size=3 left=0 right=2
+#c top.e top.e.\inv.a[0][0] delays rise=0 fall=0 output-drivers=1
+#c top.e element top.e.\inv.a[0][0] index=0 value=0 parent=e
+#c top.e top.e.\inv.a[0][1] delays rise=0 fall=0 output-drivers=1
+#c top.e element top.e.\inv.a[0][1] index=1 value=1 parent=e
+#c top.e top.e.\inv.a[0][2] delays rise=0 fall=0 output-drivers=1
+#c top.e element top.e.\inv.a[0][2] index=2 value=0 parent=e
+#c top.blk[0] internal scopes=0
+#c top.blk[0] array inv type=111 size=1 left=0 right=0
+#c top.blk[0] top.blk[0].inv[0] delays rise=0 fall=0 output-drivers=1
+#c top.blk[0] element top.blk[0].inv[0] index=0 value=1 parent=blk[0]
+#c top.blk[1] internal scopes=0
+#c top.blk[1] array inv type=111 size=2 left=0 right=1
+#c top.blk[1] top.blk[1].inv[0] delays rise=0 fall=0 output-drivers=1
+#c top.blk[1] element top.blk[1].inv[0] index=0 value=0 parent=blk[1]
+#c top.blk[1] top.blk[1].inv[1] delays rise=0 fall=0 output-drivers=1
+#c top.blk[1] element top.blk[1].inv[1] index=1 value=1 parent=blk[1]
+#c up4 1101
+#c down4 0010
+#c up3 101
+#c down3 010
+#c slow4 0010
+#c slow3 010
+#c ey 010

@@ -3,7 +3,6 @@
 #include "lowerer_vhdl_vital_names.hpp"
 
 #include <cctype>
-#include <map>
 
 namespace fsim::elaboration {
 using namespace runtime::simir;

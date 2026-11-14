@@ -1,9 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_test_support.hpp"
 
+#include "fsim/runtime/simir_interpreter.hpp"
 #include "fsim/support/environment.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
 #include "fsim/semantic/compiled_design_specialization.hpp"
+#include "fsim/elaboration/elaborator.hpp"
+#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/parser.hpp"
+#include "fsim/frontend/source.hpp"
+#include "fsim/frontend/token.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/semantic/compiled_design.hpp"
+#include "fsim/semantic/model.hpp"
+#include "fsim/semantic/systemverilog_hir.hpp"
+#include "fsim/semantic/vhdl_hir.hpp"
 
 #include <cstdlib>
 #include <iostream>
@@ -12,6 +26,13 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <algorithm>
+#include <cassert>
+#include <cstdint>
+#include <span>
+#include <stdlib.h>
+#include <utility>
+#include <vector>
 
 namespace fsim::tests::elaboration {
 namespace {
@@ -2058,47 +2079,11 @@ void run_local_nonblocking_boundary_test()
                   << lowerer_trace.str()
                   << "FSIM_HIR_LOCAL_REJECTION_TRACE_END\n";
     }
-    assert(rejected.diagnostics.size() == 2U);
-    const auto statement_failure = std::ranges::find_if(
-        rejected.diagnostics,
-        [](const fsim::elaboration::Diagnostic& diagnostic) {
-            return diagnostic.code == "FSIM-ELAB-HIR-001"
-                && diagnostic.message
-                    == "compiled SystemVerilog HIR assignment statement 0 "
-                       "at source line 1 could not be lowered; rejected "
-                       "assignment to name expression 'local_value' at 1:62"
-                && diagnostic.span.source_name.str() == "hir_direct.sv"
-                && diagnostic.span.begin.line == 1U
-                && diagnostic.span.begin.column == 70U;
-        });
-    const auto process_failure = std::ranges::find_if(
-        rejected.diagnostics,
-        [](const fsim::elaboration::Diagnostic& diagnostic) {
-            return diagnostic.code == "FSIM-ELAB-HIR-001"
-                && diagnostic.message
-                    == "compiled process could not be lowered from HIR"
-                && diagnostic.span.source_name.str() == "hir_direct.sv"
-                && diagnostic.span.begin.line == 1U
-                && diagnostic.span.begin.column == 62U;
-        });
-    assert(statement_failure != rejected.diagnostics.end());
-    assert(process_failure != rejected.diagnostics.end());
-    assert(std::ranges::none_of(
-        rejected.diagnostics,
-        [](const fsim::elaboration::Diagnostic& diagnostic) {
-            return diagnostic.message.find(
-                       "failed during local declaration initialization")
-                != std::string::npos;
-        }));
-    const auto trace = lowerer_trace.str();
-    const auto intended_rejection = trace.find(
-        "[fsim-hir-lower] "
-        "local-nonblocking-assignment-rejected\n");
-    assert(intended_rejection != std::string::npos);
-    assert(trace.find(
-               "[fsim-hir-lower] assignment-rejected line=",
-               intended_rejection)
-        != std::string::npos);
+    // A variable of a static-lifetime process is static (IEEE 1800-2023
+    // 6.21), so a nonblocking assignment may write it (10.4.2): it lowers.
+    assert(rejected.diagnostics.empty());
+    assert(lowerer_trace.str().find("local-nonblocking-assignment-rejected")
+        == std::string::npos);
 }
 
 void run_systemverilog_equality_test()
@@ -2254,6 +2239,7 @@ end architecture;
         declaration.subtype.emplace();
         declaration.subtype->type_mark.source = entity_source;
         declaration.subtype->type_mark.spelling = "bit";
+        declaration.subtype->provided_type = semantic::vhdl::ProvidedType::bit;
         declaration.subtype->domain = semantic::vhdl::ValueDomain::bit2;
         declaration.subtype->executable_width = 1U;
         vhdl.mutable_declarations().push_back(std::move(declaration));
@@ -2546,6 +2532,7 @@ end architecture;
     constant_record.subtype.emplace();
     constant_record.subtype->type_mark.source = architecture_source;
     constant_record.subtype->type_mark.spelling = "bit";
+    constant_record.subtype->provided_type = semantic::vhdl::ProvidedType::bit;
     constant_record.subtype->domain = semantic::vhdl::ValueDomain::bit2;
     constant_record.subtype->executable_width = 1U;
     constant_compiled.vhdl_hir.mutable_declarations().push_back(
@@ -2627,6 +2614,7 @@ end architecture;
     semantic::vhdl::SubtypeIndication bit_subtype;
     bit_subtype.type_mark.source = process_source;
     bit_subtype.type_mark.spelling = "bit";
+    bit_subtype.provided_type = semantic::vhdl::ProvidedType::bit;
     bit_subtype.domain = semantic::vhdl::ValueDomain::bit2;
     bit_subtype.executable_width = 1U;
     semantic::vhdl::Declaration formal_record;
@@ -2887,6 +2875,8 @@ end architecture;
         // STD.STANDARD.BIT_VECTOR.
         found->subtype->builtin_type
             = semantic::vhdl::BuiltinTypeIdentity::std_standard_bit_vector;
+        found->subtype->provided_type
+            = semantic::vhdl::ProvidedType::bit_vector;
         semantic::vhdl::RangeConstraint range;
         range.left = 0;
         range.right = 0;
@@ -2932,6 +2922,8 @@ end architecture;
     index_declaration_record.subtype.emplace();
     index_declaration_record.subtype->type_mark.source = process_source;
     index_declaration_record.subtype->type_mark.spelling = "integer";
+    index_declaration_record.subtype->provided_type
+        = semantic::vhdl::ProvidedType::integer;
     index_declaration_record.subtype->domain
         = semantic::vhdl::ValueDomain::integer;
     index_declaration_record.subtype->signed_value = true;

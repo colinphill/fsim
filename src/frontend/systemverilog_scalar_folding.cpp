@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/frontend/systemverilog_scalar_folding.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/source.hpp"
+#include "fsim/frontend/systemverilog_scalars.hpp"
 
 #include <array>
 #include <bit>
@@ -8,6 +11,13 @@
 #include <iomanip>
 #include <limits>
 #include <sstream>
+#include <cstdint>
+#include <ios>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <utility>
 
 namespace fsim::frontend {
 namespace {

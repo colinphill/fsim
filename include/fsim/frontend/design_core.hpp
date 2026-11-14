@@ -5,12 +5,12 @@
 #include "fsim/frontend/systemverilog_scalars.hpp"
 #include "fsim/frontend/token.hpp"
 #include "fsim/support/rare_vector.hpp"
+#include "fsim/support/uvm_role.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <memory>
 #include <optional>
-#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -706,6 +706,10 @@ struct Type {
         systemverilog_class_parameter_actuals;
     // One-based parser-token ordinal of this type-name use; zero is unknown.
     std::uint64_t systemverilog_source_order { };
+    // No data type was written (IEEE 1800-2023 6.8, 13.3, 23.2.2): the
+    // spelling "implicit" is then only a placeholder, since `implicit` is
+    // not a keyword and can name a user type.
+    bool implicit_type { };
 
     Type() = default;
     Type(ValueDomain domain_value, std::string spelling_value,
@@ -1973,6 +1977,10 @@ struct Process {
     // Resolver-generated concurrent assertions sample through the pre-slot
     // signal snapshot and execute their property automata in Observed.
     bool systemverilog_concurrent_assertion { };
+    // The concurrent assertion statement such a process was built from: its
+    // index in the concurrent assertions of the unit or generate block that
+    // holds the process (IEEE 1800-2023 37.49).
+    std::optional<std::size_t> systemverilog_assertion_directive;
     std::string name;
     std::vector<ParameterDeclaration> constants;
     std::vector<TypeAliasDeclaration> type_aliases;
@@ -2148,6 +2156,8 @@ struct SystemVerilogClassProperty {
     bool is_rand { };
     bool is_randc { };
     SourceSpan span;
+    // The property's role in the governed UVM library (none outside it).
+    support::UvmRole uvm_role { };
 };
 
 /// A source-level class method or prototype.
@@ -2182,6 +2192,8 @@ struct SystemVerilogClassMethod {
     bool out_of_block_definition { };
     bool defined { true };
     SourceSpan span;
+    // The method's role in the governed UVM library (none outside it).
+    support::UvmRole uvm_role { };
 };
 
 struct SystemVerilogClassConstraint {

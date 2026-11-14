@@ -123,14 +123,18 @@ namespace {
 
 // The mode string a FILE_OPEN_KIND literal opens with (IEEE 1076-2019
 // 5.5.2, 16.3).
+// The mode of the fopen-style open for a static FILE_OPEN_KIND value (IEEE
+// 1076-2019 6.4.2.5): its position, READ_MODE, WRITE_MODE, APPEND_MODE and
+// READ_WRITE_MODE being 0 to 3, however the expression spells it.
 [[nodiscard]] std::string_view vhdl_file_open_mode(
-    const std::string_view kind) noexcept
+    const std::optional<std::int64_t> position) noexcept
 {
-    return kind == "read_mode"   ? std::string_view { "r" }
-        : kind == "write_mode"   ? std::string_view { "w" }
-        : kind == "append_mode"  ? std::string_view { "a" }
-        : kind == "read_write_mode" ? std::string_view { "r+" }
-                                    : std::string_view { };
+    return !position            ? std::string_view { }
+        : *position == 0        ? std::string_view { "r" }
+        : *position == 1        ? std::string_view { "w" }
+        : *position == 2        ? std::string_view { "a" }
+        : *position == 3        ? std::string_view { "r+" }
+                                : std::string_view { };
 }
 
 } // namespace
@@ -572,13 +576,10 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_file_call(
         }
         if (simple == "file_open") {
             // The impure function form returns the FILE_OPEN_STATUS.
-            const auto kind_expression = operands.size() > 2U
-                ? specialized_hir_unit_->find_expression(operands[2])
-                : std::nullopt;
             const auto mode_text = vhdl_file_open_mode(
-                kind_expression && kind_expression->vhdl != nullptr
-                    ? vhdl_simple_name(kind_expression->vhdl->text)
-                    : std::string_view { "read_mode" });
+                operands.size() > 2U
+                    ? hir_constant_integer(operands[2])
+                    : std::optional<std::int64_t> { 0 });
             if (operands.size() < 2U || operands.size() > 3U
                 || mode_text.empty()
                 || !hir_expression_is_string(
@@ -2758,10 +2759,31 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_file_call(
 
         const auto target_id = call.operands[1];
         const auto target_declaration = hir_target_declaration(target_id);
+        // A class property target (8.5) is scanned into a copy of its value,
+        // which is stored back whether or not a plusarg matched.
+        std::optional<RegisterId> packed_copy;
+        std::optional<StringRegisterId> string_copy;
         if (!target_declaration) {
-            return fail("FSIM-ELAB-SVCLI-003",
-                "$value$plusargs target must be a direct writable packed "
-                "or string variable");
+            if (const auto property
+                = hir_class_property_profile(target_id, true);
+                property && property->writable
+                && hir_expression_is_string(target_id, hir_process_scope_)) {
+                string_copy = lower_hir_string_expression(target_id);
+            } else if (hir_class_property_profile(target_id)
+                || hir_class_property_member(target_id)
+                || hir_class_property_select_path(target_id)) {
+                if (const auto width
+                    = hir_expression_width(target_id, hir_process_scope_);
+                    width && *width != 0U
+                    && *width <= std::numeric_limits<std::uint32_t>::max()) {
+                    packed_copy = lower_hir_expression(target_id, *width);
+                }
+            }
+            if (!string_copy && !packed_copy) {
+                return fail("FSIM-ELAB-SVCLI-003",
+                    "$value$plusargs target must be a direct writable "
+                    "packed or string variable");
+            }
         }
         InputScanConversion conversion;
         if (literal_format) {
@@ -2771,8 +2793,13 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_file_call(
             conversion.maximum_characters
                 = parsed_conversion.maximum_characters;
         }
-        if (const auto string_binding = hir_string_binding(
-                *target_declaration, hir_process_scope_, true)) {
+        if (const auto string_binding = string_copy
+                ? std::optional { HirStringBinding {
+                      semantic::DeclarationId { },
+                      HirStringBindingKind::local, { }, *string_copy,
+                      std::nullopt } }
+                : hir_string_binding(
+                      *target_declaration, hir_process_scope_, true)) {
             // A run-time format's conversion is a placeholder this target
             // accepts until the format is parsed.
             if (!literal_format) {
@@ -2791,8 +2818,17 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_file_call(
                     "$value$plusargs string target is read-only");
             }
         } else {
-            const auto binding = hir_runtime_binding(
-                *target_declaration, hir_process_scope_, true);
+            auto binding = packed_copy
+                ? std::optional<HirRuntimeBinding> { }
+                : hir_runtime_binding(
+                      *target_declaration, hir_process_scope_, true);
+            if (packed_copy) {
+                binding.emplace();
+                binding->kind = HirRuntimeBindingKind::local;
+                binding->local = *packed_copy;
+                binding->width = register_width(*packed_copy);
+                binding->domain = register_domain(*packed_copy);
+            }
             if (!binding || binding->width == 0U
                 || binding->width
                     > std::numeric_limits<std::uint32_t>::max()) {
@@ -2858,6 +2894,13 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_file_call(
         }
         scan.plusarg_value = true;
         process_.operations.emplace_back(std::move(scan));
+        if (string_copy
+            && !lower_hir_class_string_property_write(target_id, *string_copy)) {
+            return std::nullopt;
+        }
+        if (packed_copy && !lower_hir_packed_copy_out(target_id, *packed_copy)) {
+            return std::nullopt;
+        }
         // The result tells whether a plusarg matched, whatever the
         // conversion stored (IEEE 1800-2017 21.6).
         return expected_width != 0U && expected_width != 32U
@@ -3484,6 +3527,19 @@ bool Lowerer::lower_hir_vhdl_file_statement(
         return subtype && !subtype->type_mark.target.valid()
             && vhdl_simple_name(subtype->type_mark.spelling) == "text";
     };
+    // READLINE, WRITELINE and TEE take a file of std.textio.TEXT (IEEE
+    // 1076-2019 16.4); a file type declared `is file of string` is another
+    // type (5.5.1) and matches none of them.
+    const auto textio_text_file = [&](const semantic::ExpressionId value) {
+        const auto declaration_id = hir_target_declaration(value);
+        const auto declaration = declaration_id
+            ? specialized_hir_unit_->find_declaration(*declaration_id)
+            : std::nullopt;
+        return declaration && declaration->vhdl != nullptr
+            && declaration->vhdl->subtype
+            && declaration->vhdl->subtype->provided_type
+                == semantic::vhdl::ProvidedType::textio_text;
+    };
     const auto standard_output = [&](const semantic::ExpressionId value) {
         if (const auto declared = hir_target_declaration(value)) {
             // A file opened on STD_OUTPUT, the logical name std.textio
@@ -3690,10 +3746,12 @@ bool Lowerer::lower_hir_vhdl_file_statement(
             || !element_subtype
             || element_subtype->domain
                 != semantic::vhdl::ValueDomain::string
+            || !textio_text_file(file->first)
             || !line_local || !line_local->local) {
             return fail("FSIM-ELAB-VHTEXTIO-001",
                 std::string { name }
-                    + " requires a text file and writable line object");
+                    + " requires a file of std.textio.TEXT and a writable "
+                      "line object");
         }
         if (name == "readline") {
             const auto count = allocate_register(
@@ -3787,15 +3845,9 @@ bool Lowerer::lower_hir_vhdl_file_statement(
                 "file_open requires a file object, string logical name, "
                 "and optional file_open_kind");
         }
-        const auto kind_expression = kind
-            ? specialized_hir_unit_->find_expression(*kind)
-            : std::nullopt;
-        auto kind_name = kind_expression
-                && kind_expression->vhdl != nullptr
-            ? std::string_view { kind_expression->vhdl->text }
-            : std::string_view { "read_mode" };
-        kind_name = vhdl_simple_name(kind_name);
-        const auto mode_text = vhdl_file_open_mode(kind_name);
+        const auto mode_text = vhdl_file_open_mode(
+            kind ? hir_constant_integer(*kind)
+                 : std::optional<std::int64_t> { 0 });
         if (mode_text.empty()) {
             return fail("FSIM-ELAB-VHFILE-004",
                 "VHDL file open kind must be read_mode, write_mode, "

@@ -3,7 +3,6 @@
 
 #include "fsim/artifact/coverage_database.hpp"
 
-#include <compare>
 #include <cstddef>
 #include <cstdint>
 #include <optional>

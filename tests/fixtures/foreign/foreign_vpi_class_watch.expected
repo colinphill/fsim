@@ -1,0 +1,15 @@
+#c watch w accepted
+#c watch arr[2] accepted
+#c watch sarr[1] accepted
+#c watch label refused: vpi_register_cb: cbValueChange on a string is excluded (IEEE 1800-2023 38.36.1)
+#c watch q refused: vpi_register_cb: cbValueChange on a queue is excluded (IEEE 1800-2023 38.36.1)
+#c watch next refused: vpi_register_cb: cbValueChange on a class object is excluded (IEEE 1800-2023 38.36.1)
+#c change w value=1 t=2
+#c change w value=2 t=2
+#c change arr[2] value=5 t=2
+#c change arr[2] value=6 t=2
+#c change sarr[1] value=7 t=3
+#c change sarr[1] value=8 t=3
+#c change w value=3 t=4
+#c read sarr[1] value=8
+#c done w=3 arr2=6 sarr1=8

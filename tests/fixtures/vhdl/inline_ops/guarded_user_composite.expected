@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+wide gp=2,4 gl='U' at 0
+wide gp=13,24 gl='U' at 0
+wide gp=13,24 gl='1' at 500
+wide gp=10,20 gl='1' at 1000
+wide gp=10,20 gl='0' at 1500
+wide gp=15,26 gl='0' at 2000
+wide gp=15,26 gl='1' at 2500
+wide gp=10,20 gl='1' at 3000
+wide gp=10,20 gl='Z' at 3500
+wide gp=0,0 gl='Z' at 4000
+wide gp=0,0 gl='0' at 4500

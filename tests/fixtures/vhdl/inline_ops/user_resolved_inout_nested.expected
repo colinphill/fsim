@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
+wide w=0 ws=0,0 at 0
+wide w=12 ws=7,15 at 0
+wide w=20 ws=7,23 at 1

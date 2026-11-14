@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/runtime/simir.hpp"
 #include "fsim/runtime/vcd_writer.hpp"
 #include "path_test_support.hpp"
 
@@ -576,7 +578,7 @@ int main() {
     std::ofstream output(leaf, std::ios::binary);
     output << R"(
 use work.component_runtime_profiles.all;
-entity component_runtime_leaf is
+library ieee; use ieee.std_logic_1164.all; entity component_runtime_leaf is
   generic (entity_amount : integer := 9);
   port (
     entity_input : in integer;
@@ -590,7 +592,7 @@ begin
   entity_packet_output <= entity_packet_input;
 end architecture;
 
-entity component_runtime_stable is
+library ieee; use ieee.std_logic_1164.all; entity component_runtime_stable is
   port (
     input_value : in integer;
     output_value : out integer);
@@ -600,7 +602,7 @@ begin
   output_value <= input_value;
 end architecture;
 
-entity component_runtime_defaulted is
+library ieee; use ieee.std_logic_1164.all; entity component_runtime_defaulted is
   port (
     entity_default_input : in integer := 13;
     entity_default_output : out integer);
@@ -610,7 +612,7 @@ begin
   entity_default_output <= entity_default_input;
 end architecture;
 
-entity component_runtime_nonvalue is
+library ieee; use ieee.std_logic_1164.all; entity component_runtime_nonvalue is
   generic (
     type entity_t;
     function entity_function(value : entity_t) return entity_t is <>;
@@ -632,7 +634,7 @@ begin
   end process;
 end architecture;
 
-entity component_runtime_vector is
+library ieee; use ieee.std_logic_1164.all; entity component_runtime_vector is
   port (
     input_value : in std_logic_vector(3 downto 0);
     output_value : out std_logic_vector(3 downto 0));
@@ -642,7 +644,7 @@ begin
   output_value <= input_value;
 end architecture;
 
-entity component_runtime_open_modes is
+library ieee; use ieee.std_logic_1164.all; entity component_runtime_open_modes is
   port (
     output_value : out integer;
     buffer_value : buffer integer);
@@ -653,7 +655,7 @@ begin
   buffer_value <= 7;
 end architecture;
 
-entity component_runtime_width is
+library ieee; use ieee.std_logic_1164.all; entity component_runtime_width is
   generic (width : positive := 4);
   port (
     input_value : in bit_vector(width - 1 downto 0);
@@ -664,7 +666,7 @@ begin
   output_value <= input_value;
 end architecture;
 
-entity component_runtime_generic_defaults is
+library ieee; use ieee.std_logic_1164.all; entity component_runtime_generic_defaults is
   generic (
     constant base_value : in integer := 4;
     derived_value : integer := base_value * 2);
@@ -676,7 +678,7 @@ begin
 end architecture;
 
 use work.component_runtime_profiles.all;
-entity component_runtime_aggregate_generic is
+library ieee; use ieee.std_logic_1164.all; entity component_runtime_aggregate_generic is
   generic (mask_value : mask_t := (0 => '1', others => '0'));
   port (output_value : out mask_t);
 end entity;
@@ -686,7 +688,7 @@ begin
 end architecture;
 
 use work.component_runtime_profiles.all;
-entity component_runtime_static_defaults is
+library ieee; use ieee.std_logic_1164.all; entity component_runtime_static_defaults is
   generic (
     package_value : integer := package_base;
     length_value : integer := mask_t'length;
@@ -719,7 +721,7 @@ package component_runtime_helper_template is
   constant selected_seed : integer := seed;
 end package;
 
-package component_runtime_profiles is
+library ieee; use ieee.std_logic_1164.all; package component_runtime_profiles is
   subtype mask_t is bit_vector(3 downto 0);
   constant package_base : integer := 6;
   function scale(value : integer) return integer;
@@ -796,7 +798,7 @@ end package;
     std::ofstream output(
         hierarchy, std::ios::binary | std::ios::trunc);
     output << R"(
-entity component_runtime_top is
+library ieee; use ieee.std_logic_1164.all; entity component_runtime_top is
 end entity;
 use work.component_runtime_profiles.all;
 use work.component_default_profiles.all;

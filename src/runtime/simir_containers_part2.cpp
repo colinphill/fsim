@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "simir_internal.hpp"
 #include "simir_container_helpers.hpp"
+#include "simir_container_ops.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 
-#include <algorithm>
-#include <charconv>
+#include <stdexcept>
+
 
 namespace fsim::runtime::simir {
 
@@ -14,6 +16,245 @@ void Interpreter::Impl::execute_container(
     ProcessContainerAccess access { *this, process };
     execute_container_operation(operation, access, process.id, process.pc);
     ++process.pc;
+}
+
+void Interpreter::Impl::execute_container(
+    ProcessState& process,
+    const WriteContainerObjectString& operation)
+{
+    ProcessContainerAccess access { *this, process };
+    StringElementCapture capture;
+    const auto capture_index = [&](const RegisterId index, const bool text) {
+        if (text) {
+            capture.texts.push_back(access.read_string(index));
+            capture.indices.emplace_back();
+        } else {
+            capture.indices.push_back(access.read(index));
+            capture.texts.emplace_back();
+        }
+    };
+    for (const auto& level : operation.levels) {
+        capture_index(level.index, level.string_index);
+    }
+    capture_index(operation.index, operation.string_index);
+    switch (operation.source_kind) {
+    case ContainerElementSourceKind::text:
+        capture.value = access.read_string(operation.source);
+        break;
+    case ContainerElementSourceKind::packed:
+        capture.packed = access.read(operation.packed_source);
+        break;
+    case ContainerElementSourceKind::container:
+        capture.container = access.read_container(operation.container_source);
+        break;
+    }
+    write_object_string_element(operation,
+        process.program().scheduling_domain(), process.id, process.pc,
+        capture);
+    ++process.pc;
+}
+
+namespace {
+
+// The registers of one string element write against copies of the container
+// object's value and of the nested containers it descends through: container
+// register k holds level k's container (the last the leaf container), packed
+// register k the index of level k, and string register k + 1 its key; string
+// register 0 holds the new element value.
+class CapturedStringElementAccess final : public ContainerRegisterAccess {
+public:
+    CapturedStringElementAccess(std::vector<ContainerValue>& containers,
+        const std::vector<PackedLogic4>& indices,
+        const std::vector<std::string>& texts, const std::string& value)
+        : containers_ { containers }, indices_ { indices }, texts_ { texts },
+          value_ { value }
+    {
+    }
+
+    [[nodiscard]] const PackedLogic4& read(RegisterId id) override
+    {
+        return indices_.at(id);
+    }
+    void write(RegisterId, PackedLogic4) override
+    {
+        throw std::logic_error { "a captured string element write has no packed result" };
+    }
+    [[nodiscard]] const std::string& read_string(StringRegisterId id) override
+    {
+        return id == 0U ? value_ : texts_.at(id - 1U);
+    }
+    [[nodiscard]] std::string& string(StringRegisterId) override
+    {
+        throw std::logic_error { "a captured string element write has no string result" };
+    }
+    [[nodiscard]] ContainerValue& container(ContainerRegisterId id) override
+    {
+        return containers_.at(id);
+    }
+    [[nodiscard]] const ContainerValue& read_container(
+        ContainerRegisterId id) override
+    {
+        return containers_.at(id);
+    }
+    [[nodiscard]] std::uint32_t next_random() override
+    {
+        return 0U;
+    }
+
+private:
+    std::vector<ContainerValue>& containers_;
+    const std::vector<PackedLogic4>& indices_;
+    const std::vector<std::string>& texts_;
+    const std::string& value_;
+};
+
+} // namespace
+
+void Interpreter::Impl::write_object_string_element(
+    const WriteContainerObjectString& operation,
+    const ProcessSchedulingDomain process_domain, const ProcessId driver,
+    const InstructionIndex instruction, const StringElementCapture& capture,
+    const NonblockingSink& nonblocking_sink)
+{
+    const auto update_domain
+        = process_domain == ProcessSchedulingDomain::systemverilog
+        ? operation.nonblocking
+            ? SignalUpdateDomain::systemverilog_nba
+            : SignalUpdateDomain::systemverilog_active
+        : SignalUpdateDomain::generic;
+    auto origin = capture_signal_change_origin(driver, update_domain);
+    if (update_domain == SignalUpdateDomain::generic
+        && operation.nonblocking) {
+        origin.phase = SchedulerPhase::update;
+    }
+    if (!operation.nonblocking) {
+        write_container_object_string_element_value(
+            operation, driver, instruction, capture, origin);
+        return;
+    }
+    // The indices and the value are captured now; the element is written when
+    // the update is published (IEEE 1800-2023 10.4.2).
+    const auto publish = [this, operation, capture, driver, instruction,
+            origin](Scheduler&) {
+            write_container_object_string_element_value(
+                operation, driver, instruction, capture, origin);
+        };
+    if (process_domain == ProcessSchedulingDomain::systemverilog
+        && nonblocking_sink) {
+        nonblocking_sink(publish);
+    } else if (process_domain == ProcessSchedulingDomain::systemverilog) {
+        scheduler.schedule_systemverilog(origin.phase, driver, publish);
+    } else {
+        scheduler.schedule(SchedulerPhase::update, driver, publish);
+    }
+}
+
+void Interpreter::Impl::write_container_object_string_element_value(
+    const WriteContainerObjectString& operation, const ProcessId driver,
+    const InstructionIndex instruction, const StringElementCapture& capture,
+    const SignalChangeOrigin origin)
+{
+    const auto depth = operation.levels.size();
+    std::vector<ContainerValue> containers;
+    containers.reserve(depth + 2U);
+    containers.push_back(read_container_object_value(operation.object));
+    // The captured packed value follows the indices as one more packed
+    // register, the captured container value the levels' containers as one
+    // more container register.
+    auto indices = capture.indices;
+    const auto packed_register = static_cast<RegisterId>(indices.size());
+    indices.push_back(capture.packed);
+    CapturedStringElementAccess access {
+        containers, indices, capture.texts, capture.value };
+    // Register k of the captured indices is level k's; its key is string
+    // register k + 1.
+    const auto text_register = [](const std::size_t level) {
+        return static_cast<RegisterId>(level + 1U);
+    };
+    for (std::size_t level = 0U; level < depth; ++level) {
+        const auto& step = operation.levels[level];
+        // The register that receives the element holds its type (as the
+        // lowered register would): the nested element's, then the members'.
+        const auto& from = containers[level].type;
+        const auto element = aggregate_box(from)
+            ? std::optional<ContainerType> { from }
+            : nested_element_container_type(from);
+        if (!element) {
+            container_error(driver, instruction,
+                "nested element write requires a nested container");
+        }
+        auto element_type = *element;
+        for (const auto member : step.members) {
+            if (member >= element_type.element_types.size()) {
+                container_error(driver, instruction,
+                    "aggregate member write path is invalid");
+            }
+            auto next = element_type.element_types[member];
+            element_type = std::move(next);
+        }
+        containers.emplace_back();
+        containers.back().type = std::move(element_type);
+        ContainerElementRead read;
+        read.destination = static_cast<ContainerRegisterId>(level + 1U);
+        read.source = static_cast<ContainerRegisterId>(level);
+        read.index = step.string_index
+            ? text_register(level) : static_cast<RegisterId>(level);
+        read.signed_index = step.signed_index;
+        read.string_index = step.string_index;
+        read.linear_index = step.linear_index;
+        read.members = step.members;
+        execute_container_operation(read, access, driver, instruction);
+    }
+    // The element write of the register form on the leaf container.
+    const auto leaf_index = operation.string_index
+        ? text_register(depth) : static_cast<RegisterId>(depth);
+    switch (operation.source_kind) {
+    case ContainerElementSourceKind::text: {
+        const ContainerStringWrite write {
+            static_cast<ContainerRegisterId>(depth), leaf_index,
+            0U, operation.signed_index, operation.linear_index,
+            operation.string_index, { }, false };
+        execute_container_operation(write, access, driver, instruction);
+        break;
+    }
+    case ContainerElementSourceKind::packed: {
+        const ContainerWrite write {
+            static_cast<ContainerRegisterId>(depth), leaf_index,
+            packed_register, operation.signed_index, operation.linear_index,
+            operation.string_index, false };
+        execute_container_operation(write, access, driver, instruction);
+        break;
+    }
+    case ContainerElementSourceKind::container: {
+        const auto source = static_cast<ContainerRegisterId>(containers.size());
+        containers.push_back(capture.container);
+        ContainerElementWrite write;
+        write.target = static_cast<ContainerRegisterId>(depth);
+        write.index = leaf_index;
+        write.source = source;
+        write.signed_index = operation.signed_index;
+        write.linear_index = operation.linear_index;
+        write.string_index = operation.string_index;
+        write.members = operation.members;
+        execute_container_operation(write, access, driver, instruction);
+        break;
+    }
+    }
+    for (std::size_t level = depth; level-- > 0U;) {
+        const auto& step = operation.levels[level];
+        ContainerElementWrite back;
+        back.target = static_cast<ContainerRegisterId>(level);
+        back.index = step.string_index
+            ? text_register(level) : static_cast<RegisterId>(level);
+        back.source = static_cast<ContainerRegisterId>(level + 1U);
+        back.signed_index = step.signed_index;
+        back.string_index = step.string_index;
+        back.linear_index = step.linear_index;
+        back.members = step.members;
+        execute_container_operation(back, access, driver, instruction);
+    }
+    write_container_object_value(
+        operation.object, containers.front(), driver, origin);
 }
 
 void Interpreter::Impl::execute_container(

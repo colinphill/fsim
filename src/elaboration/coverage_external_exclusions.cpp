@@ -4,7 +4,6 @@
 #include "fsim/support/sha256.hpp"
 
 #include <algorithm>
-#include <set>
 #include <tuple>
 #include <utility>
 

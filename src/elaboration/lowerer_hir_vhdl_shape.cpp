@@ -395,9 +395,21 @@ Lowerer::hir_vhdl_external_subtype(
         || !subtype_expression->vhdl->text.starts_with(subtype_prefix)) {
         return std::nullopt;
     }
+    // The type mark analysis resolved for the subtype indication (8.7).
+    if (!subtype_expression->vhdl->qualified_type_mark) {
+        return std::nullopt;
+    }
+    const auto& mark = *subtype_expression->vhdl->qualified_type_mark;
     semantic::vhdl::SubtypeIndication declared;
-    declared.type_mark.spelling
-        = subtype_expression->vhdl->text.substr(subtype_prefix.size());
+    declared.type_mark.spelling = mark.spelling;
+    if (mark.selected) {
+        if (const auto declaration
+            = specialized_hir_unit_->find_declaration(*mark.selected);
+            declaration && declaration->vhdl != nullptr
+            && declaration->vhdl->declared_type) {
+            declared.type_mark.target = *declaration->vhdl->declared_type;
+        }
+    }
     auto subtype = hir_effective_vhdl_subtype(declared);
     const auto signal = hir_vhdl_external_signal_lookup(expression_id);
     if (!subtype || !signal) {

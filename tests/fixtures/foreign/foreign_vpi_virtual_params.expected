@@ -1,0 +1,17 @@
+#c top.vd defname=SBus assigns=2 W=8,D=16
+#c top.vl defname=SBus assigns=2 W=6,D=12
+#c top.vq defname=SBus assigns=2 W=24,D=48
+#c top.vn defname=SBus assigns=2 W=8,D=5
+#c top.ve defname=SBus assigns=2 W=7,D=14
+#c pkg::pv defname=SBus assigns=2 W=24,D=48
+#c pkg typedef defname=SBus assigns=2 W=24,D=48
+#c pkg::Box.bc defname=SBus assigns=2 W=10,D=20
+#c pkg::Box.bq defname=SBus assigns=2 W=24,D=48
+#c top.b5.bc defname=SBus assigns=2 W=5,D=10
+#c top.b5.bq defname=SBus assigns=2 W=24,D=48
+#c top.b.bc defname=SBus assigns=2 W=10,D=20
+#c top.b.bq defname=SBus assigns=2 W=24,D=48
+#c top.b0.bc defname=SBus assigns=2 W=10,D=20
+#c top.b0.bq defname=SBus assigns=2 W=24,D=48
+#c top.s7.bc defname=SBus assigns=2 W=7,D=14
+#c top.s7.bq defname=SBus assigns=2 W=24,D=48

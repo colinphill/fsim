@@ -3,7 +3,6 @@
 #include "hierarchy_sv_constant_evaluator.hpp"
 #include "hierarchy_sv_parameters_internal.hpp"
 
-#include "fsim/frontend/systemverilog_scalar_folding.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
 #include "fsim/semantic/systemverilog_type_descriptor.hpp"
 

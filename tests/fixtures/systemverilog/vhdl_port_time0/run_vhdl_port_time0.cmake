@@ -12,6 +12,8 @@
 # processes within a time step is unspecified, so the mixed cases read the
 # ports between time steps and report time-0 activity only that way.
 
+include("${CMAKE_CURRENT_LIST_DIR}/../../../cmake/FsimTestWorkspace.cmake")
+
 if(NOT DEFINED FSIM_EXECUTABLE OR NOT EXISTS "${FSIM_EXECUTABLE}")
   message(FATAL_ERROR "FSIM_EXECUTABLE must name the built fsim command")
 endif()
@@ -25,6 +27,7 @@ endforeach()
 
 string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef workspace_id)
 set(workspace "${CMAKE_CURRENT_BINARY_DIR}/fsim-vhdl-port-time0-${workspace_id}")
+fsim_test_workspace("${workspace}")
 
 function(run_fsim_step CASE_DIR STEP_NAME)
   execute_process(
@@ -94,3 +97,6 @@ foreach(entry IN LISTS cases)
     endif()
   endforeach()
 endforeach()
+
+# Passed: remove this run's workspaces (a failure above keeps them).
+fsim_test_workspace_cleanup()

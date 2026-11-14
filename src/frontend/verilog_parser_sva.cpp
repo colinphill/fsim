@@ -14,6 +14,10 @@
 
 #include "fsim/semantic/sva_plan.hpp"
 #include "fsim/support/environment.hpp"
+#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/source.hpp"
+#include "fsim/frontend/token.hpp"
 
 #include <algorithm>
 #include <functional>
@@ -22,6 +26,16 @@
 #include <set>
 #include <string>
 #include <utility>
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <iterator>
+#include <optional>
+#include <span>
+#include <string_view>
+#include <tuple>
+#include <type_traits>
+#include <vector>
 
 namespace fsim::frontend {
 namespace {
@@ -85,6 +99,13 @@ enum class NodeKind : std::uint8_t {
     // A property instance whose local variables have initialization
     // assignments (actual_tokens), performed when its evaluation begins.
     initialized,
+    // The expansion of an instance of a recursive property (16.12.17), the
+    // node its recursive instances return to (operand: the expanded body).
+    recursion_target,
+    // A recursive instance (16.12.17): a new evaluation of the expansion
+    // `target`, whose local formal arguments first take the values of
+    // the instance's actuals (actual_tokens: the assignments, in order).
+    recursion,
 };
 
 struct Node {
@@ -105,6 +126,9 @@ struct Node {
     // An instance: the declaration it names, whether that is a sequence,
     // and the actuals as written.
     std::string instance;
+    const SystemVerilogAssertionDeclaration* declared { };
+    // The recursion_target node a recursion node evaluates again.
+    std::size_t target { };
     bool sequence_instance { };
     // An instance's actuals as written; a case item's expressions.
     std::vector<std::vector<Token>> actual_tokens;
@@ -192,7 +216,53 @@ struct ParseContext {
     std::set<std::string, std::less<>> local_names { };
     // Whether the property uses local variables or match items.
     bool uses_locals { };
+    // Whether `failure` is a form the standard makes illegal.
+    bool illegal { };
+    // Whether the property operators IEEE 1800-2009 added (Annex B) are
+    // keywords: under an earlier keyword set they are identifiers.
+    bool keywords_2009 { true };
+    // The replacement of a read of a sequence's end point,
+    // `receiver.triggered` or `receiver.matched` (16.13.5, 16.13.6), on
+    // the clocking event in effect (VerilogParser::sva_endpoint_use); unset
+    // for the published tree, which keeps the method.
+    std::function<std::optional<std::vector<Token>>(
+        const SystemVerilogAssertionDeclaration&, std::span<const Token>,
+        bool, std::string&, std::string&)>
+        endpoint { };
+    // The tick bits of the end-point monitors the plan's reads wait for.
+    std::vector<std::string> endpoint_waits { };
+    // The expansions of recursive property instances in progress, the
+    // outermost first (16.12.17): the declaration, the identity of the
+    // actuals of its formals that are not local variables, the
+    // recursion_target node, the clock in effect, and the unique names of
+    // the declaration's local formals and local variables.
+    struct Expansion {
+        const SystemVerilogAssertionDeclaration* declaration { };
+        std::string key;
+        std::size_t target { };
+        std::uint32_t clock { };
+        std::map<std::string, std::string, std::less<>> locals;
+    };
+    std::vector<Expansion> expansions { };
+    // The recursive property declarations that break a restriction of
+    // 16.12.17 (VerilogParser::sva_illegal_recursive_), by name, line and
+    // offset of the name: an error was reported for each.
+    const std::set<std::tuple<std::string, std::size_t, std::size_t>>*
+        illegal_recursive { };
 };
+
+// The property and sequence operator keywords IEEE 1800-2009 added
+// (Annex B, Table B.1).
+[[nodiscard]] bool property_keyword_2009(const std::string_view text)
+{
+    static constexpr std::array<std::string_view, 16> words {
+        "accept_on", "eventually", "implies", "nexttime", "reject_on",
+        "s_always", "s_eventually", "s_nexttime", "s_until", "s_until_with",
+        "strong", "sync_accept_on", "sync_reject_on", "until", "until_with",
+        "weak",
+    };
+    return std::ranges::find(words, text) != words.end();
+}
 
 // Whether `tokens` reference one of `names` (not as a member after `.`).
 [[nodiscard]] bool mentions_local(const std::span<const Token> tokens,
@@ -272,6 +342,37 @@ struct ParseContext {
         }
     }
     return context.scopes.empty() ? 0U : context.scopes.size() - 1U;
+}
+
+// The sequence or property declaration (of `kind` when given) that a name
+// written in scope `origin` denotes: the innermost declaration of that name
+// in `origin` or a scope enclosing it (16.8, 23.9). Declarations after the
+// scopes' ranges (copies of imported package declarations) are visible from
+// every scope.
+[[nodiscard]] const SystemVerilogAssertionDeclaration* visible_declaration(
+    const DesignUnit& unit, const std::vector<SvaNameScope>& scopes,
+    const std::string_view name, const std::size_t origin,
+    const std::optional<SystemVerilogAssertionDeclarationKind> kind)
+{
+    const auto& declarations = unit.systemverilog_assertion_declarations;
+    for (auto index = declarations.size(); index-- > 0U;) {
+        const auto& entry = declarations[index];
+        if (entry.kind == SystemVerilogAssertionDeclarationKind::Checker
+            || entry.name != name || (kind && entry.kind != *kind)) {
+            continue;
+        }
+        std::size_t level { };
+        for (std::size_t candidate = 0; candidate < scopes.size(); ++candidate) {
+            if (index < scopes[candidate].declarations_end) {
+                level = candidate;
+                break;
+            }
+        }
+        if (level <= origin) {
+            return &entry;
+        }
+    }
+    return nullptr;
 }
 
 // Whether tokens [begin, end) are one name: identifiers joined by `.` or
@@ -474,6 +575,16 @@ private:
         return std::nullopt;
     }
 
+    // A form IEEE 1800-2023 makes illegal (an error, not a limitation).
+    std::optional<std::size_t> fail_illegal(std::string reason)
+    {
+        if (context_.failure.empty()) {
+            context_.failure = std::move(reason);
+            context_.illegal = true;
+        }
+        return std::nullopt;
+    }
+
     [[nodiscard]] bool at(const TokenKind kind, const std::size_t offset = 0) const
     {
         return position_ + offset < tokens_.size()
@@ -483,7 +594,8 @@ private:
         const std::size_t offset = 0) const
     {
         return position_ + offset < tokens_.size()
-            && token_is_keyword(tokens_[position_ + offset], text);
+            && token_is_keyword(tokens_[position_ + offset], text)
+            && (context_.keywords_2009 || !property_keyword_2009(text));
     }
     [[nodiscard]] std::optional<std::size_t> matching(
         const std::size_t open) const
@@ -545,6 +657,12 @@ private:
         const bool implies = at_implication();
         if (!implies && !at_followed_by()) {
             return left;
+        }
+        // A clocked operand in the antecedent position is a clocked
+        // sequence (`(@(c) a) |=> p`, A.2.10), not a clocked property.
+        if (nodes_[*left].kind == NodeKind::clocked_property
+            && is_sequence(nodes_[*left].operands[0])) {
+            nodes_[*left].kind = NodeKind::clocked;
         }
         if (!is_sequence(*left)) {
             return fail("the antecedent of an implication must be a sequence");
@@ -826,6 +944,13 @@ private:
                 return fail("an abort condition is unbalanced");
             }
             node.expression = slice(position_ + 1U, *close);
+            // An abort condition shall not reference local variables
+            // (16.12.14).
+            if (!context_.local_names.empty()
+                && mentions_local(node.expression, context_.local_names)) {
+                return fail_illegal("an abort condition that references a "
+                                    "local variable (16.12.14)");
+            }
             if (!context_.boolean(node.expression)) {
                 return fail("an abort condition is not a boolean expression");
             }
@@ -1310,15 +1435,19 @@ private:
                 && tokens_[at_position + 1U].kind == TokenKind::Dot)) {
             return nullptr;
         }
-        const auto found = std::ranges::find_if(
-            context_.unit.systemverilog_assertion_declarations,
-            [&](const SystemVerilogAssertionDeclaration& entry) {
-                return entry.kind != SystemVerilogAssertionDeclarationKind::Checker
-                    && entry.name == tokens_[at_position].text;
-            });
-        return found == context_.unit.systemverilog_assertion_declarations.end()
-            ? nullptr
-            : &*found;
+        // An instance followed by a method call (`s(2).triggered`,
+        // `s(2).matched`) is the boolean endpoint of a sequence instance
+        // (16.13.6), not an instance in the property.
+        if (at_position + 1U < tokens_.size()
+            && tokens_[at_position + 1U].kind == TokenKind::LeftParen) {
+            const auto close = matching(at_position + 1U);
+            if (close && *close + 1U < tokens_.size()
+                && tokens_[*close + 1U].kind == TokenKind::Dot) {
+                return nullptr;
+            }
+        }
+        return visible_declaration(context_.unit, context_.scopes,
+            tokens_[at_position].text, context_.origin, std::nullopt);
     }
 
     // Whether a token range names a sequence or property declaration, so it
@@ -1339,6 +1468,11 @@ private:
     {
         Node node;
         node.expression = slice(position_, end);
+        if (context_.endpoint) {
+            if (auto failure = replace_endpoints(node.expression)) {
+                return fail(std::move(*failure));
+            }
+        }
         if (!context_.boolean(node.expression)) {
             return fail("'" + spelling(node.expression)
                 + "' is not a boolean expression");
@@ -1347,19 +1481,123 @@ private:
         return add(std::move(node));
     }
 
+    // Replaces each read of a sequence's end point in a boolean,
+    // `s.triggered`, `s(a).matched`, `(s).triggered()` (a substituted
+    // sequence formal), with the end-point monitor's state (16.13.6);
+    // the failure when one cannot be evaluated.
+    std::optional<std::string> replace_endpoints(std::vector<Token>& tokens)
+    {
+        for (std::size_t index = 1U; index < tokens.size(); ++index) {
+            if (tokens[index].kind != TokenKind::Identifier
+                || (tokens[index].text != "triggered"
+                    && tokens[index].text != "matched")
+                || tokens[index - 1U].kind != TokenKind::Dot
+                || index < 2U) {
+                continue;
+            }
+            // The receiver ends before the dot: a name, a call of a name,
+            // or a parenthesized substituted actual.
+            const auto receiver_end = index - 1U;
+            auto receiver_begin = receiver_end - 1U;
+            if (tokens[receiver_begin].kind == TokenKind::RightParen) {
+                int depth { };
+                auto open = receiver_begin;
+                for (;; --open) {
+                    if (tokens[open].kind == TokenKind::RightParen) {
+                        ++depth;
+                    } else if (tokens[open].kind == TokenKind::LeftParen
+                        && --depth == 0) {
+                        break;
+                    }
+                    if (open == 0U) {
+                        return "an unbalanced sequence method receiver";
+                    }
+                }
+                receiver_begin = open;
+                if (open > 0U && tokens[open - 1U].kind == TokenKind::Identifier) {
+                    receiver_begin = open - 1U;
+                }
+            } else if (tokens[receiver_begin].kind != TokenKind::Identifier) {
+                continue;
+            }
+            std::vector<Token> receiver(
+                tokens.begin() + static_cast<std::ptrdiff_t>(receiver_begin),
+                tokens.begin() + static_cast<std::ptrdiff_t>(receiver_end));
+            // A parenthesized actual is the instance it holds.
+            while (receiver.size() >= 3U
+                && receiver.front().kind == TokenKind::LeftParen
+                && receiver.back().kind == TokenKind::RightParen) {
+                receiver.erase(receiver.begin());
+                receiver.pop_back();
+            }
+            if (receiver.empty() || receiver.front().kind != TokenKind::Identifier
+                || (receiver_begin > 0U
+                    && (tokens[receiver_begin - 1U].kind == TokenKind::Dot
+                        || tokens[receiver_begin - 1U].kind == TokenKind::Scope))) {
+                // A hierarchical receiver, or the method of an event.
+                if (receiver_begin > 0U
+                    && tokens[receiver_begin - 1U].kind == TokenKind::Dot
+                    && sequence_declaration(receiver.front().text)) {
+                    return "a sequence end point read through a hierarchical "
+                           "name";
+                }
+                continue;
+            }
+            const auto* const declared
+                = sequence_declaration(receiver.front().text);
+            if (declared == nullptr) {
+                continue;
+            }
+            auto method_end = index + 1U;
+            if (method_end + 1U < tokens.size()
+                && tokens[method_end].kind == TokenKind::LeftParen
+                && tokens[method_end + 1U].kind == TokenKind::RightParen) {
+                method_end += 2U;
+            }
+            std::string wait_bit;
+            std::string failure;
+            auto replacement = context_.endpoint(*declared, receiver,
+                tokens[index].text == "matched", wait_bit, failure);
+            if (!replacement) {
+                return failure;
+            }
+            if (!wait_bit.empty()
+                && std::ranges::find(context_.endpoint_waits, wait_bit)
+                    == context_.endpoint_waits.end()) {
+                context_.endpoint_waits.push_back(std::move(wait_bit));
+            }
+            tokens.erase(tokens.begin() + static_cast<std::ptrdiff_t>(receiver_begin),
+                tokens.begin() + static_cast<std::ptrdiff_t>(method_end));
+            tokens.insert(tokens.begin() + static_cast<std::ptrdiff_t>(receiver_begin),
+                replacement->begin(), replacement->end());
+            index = receiver_begin + replacement->size();
+        }
+        return std::nullopt;
+    }
+
+    [[nodiscard]] const SystemVerilogAssertionDeclaration* sequence_declaration(
+        const std::string_view name) const
+    {
+        const auto* const found = visible_declaration(context_.unit,
+            context_.scopes, name, context_.origin, std::nullopt);
+        return found != nullptr
+                && found->kind == SystemVerilogAssertionDeclarationKind::Sequence
+            ? found
+            : nullptr;
+    }
+
     std::optional<std::size_t> nested(const std::size_t open,
         const std::size_t close)
     {
         const auto inside = slice(open + 1U, close);
         auto parts = split_top_level(inside, TokenKind::Comma);
         if (parts.size() > 1U) {
-            if (context_.keep_instances) {
-                return fail("sequence match items are not yet evaluated by "
-                            "the concurrent-property monitor");
-            }
             // `(s, item, ...)`: the items run at the end of each match of s
-            // (16.10, 16.11).
-            context_.uses_locals = true;
+            // (16.10, 16.11); the published tree keeps them as the match
+            // items of s (37.54).
+            if (!context_.keep_instances) {
+                context_.uses_locals = true;
+            }
             TreeParser inner { nodes_, parts.front(), context_, path_ };
             auto operand = inner.parse();
             position_ = close + 1U;
@@ -1446,6 +1684,26 @@ private:
                 ++position_;
             }
             const auto clock = clock_index(event);
+            if (context_.keep_instances && delay_operand_) {
+                // After `##1` or `##0` the clocking event governs the
+                // longest sequence that follows (16.13.1), the same operand
+                // the assertion engine takes below; its clock flows on to
+                // the right (16.13.3), so a later operator's operand is not
+                // part of this clocked sequence.
+                delay_operand_ = false;
+                const auto enclosing
+                    = std::exchange(context_.current_clock, clock);
+                auto operand = disjunction();
+                delay_operand_ = true;
+                if (clock == enclosing || !operand) {
+                    return operand;
+                }
+                Node node;
+                node.kind = NodeKind::clocked;
+                node.clock = clock;
+                node.operands = { *operand };
+                return add(std::move(node));
+            }
             if (context_.keep_instances) {
                 // The published tree keeps every clocking event (37.52,
                 // 37.56): a sequence on another clock than the one in
@@ -1508,6 +1766,7 @@ private:
             Node node;
             node.kind = NodeKind::instance;
             node.instance = declaration.name;
+            node.declared = &declaration;
             node.sequence_instance = declaration.kind
                 == SystemVerilogAssertionDeclarationKind::Sequence;
             ++position_;
@@ -1524,10 +1783,22 @@ private:
             }
             return add(std::move(node));
         }
-        // An instance of a declaration that is being expanded is recursive.
-        if (std::ranges::find(path_, &declaration) != path_.end()) {
-            return fail("recursive sequence and property instances are not "
-                        "yet evaluated by the concurrent-property monitor");
+        // A property whose body reaches itself is recursive (16.12.17); an
+        // instance of a declaration being expanded is otherwise one an
+        // actual argument wrote in an enclosing context (`s2(s1(a))` where
+        // s2's body instances s1). A sequence shall not depend on itself
+        // (16.8, reported with the declarations).
+        const bool recursive = reaches(declaration, declaration);
+        if (recursive
+            && declaration.kind == SystemVerilogAssertionDeclarationKind::Sequence) {
+            return fail("a sequence that depends on itself (16.8)");
+        }
+        if (recursive && context_.illegal_recursive != nullptr
+            && context_.illegal_recursive->contains({ declaration.name,
+                declaration.name_span.begin.line,
+                declaration.name_span.begin.offset })) {
+            return fail("a recursive property that breaks a restriction of "
+                        "16.12.17");
         }
         if (declaration.disable) {
             return fail("disable iff of a nested property instance");
@@ -1546,14 +1817,48 @@ private:
             }
             position_ = *close + 1U;
         }
+        // The same recursive instance as one being expanded, with the same
+        // actuals of its formals that are not local variables, evaluates
+        // that expansion again (16.12.17, Restriction 4).
+        std::string key;
+        if (recursive) {
+            for (const auto& formal : declaration.formals) {
+                if (local_input(formal)) {
+                    continue;
+                }
+                Token reference;
+                reference.kind = TokenKind::Identifier;
+                reference.text = formal.name;
+                reference.span = formal.span;
+                const auto value = substituted(declaration, actuals,
+                    std::span<const Token> { &reference, 1U });
+                if (!value) {
+                    return fail("the actual arguments of '" + declaration.name
+                        + "' do not match its formals");
+                }
+                key += resolve_clock(context_.unit, context_.scopes, *value,
+                    context_.origin).identity;
+                key += " , ";
+            }
+            for (auto expansion = context_.expansions.rbegin();
+                 expansion != context_.expansions.rend(); ++expansion) {
+                if (expansion->declaration != &declaration
+                    || expansion->key != key) {
+                    continue;
+                }
+                return recursion(declaration, actuals, *expansion);
+            }
+        }
         // Each instance has its own copy of the declaration's local
         // variables (16.10).
         std::vector<std::vector<Token>> initializers;
         std::optional<std::vector<Token>> body;
+        std::map<std::string, std::string, std::less<>> local_names;
         if (has_locals(declaration)) {
             body.emplace();
             if (auto error = declare_locals(context_, declaration, actuals,
-                    declaration.expression_tokens, *body, initializers)) {
+                    declaration.expression_tokens, *body, initializers,
+                    &local_names)) {
                 return fail(std::move(*error));
             }
         } else {
@@ -1575,14 +1880,32 @@ private:
                 context_.origin = origin;
                 return fail("the instance clock does not substitute");
             }
-            clock = clock_index(*event);
+            if (!inferred_clock_only(*event)) {
+                clock = clock_index(*event);
+            }
         }
         const auto enclosing = std::exchange(context_.current_clock, clock);
+        // The node the recursive instances of this expansion return to.
+        std::optional<std::size_t> target;
+        if (recursive) {
+            Node node;
+            node.kind = NodeKind::recursion_target;
+            target = add(std::move(node));
+            context_.expansions.push_back({ &declaration, key, *target, clock,
+                std::move(local_names) });
+        }
         TreeParser inner { nodes_,
             inferred(std::move(*body), context_.clocks[clock],
                 context_.inferred_disable),
             context_, expanded_path(declaration) };
         auto operand = inner.parse();
+        if (target) {
+            context_.expansions.pop_back();
+            if (operand) {
+                nodes_[*target].operands = { *operand };
+                operand = target;
+            }
+        }
         context_.current_clock = enclosing;
         context_.origin = origin;
         if (operand && !initializers.empty()) {
@@ -1598,6 +1921,85 @@ private:
             return operand;
         }
         return clocked(clock, operand);
+    }
+
+    // A recursive instance that evaluates `expansion` again (16.12.17): its
+    // local formal arguments take the values of its actuals, all evaluated
+    // before any is assigned (16.8.2), then its local variables their
+    // initial values (16.10).
+    std::optional<std::size_t> recursion(
+        const SystemVerilogAssertionDeclaration& declaration,
+        const std::vector<std::vector<Token>>& actuals,
+        const ParseContext::Expansion& expansion)
+    {
+        if (context_.current_clock != expansion.clock) {
+            return fail("a recursive property instance on another clock than "
+                        "the instance it repeats");
+        }
+        Node node;
+        node.kind = NodeKind::recursion;
+        node.target = expansion.target;
+        const auto& model = tokens_[position_ - 1U];
+        const auto assignment = [&](const std::string& target,
+                                    const std::span<const Token> value) {
+            std::vector<Token> item;
+            item.push_back(punctuation(model, TokenKind::Identifier, target));
+            item.push_back(punctuation(model, TokenKind::Assign, "="));
+            item.push_back(punctuation(model, TokenKind::LeftParen, "("));
+            item.insert(item.end(), value.begin(), value.end());
+            item.push_back(punctuation(model, TokenKind::RightParen, ")"));
+            return item;
+        };
+        std::vector<std::vector<Token>> stores;
+        for (const auto& formal : declaration.formals) {
+            if (!local_input(formal)) {
+                continue;
+            }
+            const auto unique = expansion.locals.find(formal.name);
+            if (unique == expansion.locals.end()) {
+                return fail("a recursive instance's local formal argument");
+            }
+            Token reference;
+            reference.kind = TokenKind::Identifier;
+            reference.text = formal.name;
+            reference.span = formal.span;
+            const auto value = substituted(declaration, actuals,
+                std::span<const Token> { &reference, 1U });
+            if (!value) {
+                return fail("the actual arguments of '" + declaration.name
+                    + "' do not match its formals");
+            }
+            std::vector<Token> type = formal.type_tokens;
+            if (!type.empty() && type.front().text == "input") {
+                type.erase(type.begin());
+            }
+            const auto temporary
+                = "__fsim_lv" + std::to_string(context_.locals.size());
+            context_.locals.push_back({ temporary, std::move(type) });
+            context_.local_names.insert(temporary);
+            context_.uses_locals = true;
+            node.actual_tokens.push_back(assignment(temporary, *value));
+            const auto read = punctuation(model, TokenKind::Identifier, temporary);
+            stores.push_back(assignment(unique->second,
+                std::span<const Token> { &read, 1U }));
+        }
+        node.actual_tokens.insert(node.actual_tokens.end(),
+            std::make_move_iterator(stores.begin()),
+            std::make_move_iterator(stores.end()));
+        for (const auto& local : declaration.local_variables) {
+            const auto unique = expansion.locals.find(local.name);
+            if (local.initializer_tokens.empty()
+                || unique == expansion.locals.end()) {
+                continue;
+            }
+            const auto value = substituted(declaration, actuals,
+                renamed(local.initializer_tokens, expansion.locals));
+            if (!value) {
+                return fail("a local variable initializer does not substitute");
+            }
+            node.actual_tokens.push_back(assignment(unique->second, *value));
+        }
+        return add(std::move(node));
     }
 
     // The index of a clocking event among the property's clocks: an event
@@ -1668,7 +2070,9 @@ public:
         const SystemVerilogAssertionDeclaration& declaration,
         const std::vector<std::vector<Token>>& actuals,
         const std::span<const Token> raw, std::vector<Token>& body,
-        std::vector<std::vector<Token>>& initializers)
+        std::vector<std::vector<Token>>& initializers,
+        std::map<std::string, std::string, std::less<>>* const unique_names
+        = nullptr)
     {
         context.uses_locals = true;
         std::map<std::string, std::string, std::less<>> names;
@@ -1754,6 +2158,9 @@ public:
             return std::string { "the instance actuals do not match the formals" };
         }
         body = std::move(*substituted_raw);
+        if (unique_names != nullptr) {
+            *unique_names = std::move(names);
+        }
         return std::nullopt;
     }
 
@@ -1805,6 +2212,24 @@ public:
             result.push_back(punctuation(token, TokenKind::RightParen, ")"));
         }
         return result;
+    }
+
+    // Whether a substituted clocking event is only `$inferred_clock`: the
+    // declaration then has the clock of the instance's context (16.14.7),
+    // not a clock of its own.
+    [[nodiscard]] static bool inferred_clock_only(
+        const std::span<const Token> event)
+    {
+        std::size_t begin { };
+        auto end = event.size();
+        while (end >= begin + 3U && event[begin].kind == TokenKind::LeftParen
+            && event[end - 1U].kind == TokenKind::RightParen) {
+            ++begin;
+            --end;
+        }
+        return end == begin + 1U
+            && event[begin].kind == TokenKind::Identifier
+            && event[begin].text == "$inferred_clock";
     }
 
     // A formal's default `$inferred_clock` or `$inferred_disable` is the
@@ -1880,6 +2305,56 @@ private:
         return clocks.size() <= 1U;
     }
 
+    // Whether the body or formal defaults of `from`, through the bodies of
+    // the declarations they instance, instance `target`.
+    [[nodiscard]] bool reaches(const SystemVerilogAssertionDeclaration& from,
+        const SystemVerilogAssertionDeclaration& target) const
+    {
+        std::vector<const SystemVerilogAssertionDeclaration*> pending { &from };
+        std::set<const SystemVerilogAssertionDeclaration*> visited;
+        // A declaration's names resolve in its own scope (16.8).
+        const auto instanced = [&](const std::span<const Token> tokens,
+                                   const std::size_t origin) {
+            for (std::size_t index = 0; index < tokens.size(); ++index) {
+                const auto& token = tokens[index];
+                if (token.kind != TokenKind::Identifier
+                    || (index > 0U
+                        && (tokens[index - 1U].kind == TokenKind::Dot
+                            || tokens[index - 1U].kind == TokenKind::Scope))
+                    || (index + 1U < tokens.size()
+                        && tokens[index + 1U].kind == TokenKind::Dot)) {
+                    continue;
+                }
+                const auto* const found = visible_declaration(context_.unit,
+                    context_.scopes, token.text, origin, std::nullopt);
+                if (found == nullptr) {
+                    continue;
+                }
+                if (found == &target) {
+                    return true;
+                }
+                if (visited.insert(found).second) {
+                    pending.push_back(found);
+                }
+            }
+            return false;
+        };
+        while (!pending.empty()) {
+            const auto* const current = pending.back();
+            pending.pop_back();
+            const auto origin = declaration_scope(context_, *current);
+            if (instanced(current->expression_tokens, origin)) {
+                return true;
+            }
+            for (const auto& formal : current->formals) {
+                if (instanced(formal.default_tokens, origin)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     [[nodiscard]] std::vector<const SystemVerilogAssertionDeclaration*>
     expanded_path(const SystemVerilogAssertionDeclaration& declaration) const
     {
@@ -1911,6 +2386,9 @@ public:
     std::vector<std::vector<Token>> calls;
     // Why a multiclocked sequence could not be compiled.
     std::string failure { };
+    // Whether that reason is a form the standard makes illegal, not one
+    // the plan does not cover.
+    bool illegal { };
 
     // The property's local variables, by their unique names, in order.
     void use_locals(const std::vector<std::string>& names)
@@ -1964,6 +2442,7 @@ public:
             clocks.insert(leading(node.operands[0], incoming));
             break;
         case NodeKind::initialized:
+        case NodeKind::recursion_target:
             leading_clocks(node.operands[0], incoming, clocks);
             break;
         case NodeKind::accept:
@@ -2348,10 +2827,28 @@ private:
         case NodeKind::weak:
         case NodeKind::match_items:
         case NodeKind::initialized:
+        case NodeKind::recursion_target:
             return leading(node.operands[0], incoming);
         default:
             return incoming;
         }
+    }
+
+    // Whether `index` holds initialization assignments that run at a tick
+    // of the instance's only semantic leading clock, the clock in effect
+    // where its evaluation begins (16.13.7): they run before its operand,
+    // as for a singly clocked one, and do not nest it.
+    [[nodiscard]] bool leading_initializers(const std::size_t index,
+        const std::uint32_t incoming) const
+    {
+        const auto& node = nodes_[index];
+        if ((node.kind != NodeKind::match_items || !node.leading)
+            && node.kind != NodeKind::initialized) {
+            return false;
+        }
+        std::set<std::uint32_t> clocks;
+        leading_clocks(node.operands[0], incoming, clocks);
+        return clocks.size() == 1U && *clocks.begin() == incoming;
     }
 
     // `incoming` is the clock in effect at node `index` (16.13.3).
@@ -2377,7 +2874,8 @@ private:
             Nested& operator=(const Nested&) = delete;
         } nested { nested_,
             node.kind != NodeKind::boolean && node.kind != NodeKind::delay
-                && node.kind != NodeKind::clocked };
+                && node.kind != NodeKind::clocked
+                && !leading_initializers(index, incoming) };
         // A boolean is checked on the clock in effect at it; only a cycle
         // delay may change the clock of the thread (16.13.1).
         const auto on_clock = [&] {
@@ -2422,13 +2920,21 @@ private:
                     item));
             }
             if (node.leading) {
+                // 16.13.7: with several semantic leading clocks, each one's
+                // copy of the locals is initialized at its earliest tick.
+                if (!leading_initializers(index, incoming)) {
+                    fail("local variable initialization assignments of an "
+                         "instance with a leading clock other than the clock "
+                         "in effect at its start (16.13.7)");
+                    return;
+                }
                 code.insert(code.end(), items.begin(), items.end());
                 emit(node.operands[0], sequence, incoming);
                 break;
             }
             if (admits_empty(node.operands[0])) {
-                fail("a sequence match item attached to a subsequence that "
-                     "admits an empty match (16.10)");
+                fail_illegal("a sequence match item attached to a "
+                             "subsequence that admits an empty match (16.10)");
                 return;
             }
             emit(node.operands[0], sequence, incoming);
@@ -2631,6 +3137,7 @@ private:
             result.sequence = sequence(node.operands[0], incoming);
             break;
         case NodeKind::negation:
+            restrict_recursion(index);
             result.kind = plan::PropertyKind::negation;
             result.children = { operand(0) };
             break;
@@ -2659,21 +3166,59 @@ private:
             break;
         case NodeKind::initialized: {
             // The initialization assignments run when the property's
-            // evaluation begins (16.10).
-            std::vector<std::uint32_t> initializers;
-            for (const auto& item : node.actual_tokens) {
-                auto parsed = match_item(item);
-                if (!parsed) {
-                    fail("a local variable initialization assignment");
-                    return 0U;
-                }
-                initializers.push_back(expression(std::move(parsed->first),
-                    parsed->second + 1U));
+            // evaluation begins (16.10), at a tick of its only semantic
+            // leading clock (16.13.7); several leading clocks would each
+            // need their own copy of the locals.
+            if (!leading_initializers(index, incoming)) {
+                fail("local variable initialization assignments of a "
+                     "property with a leading clock other than the clock in "
+                     "effect at its start (16.13.7)");
+                return 0U;
+            }
+            auto initializers = assignments(node.actual_tokens);
+            if (!initializers) {
+                return 0U;
             }
             const auto inner = operand(0);
+            // The expansion of a recursive property is evaluated again by
+            // its recursive instances, which assign their own values.
+            if (nodes_[node.operands[0]].kind == NodeKind::recursion_target) {
+                return pass_through(inner, std::move(*initializers), incoming);
+            }
             auto& target = plan.properties[inner].initializers;
-            target.insert(target.begin(), initializers.begin(), initializers.end());
+            target.insert(target.begin(), initializers->begin(), initializers->end());
             return inner;
+        }
+        case NodeKind::recursion_target: {
+            // Its recursive instances refer to its index before its operand
+            // is compiled (16.12.17).
+            const auto reserved = add(plan::Property { });
+            targets_[index] = { reserved, incoming };
+            const auto inner = operand(0);
+            if (inner + 1U == plan.properties.size()) {
+                plan.properties[reserved] = std::move(plan.properties[inner]);
+                plan.properties.pop_back();
+            } else {
+                plan.properties[reserved] = plan.properties[inner];
+            }
+            return reserved;
+        }
+        case NodeKind::recursion: {
+            const auto target = targets_.find(node.target);
+            if (target == targets_.end() || target->second.second != incoming) {
+                fail("a recursive property instance outside the expansion "
+                     "it repeats, or on another clock");
+                return 0U;
+            }
+            if (node.actual_tokens.empty()) {
+                return target->second.first;
+            }
+            auto initializers = assignments(node.actual_tokens);
+            if (!initializers) {
+                return 0U;
+            }
+            return pass_through(target->second.first, std::move(*initializers),
+                incoming);
         }
         case NodeKind::conditional:
             result.kind = plan::PropertyKind::conditional;
@@ -2687,6 +3232,9 @@ private:
             }
             break;
         case NodeKind::nexttime:
+            if (node.strong) {
+                restrict_recursion(index);
+            }
             result.kind = plan::PropertyKind::nexttime;
             result.strong = node.strong;
             result.lo = bound(node.lo);
@@ -2694,6 +3242,9 @@ private:
             break;
         case NodeKind::always:
         case NodeKind::eventually:
+            if (node.strong) {
+                restrict_recursion(index);
+            }
             result.kind = node.kind == NodeKind::always
                 ? plan::PropertyKind::always
                 : plan::PropertyKind::eventually;
@@ -2703,6 +3254,9 @@ private:
             result.children = { operand(0) };
             break;
         case NodeKind::until: {
+            if (node.strong) {
+                restrict_recursion(index);
+            }
             result.kind = plan::PropertyKind::until;
             result.strong = node.strong;
             const auto left = operand(0);
@@ -2723,8 +3277,8 @@ private:
             // An abort condition shall not reference local variables
             // (16.12.14).
             if (reads_locals(node.expression)) {
-                fail("an abort condition that references a local variable "
-                     "(16.12.14)");
+                fail_illegal("an abort condition that references a local "
+                             "variable (16.12.14)");
             }
             result.kind = node.kind == NodeKind::accept
                 ? plan::PropertyKind::accept
@@ -2742,6 +3296,58 @@ private:
         return add(std::move(result));
     }
 
+    // `not` and the strong operators shall not apply to a property that
+    // instantiates a recursive property (16.12.17 Restriction 1).
+    void restrict_recursion(const std::size_t index)
+    {
+        std::vector<std::size_t> pending { nodes_[index].operands.begin(),
+            nodes_[index].operands.end() };
+        while (!pending.empty()) {
+            const auto current = pending.back();
+            pending.pop_back();
+            if (nodes_[current].kind == NodeKind::recursion_target) {
+                fail_illegal("not or a strong operator applied to a recursive "
+                             "property (16.12.17 Restriction 1)");
+                return;
+            }
+            pending.insert(pending.end(), nodes_[current].operands.begin(),
+                nodes_[current].operands.end());
+        }
+    }
+
+    // The local variable assignments `items` as plan expressions.
+    std::optional<std::vector<std::uint32_t>> assignments(
+        const std::vector<std::vector<Token>>& items)
+    {
+        std::vector<std::uint32_t> result;
+        for (const auto& item : items) {
+            auto parsed = match_item(item);
+            if (!parsed) {
+                fail("a local variable initialization assignment");
+                return std::nullopt;
+            }
+            result.push_back(expression(std::move(parsed->first),
+                parsed->second + 1U));
+        }
+        return result;
+    }
+
+    // Property `child` evaluated after the assignments `initializers`, done
+    // when the evaluation begins: `if (1) child` (16.12.8).
+    std::uint32_t pass_through(const std::uint32_t child,
+        std::vector<std::uint32_t> initializers, const std::uint32_t incoming)
+    {
+        plan::Property result;
+        result.kind = plan::PropertyKind::conditional;
+        result.clock = incoming;
+        result.guard = guard(truth_);
+        result.children = { child };
+        result.initializers = std::move(initializers);
+        result.line = plan.properties[child].line;
+        result.column = plan.properties[child].column;
+        return add(std::move(result));
+    }
+
     void fail(std::string reason)
     {
         if (failure.empty()) {
@@ -2749,8 +3355,20 @@ private:
         }
     }
 
+    // A form IEEE 1800-2023 makes illegal (an error, not a limitation).
+    void fail_illegal(std::string reason)
+    {
+        if (failure.empty()) {
+            failure = std::move(reason);
+            illegal = true;
+        }
+    }
+
     const std::vector<Node>& nodes_;
     std::vector<Token> truth_;
+    // The plan property and clock of each recursion_target node compiled
+    // so far (16.12.17).
+    std::map<std::size_t, std::pair<std::uint32_t, std::uint32_t>> targets_;
     std::map<std::string, std::uint32_t, std::less<>> local_index_;
     std::set<std::string, std::less<>> local_names_;
     std::map<std::string, std::uint32_t, std::less<>> expression_index_;
@@ -3295,9 +3913,28 @@ void VerilogParser::wrap_multiclock_sequences(
 // instance) publishes (IEEE 1800-2023 37.50-37.54): the parser's tree with
 // named instances kept, its boolean leaves, conditions and bounds as
 // expressions, in the operand order of the standard.
+namespace {
+
+// A property instance in the declaration of a property (16.12.17, F.7):
+// VerilogParser::SvaPropertyInstanceFact with the declaration it names.
+struct PropertyInstanceFact {
+    const SystemVerilogAssertionDeclaration* callee { };
+    std::optional<std::int64_t> weight;
+    bool restricted { };
+    bool formal_actuals { };
+};
+
+[[nodiscard]] std::vector<PropertyInstanceFact> property_instance_facts(
+    const DesignUnit& unit, const ParseContext& context,
+    const std::vector<Node>& nodes, std::size_t root,
+    const SystemVerilogAssertionDeclaration& declaration);
+
+} // namespace
+
 std::optional<SystemVerilogAssertionTree> VerilogParser::build_assertion_tree(
     const DesignUnit& unit, std::vector<Token> tokens,
-    const SystemVerilogAssertionDeclaration* declaration)
+    const SystemVerilogAssertionDeclaration* declaration,
+    std::string* const failure)
 {
     using Operator = SystemVerilogAssertionOperator;
     strip_semicolons(tokens);
@@ -3306,20 +3943,24 @@ std::optional<SystemVerilogAssertionTree> VerilogParser::build_assertion_tree(
     }
     const auto model = tokens.front();
     std::vector<Node> nodes;
+    const bool keywords_2009 = keyword_set_rank(keyword_set_)
+        >= keyword_set_rank(KeywordSet::SystemVerilog2009);
     ParseContext context {
         unit,
-        [this](const std::span<const Token> operand) {
+        [this, keywords_2009](const std::span<const Token> operand) {
             static constexpr std::array<std::string_view, 20> operators {
                 "and", "or", "not", "intersect", "within", "throughout",
                 "iff", "implies", "until", "s_until", "until_with",
                 "s_until_with", "first_match", "nexttime", "s_nexttime",
                 "always", "s_always", "eventually", "s_eventually", "strong",
             };
-            if (std::ranges::any_of(operand, [](const Token& token) {
+            if (std::ranges::any_of(operand, [&](const Token& token) {
                     return token.kind == TokenKind::Hash
                         || (token.kind == TokenKind::Identifier
                             && std::ranges::find(operators, token.text)
-                                != operators.end());
+                                != operators.end()
+                            && (keywords_2009
+                                || !property_keyword_2009(token.text)));
                 })) {
                 return false;
             }
@@ -3330,6 +3971,7 @@ std::optional<SystemVerilogAssertionTree> VerilogParser::build_assertion_tree(
         },
     };
     context.keep_instances = true;
+    context.keywords_2009 = keywords_2009;
     context.scopes = sva_name_scopes(unit);
     context.origin = declaration != nullptr
         ? declaration_scope(context, *declaration)
@@ -3343,7 +3985,27 @@ std::optional<SystemVerilogAssertionTree> VerilogParser::build_assertion_tree(
     TreeParser parser { nodes, std::move(tokens), context, { } };
     const auto parsed = parser.parse();
     if (!parsed) {
+        if (failure != nullptr) {
+            *failure = context.failure;
+        }
         return std::nullopt;
+    }
+    if (declaration != nullptr
+        && declaration->kind == SystemVerilogAssertionDeclarationKind::Property) {
+        const auto key_of = [](const SystemVerilogAssertionDeclaration& entry) {
+            return SvaDeclarationKey { entry.name, entry.name_span.begin.line,
+                entry.name_span.begin.offset };
+        };
+        auto& facts = sva_property_facts_[key_of(*declaration)];
+        facts.name = declaration->name;
+        facts.name_span = declaration->name_span;
+        facts.disable = declaration->disable.has_value();
+        facts.instances.clear();
+        for (const auto& fact : property_instance_facts(
+                 unit, context, nodes, *parsed, *declaration)) {
+            facts.instances.push_back({ key_of(*fact.callee), fact.callee->name,
+                fact.weight, fact.restricted, fact.formal_actuals });
+        }
     }
     SystemVerilogAssertionTree tree;
     bool failed { };
@@ -3472,6 +4134,8 @@ std::optional<SystemVerilogAssertionTree> VerilogParser::build_assertion_tree(
             if (operand.node >= 0) {
                 tree.nodes[static_cast<std::size_t>(operand.node)].strong
                     = node.kind == NodeKind::strong;
+            } else {
+                operand.strong = node.kind == NodeKind::strong;
             }
             return operand;
         }
@@ -3533,10 +4197,42 @@ std::optional<SystemVerilogAssertionTree> VerilogParser::build_assertion_tree(
         }
         case NodeKind::first_match:
             return add(Operator::FirstMatch, true, { child(0) });
-        case NodeKind::match_items:
+        case NodeKind::match_items: {
+            // The sequence with its match items, each parsed as the
+            // statement it is (an assignment, an increment or decrement, or
+            // a subroutine call; 16.10 A.2.10 sequence_match_item). Names of
+            // local variables are not this scope's objects: the statement
+            // is kept like a boolean's expression, with its diagnostics and
+            // name references dropped.
+            auto operand = child(0);
+            for (const auto& item : node.actual_tokens) {
+                if (item.empty()) {
+                    failed = true;
+                    continue;
+                }
+                auto tokens = item;
+                tokens.push_back(punctuation(item.back(), TokenKind::Semicolon, ";"));
+                const auto saved = diagnostics_.size();
+                const auto references = implicit_net_references_.size();
+                const auto hoisted = hoisted_statements_.size();
+                auto statement = parse_generated_statement(std::move(tokens),
+                    cover(item.front().span, item.back().span));
+                diagnostics_.resize(saved);
+                implicit_net_references_.resize(references);
+                hoisted_statements_.resize(hoisted);
+                if (!statement) {
+                    failed = true;
+                    continue;
+                }
+                operand.match_items.push_back(std::move(*statement));
+            }
+            return operand;
+        }
         case NodeKind::initialized:
+        case NodeKind::recursion_target:
+        case NodeKind::recursion:
             // Only the monitor's parse makes these (the published tree keeps
-            // instances and refuses match items).
+            // instances).
             failed = true;
             return SystemVerilogAssertionTreeOperand { };
         case NodeKind::negation:
@@ -3619,14 +4315,8 @@ std::optional<SystemVerilogAssertionTree> VerilogParser::build_assertion_tree(
         }
         case NodeKind::instance: {
             const Node& instance_node = node;
-            const auto named = std::ranges::find_if(
-                unit.systemverilog_assertion_declarations,
-                [&](const SystemVerilogAssertionDeclaration& entry) {
-                    return entry.kind
-                            != SystemVerilogAssertionDeclarationKind::Checker
-                        && entry.name == instance_node.instance;
-                });
-            if (named == unit.systemverilog_assertion_declarations.end()) {
+            const auto* const named = instance_node.declared;
+            if (named == nullptr) {
                 failed = true;
                 return { };
             }
@@ -3715,15 +4405,48 @@ void VerilogParser::publish_assertion_trees(const DesignUnit& unit,
     std::vector<SystemVerilogAssertionDeclaration>& declarations,
     std::vector<SystemVerilogConcurrentAssertion>& assertions)
 {
+    const auto scopes = sva_name_scopes(unit);
     const auto publish_declaration
-        = [&](SystemVerilogAssertionDeclaration& declaration) {
+        = [&](SystemVerilogAssertionDeclaration& declaration,
+              const bool declared) {
               if (declaration.kind == SystemVerilogAssertionDeclarationKind::Checker
                   || declaration.tree) {
                   return;
               }
+              std::string failure;
               auto tree = build_assertion_tree(
-                  unit, declaration.expression_tokens, &declaration);
+                  unit, declaration.expression_tokens, &declaration, &failure);
+              if (!tree && !declared) {
+                  // The directive's own sequence: the assertion engine
+                  // reports it with the directive.
+                  return;
+              }
               if (!tree) {
+                  // A declaration body that is no sequence or property
+                  // expression is an error whether or not an assertion uses
+                  // the declaration (16.8, 16.12).
+                  Token location;
+                  location.kind = TokenKind::Identifier;
+                  location.text = declaration.name;
+                  location.span = declaration.name_span;
+                  error(declaration.expression_tokens.empty()
+                          ? location
+                          : declaration.expression_tokens.front(),
+                      "FSIM-SV-SEM-475",
+                      std::string { declaration.kind
+                                  == SystemVerilogAssertionDeclarationKind::
+                                      Sequence
+                              ? "the body of sequence '"
+                              : "the body of property '" }
+                          + declaration.name + "' is not a "
+                          + (declaration.kind
+                                      == SystemVerilogAssertionDeclarationKind::
+                                          Sequence
+                                  ? "sequence"
+                                  : "property")
+                          + " expression"
+                          + (failure.empty() ? std::string { }
+                                             : ": " + failure));
                   return;
               }
               for (const auto& formal : declaration.formals) {
@@ -3738,11 +4461,11 @@ void VerilogParser::publish_assertion_trees(const DesignUnit& unit,
               declaration.tree = std::move(tree);
           };
     for (auto& declaration : declarations) {
-        publish_declaration(declaration);
+        publish_declaration(declaration, true);
     }
     for (auto& assertion : assertions) {
         if (assertion.inline_sequence) {
-            publish_declaration(*assertion.inline_sequence);
+            publish_declaration(*assertion.inline_sequence, false);
         }
         // A property that names a declared property or sequence is an
         // instance of it (37.50 vpiProperty); an inline property is the
@@ -3753,13 +4476,9 @@ void VerilogParser::publish_assertion_trees(const DesignUnit& unit,
                 "$inline_property$")) {
             continue;
         }
-        const auto named = std::ranges::find_if(
-            unit.systemverilog_assertion_declarations,
-            [&](const SystemVerilogAssertionDeclaration& entry) {
-                return entry.kind != SystemVerilogAssertionDeclarationKind::Checker
-                    && entry.name == assertion.property_tokens.front().text;
-            });
-        if (named == unit.systemverilog_assertion_declarations.end()) {
+        if (visible_declaration(unit, scopes, assertion.property_tokens.front().text,
+                scopes.empty() ? 0U : scopes.size() - 1U, std::nullopt)
+            == nullptr) {
             continue;
         }
         assertion.property_instance
@@ -3801,7 +4520,13 @@ std::optional<VerilogParser::SvaPrepared> VerilogParser::prepare_sva_property(
         reason = std::move(why);
         return std::nullopt;
     };
+    const auto fail_illegal
+        = [&](std::string why) -> std::optional<SvaPrepared> {
+        sva_reject_illegal_ = true;
+        return fail(std::move(why));
+    };
     sva_uses_locals_ = false;
+    sva_reject_illegal_ = false;
     std::vector<Token> tokens;
     std::vector<Token> clock { };
     std::vector<Token> disable;
@@ -3854,6 +4579,8 @@ std::optional<VerilogParser::SvaPrepared> VerilogParser::prepare_sva_property(
     // A property that is one instance of a declaration takes that
     // declaration's clock and disable condition (16.12, 16.13).
     std::vector<std::string> inlined;
+    // Whether the maximal property is a sequence or property instance.
+    bool root_instance { };
     while (!tokens.empty()) {
         if (tokens.front().kind != TokenKind::Identifier) {
             break;
@@ -3864,13 +4591,14 @@ std::optional<VerilogParser::SvaPrepared> VerilogParser::prepare_sva_property(
             break;
         }
         inlined.push_back(std::string { tokens.front().text });
-        const auto declaration = std::ranges::find_if(
-            unit.systemverilog_assertion_declarations,
-            [&](const SystemVerilogAssertionDeclaration& entry) {
-                return entry.kind != SystemVerilogAssertionDeclarationKind::Checker
-                    && entry.name == tokens.front().text;
-            });
-        if (declaration == unit.systemverilog_assertion_declarations.end()) {
+        // An end point's monitor instances the declaration resolved where
+        // the end point was read.
+        const auto* const declaration = inlined.size() == 1U
+                && sva_root_declaration_ != nullptr
+            ? sva_root_declaration_
+            : visible_declaration(unit, scoped.scopes, tokens.front().text,
+                  origin, std::nullopt);
+        if (declaration == nullptr) {
             break;
         }
         std::vector<std::vector<Token>> actuals;
@@ -3917,17 +4645,41 @@ std::optional<VerilogParser::SvaPrepared> VerilogParser::prepare_sva_property(
             return fail("the instance actuals do not match the formals");
         }
         origin = declaration_scope(scoped, *declaration);
+        // The declaration's clocking event and disable condition shall not
+        // reference its local variables or local formals (16.10, 16.12).
+        std::set<std::string, std::less<>> declared_locals;
+        for (const auto& local : declaration->local_variables) {
+            declared_locals.insert(local.name);
+        }
+        for (const auto& formal : declaration->formals) {
+            if (formal.local) {
+                declared_locals.insert(formal.name);
+            }
+        }
+        if (declaration->clock
+            && mentions_local(declaration->clock->event_tokens, declared_locals)) {
+            return fail_illegal("a clocking event that references a local "
+                                "variable (16.10)");
+        }
+        if (declaration->disable
+            && mentions_local(
+                declaration->disable->condition_tokens, declared_locals)) {
+            return fail_illegal("a disable condition that references a local "
+                                "variable (16.12)");
+        }
         if (declaration->clock) {
             auto event = TreeParser::substituted(
                 *declaration, actuals, declaration->clock->event_tokens);
             if (!event) {
                 return fail("the instance clock does not substitute");
             }
-            if (other_clock(*event, origin)) {
-                return fail("more than one clocking event");
+            if (!TreeParser::inferred_clock_only(*event)) {
+                if (other_clock(*event, origin)) {
+                    return fail("more than one clocking event");
+                }
+                clock = std::move(*event);
+                clock_origin = origin;
             }
-            clock = std::move(*event);
-            clock_origin = origin;
         }
         if (declaration->disable) {
             auto condition = TreeParser::substituted(
@@ -3939,6 +4691,7 @@ std::optional<VerilogParser::SvaPrepared> VerilogParser::prepare_sva_property(
         }
         tokens = std::move(*body);
         strip_semicolons(tokens);
+        root_instance = true;
     }
     // A leading clocking event and disable condition in the property.
     if (!tokens.empty() && tokens.front().kind == TokenKind::At) {
@@ -3999,11 +4752,25 @@ std::optional<VerilogParser::SvaPrepared> VerilogParser::prepare_sva_property(
         name.span = directive.span;
         clock.push_back(std::move(name));
     }
-    if (clock.empty()) {
+    // Without a clock flowing in, the property's own unique semantic
+    // leading clock clocks it (16.16.1: `s ##1 t` with s and t clocked
+    // sequences); clock 0 then stands for the inherited clock until the
+    // property is parsed.
+    const bool inherited_clock = clock.empty();
+    if (inherited_clock
+        && (std::ranges::any_of(tokens,
+                [](const Token& token) {
+                    return token.text == "$inferred_clock";
+                })
+            || std::ranges::any_of(disable, [](const Token& token) {
+                   return token.text == "$inferred_clock";
+               }))) {
         return fail("no clocking event");
     }
     // The leading clock as the directive's scope reads it.
-    auto leading_clock = resolve_clock(unit, scoped.scopes, clock, clock_origin);
+    auto leading_clock = inherited_clock
+        ? ResolvedClock { }
+        : resolve_clock(unit, scoped.scopes, clock, clock_origin);
     clock = std::move(leading_clock.tokens);
     // It is illegal to use an automatic variable in a clocking event
     // (IEEE 1800-2023 16.14.6).
@@ -4031,9 +4798,11 @@ std::optional<VerilogParser::SvaPrepared> VerilogParser::prepare_sva_property(
         return fail("an empty property");
     }
 
+    const bool keywords_2009 = keyword_set_rank(keyword_set_)
+        >= keyword_set_rank(KeywordSet::SystemVerilog2009);
     ParseContext context {
         unit,
-        [this](const std::span<const Token> operand) {
+        [this, keywords_2009](const std::span<const Token> operand) {
             // Sequence and property operators never occur in an expression.
             static constexpr std::array<std::string_view, 20> operators {
                 "and", "or", "not", "intersect", "within", "throughout",
@@ -4041,11 +4810,13 @@ std::optional<VerilogParser::SvaPrepared> VerilogParser::prepare_sva_property(
                 "s_until_with", "first_match", "nexttime", "s_nexttime",
                 "always", "s_always", "eventually", "s_eventually", "strong",
             };
-            if (std::ranges::any_of(operand, [](const Token& token) {
+            if (std::ranges::any_of(operand, [&](const Token& token) {
                     return token.kind == TokenKind::Hash
                         || (token.kind == TokenKind::Identifier
                             && std::ranges::find(operators, token.text)
-                                != operators.end());
+                                != operators.end()
+                            && (keywords_2009
+                                || !property_keyword_2009(token.text)));
                 })) {
                 return false;
             }
@@ -4063,16 +4834,28 @@ std::optional<VerilogParser::SvaPrepared> VerilogParser::prepare_sva_property(
         0U,
     };
     context.clock_identities = { std::move(leading_clock.identity) };
+    context.keywords_2009 = keywords_2009;
     context.scopes = std::move(scoped.scopes);
     context.origin = origin;
     context.locals = std::move(scoped.locals);
     context.local_names = std::move(scoped.local_names);
     context.uses_locals = scoped.uses_locals;
+    context.illegal_recursive = &sva_illegal_recursive_;
+    context.endpoint = [&](const SystemVerilogAssertionDeclaration& declared,
+                           const std::span<const Token> receiver,
+                           const bool matched, std::string& wait_bit,
+                           std::string& failure) {
+        return sva_endpoint_use(unit, context.scopes, context.origin,
+            declared, receiver, matched,
+            context.clocks[context.current_clock], directive.span, wait_bit,
+            failure);
+    };
     std::vector<Node> nodes;
     TreeParser parser { nodes, tokens, context, { } };
     auto root = parser.parse();
     sva_uses_locals_ = sva_uses_locals_ || context.uses_locals;
     if (!root) {
+        sva_reject_illegal_ = context.illegal;
         return fail(context.failure);
     }
     // The root declarations' initialization assignments run when the
@@ -4098,28 +4881,13 @@ std::optional<VerilogParser::SvaPrepared> VerilogParser::prepare_sva_property(
     // local variable (16.10, 16.12.14).
     if (!context.local_names.empty()) {
         if (mentions_local(disable, context.local_names)) {
-            return fail("a disable condition that references a local variable "
-                        "(16.12)");
+            return fail_illegal("a disable condition that references a "
+                                "local variable (16.12)");
         }
         for (const auto& event : context.clocks) {
             if (mentions_local(event, context.local_names)) {
-                return fail("a clocking event that references a local variable "
-                            "(16.10)");
-            }
-        }
-    }
-    const bool multiclocked = context.clocks.size() > 1U;
-    if (multiclocked && (tick_prefix.empty() || expect_names != nullptr)) {
-        return fail("a multiclocked sequence in a procedural assertion");
-    }
-    if (multiclocked && !context.locals.empty()) {
-        // 16.13.7: a multiclocked property's local variable initialization
-        // assignments happen at the earliest tick of each semantic leading
-        // clock, a copy per clock; not evaluated yet.
-        for (const auto& node : nodes) {
-            if (node.kind == NodeKind::initialized) {
-                return fail("local variable initialization assignments of a "
-                            "multiclocked property (16.13.7)");
+                return fail_illegal("a clocking event that references a "
+                                    "local variable (16.10)");
             }
         }
     }
@@ -4131,6 +4899,53 @@ std::optional<VerilogParser::SvaPrepared> VerilogParser::prepare_sva_property(
         }
         compiler.use_locals(names);
     }
+    if (inherited_clock) {
+        // The inherited clock is no clock: the property's set of semantic
+        // leading clocks shall be one clock of its own (16.16.1, 16.16 e).
+        std::set<std::uint32_t> leading;
+        if (context.clocks.size() > 1U) {
+            compiler.leading_clocks(*root, 0U, leading);
+        }
+        if (leading.empty() || leading.contains(0U)
+            || std::ranges::any_of(nodes, [](const Node& node) {
+                   return (node.kind == NodeKind::clocked
+                              || node.kind == NodeKind::clocked_property)
+                       && node.clock == 0U;
+               })) {
+            return fail("no clocking event");
+        }
+        if (leading.size() != 1U) {
+            return fail_illegal("a multiclocked property without a unique "
+                                "semantic leading clock (16.16)");
+        }
+        // With no clock from the statement, a default clocking or the
+        // procedure, the maximal property shall be an instance (16.16 f).
+        if (!root_instance) {
+            return fail_illegal("a concurrent assertion without a leading "
+                                "clocking event whose property is not a "
+                                "sequence or property instance (16.16)");
+        }
+        const auto unique = *leading.begin() - 1U;
+        context.clocks.erase(context.clocks.begin());
+        context.clock_identities.erase(context.clock_identities.begin());
+        for (auto& node : nodes) {
+            if (node.kind == NodeKind::clocked
+                || node.kind == NodeKind::clocked_property) {
+                --node.clock;
+                node.clock = node.clock == 0U ? unique
+                    : node.clock == unique   ? 0U
+                                             : node.clock;
+            }
+        }
+        std::swap(context.clocks[0], context.clocks[unique]);
+        std::swap(context.clock_identities[0],
+            context.clock_identities[unique]);
+        clock = context.clocks[0];
+    }
+    const bool multiclocked = context.clocks.size() > 1U;
+    if (multiclocked && (tick_prefix.empty() || expect_names != nullptr)) {
+        return fail("a multiclocked sequence in a procedural assertion");
+    }
     // The clock in effect at the root: the directive's (clock 0).
     std::uint32_t root_clock = 0U;
     if (multiclocked) {
@@ -4141,8 +4956,8 @@ std::optional<VerilogParser::SvaPrepared> VerilogParser::prepare_sva_property(
         std::set<std::uint32_t> leading;
         compiler.leading_clocks(*root, 0U, leading);
         if (leading.size() != 1U) {
-            return fail("a multiclocked property without a unique semantic "
-                        "leading clock (16.16)");
+            return fail_illegal("a multiclocked property without a unique "
+                                "semantic leading clock (16.16)");
         }
         const auto unique = *leading.begin();
         if (unique != 0U) {
@@ -4164,6 +4979,7 @@ std::optional<VerilogParser::SvaPrepared> VerilogParser::prepare_sva_property(
             && directive.kind == SystemVerilogConcurrentAssertionKind::Cover,
         root_clock);
     if (!compiler.failure.empty()) {
+        sva_reject_illegal_ = compiler.illegal;
         return fail(compiler.failure);
     }
     SvaPrepared prepared;
@@ -4214,7 +5030,8 @@ std::optional<VerilogParser::SvaPrepared> VerilogParser::prepare_sva_property(
         prepared.every_step = true;
     }
     prepared.wakes = !prepared.async_aborts.empty() || prepared.every_step;
-    if (multiclocked || (prepared.wakes && !tick_prefix.empty())) {
+    if (multiclocked
+        || ((prepared.wakes || sva_force_ticks_) && !tick_prefix.empty())) {
         // Each clock's tick is a hidden bit its own clock process sets and
         // the monitor's tick clears (`<prefix>_ck`, `<prefix>_ck<k>` for
         // clock k of a multiclocked plan), read with its current value
@@ -4339,6 +5156,7 @@ std::optional<VerilogParser::SvaPrepared> VerilogParser::prepare_sva_property(
         return fail(clock_failure);
     }
     prepared.calls = std::move(compiler.calls);
+    prepared.endpoint_waits = std::move(context.endpoint_waits);
     return prepared;
 }
 
@@ -4572,22 +5390,13 @@ void VerilogParser::resolve_expect_statements(const DesignUnit& scope,
             location.kind = TokenKind::Identifier;
             location.text = "expect";
             location.span = directive.span;
-            error(location, "FSIM-SV-SEM-200",
-                "the expect property cannot be evaluated: " + reason);
-            return;
-        }
-        if (!prepared->locals.empty() || !prepared->calls.empty()) {
-            // The request loop reads the design's values in the assertion
-            // process's sampled mode (16.10, 16.5.1), which an expect's
-            // procedure does not have.
-            Token location;
-            location.kind = TokenKind::Identifier;
-            location.text = "expect";
-            location.span = directive.span;
-            error(location, "FSIM-SV-SEM-200",
-                "the expect property cannot be evaluated: local variables "
-                "or subroutine calls in an expect property (16.17, 16.10, "
-                "16.11)");
+            if (sva_reject_illegal_) {
+                error(location, "FSIM-SV-SEM-474",
+                    "the expect property is illegal: " + reason);
+            } else {
+                error(location, "FSIM-SV-SEM-200",
+                    "the expect property cannot be evaluated: " + reason);
+            }
             return;
         }
         // Every expect statement has its own monitor site: a process may
@@ -4687,8 +5496,14 @@ void VerilogParser::resolve_expect_statements(const DesignUnit& scope,
         // One attempt starts at the next clocking event; the statement
         // completes with the attempt (16.17).
         emit("begin int " + prefix + "_n; int " + prefix + "_o; int " + prefix
-            + "_c; bit " + prefix + "_s; " + prefix + "_s = 1'b1; " + prefix
-            + "_o = 0; while (" + prefix + "_o == 0) begin ");
+            + "_c; bit " + prefix + "_s; ");
+        // The property's local variables and the subroutine calls' queue
+        // index: variables of the statement's block (16.10, 16.11).
+        const auto declarations
+            = sva_local_declarations(*prepared, prefix, directive.span);
+        body.insert(body.end(), declarations.begin(), declarations.end());
+        emit(prefix + "_s = 1'b1; " + prefix + "_o = 0; while (" + prefix
+            + "_o == 0) begin ");
         if (wakes) {
             emit("if (" + prefix + "_s) @(posedge " + tick_bit + "); else @(posedge "
                 + tick_bit + " or " + wake_bit
@@ -4727,6 +5542,22 @@ void VerilogParser::resolve_expect_statements(const DesignUnit& scope,
                       directive.span)
                 : std::vector<Token> { });
         body.insert(body.end(), call.begin(), call.end());
+        emit("; ");
+        if (!prepared->locals.empty() || !prepared->calls.empty()) {
+            // The local-variable requests and the queued subroutine calls
+            // read the design's sampled values (16.10, 16.11, 16.5.1), as an
+            // assertion process does: the statement's procedure reads them
+            // so between the two markers, and its own variables (the
+            // locals) with their current values.
+            emit("__fsim_act_sampledon(); ");
+            const auto loop = sva_request_loop(
+                *prepared, site, call, prefix, directive.span);
+            body.insert(body.end(), loop.begin(), loop.end());
+            const auto calls
+                = sva_call_loop(*prepared, site, prefix, directive.span);
+            body.insert(body.end(), calls.begin(), calls.end());
+            emit("__fsim_act_sampledoff(); ");
+        }
         // The pass statement runs on a nonvacuous (1) or vacuous (3)
         // success and the fail statement on a failure (2) only while the
         // assertion action controls enable them for this expect statement
@@ -4739,7 +5570,7 @@ void VerilogParser::resolve_expect_statements(const DesignUnit& scope,
             label += character;
         }
         const auto control = prefix + "_c";
-        emit("; " + prefix + "_s = 1'b0; if (" + prefix + "_n != 0) " + prefix
+        emit(prefix + "_s = 1'b0; if (" + prefix + "_n != 0) " + prefix
             + "_o = $__fsim_sva_outcome(" + std::to_string(site) + "); end "
             + control + " = $__fsim_assertion_control("
             + std::to_string(semantic::sva::control_expect) + ", 0, \""
@@ -4775,10 +5606,26 @@ void VerilogParser::resolve_expect_statements(const DesignUnit& scope,
                 Statement replacement;
                 replacement.kind = StatementKind::Block;
                 replacement.span = directive.span;
-                const auto& actions = item.task_name == "__fsim_act_success"
-                    ? pass_actions
-                    : failure_actions;
-                replacement.statements.assign(actions.begin(), actions.end());
+                const auto marker = [&](const std::string_view text) {
+                    Statement region;
+                    region.kind = StatementKind::Display;
+                    region.output_newline = false;
+                    region.output_text = std::string { "\x1f" } + std::string { text };
+                    region.span = directive.span;
+                    replacement.statements = { std::move(region) };
+                };
+                if (item.task_name == "__fsim_act_callregion") {
+                    marker("fsim.concurrent-assertion-call-region|" + prefix);
+                } else if (item.task_name == "__fsim_act_sampledon") {
+                    marker("fsim.concurrent-assertion-sampled-reads|on");
+                } else if (item.task_name == "__fsim_act_sampledoff") {
+                    marker("fsim.concurrent-assertion-sampled-reads|off");
+                } else {
+                    const auto& actions = item.task_name == "__fsim_act_success"
+                        ? pass_actions
+                        : failure_actions;
+                    replacement.statements.assign(actions.begin(), actions.end());
+                }
                 item = std::move(replacement);
                 return;
             }
@@ -4873,8 +5720,15 @@ void VerilogParser::resolve_expect_statements(const DesignUnit& scope,
 bool VerilogParser::resolve_sva_directive(
     DesignUnit& unit, const std::size_t index)
 {
+    return resolve_sva_monitor(unit,
+        unit.systemverilog_concurrent_assertions[index], index, nullptr);
+}
+
+bool VerilogParser::resolve_sva_monitor(DesignUnit& unit,
+    const SystemVerilogConcurrentAssertion& directive, const std::size_t index,
+    const SvaEndpoint* const endpoint)
+{
     using namespace assertion_resolution_detail;
-    const auto& directive = unit.systemverilog_concurrent_assertions[index];
     const auto reject = [&](const std::string& reason) {
         sva_reject_reason_ = reason;
         if (trace_enabled()) {
@@ -4885,11 +5739,25 @@ bool VerilogParser::resolve_sva_directive(
         return false;
     };
     std::string reason;
-    const auto prefix = "__fsim_sva" + std::to_string(index);
+    const auto prefix = endpoint != nullptr
+        ? endpoint->name
+        : "__fsim_sva" + std::to_string(index);
+    // An end point's readers wait for its monitor's tick bit.
+    const auto forced_ticks
+        = std::exchange(sva_force_ticks_, endpoint != nullptr);
+    const auto root_declaration = std::exchange(sva_root_declaration_,
+        endpoint != nullptr
+            ? &unit.systemverilog_assertion_declarations[endpoint->declaration]
+            : nullptr);
     const auto prepared
         = prepare_sva_property(unit, directive, reason, prefix);
+    sva_force_ticks_ = forced_ticks;
+    sva_root_declaration_ = root_declaration;
     if (!prepared) {
         return reject(reason);
+    }
+    if (endpoint != nullptr) {
+        sva_endpoints_[index].waits = prepared->endpoint_waits;
     }
     const auto& encoded = prepared->plan;
     if (trace_enabled()) {
@@ -4901,9 +5769,14 @@ bool VerilogParser::resolve_sva_directive(
     Process process;
     process.kind = ProcessKind::VerilogAlways;
     process.systemverilog_concurrent_assertion = true;
-    process.name = directive.label.empty()
-        ? "$assertion$" + std::to_string(index + 1U)
-        : directive.label;
+    if (endpoint == nullptr) {
+        process.systemverilog_assertion_directive = index;
+        process.name = directive.label.empty()
+            ? "$assertion$" + std::to_string(index + 1U)
+            : directive.label;
+    } else {
+        process.name = endpoint->name;
+    }
     process.span = directive.span;
     const auto kind_name
         = directive.kind == SystemVerilogConcurrentAssertionKind::Assume
@@ -5051,8 +5924,10 @@ bool VerilogParser::resolve_sva_directive(
     // directive type to the assertion controls (IEEE 1800-2023 20.11),
     // which reach the monitor through the attempt filter and the outcome
     // pop.
-    const auto control_directive
-        = directive.kind == SystemVerilogConcurrentAssertionKind::Assert
+    // An end point's monitor is no assertion: the assertion controls do
+    // not reach it (20.11).
+    const auto control_directive = endpoint != nullptr ? 0U
+        : directive.kind == SystemVerilogConcurrentAssertionKind::Assert
         ? semantic::sva::control_assert
         : directive.kind == SystemVerilogConcurrentAssertionKind::Cover
         ? semantic::sva::control_cover
@@ -5167,7 +6042,13 @@ bool VerilogParser::resolve_sva_directive(
         }
         wake = synthetic_tokens(group, directive.span);
     }
-    emit(") begin " + prefix + "_n = ");
+    emit(") begin ");
+    // The end points this time step's evaluation reads are known once
+    // their monitors have ticked (16.13.6).
+    for (const auto& bit : prepared->endpoint_waits) {
+        emit("wait ($__fsim_current(" + bit + " == 1'b0)); ");
+    }
+    emit(prefix + "_n = ");
     {
         // A procedural assertion starts an attempt only when its procedure
         // reached the statement (16.14.6.2); the lowering reads this
@@ -5226,6 +6107,34 @@ bool VerilogParser::resolve_sva_directive(
     if (!statement) {
         return reject("the generated process does not parse");
     }
+    // An end point's match keeps the time of the match, and of the last
+    // match of an earlier time step, read with current values in the
+    // Observed region (16.13.6).
+    std::vector<Statement> endpoint_match;
+    if (endpoint != nullptr) {
+        const auto sampled_reads = [&](const std::string_view state) {
+            Statement statement;
+            statement.kind = StatementKind::Display;
+            statement.output_newline = false;
+            statement.output_text = std::string { "\x1f"
+                                                  "fsim.concurrent-assertion-sampled-reads|" }
+                + std::string { state };
+            statement.span = directive.span;
+            return statement;
+        };
+        auto update = parse_generated_statement(
+            synthetic_tokens("if (" + prefix + "_t != $realtime + 1.0) begin "
+                    + prefix + "_p = " + prefix + "_t; " + prefix
+                    + "_t = $realtime + 1.0; end",
+                directive.span),
+            directive.span);
+        if (!update) {
+            return reject("the generated end-point update does not parse");
+        }
+        endpoint_match.push_back(sampled_reads("off"));
+        endpoint_match.push_back(std::move(*update));
+        endpoint_match.push_back(sampled_reads("on"));
+    }
     // Replace the action placeholders.
     const auto substitute = [&](const auto& self, Statement& item) -> void {
         if (item.kind == StatementKind::TaskCall
@@ -5234,7 +6143,11 @@ bool VerilogParser::resolve_sva_directive(
             Statement replacement;
             replacement.kind = StatementKind::Block;
             replacement.span = directive.span;
-            if (which == "callregion") {
+            if (endpoint != nullptr) {
+                if (which == "success" || which == "success_off") {
+                    replacement.statements = endpoint_match;
+                }
+            } else if (which == "callregion") {
                 Statement region;
                 region.kind = StatementKind::Display;
                 region.output_newline = false;
@@ -5310,8 +6223,10 @@ bool VerilogParser::resolve_sva_directive(
         }
         abort_assignment->assignment_kind = AssignmentKind::Continuous;
     }
-    process.statements.push_back(coverage_marker("register"));
-    if (checks) {
+    if (endpoint == nullptr) {
+        process.statements.push_back(coverage_marker("register"));
+    }
+    if (checks && endpoint == nullptr) {
         process.statements.push_back(std::move(obligation));
         process.statements.push_back(std::move(vacuous_obligation));
     }
@@ -5358,6 +6273,841 @@ bool VerilogParser::resolve_sva_directive(
         unit.concurrent_statements.push_back(std::move(*abort_assignment));
     }
     return true;
+}
+
+std::optional<std::vector<Token>> VerilogParser::sva_endpoint_use(
+    const DesignUnit& unit, const std::vector<SvaNameScope>& scopes,
+    const std::size_t origin,
+    const SystemVerilogAssertionDeclaration& declaration,
+    const std::span<const Token> receiver, const bool matched,
+    const std::span<const Token> clock, const SourceSpan& span,
+    std::string& wait_bit, std::string& failure)
+{
+    const auto innermost = scopes.empty() ? 0U : scopes.size() - 1U;
+    // A sequence declared without a clock ends on the clock of the context
+    // of the read (16.13.5).
+    std::vector<Token> source_clock;
+    if (!declaration.clock) {
+        if (clock.empty()) {
+            failure = "the sequence '" + declaration.name
+                + "' of an end-point read has no clocking event";
+            return std::nullopt;
+        }
+        source_clock.assign(clock.begin(), clock.end());
+    }
+    // The same end point is the same declaration with actuals and clock
+    // naming the same objects.
+    const auto declaration_index = static_cast<std::size_t>(
+        &declaration - unit.systemverilog_assertion_declarations.data());
+    auto resolved = resolve_clock(unit, scopes, receiver, origin);
+    const auto clock_identity = source_clock.empty()
+        ? std::string { }
+        : resolve_clock(unit, scopes, source_clock, innermost).identity;
+    const auto key = std::to_string(declaration_index) + " "
+        + resolved.identity + " @ " + clock_identity;
+    auto found = std::ranges::find(sva_endpoints_, key, &SvaEndpoint::key);
+    if (found == sva_endpoints_.end()) {
+        SvaEndpoint endpoint;
+        endpoint.key = key;
+        endpoint.receiver = std::move(resolved.tokens);
+        endpoint.declaration = declaration_index;
+        endpoint.clock = std::move(source_clock);
+        endpoint.span = span;
+        endpoint.name = "__fsim_ep" + std::to_string(sva_endpoint_counter_++);
+        sva_endpoints_.push_back(std::move(endpoint));
+        found = sva_endpoints_.end() - 1;
+    }
+    const auto name = found->name;
+    if (!matched) {
+        // Triggered in this time step: a match at the current time, read
+        // once the monitor has ticked (16.13.6).
+        wait_bit = name + "_ck";
+        return synthetic_tokens(
+            "$__fsim_current(" + name + "_t == $realtime + 1.0)", span);
+    }
+    // Matched at a tick of the destination clock: a match of an earlier
+    // time step at or after the previous tick of that clock (16.13.5,
+    // F.6.1).
+    if (clock.empty()) {
+        failure = "a matched end point read without a clocking event";
+        return std::nullopt;
+    }
+    const auto destination_key = name + " @ "
+        + resolve_clock(unit, scopes, clock, innermost).identity;
+    auto destination = std::ranges::find(sva_endpoint_destinations_,
+        destination_key, &SvaEndpointDestination::key);
+    if (destination == sva_endpoint_destinations_.end()) {
+        SvaEndpointDestination entry;
+        entry.key = destination_key;
+        entry.clock.assign(clock.begin(), clock.end());
+        entry.span = span;
+        entry.name = name + "_d"
+            + std::to_string(sva_endpoint_destinations_.size());
+        sva_endpoint_destinations_.push_back(std::move(entry));
+        destination = sva_endpoint_destinations_.end() - 1;
+    }
+    const auto earlier = "((" + name + "_t < $realtime + 1.0) ? " + name
+        + "_t : " + name + "_p)";
+    return synthetic_tokens("$__fsim_current(" + earlier + " >= 1.0 && "
+            + earlier + " >= " + destination->name + "_prev)",
+        span);
+}
+
+void VerilogParser::materialize_sva_endpoints(DesignUnit& unit)
+{
+    // A monitor's sequence may read other end points, which register more.
+    for (std::size_t index = 0; index < sva_endpoints_.size(); ++index) {
+        if (sva_endpoints_[index].materialized) {
+            continue;
+        }
+        sva_endpoints_[index].materialized = true;
+        const auto endpoint = sva_endpoints_[index];
+        parse_generated_items(synthetic_tokens("real " + endpoint.name
+                    + "_t; real " + endpoint.name + "_p;",
+                endpoint.span),
+            endpoint.span, unit);
+        SystemVerilogConcurrentAssertion directive;
+        directive.kind = SystemVerilogConcurrentAssertionKind::Cover;
+        directive.form = SystemVerilogConcurrentAssertionForm::Sequence;
+        directive.span = endpoint.span;
+        if (!endpoint.clock.empty()) {
+            directive.property_tokens = synthetic_tokens("@(", endpoint.span);
+            directive.property_tokens.insert(directive.property_tokens.end(),
+                endpoint.clock.begin(), endpoint.clock.end());
+            const auto close = synthetic_tokens(")", endpoint.span);
+            directive.property_tokens.insert(directive.property_tokens.end(),
+                close.begin(), close.end());
+        }
+        directive.property_tokens.insert(directive.property_tokens.end(),
+            endpoint.receiver.begin(), endpoint.receiver.end());
+        {
+            SystemVerilogAssertionDeclaration sequence;
+            sequence.kind = SystemVerilogAssertionDeclarationKind::Sequence;
+            sequence.body_tokens = directive.property_tokens;
+            sequence.body_span = endpoint.span;
+            structure_assertion_clock_and_disable(sequence, 0U);
+            structure_assertion_endpoints(sequence);
+            structure_sequence_expression(sequence);
+            sequence.span = endpoint.span;
+            directive.inline_sequence = std::move(sequence);
+        }
+        const auto saved_reason = sva_reject_reason_;
+        const auto saved_illegal = sva_reject_illegal_;
+        if (!resolve_sva_monitor(unit, directive, index,
+                &sva_endpoints_[index])) {
+            error(endpoint.receiver.front(), "FSIM-SV-SEM-476",
+                "the end point of sequence '" + spelling(endpoint.receiver)
+                    + "' cannot be evaluated: " + sva_reject_reason_);
+        }
+        sva_reject_reason_ = saved_reason;
+        sva_reject_illegal_ = saved_illegal;
+    }
+    for (auto& destination : sva_endpoint_destinations_) {
+        if (destination.materialized) {
+            continue;
+        }
+        destination.materialized = true;
+        std::vector<Token> items = synthetic_tokens("real " + destination.name
+                + "_prev; real " + destination.name
+                + "_cur; always @(",
+            destination.span);
+        items.insert(items.end(), destination.clock.begin(),
+            destination.clock.end());
+        const auto tail = synthetic_tokens(") begin " + destination.name
+                + "_prev = " + destination.name + "_cur; " + destination.name
+                + "_cur = $realtime + 1.0; end",
+            destination.span);
+        items.insert(items.end(), tail.begin(), tail.end());
+        parse_generated_items(std::move(items), destination.span, unit);
+    }
+    // There shall be no circular dependencies between sequences induced by
+    // triggered (16.13.6).
+    for (const auto& endpoint : sva_endpoints_) {
+        std::vector<std::string> pending = endpoint.waits;
+        std::set<std::string> seen;
+        bool circular { };
+        while (!pending.empty() && !circular) {
+            const auto bit = pending.back();
+            pending.pop_back();
+            if (bit == endpoint.name + "_ck") {
+                circular = true;
+                break;
+            }
+            if (!seen.insert(bit).second) {
+                continue;
+            }
+            for (const auto& other : sva_endpoints_) {
+                if (other.name + "_ck" == bit) {
+                    pending.insert(pending.end(), other.waits.begin(),
+                        other.waits.end());
+                }
+            }
+        }
+        if (circular) {
+            error(endpoint.receiver.front(), "FSIM-SV-SEM-476",
+                "the end point of sequence '" + spelling(endpoint.receiver)
+                    + "' depends on itself through triggered (16.13.6)");
+        }
+    }
+}
+
+void VerilogParser::resolve_procedural_sva_endpoints(DesignUnit& unit)
+{
+    // The procedures are the unit's: their names resolve in its innermost
+    // scope.
+    const auto scopes = sva_name_scopes(unit);
+    const auto innermost = scopes.empty() ? 0U : scopes.size() - 1U;
+    const auto sequence = [&](const std::string_view name)
+        -> const SystemVerilogAssertionDeclaration* {
+        const auto* const found = visible_declaration(unit, scopes, name,
+            innermost, std::nullopt);
+        return found != nullptr
+                && found->kind == SystemVerilogAssertionDeclarationKind::Sequence
+            ? found
+            : nullptr;
+    };
+    // The clock of a sequence read outside an assertion: its own, else the
+    // default clocking (16.13.6, 16.15).
+    const auto endpoint_name = [&](const std::string& name,
+                                   const SourceSpan& span,
+                                   const std::vector<Token>* instance = nullptr)
+        -> std::optional<std::string> {
+        std::vector<Token> clock;
+        if (unit.systemverilog_default_clocking_block) {
+            Token block;
+            block.kind = TokenKind::Identifier;
+            block.text = *unit.systemverilog_default_clocking_block;
+            block.span = span;
+            clock.push_back(std::move(block));
+        }
+        std::string wait_bit;
+        std::string failure;
+        const auto receiver
+            = instance != nullptr ? *instance : synthetic_tokens(name, span);
+        auto replacement = sva_endpoint_use(unit, scopes, innermost,
+            *sequence(name), receiver, false, clock, span, wait_bit, failure);
+        if (!replacement) {
+            Token location;
+            location.kind = TokenKind::Identifier;
+            location.text = name;
+            location.span = span;
+            error(location, "FSIM-SV-SEM-476",
+                "the end point of sequence '" + name
+                    + "' cannot be evaluated: " + failure);
+            return std::nullopt;
+        }
+        return wait_bit.substr(0U, wait_bit.size() - 3U);
+    };
+    const auto rewrite_expression = [&](const auto& self,
+                                        Expression& expression) -> void {
+        if (expression.kind == ExpressionKind::Identifier
+            && expression.text.ends_with(".triggered")) {
+            const auto receiver = expression.text.substr(
+                0U, expression.text.size() - std::string_view { ".triggered" }.size());
+            if (receiver.find('.') == std::string::npos
+                && sequence(receiver) != nullptr) {
+                if (const auto name = endpoint_name(receiver, expression.span)) {
+                    // Outside an assertion the triggered state reads the
+                    // current values (9.4.4).
+                    if (auto replaced = assertion_expression(synthetic_tokens(
+                            "(" + *name + "_t == $realtime + 1.0)",
+                            expression.span))) {
+                        expression = std::move(*replaced);
+                    }
+                }
+                return;
+            }
+        }
+        // `s(actuals).triggered`: the instance's tokens come from the token
+        // stream at the call's source order.
+        // (`@sv-select:triggered` of the call `s(actuals)`).
+        if (expression.kind == ExpressionKind::Call
+            && expression.text == "@sv-select:triggered"
+            && expression.operands.size() == 1U
+            && expression.operands.front().kind == ExpressionKind::Call
+            && (expression.systemverilog_source_order != 0U
+                || expression.operands.front().systemverilog_source_order != 0U)) {
+            const auto receiver = expression.operands.front().text;
+            const auto first = static_cast<std::size_t>(
+                (expression.systemverilog_source_order != 0U
+                        ? expression.systemverilog_source_order
+                        : expression.operands.front().systemverilog_source_order)
+                - 1U);
+            if (receiver.find('.') == std::string::npos
+                && sequence(receiver) != nullptr && first + 1U < tokens_.size()
+                && tokens_[first].kind == TokenKind::Identifier
+                && tokens_[first].text == receiver
+                && tokens_[first].span.begin == expression.span.begin
+                && tokens_[first + 1U].kind == TokenKind::LeftParen) {
+                std::vector<Token> instance { tokens_[first] };
+                std::size_t depth { };
+                for (auto index = first + 1U; index < tokens_.size(); ++index) {
+                    instance.push_back(tokens_[index]);
+                    if (tokens_[index].kind == TokenKind::LeftParen) {
+                        ++depth;
+                    } else if (tokens_[index].kind == TokenKind::RightParen
+                        && --depth == 0U) {
+                        break;
+                    }
+                }
+                if (depth == 0U) {
+                    if (const auto name
+                        = endpoint_name(receiver, expression.span, &instance)) {
+                        if (auto replaced = assertion_expression(synthetic_tokens(
+                                "(" + *name + "_t == $realtime + 1.0)",
+                                expression.span))) {
+                            expression = std::move(*replaced);
+                        }
+                    }
+                    return;
+                }
+            }
+        }
+        for (auto& operand : expression.operands) {
+            self(self, operand);
+        }
+    };
+    const auto rewrite_statement = [&](const auto& self,
+                                       Statement& statement) -> void {
+        for (auto* expression : { &statement.target, &statement.value,
+                 &statement.condition, &statement.loop_initial,
+                 &statement.loop_limit }) {
+            rewrite_expression(rewrite_expression, *expression);
+        }
+        for (auto& argument : statement.task_arguments) {
+            rewrite_expression(rewrite_expression, argument);
+        }
+        for (auto& argument : statement.output_arguments) {
+            rewrite_expression(rewrite_expression, argument);
+        }
+        // `@s` waits for an end point of s (9.4.2.4): a change of the time
+        // of its last match.
+        for (auto& sensitivity : statement.sensitivities) {
+            // `@(s(actuals))`: an instance whose actuals are no expressions
+            // (kept as its name), or a call of a name that is a sequence.
+            const auto stashed = sva_event_instances_.find(
+                sensitivity.signal.empty()
+                    ? sensitivity.expression.systemverilog_source_order
+                    : sensitivity.systemverilog_source_order);
+            if (stashed != sva_event_instances_.end()
+                && sensitivity.edge == EdgeKind::Any
+                && (stashed->second.sequence_only
+                        ? sensitivity.signal == stashed->second.tokens.front().text
+                        : (sensitivity.expression.kind == ExpressionKind::Call
+                              && sensitivity.expression.text
+                                  == stashed->second.tokens.front().text))) {
+                const auto& tokens = stashed->second.tokens;
+                if (sequence(tokens.front().text) != nullptr) {
+                    if (const auto name = endpoint_name(
+                            tokens.front().text, sensitivity.span, &tokens)) {
+                        sensitivity.signal = *name + "_t";
+                        sensitivity.expression = {};
+                    }
+                    continue;
+                }
+                if (stashed->second.sequence_only) {
+                    error(tokens.front(), "FSIM-SV-SEM-476",
+                        "the event expression '" + tokens.front().text
+                            + "(...)' has actuals that are no expressions, and '"
+                            + tokens.front().text
+                            + "' names no sequence (9.4.2.4, 16.8)");
+                    continue;
+                }
+            }
+            if (!sensitivity.signal.empty()
+                && sensitivity.edge == EdgeKind::Any
+                && sequence(sensitivity.signal) != nullptr) {
+                if (const auto name
+                    = endpoint_name(sensitivity.signal, sensitivity.span)) {
+                    sensitivity.signal = *name + "_t";
+                }
+            }
+            rewrite_expression(rewrite_expression, sensitivity.expression);
+        }
+        for (auto& child : statement.statements) {
+            self(self, child);
+        }
+        for (auto& child : statement.else_statements) {
+            self(self, child);
+        }
+        for (auto& child : statement.loop_updates) {
+            self(self, child);
+        }
+    };
+    for (auto& process : unit.processes) {
+        for (auto& statement : process.statements) {
+            rewrite_statement(rewrite_statement, statement);
+        }
+    }
+    for (auto& task : unit.tasks) {
+        for (auto& statement : task.statements) {
+            rewrite_statement(rewrite_statement, statement);
+        }
+    }
+    for (auto& function : unit.functions) {
+        for (auto& statement : function.statements) {
+            rewrite_statement(rewrite_statement, statement);
+        }
+    }
+    for (auto& statement : unit.concurrent_statements) {
+        rewrite_statement(rewrite_statement, statement);
+    }
+    if (sva_procedural_body_ != nullptr) {
+        auto& body = *sva_procedural_body_;
+        for (auto& process : body.processes) {
+            for (auto& statement : process.statements) {
+                rewrite_statement(rewrite_statement, statement);
+            }
+        }
+        for (auto& task : body.tasks) {
+            for (auto& statement : task.statements) {
+                rewrite_statement(rewrite_statement, statement);
+            }
+        }
+        for (auto& function : body.functions) {
+            for (auto& statement : function.statements) {
+                rewrite_statement(rewrite_statement, statement);
+            }
+        }
+        for (auto& statement : body.concurrent_statements) {
+            rewrite_statement(rewrite_statement, statement);
+        }
+    }
+}
+
+void VerilogParser::check_sequence_dependencies(const DesignUnit& unit)
+{
+    const auto scopes = sva_name_scopes(unit);
+    const auto innermost = scopes.empty() ? 0U : scopes.size() - 1U;
+    const auto& declarations = unit.systemverilog_assertion_declarations;
+    const auto level_of = [&](const std::size_t index) {
+        for (std::size_t level = 0; level < scopes.size(); ++level) {
+            if (index < scopes[level].declarations_end) {
+                return level;
+            }
+        }
+        return innermost;
+    };
+    std::map<const SystemVerilogAssertionDeclaration*,
+        std::set<const SystemVerilogAssertionDeclaration*>>
+        edges;
+    // The sequences the tokens of `owner` (none for an assertion
+    // statement), written in scope `origin`, instance; each instance's
+    // actuals add the edges of 16.8.
+    const auto scan = [&](const auto& self, const std::span<const Token> tokens,
+                          const SystemVerilogAssertionDeclaration* const owner,
+                          const std::size_t origin,
+                          std::set<const SystemVerilogAssertionDeclaration*>& found)
+        -> void {
+        const auto own_name = [&](const std::string_view name) {
+            return owner != nullptr
+                && (std::ranges::any_of(owner->formals,
+                        [&](const auto& formal) { return formal.name == name; })
+                    || std::ranges::any_of(owner->local_variables,
+                        [&](const auto& local) { return local.name == name; }));
+        };
+        for (std::size_t index = 0; index < tokens.size(); ++index) {
+            const auto& token = tokens[index];
+            if (token.kind != TokenKind::Identifier
+                || (index > 0U
+                    && (tokens[index - 1U].kind == TokenKind::Dot
+                        || tokens[index - 1U].kind == TokenKind::Scope))
+                || own_name(token.text)) {
+                continue;
+            }
+            const auto* const named = visible_declaration(unit, scopes,
+                token.text, origin, std::nullopt);
+            if (named == nullptr
+                || named->kind != SystemVerilogAssertionDeclarationKind::Sequence) {
+                continue;
+            }
+            found.insert(named);
+            if (index + 1U >= tokens.size()
+                || tokens[index + 1U].kind != TokenKind::LeftParen) {
+                continue;
+            }
+            std::size_t depth { };
+            auto close = index + 1U;
+            for (; close < tokens.size(); ++close) {
+                if (tokens[close].kind == TokenKind::LeftParen) {
+                    ++depth;
+                } else if (tokens[close].kind == TokenKind::RightParen
+                    && --depth == 0U) {
+                    break;
+                }
+            }
+            if (close >= tokens.size()) {
+                continue;
+            }
+            std::set<const SystemVerilogAssertionDeclaration*> in_actuals;
+            self(self,
+                tokens.subspan(index + 2U, close - index - 2U), owner, origin,
+                in_actuals);
+            edges[named].insert(in_actuals.begin(), in_actuals.end());
+            found.insert(in_actuals.begin(), in_actuals.end());
+            index = close;
+        }
+    };
+    for (std::size_t index = 0; index < declarations.size(); ++index) {
+        const auto& declaration = declarations[index];
+        if (declaration.kind == SystemVerilogAssertionDeclarationKind::Checker) {
+            continue;
+        }
+        const auto origin = level_of(index);
+        std::set<const SystemVerilogAssertionDeclaration*> found;
+        scan(scan, declaration.expression_tokens, &declaration, origin, found);
+        if (declaration.clock) {
+            scan(scan, declaration.clock->event_tokens, &declaration, origin,
+                found);
+        }
+        for (const auto& formal : declaration.formals) {
+            scan(scan, formal.default_tokens, &declaration, origin, found);
+        }
+        if (declaration.kind == SystemVerilogAssertionDeclarationKind::Sequence) {
+            edges[&declaration].insert(found.begin(), found.end());
+        }
+    }
+    for (const auto& directive : unit.systemverilog_concurrent_assertions) {
+        std::set<const SystemVerilogAssertionDeclaration*> found;
+        scan(scan, directive.property_tokens, nullptr, innermost, found);
+    }
+    for (const auto& [from, targets] : edges) {
+        std::vector<const SystemVerilogAssertionDeclaration*> pending {
+            targets.begin(), targets.end() };
+        std::set<const SystemVerilogAssertionDeclaration*> visited;
+        bool cyclic { };
+        while (!pending.empty() && !cyclic) {
+            const auto* const current = pending.back();
+            pending.pop_back();
+            if (current == from) {
+                cyclic = true;
+            } else if (visited.insert(current).second) {
+                const auto next = edges.find(current);
+                if (next != edges.end()) {
+                    pending.insert(pending.end(), next->second.begin(),
+                        next->second.end());
+                }
+            }
+        }
+        if (!cyclic
+            || !sva_cyclic_sequences_reported_
+                    .emplace(from->name, from->name_span.begin.line,
+                        from->name_span.begin.offset)
+                    .second) {
+            continue;
+        }
+        Token location;
+        location.kind = TokenKind::Identifier;
+        location.text = from->name;
+        location.span = from->name_span;
+        error(location, "FSIM-SV-SEM-477",
+            "the named sequence '" + from->name
+                + "' depends on itself through its instances: a cyclic "
+                  "dependency among named sequences (16.8)");
+    }
+}
+
+namespace {
+
+// The minimal length in ticks of sequence node `index` (16.7, 16.9); none
+// when a bound is not a literal. A named sequence instance counts as one
+// tick.
+[[nodiscard]] std::optional<std::int64_t> minimal_length(
+    const std::vector<Node>& nodes, const std::size_t index)
+{
+    const auto& node = nodes[index];
+    const auto length = [&](const std::size_t position) {
+        return position < node.operands.size()
+            ? minimal_length(nodes, node.operands[position])
+            : std::optional<std::int64_t> { };
+    };
+    const auto low = [&]() -> std::optional<std::int64_t> {
+        if (node.lo.kind != BoundSpec::Kind::literal) {
+            return std::nullopt;
+        }
+        return node.lo.value;
+    };
+    switch (node.kind) {
+    case NodeKind::boolean:
+    case NodeKind::instance:
+        return 1;
+    case NodeKind::delay: {
+        const auto delay = low();
+        if (!delay) {
+            return std::nullopt;
+        }
+        if (node.leading) {
+            const auto right = length(0);
+            return right ? std::optional { *delay + *right } : std::nullopt;
+        }
+        const auto left = length(0);
+        const auto right = length(1);
+        return left && right ? std::optional { *left + *delay + *right - 1 }
+                             : std::nullopt;
+    }
+    case NodeKind::repeat: {
+        const auto count = low();
+        const auto operand = length(0);
+        return count && operand ? std::optional { *count * *operand }
+                                : std::nullopt;
+    }
+    case NodeKind::goto_repeat:
+    case NodeKind::nonconsecutive_repeat:
+        return low();
+    case NodeKind::sequence_or: {
+        const auto left = length(0);
+        const auto right = length(1);
+        return left && right ? std::optional { std::min(*left, *right) }
+                             : std::nullopt;
+    }
+    case NodeKind::sequence_and:
+    case NodeKind::intersect: {
+        const auto left = length(0);
+        const auto right = length(1);
+        return left && right ? std::optional { std::max(*left, *right) }
+                             : std::nullopt;
+    }
+    case NodeKind::within:
+        return length(1);
+    case NodeKind::throughout:
+    case NodeKind::first_match:
+    case NodeKind::clocked:
+    case NodeKind::match_items:
+    case NodeKind::strong:
+    case NodeKind::weak:
+        return length(0);
+    default:
+        return std::nullopt;
+    }
+}
+
+std::vector<PropertyInstanceFact> property_instance_facts(
+    const DesignUnit& unit, const ParseContext& context,
+    const std::vector<Node>& nodes, const std::size_t root,
+    const SystemVerilogAssertionDeclaration& declaration)
+{
+    std::vector<PropertyInstanceFact> facts;
+    const auto is_formal = [&](const std::string_view name) {
+        return std::ranges::any_of(declaration.formals,
+            [&](const SystemVerilogAssertionFormal& formal) {
+                return formal.name == name;
+            });
+    };
+    // Restriction 4 for one actual of an instance of `callee` bound to its
+    // formal `formal`.
+    const auto actual_allowed = [&](std::span<const Token> actual,
+                                    const SystemVerilogAssertionFormal* formal) {
+        if (formal != nullptr && formal->local) {
+            return true;
+        }
+        while (actual.size() >= 3U && actual.front().kind == TokenKind::LeftParen
+            && actual.back().kind == TokenKind::RightParen) {
+            actual = actual.subspan(1U, actual.size() - 2U);
+        }
+        if (actual.size() == 1U && actual.front().kind == TokenKind::Identifier
+            && is_formal(actual.front().text)) {
+            return true;
+        }
+        return std::ranges::none_of(actual, [&](const Token& token) {
+            return token.kind == TokenKind::Identifier && is_formal(token.text);
+        });
+    };
+    // The property instances the tokens of an actual argument hold, at the
+    // weight of the instance they are an actual of (F.7).
+    const auto actual_instances = [&](const std::span<const Token> tokens,
+                                      const std::optional<std::int64_t> weight,
+                                      const bool restricted) {
+        for (std::size_t index = 0; index < tokens.size(); ++index) {
+            const auto& token = tokens[index];
+            if (token.kind != TokenKind::Identifier
+                || (index > 0U
+                    && (tokens[index - 1U].kind == TokenKind::Dot
+                        || tokens[index - 1U].kind == TokenKind::Scope))
+                || is_formal(token.text)) {
+                continue;
+            }
+            const auto* const named = visible_declaration(unit, context.scopes,
+                token.text, context.origin, std::nullopt);
+            if (named == nullptr
+                || named->kind != SystemVerilogAssertionDeclarationKind::Property) {
+                continue;
+            }
+            facts.push_back({ named, weight, restricted, true });
+        }
+    };
+    const auto add_weight = [](const std::optional<std::int64_t> weight,
+                                const std::optional<std::int64_t> step) {
+        return weight && step ? std::optional { *weight + std::max<std::int64_t>(*step, 0) }
+                              : std::optional<std::int64_t> { };
+    };
+    const auto walk = [&](const auto& self, const std::size_t index,
+                          const std::optional<std::int64_t> weight,
+                          const bool restricted) -> void {
+        const auto& node = nodes[index];
+        const auto operands = [&](const std::optional<std::int64_t> at,
+                                  const bool under) {
+            for (const auto operand : node.operands) {
+                self(self, operand, at, under);
+            }
+        };
+        switch (node.kind) {
+        case NodeKind::instance: {
+            if (node.declared == nullptr || node.sequence_instance) {
+                return;
+            }
+            const auto& callee = *node.declared;
+            bool allowed = true;
+            std::size_t positional { };
+            for (const auto& actual : node.actual_tokens) {
+                const SystemVerilogAssertionFormal* formal { };
+                std::span<const Token> value { actual };
+                if (actual.size() >= 4U && actual[0].kind == TokenKind::Dot
+                    && actual[1].kind == TokenKind::Identifier
+                    && actual[2].kind == TokenKind::LeftParen
+                    && actual.back().kind == TokenKind::RightParen) {
+                    const auto found = std::ranges::find(callee.formals,
+                        actual[1].text, &SystemVerilogAssertionFormal::name);
+                    formal = found == callee.formals.end() ? nullptr : &*found;
+                    value = value.subspan(3U, actual.size() - 4U);
+                } else if (positional < callee.formals.size()) {
+                    formal = &callee.formals[positional++];
+                }
+                allowed = allowed && actual_allowed(value, formal);
+                actual_instances(value, weight, restricted);
+            }
+            facts.push_back({ &callee, weight, restricted, allowed });
+            return;
+        }
+        case NodeKind::implication:
+        case NodeKind::followed_by: {
+            const auto length = minimal_length(nodes, node.operands[0]);
+            self(self, node.operands[1],
+                add_weight(weight,
+                    length ? std::optional { *length - (node.overlapped ? 1 : 0) }
+                           : std::nullopt),
+                restricted);
+            return;
+        }
+        case NodeKind::nexttime:
+        case NodeKind::always:
+        case NodeKind::eventually:
+            operands(add_weight(weight,
+                         node.lo.kind == BoundSpec::Kind::literal
+                             ? std::optional { node.lo.value }
+                             : std::nullopt),
+                restricted || node.strong);
+            return;
+        case NodeKind::until:
+        case NodeKind::negation:
+            operands(weight,
+                restricted || node.kind == NodeKind::negation || node.strong);
+            return;
+        default:
+            if (sequence_kind(node.kind)) {
+                return;
+            }
+            operands(weight, restricted);
+            return;
+        }
+    };
+    walk(walk, root, std::int64_t { 0 }, false);
+    return facts;
+}
+
+} // namespace
+
+void VerilogParser::check_recursive_properties(const DesignUnit& unit)
+{
+    std::set<SvaDeclarationKey> declared;
+    for (const auto& declaration : unit.systemverilog_assertion_declarations) {
+        if (declaration.kind == SystemVerilogAssertionDeclarationKind::Property) {
+            declared.emplace(declaration.name, declaration.name_span.begin.line,
+                declaration.name_span.begin.offset);
+        }
+    }
+    // Whether `to` is reached from `from` in the dependency digraph (F.7),
+    // through edges of zero weight only when `zero`.
+    const auto reaches = [&](const SvaDeclarationKey& from,
+                             const SvaDeclarationKey& to, const bool zero) {
+        std::vector<SvaDeclarationKey> pending { from };
+        std::set<SvaDeclarationKey> visited;
+        while (!pending.empty()) {
+            const auto current = pending.back();
+            pending.pop_back();
+            const auto facts = sva_property_facts_.find(current);
+            if (facts == sva_property_facts_.end()) {
+                continue;
+            }
+            for (const auto& instance : facts->second.instances) {
+                if (zero && (!instance.weight || *instance.weight > 0)) {
+                    continue;
+                }
+                if (instance.callee == to) {
+                    return true;
+                }
+                if (visited.insert(instance.callee).second) {
+                    pending.push_back(instance.callee);
+                }
+            }
+        }
+        return false;
+    };
+    const auto recursive = [&](const SvaDeclarationKey& key) {
+        return reaches(key, key, false);
+    };
+    for (const auto& key : declared) {
+        const auto facts = sva_property_facts_.find(key);
+        if (facts == sva_property_facts_.end()
+            || sva_illegal_recursive_.contains(key)) {
+            continue;
+        }
+        const auto& fact = facts->second;
+        std::string reason;
+        const bool self = recursive(key);
+        if (self && fact.disable) {
+            reason = "it has a disable iff (16.12.17 Restriction 2)";
+        }
+        for (const auto& instance : fact.instances) {
+            if (!reason.empty()) {
+                break;
+            }
+            const bool reaches_recursion = recursive(instance.callee)
+                || std::ranges::any_of(sva_property_facts_,
+                    [&](const auto& entry) {
+                        return reaches(instance.callee, entry.first, false)
+                            && recursive(entry.first);
+                    });
+            if (instance.restricted && reaches_recursion) {
+                reason = "not or a strong operator applies to its instance of '"
+                    + instance.callee_name
+                    + "', from which a recursive property is reached "
+                      "(16.12.17 Restriction 1)";
+            } else if (self && reaches(instance.callee, key, false)
+                && !instance.formal_actuals) {
+                reason = "an actual argument of its recursive instance of '"
+                    + instance.callee_name
+                    + "' is not a formal argument, reads a formal argument, "
+                      "and is not bound to a local variable formal argument "
+                      "(16.12.17 Restriction 4)";
+            }
+        }
+        // Every cycle through it has a positive weight (Restriction 3).
+        if (reason.empty() && self && reaches(key, key, true)) {
+            reason = "one of its recursive instances does not follow a "
+                     "positive advance in time (16.12.17 Restriction 3)";
+        }
+        if (reason.empty()) {
+            continue;
+        }
+        sva_illegal_recursive_.insert(key);
+        Token location;
+        location.kind = TokenKind::Identifier;
+        location.text = fact.name;
+        location.span = fact.name_span;
+        error(location, "FSIM-SV-SEM-477",
+            "the property '" + fact.name + "' is an illegal recursive "
+                "property: " + reason);
+    }
 }
 
 } // namespace fsim::frontend

@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/elaboration/elaborator.hpp"
 #include "fsim/app/sdf_drive_timing.hpp"
 #include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -10,7 +14,6 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
-#include <ranges>
 #include <stdexcept>
 #include <string>
 #include <string_view>

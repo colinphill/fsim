@@ -5,7 +5,6 @@
 #include "acc_internal.hpp"
 #include "fsim/runtime/tf_containment.hpp"
 
-#include <compare>
 #include <cstdint>
 #include <limits>
 #include <map>

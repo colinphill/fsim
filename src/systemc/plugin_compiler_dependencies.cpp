@@ -2,9 +2,31 @@
 #include "plugin_compiler_internal.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
+#include "fsim/compiler/object_cache.hpp"
+#include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/project/project.hpp"
+#include "fsim/systemc/plugin_compiler.hpp"
 
 #include <map>
 #include <mutex>
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <cctype>
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <filesystem>
+#include <iterator>
+#include <optional>
+#include <set>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <unistd.h>
+#include <unordered_set>
+#include <utility>
+#include <vector>
 
 namespace fsim::systemc::plugin_detail {
 

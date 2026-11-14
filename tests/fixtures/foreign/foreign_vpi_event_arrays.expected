@@ -1,0 +1,9 @@
+#c top.big vpiNamedEventArray size 2 order big[5000] big[5001] parent array
+#c class pe vpiNamedEvent
+#c big 5001 seen at 1
+#c top.d vpiNamedEventArray size 3 order d[3] d[2] d[1] parent array
+#c d 2 seen at 2
+#c top.g.ge vpiNamedEventArray size 2 order ge[7] ge[8] parent array
+#c ge 8 seen at 3
+#c class pe seen at 5
+#c end at 6

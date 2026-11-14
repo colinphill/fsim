@@ -1,10 +1,24 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_test_support.hpp"
+#include "fsim/app/built_project.hpp"
+#include "change_mismatch_report.hpp"
+#include "fsim/app/application.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include "fsim/runtime/vcd_writer.hpp"
 
 #include <cassert>
 #include <csignal>
 #include <sstream>
 #include <utility>
+#include <cstdint>
+#include <ios>
+#include <iostream>
+#include <optional>
+#include <source_location>
+#include <string>
+#include <vector>
 
 namespace fsim::test {
 

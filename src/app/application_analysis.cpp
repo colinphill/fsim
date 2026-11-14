@@ -2,7 +2,6 @@
 #include "application_internal.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
-#include "fsim/support/uvm_identity.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
 
 #include <algorithm>
@@ -10,7 +9,6 @@
 #include <iterator>
 #include <memory>
 #include <mutex>
-#include <set>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -558,6 +556,11 @@ std::optional<ParsedSnapshot> parse_independent_roots(
         const std::string_view package, const std::string_view member) {
       return earlier->find(package, member, fallback);
     };
+    subgroup.package_assertion_lookup = [earlier,
+        fallback = group.package_assertion_lookup](
+        const std::string_view package) {
+      return earlier->assertions(package, fallback);
+    };
     auto parsed = parse_group_snapshot(subgroup);
     for (const auto& unit : parsed.result.design.units) {
       if (unit.kind == frontend::UnitKind::SystemVerilogPackage) {
@@ -632,7 +635,8 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
         std::move(preprocessed.lexed),
         group.standard_revision,
         group.compatibility_profile,
-        group.package_member_lookup);
+        group.package_member_lookup,
+        group.package_assertion_lookup);
     for (auto& unit : snapshot.result.design.units) {
         const auto unit_source = fsim::support::path_from_utf8(physical_source(unit.span));
         auto source_order = group.inputs.empty()
@@ -1278,7 +1282,7 @@ void install_compiled_class_specializations(
             // conditional-generate alternative exists only when elaboration
             // selects that alternative (IEEE 1800-2023 27.5), so an
             // alternative not taken is not checked.
-            if (support::is_uvm_library_identity(identity)
+            if (support::uvm_library(declaration.uvm_role)
                 || !declaration.parameters.empty()
                 || declaration.forward_declaration
                 || !declaration.alternative_discriminator.empty()) {
@@ -1322,9 +1326,14 @@ std::vector<project::ProjectSection::TopLevel> selected_tops(
       return parsed->unit;
     }
     // A Verilog escaped identifier keeps its dots (IEEE 1800-2023 5.6.1).
+    // Its name keeps one terminating space, as the parser's does.
     if (const auto escape = target.find('\\');
         escape != std::string_view::npos) {
-      return std::string { target.substr(escape) };
+      auto name = target.substr(escape);
+      while (!name.empty() && name.back() == ' ') {
+        name.remove_suffix(1U);
+      }
+      return std::string { name } + ' ';
     }
     auto spelling = target;
     if (const auto colon = spelling.find(':');
@@ -1402,12 +1411,19 @@ std::vector<project::ProjectSection::TopLevel> selected_tops(
           "every selected design top requires a non-empty target and alias");
       continue;
     }
-    // An escaped Verilog identifier (`\$top`) is accepted as written.
-    const bool escaped_alias = top.alias.size() > 1U
+    // An escaped Verilog identifier (`\$top`) is accepted as written; it
+    // keeps one terminating space, as the parser's names do (5.6.1).
+    if (top.alias.size() > 1U && top.alias.front() == '\\'
+        && top.alias.back() != ' ') {
+      top.alias.push_back(' ');
+    }
+    const bool escaped_alias = top.alias.size() > 2U
         && top.alias.front() == '\\'
-        && std::ranges::all_of(top.alias, [](const unsigned char character) {
-             return std::isgraph(character) != 0;
-           });
+        && std::ranges::all_of(
+            std::string_view { top.alias }.substr(0U, top.alias.size() - 1U),
+            [](const unsigned char character) {
+              return std::isgraph(character) != 0;
+            });
     const bool valid_alias = escaped_alias
         || ((std::isalpha(static_cast<unsigned char>(top.alias.front())) != 0
              || top.alias.front() == '_')

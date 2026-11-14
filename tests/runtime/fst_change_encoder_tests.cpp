@@ -2,9 +2,7 @@
 #include "fsim/runtime/fst_change_encoder.hpp"
 
 #include <cassert>
-#include <cstddef>
 #include <stdexcept>
-#include <string>
 #include <utility>
 
 namespace {

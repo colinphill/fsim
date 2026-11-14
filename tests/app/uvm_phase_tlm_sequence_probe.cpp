@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "uvm_phase_tlm_sequence_probe.hpp"
+#include "fsim/semantic/systemverilog_class_specialization.hpp"
 
 #include "fsim/runtime/uvm_packer.hpp"
 
@@ -7,7 +8,6 @@
 #include <array>
 #include <cassert>
 #include <cstdint>
-#include <ranges>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -123,6 +123,8 @@ exercise_exact_uvm_sequence_environment(fsim::app::Simulation &simulation,
   agent_role_descriptor.component = agent;
   agent_role_descriptor.kind = SystemVerilogUvmSequenceRoleKind::Agent;
   agent_role_descriptor.default_agent_mode = SystemVerilogUvmAgentMode::Active;
+  agent_role_descriptor.active_config_field = "is_active";
+  agent_role_descriptor.active_config_type = "uvm_pkg::uvm_active_passive_enum";
   const auto agent_role =
       sequences.register_role(std::move(agent_role_descriptor));
 

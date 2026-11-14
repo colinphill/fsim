@@ -1,0 +1,9 @@
+#c probe 1
+#c   outer: m=4 u=40
+#c   inner0: n=40 w=140
+#c probe 2
+#c   outer: m=4 u=40
+#c   inner1: n=7 w=107
+#c probe 3
+#c   outer: m=4 u=41
+#c   inner2: n=41 w=141

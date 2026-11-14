@@ -2,7 +2,6 @@
 #include "fsim/frontend/coverage_report.hpp"
 
 #include <algorithm>
-#include <ranges>
 #include <string>
 #include <utility>
 

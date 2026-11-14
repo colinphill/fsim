@@ -1,12 +1,29 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_test_support.hpp"
+#include "fsim/frontend/design.hpp"
+#include "fsim/semantic/compiled_design.hpp"
+#include "fsim/elaboration/elaborator.hpp"
 #include "../support/test_helpers.hpp"
 #include "../../src/app/application_internal.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
 #include "fsim/semantic/compiled_design_normalization.hpp"
+#include "fsim/frontend/class_resolution.hpp"
+#include "fsim/frontend/class_specialization.hpp"
+#include "fsim/frontend/coverage_resolution.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/diagnostic.hpp"
 
 #include <cstdlib>
 #include <stdexcept>
+#include <algorithm>
+#include <cstdint>
+#include <optional>
+#include <span>
+#include <stdlib.h>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 
 namespace fsim::tests::elaboration {

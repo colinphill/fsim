@@ -2,7 +2,6 @@
 #pragma once
 
 #include "fsim/frontend/coverage_point_identity.hpp"
-#include "fsim/frontend/design.hpp"
 
 #include <limits>
 #include <cstddef>

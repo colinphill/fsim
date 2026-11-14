@@ -8,7 +8,6 @@
 #include <optional>
 #include <span>
 #include <string>
-#include <vector>
 
 namespace fsim::frontend {
 

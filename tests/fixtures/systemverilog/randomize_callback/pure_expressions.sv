@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-// Pure integral expressions in post_randomize, which runs outside generated
-// code: $bits (IEEE 1800-2023 20.6.2), $clog2 (20.8.1), the bit vector
+// Pure integral expressions in post_randomize, which randomize()
+// calls: $bits (IEEE 1800-2023 20.6.2), $clog2 (20.8.1), the bit vector
 // functions (20.9), $signed/$unsigned (11.7), bit-selects and part-selects
 // of descending and ascending vectors, out of range and with an unknown
 // index (11.5.1), concatenation and replication (11.4.12), the conditional

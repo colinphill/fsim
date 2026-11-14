@@ -1,0 +1,9 @@
+#c port r lowconn-type=608
+#c port-ref type=608 name=r size=3 parent=none actual=top.a typespec=641
+#c port i lowconn-type=36
+#c use type=608 name=r[0] size=1 parent=ref actual=top.a[0] typespec=0
+#c use-parent type=608 name=r size=3 parent=none actual=top.a typespec=641
+#c static-t type=608 name=t size=4 parent=none actual=null typespec=641
+#c static-n no ref obj
+#c frame type=608 name=t size=4 parent=none actual=top.u1.loc typespec=641
+#c frame type=608 name=t size=4 parent=none actual=top.u1.relay.mine typespec=641

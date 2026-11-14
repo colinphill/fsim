@@ -2,7 +2,8 @@
 #pragma once
 
 #include "fsim/elaboration/vhdl_coverage_points.hpp"
-#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/token.hpp"
 
 #include <span>
 

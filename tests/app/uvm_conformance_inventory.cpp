@@ -2,6 +2,8 @@
 #include "uvm_conformance_inventory.hpp"
 
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/semantic/systemverilog_hir.hpp"
 
 #include <algorithm>
 #include <array>
@@ -10,7 +12,6 @@
 #include <fstream>
 #include <iostream>
 #include <map>
-#include <ranges>
 #include <set>
 #include <sstream>
 #include <string>

@@ -6,8 +6,18 @@
 #include "fsim/support/index_distance.hpp"
 #include "specialization_cache.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/systemverilog_scalar_folding.hpp"
+#include "fsim/frontend/systemverilog_scalars.hpp"
+#include "fsim/runtime/logic.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/semantic/compiled_design.hpp"
+#include "fsim/semantic/compiled_design_specialization.hpp"
+#include "fsim/semantic/model.hpp"
+#include "fsim/semantic/shared_cache_lock.hpp"
+#include "fsim/semantic/systemverilog_hir.hpp"
+#include "hierarchy_sv_constant_program.hpp"
 
-#include <boost/multiprecision/cpp_int.hpp>
 
 #include <array>
 #include <algorithm>
@@ -27,6 +37,15 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <cstdint>
+#include <cstdio>
+#include <iterator>
+#include <memory>
+#include <optional>
+#include <span>
+#include <string>
+#include <system_error>
+#include <boost/multiprecision/cpp_int.hpp>
 
 namespace fsim::elaboration {
 namespace {
@@ -579,16 +598,17 @@ void convert_to_two_state(Value& value)
         // A packed array of a named packed type (`w_t [1:0]`) has elements
         // of that type's width (IEEE 1800-2017 7.4.1).
         const auto& spelling = type.target.spelling;
-        static constexpr std::array<std::string_view, 17> builtin {
+        static constexpr std::array<std::string_view, 16> builtin {
             "logic", "bit", "reg", "int", "integer", "byte", "shortint",
             "longint", "time", "wire", "signed", "unsigned", "struct",
-            "union", "enum", "implicit", "string"
+            "union", "enum", "string"
         };
         // A name not bound to its typedef here (a class property's
         // `s_t [1:0]`) resolves through the effective type below.
         const bool bound_target = type.target.target.valid();
         if (specialization == nullptr || spelling.empty()
             || type.packed_dimensions.size() > 1U
+            || type.implicit
             || std::ranges::find(builtin, std::string_view { spelling })
                 != builtin.end()
             || spelling.starts_with('@')
@@ -2312,7 +2332,7 @@ private:
                           || declaration_record.form
                               == semantic::sv::DeclarationForm::local_parameter)
                     && declaration_record.type
-                    && declaration_record.type->target.spelling == "implicit"
+                    && declaration_record.type->implicit
                     && !declaration_record.type->packed_range;
                 if (implicit_parameter) {
                     const auto& actuals
@@ -2390,6 +2410,24 @@ private:
     {
         return hir_systemverilog_declared_scalar_kind(
             specialization_, type, scope);
+    }
+
+    /// A value assigned to an object of `type` takes that type: the
+    /// integral type's width and signedness, or the real type's value
+    /// (IEEE 1800-2023 6.24, 6.12.2, 11.8.2).
+    [[nodiscard]] std::optional<Value> convert_to_object_type(
+        Value value, const semantic::sv::TypeReference& type)
+    {
+        if (typedef_real_kind(type, &specialization_) == ScalarKind::None) {
+            if (!hir_systemverilog_explicit_integral_type(type)) {
+                return value;
+            }
+            // A real value rounds to the integer it stands for (6.12.2).
+            if (value.scalar && real_family(value.scalar->kind)) {
+                value.scalar.reset();
+            }
+        }
+        return convert_record_type(std::move(value), type);
     }
 
     [[nodiscard]] std::optional<Value> value_for_declaration(
@@ -2647,6 +2685,47 @@ private:
             error_ = "unresolved SystemVerilog constant name '"
                 + record.text + "'";
             return std::nullopt;
+        }
+        // Every identifier of a constant function that is not a parameter
+        // or a function is declared in it (IEEE 1800-2023 13.4.3): a call
+        // reading a variable outside the function is not a constant function
+        // call, so it runs when its expression is evaluated.
+        if (!frames_.empty()) {
+            const auto view = specialization_.find_declaration(*selected);
+            using Form = semantic::sv::DeclarationForm;
+            // A local of the function (`real twice = x * 2.0;`) is declared
+            // in its scope or a block inside it.
+            const auto declared_in_function = [&] {
+                const auto callable
+                    = specialization_.find_declaration(frames_.back().callable);
+                if (!callable || callable->systemverilog == nullptr
+                    || !callable->systemverilog->nested_scope) {
+                    return false;
+                }
+                const auto& scopes = specialization_.design().semantics.scopes();
+                std::optional<semantic::ScopeId> scope
+                    = view->systemverilog->scope;
+                for (std::size_t depth { }; scope && scope->valid()
+                     && scope->value() < scopes.size() && depth < 256U;
+                     ++depth) {
+                    if (*scope == *callable->systemverilog->nested_scope) {
+                        return true;
+                    }
+                    scope = scopes[scope->value()].parent;
+                }
+                return false;
+            };
+            if (view && view->systemverilog != nullptr
+                && (view->systemverilog->form == Form::variable
+                    || view->systemverilog->form == Form::net
+                    || view->systemverilog->form == Form::port)
+                && !view->systemverilog->array_local_parameter
+                && !view->systemverilog->array_parameter
+                && !declared_in_function()) {
+                error_ = "SystemVerilog name '" + record.text
+                    + "' is not declared in the constant function";
+                return std::nullopt;
+            }
         }
         // Outside a constant function, a variable's initializer is only its
         // starting value, not a constant (IEEE 1800-2017 11.2.1).
@@ -4786,6 +4865,66 @@ private:
                                                      : *when_false),
                 result_kind, error_);
         }
+        // The real conversion functions are constant system functions
+        // (IEEE 1800-2023 11.2.1, 20.5): $rtoi truncates, $itor and the
+        // bit-pattern conversions follow IEEE 754.
+        if ((record.text == "$rtoi" || record.text == "$itor"
+                || record.text == "$realtobits"
+                || record.text == "$bitstoreal"
+                || record.text == "$shortrealtobits"
+                || record.text == "$bitstoshortreal")
+            && record.operands.size() == 1U) {
+            const auto operand = evaluate(record.operands.front());
+            if (!operand) {
+                return std::nullopt;
+            }
+            if (record.text == "$itor") {
+                const auto real = real_of(*operand);
+                return real ? std::optional<Value> { real_value(
+                                  *real, ScalarKind::Real) }
+                            : std::nullopt;
+            }
+            if (record.text == "$bitstoreal"
+                || record.text == "$bitstoshortreal") {
+                if (!operand->known()) {
+                    error_ = record.text + " argument contains X or Z";
+                    return std::nullopt;
+                }
+                const auto bits = static_cast<std::uint64_t>(
+                    unsigned_integer(*operand));
+                if (record.text == "$bitstoreal") {
+                    return real_value(std::bit_cast<double>(bits),
+                        ScalarKind::Real);
+                }
+                return real_value(
+                    static_cast<double>(std::bit_cast<float>(
+                        static_cast<std::uint32_t>(bits))),
+                    ScalarKind::ShortReal);
+            }
+            const auto real = real_of(*operand);
+            if (!real) {
+                error_ = record.text + " argument is not numeric";
+                return std::nullopt;
+            }
+            if (record.text == "$rtoi") {
+                // The truncated value is an integer (20.5).
+                if (!std::isfinite(*real)) {
+                    return make_known(0U, 32U, true, false,
+                        frontend::ValueDomain::Integer);
+                }
+                return make_known(
+                    static_cast<std::uint64_t>(
+                        static_cast<std::int64_t>(std::trunc(*real))),
+                    32U, true, false, frontend::ValueDomain::Integer);
+            }
+            if (record.text == "$realtobits") {
+                return make_known(std::bit_cast<std::uint64_t>(*real), 64U,
+                    false, false, frontend::ValueDomain::Bit2);
+            }
+            return make_known(
+                std::bit_cast<std::uint32_t>(static_cast<float>(*real)), 32U,
+                false, false, frontend::ValueDomain::Bit2);
+        }
         // The real math functions are constant system functions (IEEE
         // 1800-2017 11.2.1, 20.8.2); their results follow IEEE 754.
         if (const auto function = real_math_function(record.text);
@@ -5240,23 +5379,6 @@ private:
         if (!consume_work(1U)) {
             return std::nullopt;
         }
-        // A real result or argument is outside integral evaluation.
-        // A typedef of a real type is real (IEEE 1800-2023 6.18).
-        if (real_family(declared_kind(
-                callable.callable->return_type, callable.scope))
-            || std::ranges::any_of(callable.callable->formals,
-                [&](const semantic::DeclarationId formal) {
-                    const auto view = specialization_.find_declaration(formal);
-                    return view && view->systemverilog != nullptr
-                        && view->systemverilog->type
-                        && real_family(declared_kind(
-                            *view->systemverilog->type,
-                            view->systemverilog->scope));
-                })) {
-            error_ = "a real constant function is outside integral "
-                     "constant evaluation";
-            return std::nullopt;
-        }
         Frame frame;
         frame.callable = callable.id;
         const auto& formals = callable.callable->formals;
@@ -5351,10 +5473,8 @@ private:
                 return std::nullopt;
             }
             if (formal && formal->systemverilog != nullptr
-                && formal->systemverilog->type
-                && hir_systemverilog_explicit_integral_type(
-                    *formal->systemverilog->type)) {
-                value = convert_record_type(
+                && formal->systemverilog->type) {
+                value = convert_to_object_type(
                     std::move(*value), *formal->systemverilog->type);
                 if (!value) {
                     return std::nullopt;
@@ -5396,7 +5516,12 @@ private:
         const auto work_before = work_units_used_;
         const auto error_before = error_;
         auto result = make_known(0U, 32U, true, false);
-        if (callable.callable->return_type.executable_width) {
+        if (typedef_real_kind(callable.callable->return_type,
+                &specialization_) != ScalarKind::None) {
+            // A real result variable starts at 0.0 (6.8).
+            result = *convert_record_type(
+                std::move(result), callable.callable->return_type);
+        } else if (callable.callable->return_type.executable_width) {
             result = *convert_record_type(
                 std::move(result), callable.callable->return_type);
         }
@@ -5522,8 +5647,16 @@ private:
             report_program_mismatch(callable, *compiled, &value);
         }
         frames_.pop_back();
-        auto converted = convert_record_type(
-            std::move(value), callable.callable->return_type);
+        // A result converts to the return type: a real result is a real
+        // value, an integral one the integer its real operand rounds to
+        // (IEEE 1800-2023 6.12.2, 13.4).
+        const auto& return_type = callable.callable->return_type;
+        if (typedef_real_kind(return_type, &specialization_)
+                == ScalarKind::None
+            && value.scalar && real_family(value.scalar->kind)) {
+            value.scalar.reset();
+        }
+        auto converted = convert_record_type(std::move(value), return_type);
         if (converted && !memo_key.empty() && hierarchy_reads_ == reads_before
             && error_ == error_before) {
             auto& constants = *specialization_cache(specialization_).constants;
@@ -7037,10 +7170,8 @@ private:
             const auto declaration = *record.referenced_name->selected;
             const auto formal = specialization_.find_declaration(declaration);
             if (formal && formal->systemverilog != nullptr
-                && formal->systemverilog->type
-                && hir_systemverilog_explicit_integral_type(
-                    *formal->systemverilog->type)) {
-                auto converted = convert_record_type(
+                && formal->systemverilog->type) {
+                auto converted = convert_to_object_type(
                     std::move(value), *formal->systemverilog->type);
                 if (!converted) {
                     return false;
@@ -7330,8 +7461,24 @@ private:
                 if (!initialize_local_array(declaration_id, source)) {
                     return false;
                 }
-                if (frames_.back().arrays.contains(declaration_id)
-                    || !defaulted_local(source)) {
+                if (frames_.back().arrays.contains(declaration_id)) {
+                    continue;
+                }
+                // A real variable starts at 0.0 (6.8 Table 6-7).
+                if (source.form == semantic::sv::DeclarationForm::variable
+                    && source.type
+                    && typedef_real_kind(*source.type, &specialization_)
+                        != ScalarKind::None) {
+                    auto zero = convert_record_type(
+                        make_known(0U, 32U, true, false), *source.type);
+                    if (!zero) {
+                        return false;
+                    }
+                    frames_.back().values.insert_or_assign(
+                        declaration_id, std::move(*zero));
+                    continue;
+                }
+                if (!defaulted_local(source)) {
                     continue;
                 }
                 auto converted = local_default_value(source);
@@ -7358,9 +7505,8 @@ private:
             if (!value) {
                 return false;
             }
-            if (source.type
-                && hir_systemverilog_explicit_integral_type(*source.type)) {
-                value = convert_record_type(
+            if (source.type) {
+                value = convert_to_object_type(
                     std::move(*value), *source.type);
                 if (!value) {
                     return false;
@@ -8853,6 +8999,10 @@ private:
                 || !source.type->unpacked_dimensions.empty()) {
                 return refuse_program("local declaration");
             }
+            if (typedef_real_kind(*source.type, &specialization_)
+                != ScalarKind::None) {
+                return refuse_program("real local");
+            }
             auto& slot = declare_program_slot(declaration_id);
             if (!source.initializer) {
                 if (!defaulted_local(source)) {
@@ -9482,7 +9632,7 @@ private:
             }
             const auto& candidate = *declared->systemverilog;
             if (candidate.type
-                && candidate.type->target.spelling != "implicit") {
+                && !candidate.type->implicit) {
                 return real_family(
                     declared_kind(*candidate.type, candidate.scope));
             }
@@ -9507,10 +9657,51 @@ private:
             return record.text == "@sv-cast:real"
                 || record.text == "@sv-cast:shortreal"
                 || record.text == "@sv-cast:realtime"
-                || real_math_function(record.text).has_value();
+                || real_math_function(record.text).has_value()
+                || record.text == "$itor" || record.text == "$bitstoreal"
+                || record.text == "$bitstoshortreal"
+                || user_function_returns_real(record);
         default:
             return false;
         }
+    }
+
+    /// Whether a call names a user function whose return type is real,
+    /// shortreal or realtime, or a typedef of one (IEEE 1800-2023 13.4.3,
+    /// 6.18).
+    [[nodiscard]] bool user_function_returns_real(
+        const semantic::sv::Expression& record)
+    {
+        if (record.text.starts_with('$') || record.text.starts_with('@')) {
+            return false;
+        }
+        std::optional<semantic::DeclarationId> selected;
+        if (record.referenced_name && record.referenced_name->selected) {
+            selected = record.referenced_name->selected;
+        } else {
+            const semantic::CompiledDeclarationPredicate function
+                = [](const semantic::CompiledDeclarationView& candidate) {
+                      return candidate.systemverilog != nullptr
+                          && candidate.systemverilog->form
+                              == semantic::sv::DeclarationForm::function
+                          && candidate.systemverilog->callable
+                          && candidate.systemverilog->callable->function;
+                  };
+            selected = semantic::CompiledDesignResolver { specialization_ }
+                           .resolve_systemverilog(
+                               record.text, record.scope, function, false)
+                           .unique();
+        }
+        const auto declaration = selected
+            ? specialization_.find_declaration(*selected)
+            : std::nullopt;
+        return declaration && declaration->systemverilog != nullptr
+            && declaration->systemverilog->form
+                == semantic::sv::DeclarationForm::function
+            && declaration->systemverilog->callable
+            && real_family(declared_kind(
+                declaration->systemverilog->callable->return_type,
+                declaration->systemverilog->scope));
     }
 
     /// A real or time literal; a time literal is rounded to the time
@@ -10340,7 +10531,7 @@ std::string HirSystemVerilogConstant::canonical() const
 bool hir_systemverilog_explicit_integral_type(
     const semantic::sv::TypeReference& type) noexcept
 {
-    return type.target.spelling != "implicit"
+    return !type.implicit
         && type.value_form
         && *type.value_form != semantic::sv::TypeForm::unresolved;
 }
@@ -10416,6 +10607,21 @@ evaluate_hir_systemverilog_value(
     }
     return value;
 }
+
+std::optional<double> evaluate_hir_systemverilog_real(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::ExpressionId expression)
+{
+    std::string error;
+    const auto value = evaluate_hir_systemverilog_value(
+        specialization, expression, error);
+    if (!value || !value->scalar
+        || !frontend::is_real_scalar_kind(value->scalar->kind)) {
+        return std::nullopt;
+    }
+    return value->scalar->real();
+}
+
 
 std::optional<HirSystemVerilogArrayConstant>
 evaluate_hir_systemverilog_array_constant(
@@ -10518,7 +10724,7 @@ frontend::SystemVerilogScalarKind hir_systemverilog_declared_scalar_kind(
     const auto direct = scalar_kind(type);
     if (direct != ScalarKind::None || type.container_form
         || !type.packed_dimensions.empty() || type.packed_range
-        || type.target.spelling.empty() || type.target.spelling == "implicit") {
+        || type.target.spelling.empty() || type.implicit) {
         return direct;
     }
     // A typedef names its scalar through its base (IEEE 1800-2023 6.18).

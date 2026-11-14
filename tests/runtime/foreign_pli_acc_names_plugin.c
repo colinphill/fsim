@@ -21,6 +21,17 @@ static PLI_INT32 calltf_names(PLI_INT32 data, PLI_INT32 reason)
     handle first;
     handle output;
     handle input;
+    handle v1;
+    handle v2;
+    handle vy_bit;
+    handle va_bit;
+    handle bit_path;
+    handle p1;
+    handle p2;
+    handle io1;
+    handle io2;
+    handle io_path;
+    double d[2];
     char text[64];
     const char* result;
     (void)data;
@@ -66,6 +77,52 @@ static PLI_INT32 calltf_names(PLI_INT32 data, PLI_INT32 reason)
         acc_handle_path(acc_next_port(u2, input), first) == NULL
             ? "none"
             : "found");
+    /* One bit of a vector output port to the same bit of a vector input
+       port is an intermodule path; another bit is not on its net (23.50).
+       Its delays are the module input port delay of the input bit. */
+    v1 = acc_handle_by_name("v1", NULL);
+    v2 = acc_handle_by_name("v2", NULL);
+    vy_bit = acc_next_bit(acc_next_port(v1, acc_next_port(v1, NULL)), NULL);
+    va_bit = acc_next_bit(acc_next_port(v2, NULL), NULL);
+    bit_path = acc_handle_path(vy_bit, va_bit);
+    io_printf("#c bit path %s\n", bit_path == NULL ? "none" : "found");
+    io_printf("#c bit path other bit %s\n",
+        acc_handle_path(vy_bit, acc_next_bit(acc_next_port(v2, NULL), va_bit))
+                == NULL
+            ? "none"
+            : "found");
+    io_printf("#c bit path whole port %s\n",
+        acc_handle_path(vy_bit, acc_next_port(v2, NULL)) == NULL ? "none"
+                                                                 : "found");
+    (void)acc_configure(accPathDelayCount, "2");
+    io_printf("#c bit path replace ok=%d\n",
+        (int)acc_replace_delays(bit_path, 3.0, 4.0));
+    io_printf("#c input bit fetch ok=%d",
+        (int)acc_fetch_delays(va_bit, &d[0], &d[1]));
+    io_printf(" %.1f %.1f\n", d[0], d[1]);
+    io_printf("#c bit path fetch ok=%d",
+        (int)acc_fetch_delays(bit_path, &d[0], &d[1]));
+    io_printf(" %.1f %.1f\n", d[0], d[1]);
+    /* An inout port is a source and a load alike (16.2.4): the path from the
+       first pad's inout port to the second's exists, and its delays are the
+       second port's module input port delay, applied to the signal that
+       arrives at the port. */
+    p1 = acc_handle_by_name("p1", NULL);
+    p2 = acc_handle_by_name("p2", NULL);
+    io1 = acc_next_port(p1, NULL);
+    io2 = acc_next_port(p2, NULL);
+    io_path = acc_handle_path(io1, io2);
+    io_printf("#c inout path %s\n", io_path == NULL ? "none" : "found");
+    io_printf("#c inout path reversed %s\n",
+        acc_handle_path(io2, io1) == NULL ? "none" : "found");
+    io_printf("#c inout path replace ok=%d\n",
+        (int)acc_replace_delays(io_path, 5.0, 6.0));
+    io_printf("#c inout input fetch ok=%d",
+        (int)acc_fetch_delays(io2, &d[0], &d[1]));
+    io_printf(" %.1f %.1f\n", d[0], d[1]);
+    io_printf("#c inout path fetch ok=%d",
+        (int)acc_fetch_delays(io_path, &d[0], &d[1]));
+    io_printf(" %.1f %.1f\n", d[0], d[1]);
     acc_close();
     return 0;
 }

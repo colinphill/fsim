@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
+#include "fsim/artifact/coverage_database_model.hpp"
+#include "fsim/artifact/coverage_report_model.hpp"
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#include <string_view>
 
-#include "fsim/artifact/coverage_report_render.hpp"
 
 namespace fsim::artifact::coverage_report_render_detail {
 

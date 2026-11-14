@@ -6,14 +6,12 @@
 #include "fsim/runtime/uvm_component.hpp"
 
 #include <limits>
-#include <compare>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <map>
 #include <memory>
 #include <optional>
-#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>

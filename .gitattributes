@@ -6,6 +6,12 @@
 # The reviewed IEEE bundle is verified byte-for-byte at runtime and in CTest.
 third_party/ieee-1076-2019/** -text
 
+# The vendored UVM kits and Synopsys packages are distributed byte-for-byte.
+third_party/uvm-1.2/** -text whitespace=-trailing-space,-space-before-tab,-blank-at-eof,-cr-at-eol
+third_party/uvm-2020.3.1/** -text whitespace=-trailing-space,-space-before-tab,-blank-at-eof,-cr-at-eol
+third_party/ieee-derived/** -text whitespace=-trailing-space,-space-before-tab,-blank-at-eof,-cr-at-eol
+third_party/synopsys-ieee/** -text whitespace=-trailing-space,-space-before-tab,-blank-at-eof,-cr-at-eol
+
 # The governed SystemC bundle carries pinned byte digests for its provenance
 # files as well as the archive. Do not let checkout line-ending policy rewrite
 # those reviewed bytes on Windows.

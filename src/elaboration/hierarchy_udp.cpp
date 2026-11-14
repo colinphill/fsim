@@ -4,6 +4,7 @@
 #include "lowerer_internal.hpp"
 #include "fsim/support/sha256.hpp"
 
+#include <iostream>
 #include <array>
 
 namespace fsim::elaboration {
@@ -1394,7 +1395,8 @@ void HierarchyBuilder::record_verilog_primitives(
     const semantic::SpecializedHirUnit& specialization,
     const std::string& scope_path,
     const SignalMap& signals,
-    const std::span<const runtime::simir::ProcessId> processes)
+    const std::span<const runtime::simir::ProcessId> processes,
+    const GateArrayElement* const array_element)
 {
     using Kind = semantic::sv::PrimitiveKind;
     using Direction = semantic::sv::PrimitiveTerminalDirection;
@@ -1499,11 +1501,18 @@ void HierarchyBuilder::record_verilog_primitives(
         info.array_index = primitive.array_index;
         info.array_left = primitive.array_left;
         info.array_right = primitive.array_right;
-        if (!primitive.name.empty()) {
-            info.name = primitive.array_member
-                ? primitive.name + "[" + std::to_string(primitive.array_index)
+        if (array_element != nullptr) {
+            info.array_name = array_element->name;
+            info.array_member = true;
+            info.array_index = array_element->index;
+            info.array_left = array_element->left;
+            info.array_right = array_element->right;
+        }
+        if (!info.array_name.empty()) {
+            info.name = info.array_member
+                ? info.array_name + "[" + std::to_string(info.array_index)
                     + "]"
-                : primitive.name;
+                : info.array_name;
             info.full_name = scope_path.empty()
                 ? info.name : scope_path + "." + info.name;
         }
@@ -1528,13 +1537,17 @@ void HierarchyBuilder::record_verilog_primitives(
             if (!indexed) {
                 index_drivers();
             }
+            // The processes of a gate array element are named after the
+            // generate scope of its iteration.
+            const auto& driver_name = array_element != nullptr
+                ? array_element->driver_name : info.full_name;
             // One process per output terminal (`$outputN`), and a bufif or
             // notif without a delay splits into `$one`.
             // A tranif's turn-on and turn-off delays are on its control's
             // driver (`$control`).
             for (const auto& suffix : { std::string {}, std::string { "$one" },
                      std::string { "$control" } }) {
-                const auto found = delayed_drivers.find(info.full_name + suffix);
+                const auto found = delayed_drivers.find(driver_name + suffix);
                 if (found != delayed_drivers.end()) {
                     info.drivers.insert(info.drivers.end(),
                         found->second.begin(), found->second.end());
@@ -1542,7 +1555,7 @@ void HierarchyBuilder::record_verilog_primitives(
             }
             for (std::size_t output = 0U;; ++output) {
                 const auto found = delayed_drivers.find(
-                    info.full_name + "$output" + std::to_string(output));
+                    driver_name + "$output" + std::to_string(output));
                 if (found == delayed_drivers.end()) {
                     break;
                 }

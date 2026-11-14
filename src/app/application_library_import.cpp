@@ -5,20 +5,40 @@
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/artifact/object.hpp"
 #include "fsim/library/artifact.hpp"
-#include "fsim/library/source_mapping.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
-#include "fsim/support/payload_checksum.hpp"
 #include "fsim/support/sha256.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
 #include "fsim/systemc_abi.h"
+#include "fsim/app/built_project.hpp"
+#include "fsim/app/trace_archive.hpp"
+#include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/token.hpp"
+#include "fsim/project/project.hpp"
+#include "fsim/semantic/compiled_design.hpp"
+#include "fsim/semantic/systemverilog_hir.hpp"
+#include "fsim/systemc/plugin_compiler.hpp"
+#include "fsim/systemc/scv.hpp"
+#include "fsim/version.hpp"
 
 #include <algorithm>
 #include <map>
 #include <set>
 #include <span>
 #include <sstream>
+#include <cstddef>
+#include <cstdint>
+#include <filesystem>
+#include <ios>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 namespace fsim::app::application_detail {
 namespace {

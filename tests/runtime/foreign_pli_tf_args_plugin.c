@@ -8,7 +8,6 @@
 #include "fsim/runtime/vpi_abi.h"
 #include "fsim/runtime/veriuser.h"
 
-#include <stdio.h>
 #include <string.h>
 
 static const char* text(const char* value)

@@ -8,7 +8,6 @@
 #include "fsim/runtime/vpi_system.hpp"
 
 #include <cstdint>
-#include <filesystem>
 #include <string>
 #include <vector>
 

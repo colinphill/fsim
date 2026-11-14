@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <sysc/kernel/sc_simcontext.h>
-#include <sysc/kernel/sc_ver.h>
 
 #include "fsim/systemc/accellera.hpp"
 

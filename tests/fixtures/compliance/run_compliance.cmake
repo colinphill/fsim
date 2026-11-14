@@ -10,6 +10,8 @@
 # exactly PASS (or a VHDL report whose text is PASS), and no error, failure,
 # or fatal report is emitted.
 
+include("${CMAKE_CURRENT_LIST_DIR}/../../cmake/FsimTestWorkspace.cmake")
+
 if(NOT DEFINED FSIM_EXECUTABLE OR NOT EXISTS "${FSIM_EXECUTABLE}")
   message(FATAL_ERROR "FSIM_EXECUTABLE must name the built fsim command")
 endif()
@@ -56,7 +58,7 @@ get_filename_component(fixture_name "${FSIM_FIXTURE}" NAME_WE)
 string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef workspace_id)
 set(workspace
   "${CMAKE_CURRENT_BINARY_DIR}/fsim-compliance-${fixture_name}-${workspace_id}")
-file(MAKE_DIRECTORY "${workspace}")
+fsim_test_workspace("${workspace}")
 get_filename_component(fixture_file "${FSIM_FIXTURE}" NAME)
 file(COPY_FILE "${FSIM_FIXTURE}" "${workspace}/${fixture_file}")
 if(NOT before STREQUAL "")
@@ -107,3 +109,6 @@ if(NOT step_output MATCHES "(^|\n|: )PASS(\r?\n|$)")
   message(FATAL_ERROR
     "${fixture_name} did not print PASS:\n${step_output}\nworkspace: ${workspace}")
 endif()
+
+# Passed: remove this run's workspaces (a failure above keeps them).
+fsim_test_workspace_cleanup()

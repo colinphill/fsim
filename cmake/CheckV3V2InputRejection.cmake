@@ -109,7 +109,7 @@ fsim_require_v2_rejection_tokens(tests/artifact/object_artifact_test.cpp
   "store_u32(v2_header, 8U, 6U)"
   "store_u32(v2_header, 12U, 10U)"
   "v2-object-repeat"
-  "format 6, portable-unit schema 10, and compiled-HIR schema 3")
+  "format 6, portable-unit schema 10, and compiled-HIR schema 6")
 fsim_require_v2_rejection_tokens(tests/library/library_artifact_test.cpp
   "units/stage.fsimir"
   "units/invert.fsimudp"

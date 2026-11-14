@@ -3,7 +3,6 @@
 
 #include "fsim/runtime/uvm_synchronization.hpp"
 
-#include <algorithm>
 #include <cstdint>
 #include <stdexcept>
 #include <string>

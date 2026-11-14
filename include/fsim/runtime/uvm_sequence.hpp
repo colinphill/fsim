@@ -544,7 +544,10 @@ struct SystemVerilogUvmSequenceRoleDescriptor {
   SystemVerilogUvmSequencerHandle sequencer;
   SystemVerilogUvmAgentMode default_agent_mode{
       SystemVerilogUvmAgentMode::Active};
-  std::string active_config_field{"is_active"};
+  // Agent roles: the configuration field and the canonical type identity of
+  // the library active/passive enum, both supplied by the caller.
+  std::string active_config_field;
+  std::string active_config_type;
   std::string analysis_type;
   bool automatic_objection{};
   FunctionDispatch function_dispatch;
@@ -1100,6 +1103,7 @@ private:
     SystemVerilogUvmSequenceRoleDescriptor::TaskDispatch task_dispatch;
     SystemVerilogUvmObjectionSourceHandle objection_source;
     std::string active_config_field;
+    std::string active_config_type;
     std::vector<SystemVerilogUvmSequenceRoleHandle> analysis_targets;
     std::uint64_t generation{1};
     bool live{true};

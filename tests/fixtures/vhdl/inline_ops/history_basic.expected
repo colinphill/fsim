@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+wide w1 at 10000000 fs event=true active=true last_value=0000 last_event=0 fs last_active=0 fs
+wide w2 at 10000000 fs event=false active=false last_event=0 fs
+wide p1 at 12000000 fs s last_event=2000000 fs last_active=2000000 fs last_value=0000 n last_event=2000000 fs last_active=2000000 fs last_value=0
+wide p2 at 17000000 fs s last_event=7000000 fs last_active=2000000 fs last_value=0000 event=false active=false
+wide w1 at 20000000 fs event=true active=true last_value=0101 last_event=0 fs last_active=0 fs
+wide w2 at 20000000 fs event=false active=false last_event=0 fs
+wide p3 at 22000000 fs s last_event=2000000 fs last_active=2000000 fs last_value=0101 n event=false active=false last_value=0 last_event=12000000 fs last_active=2000000 fs
+wide p4 at 27000000 fs n last_value=5 last_event=2000000 fs last_active=2000000 fs s last_event=7000000 fs
+wide p5 q last_event=9223372036854775807 fs last_active=9223372036854775807 fs last_value=3 event=false active=false
+wide rise at 42000000 fs
+wide fall at 44000000 fs
+wide fall at 47000000 fs
+wide rise at 48000000 fs

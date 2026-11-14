@@ -7,7 +7,10 @@ namespace fsim::runtime {
 namespace {
 
 thread_local std::uint64_t dpi_call_process {};
-thread_local std::uint32_t dpi_call_position {};
+// No call has a position until the kernel names one (a disable covers it).
+thread_local std::uint32_t dpi_call_position {
+    DpiCallProcess::unknown_position
+};
 std::atomic<DpiCallProcess::Notice> dpi_disable_notice {};
 std::atomic<void*> dpi_disable_user_data {};
 

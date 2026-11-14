@@ -5,7 +5,6 @@
 
 #include <algorithm>
 #include <limits>
-#include <ranges>
 #include <string>
 #include <string_view>
 #include <unordered_map>

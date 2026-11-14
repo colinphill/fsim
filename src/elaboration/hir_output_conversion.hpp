@@ -6,7 +6,6 @@
 #include "fsim/runtime/simir.hpp"
 #include "fsim/semantic/systemverilog_hir.hpp"
 
-#include <stdexcept>
 
 // Conversions between the frontend, SystemVerilog HIR, and SimIR spellings of
 // output formats and assertion severities.

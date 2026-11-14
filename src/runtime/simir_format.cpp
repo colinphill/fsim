@@ -5,11 +5,34 @@
 #include "fsim/runtime/file_scanning.hpp"
 #include "fsim/runtime/string_methods.hpp"
 #include "fsim/runtime/systemverilog_scalar.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/systemverilog_scalars.hpp"
+#include "fsim/runtime/logic.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_container_value.hpp"
+#include "fsim/runtime/simir_ids.hpp"
 
-#include <boost/multiprecision/cpp_int.hpp>
 
 #include <bit>
 #include <cmath>
+#include <algorithm>
+#include <cctype>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <limits>
+#include <optional>
+#include <span>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <type_traits>
+#include <utility>
+#include <vector>
+#include <boost/multiprecision/cpp_int.hpp>
 
 namespace fsim::runtime::simir {
 
@@ -376,7 +399,12 @@ namespace fsim::runtime::simir {
             || format == OutputFormat::real_general
             || format == OutputFormat::time
             || format == OutputFormat::decimal);
-    if (scalar_text) {
+    // A time variable is a 4-state integer (6.11): one with unknown bits
+    // displays as an integral decimal value does, x, X, z or Z (21.2.1.3).
+    const bool unknown_time = scalar_text && scalar_kind == SystemVerilogScalarKind::Time
+        && (format == OutputFormat::time || format == OutputFormat::decimal)
+        && has_unknown_bits(value);
+    if (scalar_text && !unknown_time) {
         const auto decoded = decode_systemverilog_scalar_payload(value, scalar_kind);
         if (!decoded)
             throw std::runtime_error { "invalid scalar formatted payload" };
@@ -406,8 +434,8 @@ namespace fsim::runtime::simir {
             throw std::runtime_error { "scalar formatting failed" };
         return std::string { prefix } + formatted.text + std::string { suffix };
     }
-    auto formatted = format_output_value(
-        value, format, signed_decimal, suppress_leading_zero);
+    auto formatted = format_output_value(value,
+        unknown_time ? OutputFormat::decimal : format, signed_decimal, suppress_leading_zero);
     if (formatted.size() < minimum_width) {
         const auto padding = static_cast<std::size_t>(minimum_width) - formatted.size();
         if (left_justify) {
@@ -476,6 +504,45 @@ namespace fsim::runtime::simir {
         return std::nullopt;
     }
     return static_cast<SimulationTick>(ticks);
+}
+
+bool has_unknown_bits(const PackedLogic4& value) noexcept
+{
+    for (std::size_t bit = 0; bit < value.width(); ++bit) {
+        const auto state = value.get(bit);
+        if (state == Logic4::x || state == Logic4::z) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::string make_unknown_time_output(
+    const std::string_view prefix,
+    const std::string_view suffix,
+    const PackedLogic4& value,
+    const SystemVerilogTimeFormat& time_format,
+    const bool use_timeformat_width,
+    const std::uint32_t minimum_width,
+    const bool left_justify,
+    const bool zero_pad)
+{
+    auto formatted = format_output_value(value, OutputFormat::decimal, false, true);
+    const auto selected_width = use_timeformat_width ? time_format.minimum_width : minimum_width;
+    if (formatted.size() < selected_width) {
+        const auto padding = static_cast<std::size_t>(selected_width) - formatted.size();
+        if (left_justify) {
+            formatted.append(padding, ' ');
+        } else {
+            formatted.insert(0U, padding, zero_pad ? '0' : ' ');
+        }
+    }
+    std::string result;
+    result.reserve(prefix.size() + formatted.size() + suffix.size());
+    result.append(prefix);
+    result.append(formatted);
+    result.append(suffix);
+    return result;
 }
 
 [[nodiscard]] std::string make_time_output(

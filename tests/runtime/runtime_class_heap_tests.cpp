@@ -249,13 +249,16 @@ void test_systemverilog_class_heap() {
   const auto mode_first = mode_heap.allocate(mode_descriptor);
   const auto mode_second = mode_heap.allocate(mode_descriptor);
   mode_heap.set_random_mode(mode_first, "two_state", false);
-  mode_heap.set_constraint_mode(mode_first, "derived_rule", false);
+  mode_heap.set_constraint_mode(
+      mode_first, "work::Derived::derived_rule", false);
   require(
       !mode_heap.random_mode(mode_first, "two_state")
           && mode_heap.random_mode(mode_second, "two_state")
-          && !mode_heap.constraint_mode(mode_first, "derived_rule")
-          && mode_heap.constraint_mode(mode_second, "derived_rule")
-          && mode_heap.constraint_mode(mode_first, "base_rule"),
+          && !mode_heap.constraint_mode(
+              mode_first, "work::Derived::derived_rule")
+          && mode_heap.constraint_mode(
+              mode_second, "work::Derived::derived_rule")
+          && mode_heap.constraint_mode(mode_first, "work::Base::base_rule"),
       "property and constraint modes must be independently owned by each object");
   bool invalid_random_mode_failed = false;
   try {
@@ -269,9 +272,43 @@ void test_systemverilog_class_heap() {
   } catch (const std::out_of_range&) {
     missing_constraint_mode_failed = true;
   }
+  // A constraint is named by its exact identity, never by a name ending.
+  bool short_constraint_name_failed = false;
+  try {
+    (void)mode_heap.constraint_mode(mode_first, "derived_rule");
+  } catch (const std::out_of_range&) {
+    short_constraint_name_failed = true;
+  }
+  require(short_constraint_name_failed,
+      "a constraint mode lookup takes only the exact constraint identity");
   require(
       invalid_random_mode_failed && missing_constraint_mode_failed,
       "mode access must reject nonrandom properties and missing constraint blocks");
+
+  // A simple member name resolves through the object's class chain, the
+  // derived declaration hiding the base's (IEEE 1800-2023 8.14).
+  auto member_descriptor = descriptor();
+  member_descriptor.properties = {
+      {"work::Base::shared", SystemVerilogClassPropertyKind::Integer, 64},
+      {"work::Base::only", SystemVerilogClassPropertyKind::Integer, 64},
+      {"work::Derived::shared", SystemVerilogClassPropertyKind::Integer, 64}};
+  SystemVerilogClassHeap member_heap;
+  const auto member_object = member_heap.allocate(member_descriptor);
+  require(
+      member_heap.member(member_object, "shared")
+              == &member_heap.property(member_object, "work::Derived::shared")
+          && member_heap.member(member_object, "only")
+              == &member_heap.property(member_object, "work::Base::only")
+          && member_heap.member(member_object, "missing") == nullptr,
+      "a member name must denote the nearest declaring class's property");
+  bool short_property_name_failed = false;
+  try {
+    (void)member_heap.property(member_object, "shared");
+  } catch (const std::out_of_range&) {
+    short_property_name_failed = true;
+  }
+  require(short_property_name_failed,
+      "a property lookup takes only the exact property identity");
 
   SystemVerilogClassHeap container_heap;
   const auto element = container_heap.allocate(descriptor());
@@ -386,8 +423,12 @@ void test_systemverilog_class_methods() {
   auto method_descriptor = descriptor();
   method_descriptor.properties.push_back(
       {"wide", SystemVerilogClassPropertyKind::Logic4, 137});
+  // Each property is declared in work::Base (`owner::name`).
+  for (auto& property : method_descriptor.properties) {
+    property.name = "work::Base::" + property.name;
+  }
   const auto instance = heap.allocate(method_descriptor);
-  heap.property(instance, "count").packed =
+  heap.property(instance, "work::Base::count").packed =
       PackedLogic4::from_aval_bval(64, 4, 0);
   SystemVerilogClassMethodRuntime methods{
       heap, {3, 4, 2}};
@@ -414,7 +455,7 @@ void test_systemverilog_class_methods() {
   require(
       bumped.status == SystemVerilogClassMethodStatus::Completed
           && amount.front().packed.low_word().aval == 7
-          && heap.property(instance, "count").packed.low_word().aval == 7,
+          && heap.property(instance, "work::Base::count").packed.low_word().aval == 7,
       "this, implicit properties, automatic locals, base views, and copy-out must execute");
 
   auto wide_value = PackedLogic4{137, Logic4::zero};
@@ -443,7 +484,7 @@ void test_systemverilog_class_methods() {
   require(
       wide_result.status == SystemVerilogClassMethodStatus::Completed
           && wide_actuals.front().packed == wide_expected
-          && heap.property(instance, "wide").packed == wide_expected,
+          && heap.property(instance, "work::Base::wide").packed == wide_expected,
       "class method arguments, automatic locals, copy-out, and object properties must preserve arbitrary-width packed values");
 
   SystemVerilogClassMethodDescriptor task;

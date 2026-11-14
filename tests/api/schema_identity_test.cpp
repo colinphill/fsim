@@ -1,16 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
-#include "fsim/app/design_artifact.hpp"
+#include "fsim/app/artifact_schema.hpp"
 #include "fsim/artifact/design.hpp"
 #include "fsim/artifact/object.hpp"
 #include "fsim/library/artifact.hpp"
-#include "fsim/project/project.hpp"
 #include "fsim/runtime/acc_handle_bridge.h"
 #include "fsim/runtime/native_plugin_abi.h"
 #include "fsim/runtime/svdpi_bridge.h"
 #include "fsim/runtime/tf_plugin_abi.h"
 
-#include <string_view>
 
 static_assert(FSIM_NATIVE_PLUGIN_ABI_VERSION == 3U);
 static_assert(FSIM_TF_INTERFACE_ABI_VERSION == 3U);
@@ -20,16 +18,16 @@ static_assert(FSIM_ACC_STANDARD_QUERY_ABI_VERSION == 3U);
 static_assert(fsim::artifact::kObjectFormatVersion == 11);
 static_assert(fsim::library::kFormatVersion == 8);
 static_assert(fsim::library::kPortableSchemaVersion == 16);
-static_assert(fsim::library::kCompiledHirSchemaVersion == 3);
+static_assert(fsim::library::kCompiledHirSchemaVersion == 6);
 static_assert(fsim::artifact::kDesignFormatVersion == 18);
-static_assert(fsim::app::kRuntimeStateSchema == 108);
-static_assert(fsim::app::kSemanticStateSchema == 5);
-static_assert(fsim::app::kDesignIrStateSchema == 8);
-static_assert(fsim::app::kCompiledHirBundleSchema == 3);
-static_assert(fsim::app::kSystemVerilogConstraintHirStateSchema == 24);
+static_assert(fsim::app::kRuntimeStateSchema == 126);
+static_assert(fsim::app::kSemanticStateSchema == 6);
+static_assert(fsim::app::kDesignIrStateSchema == 12);
+static_assert(fsim::app::kCompiledHirBundleSchema == 6);
+static_assert(fsim::app::kSystemVerilogConstraintHirStateSchema == 32);
 static_assert(fsim::app::kSystemVerilogCoverageStateSchema == 7);
 static_assert(fsim::app::kSystemVerilogUvmStateSchema == 3);
-static_assert(fsim::app::kVhdlHirStateSchema == 13);
+static_assert(fsim::app::kVhdlHirStateSchema == 15);
 
 int main()
 {

@@ -5,6 +5,8 @@
 # a run on the compiled kernel print "fsim-kernel:" lines; the reference
 # interpreter prints none, so the lines show which engine ran.
 
+include("${CMAKE_CURRENT_LIST_DIR}/../../cmake/FsimTestWorkspace.cmake")
+
 if(NOT DEFINED FSIM_EXECUTABLE OR NOT EXISTS "${FSIM_EXECUTABLE}")
   message(FATAL_ERROR "FSIM_EXECUTABLE must name the built fsim command")
 endif()
@@ -18,7 +20,7 @@ endforeach()
 
 string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef workspace_id)
 set(case_dir "${CMAKE_CURRENT_BINARY_DIR}/fsim-engine-config-${workspace_id}")
-file(MAKE_DIRECTORY "${case_dir}")
+fsim_test_workspace("${case_dir}")
 file(COPY_FILE "${FSIM_FIXTURE_DIR}/top.sv" "${case_dir}/top.sv")
 
 function(run_fsim STEP_NAME)
@@ -77,3 +79,6 @@ execute_process(
 if("${bad_result}" STREQUAL "0")
   message(FATAL_ERROR "simulate.engine warp was accepted\n${bad_stdout}${bad_stderr}")
 endif()
+
+# Passed: remove this run's workspaces (a failure above keeps them).
+fsim_test_workspace_cleanup()

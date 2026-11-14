@@ -3,6 +3,8 @@
 # Compile legal signal-formal actuals, then isolate the known runtime-lowering
 # limitation with an explicit elaboration of the fixture's top architecture.
 
+include("${CMAKE_CURRENT_LIST_DIR}/../../cmake/FsimTestWorkspace.cmake")
+
 if(NOT DEFINED FSIM_EXECUTABLE OR NOT EXISTS "${FSIM_EXECUTABLE}")
   message(FATAL_ERROR "FSIM_EXECUTABLE must name the built fsim command")
 endif()
@@ -25,7 +27,7 @@ get_filename_component(fixture_name "${FSIM_FIXTURE}" NAME)
 string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef workspace_id)
 set(workspace
   "${CMAKE_CURRENT_BINARY_DIR}/fsim-vhdl-signal-actual-${workspace_id}")
-file(MAKE_DIRECTORY "${workspace}")
+fsim_test_workspace("${workspace}")
 file(COPY_FILE "${FSIM_FIXTURE}" "${workspace}/${fixture_name}")
 
 execute_process(
@@ -72,3 +74,6 @@ if(elaborate_output MATCHES "FSIM-ELAB-VHCALL-001" OR
     "${fixture_name} elaboration promoted a legal signal actual to an "
     "analysis error:\n${elaborate_output}\nworkspace: ${workspace}")
 endif()
+
+# Passed: remove this run's workspaces (a failure above keeps them).
+fsim_test_workspace_cleanup()

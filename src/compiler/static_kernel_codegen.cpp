@@ -17,8 +17,6 @@
 #include <llvm/ExecutionEngine/ObjectCache.h>
 #include <llvm/ExecutionEngine/Orc/CompileUtils.h>
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>
-#include <llvm/ExecutionEngine/Orc/RTDyldObjectLinkingLayer.h>
-#include <llvm/ExecutionEngine/SectionMemoryManager.h>
 #include <llvm/Config/llvm-config.h>
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/TargetParser/Host.h>
@@ -41,7 +39,6 @@
 #include <optional>
 #include <sstream>
 #include <chrono>
-#include <fstream>
 #include <functional>
 #include <unistd.h>
 #include <cstddef>
@@ -149,6 +146,7 @@ private:
 #endif
 
 using runtime::simir::StaticKernelCodegen;
+using runtime::simir::StaticKernelCodegenCacheStatistics;
 using runtime::simir::StaticKernelNativeEntry;
 using runtime::simir::StaticKernelNativeFrame;
 using runtime::simir::StaticKernelNativeHelpers;
@@ -262,6 +260,8 @@ static_assert(offsetof(StaticKernelNativeFrame, assertion_filter) == 116U);
 static_assert(offsetof(StaticKernelNativeFrame, sva) == 120U);
 static_assert(offsetof(StaticKernelNativeFrame, call_stack) == 128U);
 static_assert(offsetof(StaticKernelNativeFrame, frame_stack) == 136U);
+static_assert(offsetof(StaticKernelNativeFrame, variable_hooks) == 144U);
+static_assert(offsetof(StaticKernelNativeFrame, watch_writes) == 152U);
 static_assert(offsetof(detail::NativeCallStack, entries) == 0U);
 static_assert(offsetof(detail::NativeCallStack, capacity) == 8U);
 static_assert(offsetof(runtime::simir::StaticKernelSvaTable, blocks) == 0U);
@@ -272,6 +272,7 @@ static_assert(offsetof(runtime::simir::StaticKernelSvaTable, sampled) == 32U);
 static_assert(offsetof(runtime::simir::StaticKernelSvaTable, now) == 40U);
 static_assert(offsetof(runtime::simir::StaticKernelSvaTable, control_base) == 48U);
 static_assert(offsetof(runtime::simir::StaticKernelSvaTable, controls) == 56U);
+static_assert(offsetof(runtime::simir::StaticKernelSvaTable, history) == 64U);
 static_assert(offsetof(runtime::simir::StaticKernelContainerInfo, slot) == 4U);
 static_assert(offsetof(runtime::simir::StaticKernelContainerInfo, count) == 8U);
 static_assert(offsetof(runtime::simir::StaticKernelContainerInfo, left) == 16U);
@@ -426,6 +427,7 @@ void append_sva_plan(std::string& text, const detail::SvaNativePlan& plan, const
         append(property.kind);
         append(property.overlapped);
         append(property.synchronous);
+        append(property.strong);
         append(property.clock);
         append(property.sequence);
         append(property.child);
@@ -516,6 +518,26 @@ public:
         , i64t_(llvm::Type::getInt64Ty(context_))
         , ptr_(llvm::PointerType::getUnqual(context_))
     {
+        // A recursive property (IEEE 1800-2023 16.12.17): a node reaches
+        // itself through its children.
+        std::vector<std::uint8_t> mark(plan.properties.size());
+        const auto cyclic = [&](const auto& self, const std::size_t node) -> bool {
+            if (node >= mark.size() || mark[node] == 2U) {
+                return false;
+            }
+            if (mark[node] == 1U) {
+                return true;
+            }
+            mark[node] = 1U;
+            for (const auto child : plan.properties[node].children) {
+                if (child >= 0 && self(self, static_cast<std::size_t>(child))) {
+                    return true;
+                }
+            }
+            mark[node] = 2U;
+            return false;
+        };
+        recursive_ = cyclic(cyclic, plan.root);
     }
 
     /// The type of a plan's automaton (tick_function): `void (ptr frame,
@@ -908,6 +930,13 @@ private:
     llvm::Value* env_ { };
     llvm::Value* tick_ { };
     llvm::Function* memo_ { };
+    /// A recursive plan (16.12.17): each node's step is a function, reached
+    /// through step_any_ by the node word of the record (a forwarded
+    /// instance is a record of another node), and skip_any_ finds the end
+    /// of any record.
+    bool recursive_ { };
+    llvm::Function* step_any_ { };
+    llvm::Function* skip_any_ { };
 
     // ---- local variables (IEEE 1800-2023 16.10) ----
     //
@@ -2973,15 +3002,23 @@ private:
 
     void tree_sequences(const std::uint32_t node, std::vector<std::uint32_t>& out) const
     {
-        const auto& property = plan_.properties[node];
-        if (property.kind == semantic::sva::PropertyKind::sequence
-            || property.kind == semantic::sva::PropertyKind::implication
-            || property.kind == semantic::sva::PropertyKind::followed_by) {
-            out.push_back(property.sequence);
-        }
-        for (const auto child : property.children) {
-            tree_sequences(static_cast<std::uint32_t>(child), out);
-        }
+        std::vector<bool> seen(plan_.properties.size());
+        const auto walk = [&](const auto& self, const std::uint32_t at) -> void {
+            if (seen[at]) {
+                return;
+            }
+            seen[at] = true;
+            const auto& property = plan_.properties[at];
+            if (property.kind == semantic::sva::PropertyKind::sequence
+                || property.kind == semantic::sva::PropertyKind::implication
+                || property.kind == semantic::sva::PropertyKind::followed_by) {
+                out.push_back(property.sequence);
+            }
+            for (const auto child : property.children) {
+                self(self, static_cast<std::uint32_t>(child));
+            }
+        };
+        walk(walk, node);
     }
 
     /// The matcher call of `sequence` (see matcher_function); `point` is
@@ -3044,6 +3081,21 @@ private:
     /// (`in` itself for a node that does not exist yet): a decided instance
     /// is its header, a sequence its matcher, the others their operands.
     [[nodiscard]] llvm::Value* skip_node(const std::uint32_t node, llvm::Value* in,
+        llvm::Value* existing)
+    {
+        if (!recursive_) {
+            return skip_node_body(node, in, existing);
+        }
+        ensure_recursive_functions();
+        auto* result = var("skipped_any");
+        set(result, in);
+        if_then(ne0(existing), [&] {
+            set(result, builder_.CreateCall(skip_any_->getFunctionType(), skip_any_,
+                { frame_, registers_, slot_addr_, env_, in }));
+        });
+        return get(result);
+    }
+    [[nodiscard]] llvm::Value* skip_node_body(const std::uint32_t node, llvm::Value* in,
         llvm::Value* existing)
     {
         const auto& property = plan_.properties[node];
@@ -3154,7 +3206,198 @@ private:
     /// alone); the state says whether it decided, and how.
     [[nodiscard]] NodeState emit_node(const std::uint32_t node, llvm::Value* in,
         llvm::Value* existing, llvm::Value* start, llvm::Value* point,
-        const LocalsFrom from = LocalsFrom { nullptr, nullptr })
+        const LocalsFrom from = LocalsFrom { nullptr, nullptr }, const bool forwardable = true)
+    {
+        if (!recursive_) {
+            return emit_node_body(node, in, existing, start, point, from, nullptr);
+        }
+        ensure_recursive_functions();
+        // The node of an existing record is its first word: a forwarded
+        // instance is another node's.
+        auto* actual = var("node_actual", node);
+        if_then(ne0(existing), [&] { set(actual, old_word(in)); });
+        const std::uint64_t local_count = locals_words();
+        llvm::Value* from_pointer = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(ptr_));
+        if (local_count != 0U) {
+            // A new instance's valuation, read before the block can grow.
+            auto* copy = array("node_from", local_count);
+            for (std::uint64_t word = 0U; word < local_count; ++word) {
+                builder_.CreateStore(k(0U), element(copy, word));
+            }
+            if_then(builder_.CreateICmpEQ(existing, k(0U)), [&] {
+                for (std::uint64_t word = 0U; word < local_count; ++word) {
+                    llvm::Value* value = k(0U);
+                    if (from.pointer != nullptr) {
+                        value = builder_.CreateLoad(i64_,
+                            builder_.CreateConstInBoundsGEP1_64(i64_, from.pointer, word));
+                    } else if (from.heap_word != nullptr) {
+                        value = old_word(add(from.heap_word, word));
+                    }
+                    builder_.CreateStore(value, element(copy, word));
+                }
+            });
+            from_pointer = builder_.CreateConstInBoundsGEP2_64(copy->getAllocatedType(), copy, 0U, 0U);
+        }
+        auto* out = array("node_out", 5U);
+        builder_.CreateCall(step_any_->getFunctionType(), step_any_,
+            { frame_, registers_, slot_addr_, env_, get(actual), in, existing, start, point,
+                from_pointer, k(forwardable ? 1U : 0U),
+                builder_.CreateConstInBoundsGEP2_64(out->getAllocatedType(), out, 0U, 0U) });
+        check_status();
+        NodeState state;
+        state.decided = var("node_decided");
+        state.holds = var("node_holds");
+        state.vacuous = var("node_vacuous");
+        state.line = var("node_line");
+        state.column = var("node_column");
+        llvm::AllocaInst* fields[] { state.decided, state.holds, state.vacuous, state.line,
+            state.column };
+        for (std::uint64_t word = 0U; word < 5U; ++word) {
+            set(fields[word], builder_.CreateLoad(i64_, element(out, word)));
+        }
+        return state;
+    }
+
+    /// The functions of a recursive plan: step_any_ (frame, registers,
+    /// block slot, env, node, in, existing, start, point, locals of a new
+    /// instance, forwardable, out[5]) calls the step function of the node,
+    /// and skip_any_ (frame, registers, block slot, env, in) returns the end
+    /// of the record at `in`.
+    void ensure_recursive_functions()
+    {
+        if (step_any_ != nullptr) {
+            return;
+        }
+        struct Saved {
+            llvm::Function* fn;
+            llvm::Value* frame;
+            llvm::Value* registers;
+            llvm::Value* slot;
+            llvm::BasicBlock* failure;
+            llvm::Value* env;
+            llvm::Value* at;
+            llvm::Value* guards;
+            llvm::Value* positions;
+            llvm::Value* tick;
+            llvm::IRBuilderBase::InsertPoint point;
+        };
+        const Saved saved { fn_, frame_, registers_, slot_addr_, failure_, env_, at_,
+            guard_storage_, positions_, tick_, builder_.saveIP() };
+        auto* node_type = llvm::FunctionType::get(llvm::Type::getVoidTy(context_),
+            { ptr_, ptr_, ptr_, ptr_, i64_, i64_, i64_, i64_, ptr_, i64_, ptr_ }, false);
+        auto* any_type = llvm::FunctionType::get(llvm::Type::getVoidTy(context_),
+            { ptr_, ptr_, ptr_, ptr_, i64_, i64_, i64_, i64_, i64_, ptr_, i64_, ptr_ }, false);
+        auto* skip_type = llvm::FunctionType::get(i64_, { ptr_, ptr_, ptr_, ptr_, i64_ }, false);
+        const auto create = [&](llvm::FunctionType* type, const char* stem) {
+            auto* function = llvm::Function::Create(type, llvm::Function::InternalLinkage,
+                std::string { stem } + std::to_string(next_function_id()), module_);
+            function->addFnAttr(llvm::Attribute::NoInline);
+            function->addFnAttr(llvm::Attribute::NoUnwind);
+            return function;
+        };
+        step_any_ = create(any_type, "fsim_sk_sva_step_");
+        skip_any_ = create(skip_type, "fsim_sk_sva_skip_");
+        std::vector<llvm::Function*> nodes;
+        for (std::size_t node = 0U; node < plan_.properties.size(); ++node) {
+            nodes.push_back(create(node_type, "fsim_sk_sva_node_"));
+        }
+        // Enters `function`: its context arguments, and a failure block that
+        // returns `failed` (void when null).
+        const auto enter = [&](llvm::Function* function, llvm::Value* failed) {
+            fn_ = function;
+            frame_ = fn_->getArg(0);
+            registers_ = fn_->getArg(1);
+            slot_addr_ = fn_->getArg(2);
+            env_ = fn_->getArg(3);
+            auto* entry = block("entry");
+            failure_ = block("failure");
+            builder_.SetInsertPoint(failure_);
+            if (failed != nullptr) {
+                builder_.CreateRet(failed);
+            } else {
+                builder_.CreateRetVoid();
+            }
+            builder_.SetInsertPoint(entry);
+            load_site(env_);
+            tick_ = builder_.CreateLoad(i64_, builder_.CreateConstInBoundsGEP1_64(i64_, env_, 0U));
+        };
+        // step_any_: the node's function.
+        enter(step_any_, nullptr);
+        {
+            auto* done = block("step_done");
+            auto* dispatch = builder_.CreateSwitch(step_any_->getArg(4), done,
+                static_cast<unsigned>(nodes.size()));
+            for (std::size_t node = 0U; node < nodes.size(); ++node) {
+                auto* here = block("step_node");
+                dispatch->addCase(llvm::cast<llvm::ConstantInt>(k(node)), here);
+                builder_.SetInsertPoint(here);
+                std::vector<llvm::Value*> arguments;
+                for (unsigned index = 0U; index < 4U; ++index) {
+                    arguments.push_back(step_any_->getArg(index));
+                }
+                for (unsigned index = 5U; index < 12U; ++index) {
+                    arguments.push_back(step_any_->getArg(index));
+                }
+                builder_.CreateCall(node_type, nodes[node], arguments);
+                builder_.CreateBr(done);
+            }
+            builder_.SetInsertPoint(done);
+            builder_.CreateRetVoid();
+        }
+        // skip_any_: the end of the record of its node.
+        enter(skip_any_, skip_any_->getArg(4));
+        {
+            auto* in = skip_any_->getArg(4);
+            auto* done = block("skip_done");
+            auto* dispatch = builder_.CreateSwitch(old_word(in), done,
+                static_cast<unsigned>(nodes.size()));
+            for (std::size_t node = 0U; node < nodes.size(); ++node) {
+                auto* here = block("skip_node");
+                dispatch->addCase(llvm::cast<llvm::ConstantInt>(k(node)), here);
+                builder_.SetInsertPoint(here);
+                builder_.CreateRet(skip_node_body(static_cast<std::uint32_t>(node), in, k(1U)));
+            }
+            builder_.SetInsertPoint(done);
+            builder_.CreateRet(in);
+        }
+        // Each node's step (Instance::step, then Instance::forward).
+        for (std::size_t node = 0U; node < nodes.size(); ++node) {
+            auto* function = nodes[node];
+            enter(function, nullptr);
+            const LocalsFrom from { locals_words() != 0U ? function->getArg(8) : nullptr, nullptr };
+            const auto state = emit_node_body(static_cast<std::uint32_t>(node), function->getArg(4),
+                function->getArg(5), function->getArg(6), function->getArg(7), from,
+                function->getArg(9));
+            auto* out = function->getArg(10);
+            llvm::AllocaInst* const fields[] { state.decided, state.holds, state.vacuous,
+                state.line, state.column };
+            for (std::uint64_t word = 0U; word < 5U; ++word) {
+                builder_.CreateStore(builder_.CreateLoad(i64_, fields[word]),
+                    builder_.CreateConstInBoundsGEP1_64(i64_, out, word));
+            }
+            builder_.CreateRetVoid();
+        }
+        fn_ = saved.fn;
+        frame_ = saved.frame;
+        registers_ = saved.registers;
+        slot_addr_ = saved.slot;
+        failure_ = saved.failure;
+        env_ = saved.env;
+        at_ = saved.at;
+        guard_storage_ = saved.guards;
+        positions_ = saved.positions;
+        tick_ = saved.tick;
+        builder_.restoreIP(saved.point);
+    }
+
+    /// Instance::step of `node` (emit_node); in a recursive plan
+    /// `forwardable` (an i64 0 or 1, else null) lets an undecided instance
+    /// whose outcome is now exactly one operand's give way to it
+    /// (Instance::forward): the operand's record replaces its own, with the
+    /// nonvacuous floor (flag 4096) carried over.
+    [[nodiscard]] NodeState emit_node_body(const std::uint32_t node, llvm::Value* in,
+        llvm::Value* existing, llvm::Value* start, llvm::Value* point,
+        const LocalsFrom from, llvm::Value* forwardable)
     {
         namespace l = runtime::sva::layout;
         const auto& property = plan_.properties[node];
@@ -3195,6 +3438,22 @@ private:
         auto* time = builder_.CreateLoad(i64_, builder_.CreateConstInBoundsGEP1_64(i64_, env_, 1U));
         auto* node_clock = k(property.clock);
         auto* fresh_point = k(at_point | point_inclusive);
+        // Instance::forward (a recursive, singly clocked plan): whether the
+        // instance gives way to an operand, that operand's record in the
+        // alternate heap [from, end) (end 0: the heap's end) and the
+        // vacuity floor it gets; the instance's own floor (flag 4096).
+        const bool forwards = forwardable != nullptr && !multi;
+        auto* forward_ok = forwards ? var("forward_ok") : nullptr;
+        auto* forward_from = forwards ? var("forward_from") : nullptr;
+        auto* forward_end = forwards ? var("forward_end") : nullptr;
+        auto* forward_floor = forwards ? var("forward_floor") : nullptr;
+        llvm::Value* nonvacuous_bit = recursive_ ? builder_.CreateAnd(flags_in, k(4096U)) : nullptr;
+        // The flags an instance keeps: initialized (2048), and in a
+        // recursive plan its vacuity floor (4096).
+        const auto kept_flags = [&](llvm::Value* initialized_flag) {
+            return nonvacuous_bit != nullptr ? builder_.CreateOr(initialized_flag, nonvacuous_bit)
+                                             : initialized_flag;
+        };
         // Whether time step `at` reaches the start point.
         const auto reached = [&](llvm::Value* at) {
             auto* inclusive = ne0(builder_.CreateAnd(get(point_now), k(point_inclusive)));
@@ -3259,7 +3518,14 @@ private:
         const auto resolve = [&](llvm::Value* holds, llvm::Value* vacuous) {
             set(state.decided, k(1U));
             set(state.holds, holds);
-            set(state.vacuous, builder_.CreateAnd(holds, vacuous));
+            llvm::Value* result = builder_.CreateAnd(holds, vacuous);
+            if (recursive_) {
+                // An instance that a nonvacuous operand gave way to is not
+                // vacuous (Instance::resolve).
+                result = builder_.CreateAnd(result,
+                    builder_.CreateZExt(builder_.CreateICmpEQ(nonvacuous_bit, k(0U)), i64_));
+            }
+            set(state.vacuous, result);
         };
         const auto fail_at = [&](llvm::Value* line, llvm::Value* column) {
             set(state.line, line);
@@ -3359,6 +3625,15 @@ private:
                     set(operands, k(1U));
                     const auto child = operand(0U, add(in, header_words() + 1U), operands_existing, child_start,
                         child_point);
+                    if (forwards && property.kind == semantic::sva::PropertyKind::nexttime
+                        && !property.strong) {
+                        // A weak nexttime gives way to its operand once the
+                        // operand started.
+                        set(forward_ok, builder_.CreateZExt(builder_.CreateAnd(
+                            builder_.CreateICmpEQ(get(child.decided), k(0U)),
+                            builder_.CreateICmpSLE(child_start, now)), i64_));
+                        set(forward_from, add(get(record), header_words() + 1U));
+                    }
                     if_then(ne0(get(child.decided)), [&] {
                         if (property.kind == semantic::sva::PropertyKind::negation) {
                             // `not p` fails because p held: the property
@@ -3403,11 +3678,13 @@ private:
             case semantic::sva::PropertyKind::equivalence:
             case semantic::sva::PropertyKind::implies: {
                 set(operands, k(2U));
+                auto* left_word = rd(l::h_heap_alt_used);
                 const auto left = operand(0U, add(in, header_words() + 1U), operands_existing, node_start,
                     node_point);
                 auto* second = add(skip_node(static_cast<std::uint32_t>(property.children[0]),
                                        add(in, header_words() + 1U), operands_existing),
                     1U);
+                auto* right_word = rd(l::h_heap_alt_used);
                 const auto right = operand(1U, second, operands_existing, node_start, node_point);
                 auto* left_decided = ne0(get(left.decided));
                 auto* right_decided = ne0(get(right.decided));
@@ -3431,6 +3708,21 @@ private:
                                 get(right.vacuous)));
                         });
                     });
+                    if (forwards) {
+                        // `p and q` once one side held: the other side's
+                        // outcome, nonvacuous if the held side was.
+                        auto* use_right = builder_.CreateAnd(builder_.CreateAnd(left_decided, left_holds),
+                            builder_.CreateNot(right_decided));
+                        auto* use_left = builder_.CreateAnd(builder_.CreateAnd(right_decided, right_holds),
+                            builder_.CreateNot(left_decided));
+                        set(forward_ok, builder_.CreateZExt(builder_.CreateOr(use_right, use_left), i64_));
+                        set(forward_from, builder_.CreateSelect(use_right, add(right_word, 1U),
+                            add(left_word, 1U)));
+                        set(forward_end, builder_.CreateSelect(use_right, k(0U), right_word));
+                        set(forward_floor, builder_.CreateSelect(use_right,
+                            builder_.CreateXor(get(left.vacuous), k(1U)),
+                            builder_.CreateXor(get(right.vacuous), k(1U))));
+                    }
                     break;
                 }
                 case semantic::sva::PropertyKind::disjunction: {
@@ -3616,9 +3908,9 @@ private:
                     auto* left_in = get(position);
                     auto* right_in = skip_node(left_node, left_in, existing_pair);
                     const auto left = emit_node(left_node, left_in, existing_pair, pair_start,
-                        pair_point, LocalsFrom { locals_pointer, nullptr });
+                        pair_point, LocalsFrom { locals_pointer, nullptr }, false);
                     const auto right = emit_node(right_node, right_in, existing_pair, pair_start,
-                        pair_point, LocalsFrom { locals_pointer, nullptr });
+                        pair_point, LocalsFrom { locals_pointer, nullptr }, false);
                     if_then(ne0(existing_pair), [&] {
                         set(position, skip_node(right_node, right_in, k(1U)));
                     });
@@ -3812,6 +4104,16 @@ private:
                 set(aux_flags, builder_.CreateOr(
                     builder_.CreateShl(get(antecedent_done), k(4U)),
                     builder_.CreateShl(get(satisfied), k(5U))));
+                if (forwards && implication) {
+                    // `s |-> p` once s can match no more and one consequent
+                    // is left: that consequent, nonvacuous if satisfied.
+                    set(forward_ok, builder_.CreateZExt(builder_.CreateAnd(
+                        builder_.CreateAnd(ne0(get(antecedent_done)),
+                            builder_.CreateICmpEQ(get(has_matcher), k(0U))),
+                        builder_.CreateICmpEQ(get(listed), k(1U))), i64_));
+                    set(forward_from, add(get(record), header_words()));
+                    set(forward_floor, get(satisfied));
+                }
                 break;
             }
             case semantic::sva::PropertyKind::conditional: {
@@ -3893,6 +4195,12 @@ private:
                         set(operands, k(1U));
                         const auto child = operand(static_cast<std::uint32_t>(branch), add(in, header_words() + 1U),
                             builder_.CreateAnd(existing, chosen_before), node_start, node_point);
+                        if (forwards) {
+                            // The chosen branch's outcome.
+                            set(forward_ok, builder_.CreateZExt(
+                                builder_.CreateICmpEQ(get(child.decided), k(0U)), i64_));
+                            set(forward_from, add(get(record), header_words() + 1U));
+                        }
                         if_then(ne0(get(child.decided)), [&] { child_state(child); });
                     });
                 }
@@ -3939,7 +4247,7 @@ private:
                     builder_.CreateSelect(ne0(get(state.holds)), k(1U), k(2U)),
                     builder_.CreateShl(get(state.vacuous), k(2U))),
                     builder_.CreateOr(builder_.CreateOr(get(chosen_bit), get(until_bit)),
-                        get(aux_flags))), get(point_now)), get(initialized)));
+                        get(aux_flags))), get(point_now)), kept_flags(get(initialized))));
             alt_put(add(header, 4U), get(consequent_count));
             alt_put(add(header, 3U), get(chosen_index));
             alt_put(add(header, 5U), get(state.line));
@@ -3949,13 +4257,34 @@ private:
                 builder_.CreateOr(builder_.CreateOr(builder_.CreateOr(get(chosen_bit), get(until_bit)),
                                       get(aux_flags)),
                     builder_.CreateOr(builder_.CreateOr(builder_.CreateShl(get(has_matcher), k(7U)),
-                        get(point_now)), get(initialized))));
+                        get(point_now)), kept_flags(get(initialized)))));
             alt_put(add(header, 4U), get(consequent_count));
             alt_put(add(header, 3U), get(chosen_index));
             alt_put(add(header, 7U), get(operands));
             alt_put(add(header, 8U), get(listed));
             alt_put(add(header, 9U), get(until_count));
         });
+        if (forwards) {
+            // Instance::forward: the operand's record takes the place of
+            // this one (it lies after this header, so a forward copy is
+            // safe), its floor raised by this instance's.
+            auto* gives_way = builder_.CreateAnd(builder_.CreateAnd(ne0(forwardable),
+                builder_.CreateICmpEQ(get(state.decided), k(0U))), ne0(get(forward_ok)));
+            if_then(gives_way, [&] {
+                auto* end = builder_.CreateSelect(ne0(get(forward_end)), get(forward_end),
+                    rd(l::h_heap_alt_used));
+                auto* length = sub(end, get(forward_from));
+                auto* word = var("forward_word");
+                for_count(word, length, [&] {
+                    alt_put(add(header, get(word)), rd(alt_index(add(get(forward_from), get(word)))));
+                });
+                wr(l::h_heap_alt_used, add(header, length));
+                auto* floor = builder_.CreateOr(ne0(nonvacuous_bit), ne0(get(forward_floor)));
+                if_then(floor, [&] {
+                    alt_put(add(header, 2U), builder_.CreateOr(rd(alt_index(add(header, 2U))), k(4096U)));
+                });
+            });
+        }
         return state;
     }
 
@@ -4325,7 +4654,7 @@ private:
                 // The root is a property tree: Instance::step over its nodes,
                 // then the attempt's outcome.
                 const auto result = emit_node(plan_.root, blob, existing_flag, start_tick,
-                    k(root_point));
+                    k(root_point), LocalsFrom { nullptr, nullptr }, false);
                 auto* ending = block("tree_decided");
                 builder_.CreateCondBr(ne0(get(result.decided)), ending, row_keep);
                 builder_.SetInsertPoint(ending);
@@ -4870,6 +5199,7 @@ public:
             last_weak_ = nullptr;
             insert_unknown_ = nullptr;
             insert_weak_ = nullptr;
+            emit_statement_flush(at);
             at_ = at;
             guarded_unknown_ = nullptr;
             emit_unknown_checks(at);
@@ -4877,6 +5207,7 @@ public:
             const auto result_weak = weak_before(at);
             emit_instruction(at);
             unknown_after(at, result_unknown, result_weak);
+            emit_variable_store_hook(at);
             // Every instruction's inner blocks rejoin in the block it ends
             // in, which dominates the rest of the KIR block; values defined
             // in its inner blocks must not be reused after it.
@@ -5458,6 +5789,144 @@ private:
         }
         continue_in_full_code();
         builder_.SetInsertPoint(next);
+    }
+
+    /// Before the first instruction of a statement
+    /// (CompiledBody::statement_starts): while an observer watches a signal
+    /// (StaticKernelNativeFrame::watch_writes) and a write of an output is
+    /// pending, `fsim_sk_flush_writes` hands the writes of the statements
+    /// before to the host. Each blocking assignment is then its own value
+    /// change (IEEE 1800-2023 38.36.1 cbValueChange, and the Tcl
+    /// value-change hooks alike), not only the value the activation leaves,
+    /// and the stores of one continuous assignment's update stay one
+    /// change. Nothing but a null test runs while nothing is watched.
+    void emit_statement_flush(const std::uint32_t at)
+    {
+        if (at >= body_.statement_starts.size() || body_.statement_starts[at] == 0U) {
+            return;
+        }
+        if (builder_.GetInsertBlock() == nullptr
+            || builder_.GetInsertBlock()->getTerminator() != nullptr) {
+            return;
+        }
+        spine_.insert(builder_.GetInsertBlock());
+        auto* flag = builder_.CreateLoad(ptr_, frame_field(152U), "watch_writes");
+        auto* check = llvm::BasicBlock::Create(context_, "write_watched", &function_);
+        auto* flush = llvm::BasicBlock::Create(context_, "write_flush", &function_);
+        auto* next = llvm::BasicBlock::Create(context_, "write_next", &function_);
+        builder_.CreateCondBr(builder_.CreateIsNull(flag), next, check);
+        builder_.SetInsertPoint(check);
+        builder_.CreateCondBr(
+            builder_.CreateICmpNE(builder_.CreateLoad(i8_, flag),
+                llvm::ConstantInt::get(i8_, 0U)),
+            flush, next);
+        builder_.SetInsertPoint(flush);
+        auto* type = llvm::FunctionType::get(llvm::Type::getVoidTy(context_),
+            { ptr_ }, false);
+        builder_.CreateCall(type, helper_symbol("fsim_sk_flush_writes", type),
+            { frame_ });
+        auto* status = builder_.CreateLoad(i32_, frame_field(40U));
+        builder_.CreateCondBr(
+            builder_.CreateICmpNE(status, llvm::ConstantInt::get(i32_, 0U)),
+            failure_block_, next);
+        builder_.SetInsertPoint(next);
+        spine_.insert(next);
+    }
+
+    /// After an instruction that stores a VHDL variable
+    /// (CompiledBody::variable_stores): while the debug interface forces or
+    /// watches a variable of the frame's member
+    /// (StaticKernelNativeFrame::variable_hooks), `fsim_sk_variable_store`
+    /// puts back the forced elements in the register file and reports the
+    /// change (IEEE 1076-2019 22.5.2, 21.3.2.2). Two-state code continues
+    /// in the full code when the register now holds unknown bits.
+    void emit_variable_store_hook(const std::uint32_t at)
+    {
+        if (at >= body_.variable_stores.size()
+            || body_.variable_stores[at] == detail::no_variable_store
+            || builder_.GetInsertBlock() == nullptr
+            || builder_.GetInsertBlock()->getTerminator() != nullptr) {
+            return;
+        }
+        const auto reg = body_.variable_stores[at];
+        spine_.insert(builder_.GetInsertBlock());
+        auto* hooks = builder_.CreateLoad(ptr_, frame_field(144U), "variable_hooks");
+        auto* check = llvm::BasicBlock::Create(context_, "variable_hooked", &function_);
+        auto* store = llvm::BasicBlock::Create(context_, "variable_store", &function_);
+        auto* next = llvm::BasicBlock::Create(context_, "variable_next", &function_);
+        builder_.CreateCondBr(builder_.CreateIsNull(hooks), next, check);
+        builder_.SetInsertPoint(check);
+        auto* member = builder_.CreateZExt(
+            builder_.CreateLoad(i32_, frame_field(32U)), i64_);
+        auto* flag = builder_.CreateLoad(i8_,
+            builder_.CreateInBoundsGEP(i8_, hooks, member));
+        builder_.CreateCondBr(
+            builder_.CreateICmpNE(flag, llvm::ConstantInt::get(i8_, 0U)), store, next);
+        builder_.SetInsertPoint(store);
+        const bool local = reg < local_.size() && local_[reg] != nullptr;
+        const auto copy = [&](const bool to_file) {
+            for (std::uint64_t word = 0U; word < 2U; ++word) {
+                auto* slot = builder_.CreateConstInBoundsGEP1_64(i64_, local_[reg], word);
+                auto* file = builder_.CreateConstInBoundsGEP1_64(i64_, registers_,
+                    static_cast<std::uint64_t>(reg) * 2U + word);
+                builder_.CreateStore(builder_.CreateLoad(i64_, to_file ? slot : file),
+                    to_file ? file : slot);
+            }
+        };
+        if (local) {
+            copy(true);
+        }
+        auto* type = llvm::FunctionType::get(i32_, { ptr_, ptr_, i32_ }, false);
+        auto* unknown = builder_.CreateCall(type,
+            helper_symbol("fsim_sk_variable_store", type),
+            { frame_, registers_, llvm::ConstantInt::get(i32_, reg) });
+        if (local) {
+            copy(false);
+        }
+        auto* checked = llvm::BasicBlock::Create(context_, "variable_checked", &function_);
+        auto* status = builder_.CreateLoad(i32_, frame_field(40U));
+        builder_.CreateCondBr(
+            builder_.CreateICmpNE(status, llvm::ConstantInt::get(i32_, 0U)),
+            failure_block_, checked);
+        builder_.SetInsertPoint(checked);
+        if (two_state_) {
+            auto* full = llvm::BasicBlock::Create(context_, "variable_unknown", &function_);
+            builder_.CreateCondBr(
+                builder_.CreateICmpNE(unknown, llvm::ConstantInt::get(i32_, 0U)),
+                full, next);
+            builder_.SetInsertPoint(full);
+            continue_in_full_code();
+        } else {
+            builder_.CreateBr(next);
+        }
+        builder_.SetInsertPoint(next);
+        // The helper may have changed the register (a wide one in its
+        // chunks), and the callbacks it runs may deposit to any other
+        // variable of the member (vhpi_put_value, IEEE 1076-2019 22.5.2):
+        // later instructions read the variables again.
+        if (variable_registers_.empty()) {
+            for (const auto stored : body_.variable_stores) {
+                if (stored != detail::no_variable_store) {
+                    variable_registers_.push_back(stored);
+                }
+            }
+            std::ranges::sort(variable_registers_);
+            const auto duplicates = std::ranges::unique(variable_registers_);
+            variable_registers_.erase(duplicates.begin(), duplicates.end());
+        }
+        for (const auto variable : variable_registers_) {
+            if (variable < body_.register_widths.size()
+                && body_.register_widths[variable] > 64U) {
+                cache_.clear();
+                return;
+            }
+        }
+        for (const auto variable : variable_registers_) {
+            cache_.erase(variable);
+            if (body_.shadow_base != 0U) {
+                cache_.erase(body_.shadow_base + variable);
+            }
+        }
     }
 
     /// Ends two-state code: the full code continues at the next instruction.
@@ -7308,6 +7777,19 @@ private:
     /// appends to the deferred queue (flag_nba); an unknown or out-of-range
     /// one has no effect (IEEE 1800-2023 11.5.1) or, strict (VHDL), is an
     /// error, and so is a field that leaves the slot.
+    /// Whether a store to a resolved slot (store_slot sub 2 and 3, a
+    /// resolved store_slot_dynamic or store_slot_part, a wide_store to a
+    /// resolved slot) writes a slot a resolution function of the design's
+    /// own resolves (net_user_bit). A SystemVerilog member's store to one,
+    /// the driver of a net of a user-defined nettype (IEEE 1800-2023
+    /// 6.6.7), goes through the runtime, which queues the net's resolution
+    /// (StaticKernel::queue_nettype_resolution).
+    [[nodiscard]] static bool user_net_store(const KInst& inst) noexcept
+    {
+        return (static_cast<std::uint32_t>(inst.imm_b) & detail::net_user_bit)
+            != 0U;
+    }
+
     void emit_store_slot_dynamic(const KInst& inst, const std::uint32_t at)
     {
         const auto value = load_register(inst.x);
@@ -7316,7 +7798,9 @@ private:
         // the member's source); else imm_b the width of a Logic4 slot.
         const bool resolved = inst.sub == 2U;
         const std::uint64_t slot_width = resolved ? inst.offset : inst.imm_b;
-        if (slot_width == 0U) {
+        if (slot_width == 0U
+            || (resolved && (inst.flags & detail::flag_nba) == 0U
+                && user_net_store(inst))) {
             call_effect(at, value, index, zero_pair());
             return;
         }
@@ -7396,7 +7880,9 @@ private:
         const bool resolved = inst.sub == 2U;
         const auto slot_width = static_cast<std::uint32_t>(resolved ? inst.offset : inst.imm_b);
         if (slot_width == 0U || inst.width == 0U || inst.width > 64U
-            || part.width != inst.width) {
+            || part.width != inst.width
+            || (resolved && (inst.flags & detail::flag_nba) == 0U
+                && user_net_store(inst))) {
             call_effect(at, value, base_register,
                 tracked(inst.x) ? masks_of(inst.x) : zero_pair());
             return;
@@ -8086,6 +8572,10 @@ private:
     /// assignment (sub 2) queues it.
     void emit_wide_net_store(const KInst& inst, const std::uint32_t at)
     {
+        if (inst.sub == 0U && user_net_store(inst)) {
+            (void)call_wide(at, zero_pair(), zero_pair(), zero_pair(), 1U);
+            return;
+        }
         if (loops_chunks(inst.width)) {
             emit_wide_net_store_words(inst, at);
             return;
@@ -13878,6 +14368,46 @@ private:
                 store_register(inst.d, { builder_.CreateAnd(word, m), constant(0U) });
                 break;
             }
+            if (inst.aux == 16U) {
+                // A history attribute of a kernel signal (IEEE 1076-2019
+                // 16.2.4): sub 0 'EVENT, 1 'ACTIVE, 2 'LAST_EVENT, 3
+                // 'LAST_ACTIVE, from the history's record in the kernel's
+                // history words (x its first word): flags (bit 0 an event
+                // happened, bit 1 a transaction did), then the time and the
+                // update cycle of each. A stamp with the current time and
+                // cycle is of the cycle the running processes belong to.
+                auto* history = builder_.CreateLoad(ptr_,
+                    builder_.CreateConstInBoundsGEP1_64(i8_, table, 64U));
+                auto* cycle = builder_.CreateLoad(i64_, history);
+                auto* now = builder_.CreateLoad(i64_,
+                    builder_.CreateLoad(ptr_,
+                        builder_.CreateConstInBoundsGEP1_64(i8_, table, 40U)));
+                const auto word = [&](const std::uint64_t at) {
+                    return builder_.CreateLoad(i64_,
+                        builder_.CreateConstInBoundsGEP1_64(i64_, history,
+                            inst.x + at));
+                };
+                const bool transaction = (inst.sub & 1U) != 0U;
+                auto* has = builder_.CreateICmpNE(
+                    builder_.CreateAnd(word(0U), constant(transaction ? 2U : 1U)),
+                    constant(0U));
+                auto* stamp_time = word(transaction ? 3U : 1U);
+                if (inst.sub < 2U) {
+                    auto* current = builder_.CreateAnd(
+                        builder_.CreateAnd(has, builder_.CreateICmpEQ(stamp_time, now)),
+                        builder_.CreateICmpEQ(word(transaction ? 4U : 2U), cycle));
+                    store_register(inst.d,
+                        { builder_.CreateZExt(current, i64_), constant(0U) });
+                    break;
+                }
+                // The time since the stamp, TIME'HIGH when there is none.
+                store_register(inst.d,
+                    { builder_.CreateSelect(has, builder_.CreateSub(now, stamp_time),
+                          constant(static_cast<std::uint64_t>(
+                              std::numeric_limits<std::int64_t>::max()))),
+                        constant(0U) });
+                break;
+            }
             if (inst.aux == 4U) {
                 // $time or $stime (20.3): the time step in the unit's ticks,
                 // rounded half up as systemverilog_time_function does, with
@@ -14439,7 +14969,9 @@ private:
                 value.a = builder_.CreateOr(value.a,
                     builder_.CreateAnd(weak_of(inst.x), value.b));
             }
-            if (inst.sub >= 2U) {
+            if (inst.sub >= 2U && user_net_store(inst)) {
+                call_effect(at, load_register(inst.x), zero_pair(), zero_pair());
+            } else if (inst.sub >= 2U) {
                 emit_store_net(inst, load_register(inst.x));
             } else if (inst.sub == 1U) {
                 emit_store_wide_slot(inst, value);
@@ -15347,6 +15879,10 @@ private:
         auto* info = binding(inst.d, 1U);
         const auto shape = detail::make_net_shape(static_cast<std::uint32_t>(inst.imm_b),
             static_cast<std::uint32_t>(inst.imm_b >> 32U), slot_width);
+        if (shape.user) {
+            throw std::logic_error(
+                "static kernel user-resolved slot has an immediate store");
+        }
         const auto sources = shape.sources;
         const auto own = shape.own;
         const auto word = offset / 64U;
@@ -15810,6 +16346,7 @@ private:
             return builder_.CreateOr(left, right);
         };
         llvm::Value* seen = constant(0U);
+        llvm::Value* bus_null = constant(0U);
         llvm::Value* many = constant(0U);
         llvm::Value* any_u = constant(0U);
         llvm::Value* any_x = constant(0U);
@@ -15827,7 +16364,11 @@ private:
                     net_word(inst, shape, words, next,
                         shape.rows() + 4U * source + plane, word));
             }
-            auto* present = no(both(both(p[0], p[1]), both(p[2], p[3])));
+            // 1111 (no driver), 1110 and 1101 (a bus or register driver a
+            // null transaction disconnected) are no source.
+            auto* present = no(both(both(p[3], p[2]), either(p[1], p[0])));
+            bus_null = either(bus_null,
+                both(both(p[3], p[2]), both(p[1], no(p[0]))));
             many = either(many, both(seen, present));
             seen = either(seen, present);
             for (std::size_t plane = 0U; plane < 4U; ++plane) {
@@ -15862,10 +16403,21 @@ private:
             constant(0U),
         };
         auto* word_mask = net_word_mask(shape.width, word);
+        // An element without a source is 'Z' (0100) when a bus driver of it
+        // is disconnected; otherwise it keeps its value (a register's, or
+        // the default of one no process drives).
+        auto* empty_bus = both(no(seen), bus_null);
+        auto* keep = both(no(seen), no(bus_null));
         for (std::uint64_t plane = 0U; plane < 4U; ++plane) {
-            auto* resolved = either(both(many, codes[plane]), both(no(many), single[plane]));
-            builder_.CreateStore(both(resolved, word_mask),
-                net_word(inst, shape, words, next, plane, word));
+            auto* address = net_word(inst, shape, words, next, plane, word);
+            auto* resolved = either(both(seen,
+                                        either(both(many, codes[plane]),
+                                            both(no(many), single[plane]))),
+                both(keep, builder_.CreateLoad(i64_, address)));
+            if (plane == 2U) {
+                resolved = either(resolved, empty_bus);
+            }
+            builder_.CreateStore(both(resolved, word_mask), address);
         }
     }
 
@@ -15873,6 +16425,16 @@ private:
     void emit_net_resolve(const KInst& inst, const detail::NetShape& shape,
         const std::uint64_t words, const bool next, const NetField& field)
     {
+        if (shape.user) {
+            // A VHDL assignment's source waits for the update phase, which
+            // runs the resolution function (StaticKernel::resolve_user_slot);
+            // only VHDL members write such a slot (plan_static_kernel).
+            if (!next) {
+                throw std::logic_error(
+                    "static kernel user-resolved slot has an immediate store");
+            }
+            return;
+        }
         emit_net_resolve_word(inst, shape, words, next, field.word);
         if (field.spans_fixed) {
             emit_net_resolve_word(inst, shape, words, next,
@@ -16217,6 +16779,9 @@ private:
     llvm::BasicBlock* step_leave_ { };
     std::vector<llvm::BasicBlock*> blocks_;
     std::map<std::uint32_t, Pair> cache_;
+    /// The registers a variable store instruction writes
+    /// (CompiledBody::variable_stores), sorted.
+    std::vector<std::uint32_t> variable_registers_;
     /// Registers written to `cache_` since the last sweep.
     std::vector<std::uint32_t> fresh_;
     /// Blocks of the current KIR block in which an instruction started or
@@ -16277,6 +16842,19 @@ public:
         return ahead_of_time_;
     }
 
+    [[nodiscard]] StaticKernelCodegenCacheStatistics
+    cache_statistics() const noexcept override
+    {
+        return {
+            cache_hits_.load(std::memory_order_relaxed),
+            cache_misses_.load(std::memory_order_relaxed),
+            cache_stores_.load(std::memory_order_relaxed),
+            cache_rejected_.load(std::memory_order_relaxed),
+            cache_load_failures_.load(std::memory_order_relaxed),
+            cache_store_failures_.load(std::memory_order_relaxed),
+        };
+    }
+
     /// FSIM_STATIC_KERNEL_PERF_MAP (diagnostic): a perf map for the
     /// templates. Sizes are distances to the next template (capped), so perf
     /// can attribute samples.
@@ -16321,14 +16899,14 @@ public:
             return entries;
         }
         define_helpers(*jit_, helpers);
-        // The templates' objects link against the plans' automata.
-        ensure_sva(templates, helpers);
         std::vector<std::string> keys;
         keys.reserve(templates.size());
         for (const auto& code : templates) {
             keys.push_back(template_key(code));
         }
         load_index(index_key(keys));
+        // The templates' objects link against the plans' automata.
+        ensure_sva(templates, helpers);
         std::size_t restored = 0U;
         for (std::size_t index = 0U; index < templates.size(); ++index) {
             entries[index] = find(keys[index], templates[index]);
@@ -16483,10 +17061,17 @@ private:
                         "fsim-static-kernel-" + key);
                     if (auto failure = jit.addObjectFile(std::move(buffer))) {
                         llvm::consumeError(std::move(failure));
+                        cache_load_failures_.fetch_add(1U, std::memory_order_relaxed);
                     } else {
                         ++loaded;
+                        cache_hits_.fetch_add(1U, std::memory_order_relaxed);
                         continue;
                     }
+                } else {
+                    note_load_error(error);
+                }
+                if (image_) {
+                    cache_misses_.fetch_add(1U, std::memory_order_relaxed);
                 }
             }
             build.push_back(index);
@@ -16572,8 +17157,11 @@ private:
             if (store) {
                 const std::string bytes { objects[slot]->getBuffer() };
                 std::error_code error;
-                static_cast<void>(cache_->store(object_key(missing[build[slot]].first),
-                    std::as_bytes(std::span { bytes.data(), bytes.size() }), error));
+                (cache_->store(object_key(missing[build[slot]].first),
+                     std::as_bytes(std::span { bytes.data(), bytes.size() }), error)
+                        ? cache_stores_
+                        : cache_store_failures_)
+                    .fetch_add(1U, std::memory_order_relaxed);
             }
             if (auto error = jit.addObjectFile(std::move(objects[slot]))) {
                 throw std::runtime_error(error_text(std::move(error)));
@@ -16647,6 +17235,8 @@ private:
         add("fsim_sk_notify_field", helpers.notify_field);
         add("fsim_sk_fail", helpers.fail);
         add("fsim_sk_member_due", helpers.member_due);
+        add("fsim_sk_variable_store", helpers.variable_store);
+        add("fsim_sk_flush_writes", helpers.flush_writes);
         add("fsim_sk_net_delay", helpers.net_delay);
         add("fsim_sk_sva_tick", helpers.sva_tick);
         add("fsim_sk_sva_ensure", helpers.sva_ensure);
@@ -17009,6 +17599,10 @@ private:
             }
         }
         const bool store = ahead_of_time_ && cache_;
+        if (image_ && !ahead_of_time_) {
+            // The index of an ahead-of-time build has no code for these.
+            cache_misses_.fetch_add(group.size(), std::memory_order_relaxed);
+        }
         const auto chunks = split_group(templates, group, tier);
         if (chunks.size() == 1U) {
             auto built = build_module(jit.getDataLayout(), templates, keys, group, tier, 0U);
@@ -17237,6 +17831,9 @@ private:
         append_all(body.u_operands);
         append(body.call_stack_base);
         append_all(body.resume_entries);
+        append_all(body.statement_starts);
+        // The reports of VHDL variable stores are generated code too.
+        append_all(body.variable_stores);
         // A content key for this process's cache and the ahead-of-time
         // image (not an integrity check: the image's objects are checksummed
         // by the cache). Keys are computed for every template a simulation
@@ -17276,6 +17873,7 @@ private:
         if (!loaded_objects_.contains(object_key)) {
             const auto object = cache_->load(object_key, error);
             if (!object) {
+                note_load_error(error);
                 return nullptr;
             }
             auto buffer = llvm::MemoryBuffer::getMemBufferCopy(
@@ -17284,6 +17882,7 @@ private:
                 "fsim-static-kernel-" + object_key);
             if (auto failure = jit_->addObjectFile(std::move(buffer))) {
                 llvm::consumeError(std::move(failure));
+                cache_load_failures_.fetch_add(1U, std::memory_order_relaxed);
                 return nullptr;
             }
             loaded_objects_.insert(object_key);
@@ -17291,10 +17890,12 @@ private:
         auto symbol = jit_->lookup(symbol_name(key));
         if (!symbol) {
             llvm::consumeError(symbol.takeError());
+            cache_load_failures_.fetch_add(1U, std::memory_order_relaxed);
             return nullptr;
         }
         known.entry = symbol->toPtr<StaticKernelNativeEntry>();
         restore_resume_points(known, code);
+        cache_hits_.fetch_add(1U, std::memory_order_relaxed);
         return known_.emplace(key, std::move(known)).first->second.entry;
     }
 
@@ -17311,8 +17912,10 @@ private:
         if (!cache_->store(object,
                 std::as_bytes(std::span { bytes.data(), bytes.size() }),
                 error)) {
+            cache_store_failures_.fetch_add(1U, std::memory_order_relaxed);
             return;
         }
+        cache_stores_.fetch_add(group.size(), std::memory_order_relaxed);
         for (const auto index : group) {
             index_.push_back({ keys[index], object,
                 known_.at(keys[index]).resume_points });
@@ -17356,8 +17959,18 @@ private:
             text += "\n";
         }
         std::error_code error;
-        static_cast<void>(cache_->store(index_key_,
-            std::as_bytes(std::span { text.data(), text.size() }), error));
+        if (!cache_->store(index_key_,
+                std::as_bytes(std::span { text.data(), text.size() }), error)) {
+            cache_store_failures_.fetch_add(1U, std::memory_order_relaxed);
+        }
+    }
+
+    /// A failed load other than a miss (ObjectCache::load).
+    void note_load_error(const std::error_code& error) noexcept
+    {
+        if (error && error != std::errc::no_such_file_or_directory) {
+            cache_load_failures_.fetch_add(1U, std::memory_order_relaxed);
+        }
     }
 
     void load_index(const std::string& key)
@@ -17365,11 +17978,16 @@ private:
         std::error_code error;
         const auto payload = cache_->load(key, error);
         if (!payload) {
+            note_load_error(error);
             return;
         }
         std::istringstream lines { std::string {
             reinterpret_cast<const char*>(payload->data()), payload->size() } };
         std::string line;
+        const auto reject = [this] {
+            records_.clear();
+            cache_rejected_.fetch_add(1U, std::memory_order_relaxed);
+        };
         while (std::getline(lines, line)) {
             std::istringstream fields { line };
             std::string template_key;
@@ -17377,18 +17995,20 @@ private:
             std::size_t count { };
             if (!(fields >> template_key >> record.object >> count)
                 || count > (std::size_t { 1 } << 24U)) {
-                records_.clear();
+                reject();
                 return;
             }
             record.resume_points.resize(count);
             for (auto& point : record.resume_points) {
                 if (!(fields >> point)) {
-                    records_.clear();
+                    reject();
                     return;
                 }
             }
             records_.insert_or_assign(std::move(template_key), std::move(record));
         }
+        // From now on every template and automaton is looked up in it.
+        image_ = true;
     }
 
     bool ahead_of_time_ { };
@@ -17399,6 +18019,14 @@ private:
     /// The plans' automata compiled or loaded (ensure_sva), by symbol.
     std::unordered_map<std::string, std::uint64_t> sva_known_;
     std::unordered_map<std::string, Record> records_;
+    /// The index of an ahead-of-time build for this kernel was found.
+    bool image_ { };
+    std::atomic<std::uint64_t> cache_hits_ { };
+    std::atomic<std::uint64_t> cache_misses_ { };
+    std::atomic<std::uint64_t> cache_stores_ { };
+    std::atomic<std::uint64_t> cache_rejected_ { };
+    std::atomic<std::uint64_t> cache_load_failures_ { };
+    std::atomic<std::uint64_t> cache_store_failures_ { };
     std::vector<IndexEntry> index_;
     std::string index_key_;
     std::unordered_set<std::string> loaded_objects_;

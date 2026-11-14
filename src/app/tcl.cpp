@@ -6,16 +6,12 @@
 #include "tcl_internal.hpp"
 #include "tcl_transcript.hpp"
 
-#include "fsim/api.h"
-#include "fsim/app/application.hpp"
 #include "fsim/app/sdf_control.hpp"
 #include "fsim/support/environment.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
-#include "fsim/version.hpp"
 
 #include <algorithm>
-#include <array>
 #include <cerrno>
 #include <charconv>
 #include <cstddef>
@@ -27,7 +23,6 @@
 #include <memory>
 #include <optional>
 #include <ostream>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>

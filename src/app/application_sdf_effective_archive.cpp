@@ -3,16 +3,24 @@
 #include "fsim/app/sdf_effective_archive.hpp"
 
 #include "fsim/support/bounded_bytes.hpp"
+#include "fsim/app/sdf_reannotation.hpp"
+#include "fsim/app/sdf_value_policy.hpp"
+#include "fsim/frontend/diagnostic.hpp"
 
 #include <algorithm>
 #include <array>
 #include <bit>
 #include <limits>
-#include <ranges>
 #include <set>
 #include <stdexcept>
 #include <tuple>
 #include <utility>
+#include <cstddef>
+#include <cstdint>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
 
 namespace fsim::app {
 namespace {

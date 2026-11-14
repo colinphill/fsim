@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/semantic/vhdl_hir.hpp"
+#include "fsim/runtime/simir.hpp"
 
 #include "fsim/runtime/vcd_writer.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
@@ -1558,7 +1561,7 @@ begin
   x01_mapped <= to_x01(source);
   x01z_mapped <= to_x01z(source);
   ux01_mapped <= to_ux01(source);
-  promoted <= to_stdlogicvector("1010");
+  promoted <= to_stdlogicvector(bit_vector'("1010"));
   unknown_seen <= is_x(source);
   known_seen <= is_x("01LH");
   mapped_01 <= to_01(source, '1');
@@ -1609,7 +1612,7 @@ end architecture;
             output
                 << "entity revision_lexical is\n"
                    "  port (result : out bit_vector(136 downto 0));\n"
-                   "end entity;\n"
+                   "end revision_lexical;\n"
                    "architecture rtl of revision_lexical is\n"
                    "  signal "
                 << later_reserved_identifier
@@ -1618,7 +1621,7 @@ end architecture;
                 << later_reserved_identifier << " <= B\""
                 << wide_revision_value << "\";\n  result <= "
                 << later_reserved_identifier
-                << ";\nend architecture;\n";
+                << ";\nend rtl;\n";
             assert(output.good());
         }
         auto config = make_config(
@@ -1877,7 +1880,7 @@ library ieee;
 use ieee.std_logic_1164.all;
 entity vhdl_logic9_child is
   port (result : out std_logic_vector(7 downto 0));
-end entity;
+end vhdl_logic9_child;
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.std_logic_unsigned.all;
@@ -1892,7 +1895,7 @@ begin
   wide_down_result <= wide_down_source + 1;
   wide_up_source <= (136 => '1', others => '0');
   wide_up_result <= wide_up_source + 1;
-end architecture;
+end rtl;
 )";
         assert(output.good());
     }
@@ -1905,7 +1908,7 @@ library ieee;
 use ieee.std_logic_1164.all;
 entity vhdl_logic9_parent is
   port (result : out std_logic_vector(7 downto 0));
-end entity;
+end vhdl_logic9_parent;
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.std_logic_unsigned.all;
@@ -1929,7 +1932,7 @@ begin
   wide_up_result <= wide_up_source + 1;
   child : sv_logic9_child
     port map (data => source, result => result);
-end architecture;
+end rtl;
 )";
         assert(output.good());
     }

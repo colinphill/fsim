@@ -93,7 +93,7 @@ HierarchyBuilder::collect_compiled_systemverilog_bound_instances(
                           for (const auto& library : libraries) {
                               const auto selected
                                   = elaboration_detail::
-                                      find_exact_systemverilog_module(
+                                      find_exact_systemverilog_cell(
                                           *compiled_, library,
                                           bind.target.spelling);
                               if (selected.unit && !selected.ambiguous) {

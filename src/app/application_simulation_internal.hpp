@@ -5,21 +5,70 @@
 #include "application_class_hir_execution.hpp"
 #include "application_internal.hpp"
 #include "application_uvm_registry.hpp"
-#include "fsim/app/design_artifact.hpp"
-#include "fsim/artifact/coverage_database_codec.hpp"
-#include "fsim/artifact/coverage_database_merge.hpp"
+#include "fsim/runtime/class_randomize_graph.hpp"
 #include "fsim/runtime/run_state_sections.hpp"
 #include "fsim/runtime/scheduler_events.hpp"
-#include "fsim/support/path.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 #include "fsim/support/sha256.hpp"
+#include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/artifact/coverage_database.hpp"
+#include "fsim/artifact/coverage_database_model.hpp"
+#include "fsim/elaboration/elaborator.hpp"
+#include "fsim/frontend/coverage_execution.hpp"
+#include "fsim/frontend/diagnostic.hpp"
+#include "fsim/runtime/class_heap.hpp"
+#include "fsim/runtime/class_methods.hpp"
+#include "fsim/runtime/class_randomize.hpp"
+#include "fsim/runtime/class_static.hpp"
+#include "fsim/runtime/code_coverage.hpp"
+#include "fsim/runtime/constraint_solver.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/run_state_image.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_container_value.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include "fsim/runtime/sva_storage.hpp"
+#include "fsim/runtime/systemverilog_chandle.hpp"
+#include "fsim/runtime/systemverilog_scalar.hpp"
+#include "fsim/runtime/uvm_activity.hpp"
+#include "fsim/runtime/uvm_callback.hpp"
+#include "fsim/runtime/uvm_command_line.hpp"
+#include "fsim/runtime/uvm_component.hpp"
+#include "fsim/runtime/uvm_config_db.hpp"
+#include "fsim/runtime/uvm_foreign.hpp"
+#include "fsim/runtime/uvm_objection.hpp"
+#include "fsim/runtime/uvm_phase.hpp"
+#include "fsim/runtime/uvm_register_model.hpp"
+#include "fsim/runtime/uvm_registry.hpp"
+#include "fsim/runtime/uvm_report.hpp"
+#include "fsim/runtime/uvm_resource.hpp"
+#include "fsim/runtime/uvm_sequence.hpp"
+#include "fsim/runtime/uvm_synchronization.hpp"
+#include "fsim/runtime/uvm_test_runner.hpp"
+#include "fsim/runtime/uvm_tlm1.hpp"
+#include "fsim/runtime/uvm_tlm2.hpp"
+#include "fsim/runtime/vhpi_object.hpp"
+#include "fsim/runtime/vpi_abi.h"
+#include "fsim/runtime/vpi_callback.hpp"
+#include "fsim/runtime/vpi_coverage.hpp"
+#include "fsim/runtime/vpi_data_read.hpp"
+#include "fsim/runtime/vpi_object.hpp"
+#include "fsim/runtime/vpi_system.hpp"
+#include "fsim/runtime/vpi_time.hpp"
+#include "fsim/runtime/vpi_types.hpp"
+#include "fsim/runtime/vpi_value.hpp"
+#include "fsim/runtime/vpi_value_control.hpp"
+#include "fsim/semantic/design_ir.hpp"
+#include "fsim/semantic/model.hpp"
+#include "fsim/semantic/systemverilog_class_specialization.hpp"
+#include "fsim/semantic/systemverilog_hir.hpp"
 
 #include <array>
-#include <atomic>
-#include <chrono>
-#include <condition_variable>
 #include <cstdint>
-#include <future>
 #include <limits>
+#include <exception>
 #include <map>
 #include <deque>
 #include <memory>
@@ -30,6 +79,20 @@
 #include <tuple>
 #include <unordered_map>
 #include <vector>
+#include <algorithm>
+#include <cstddef>
+#include <filesystem>
+#include <functional>
+#include <iterator>
+#include <mutex>
+#include <span>
+#include <string>
+#include <unordered_set>
+#include <utility>
+
+namespace fsim::runtime::simir {
+class StaticKernelCodegen;
+}
 
 namespace fsim::app {
 using namespace application_detail;
@@ -272,7 +335,60 @@ struct Simulation::Impl {
         const std::span<const std::string> names,
         const std::span<const runtime::PackedLogic4> actuals,
         const std::span<const runtime::SystemVerilogConstraintTemplate>
-            inline_constraints);
+            inline_constraints,
+        std::optional<runtime::simir::ProcessId> calling_process
+        = std::nullopt,
+        bool callbacks_lowered = false);
+
+    // A randomize() call whose pre_randomize and post_randomize callbacks
+    // run as generated code (IEEE 1800-2023 18.6.1): `@randomize-begin`
+    // collects the objects that join the solve once the object's own
+    // pre_randomize has run, `@randomize-member` names the I-th of them
+    // whose callbacks run (or null), `@builtin-randomize-solve` solves
+    // without running callbacks and `@randomize-end` ends the call. Calls
+    // nest when a callback randomizes another object.
+    struct LoweredRandomizeCall {
+        runtime::SystemVerilogClassHandle handle { };
+        std::vector<runtime::SystemVerilogClassRandomizeMember> members;
+    };
+    std::vector<LoweredRandomizeCall> lowered_randomize_calls;
+    // The generated pre_randomize and post_randomize calls running now,
+    // innermost last, each in the process that called randomize(): a run
+    // error they leave names them (18.6.1). A callback is a function, so
+    // only the running process has entries here (13.4).
+    struct RandomizeCallbackContext {
+        runtime::simir::ProcessId process { };
+        runtime::SystemVerilogClassHandle target { };
+        std::string name;
+    };
+    std::vector<RandomizeCallbackContext> randomize_callback_contexts;
+    // The calls and callbacks of the process that is killing a process
+    // (IEEE 1800-2023 9.7), set aside until the kill returns: a process
+    // that kills itself or an ancestor never returns, and its callbacks end
+    // there.
+    struct KilledRandomizeState {
+        runtime::simir::ProcessId process { };
+        std::vector<LoweredRandomizeCall> calls;
+        std::vector<RandomizeCallbackContext> contexts;
+    };
+    std::optional<KilledRandomizeState> killing_randomize_state;
+    // `message` of a run error, prefixed with each callback it left,
+    // innermost first.
+    [[nodiscard]] std::string randomize_callback_error(
+        std::string message) const;
+    // The class that declares `method`, a compilation-unit scope named
+    // without its digest.
+    [[nodiscard]] static std::string randomize_callback_owner(
+        const semantic::sv::SpecializedClassMethod& method);
+    // Run `name` (pre_randomize or post_randomize) of `target`'s class in
+    // the class executor, if it has one (18.6.1).
+    void run_randomize_callback(runtime::SystemVerilogClassHandle target,
+        std::string_view name,
+        std::optional<runtime::simir::ProcessId> calling_process);
+    [[nodiscard]] runtime::PackedLogic4 invoke_lowered_randomize_step(
+        runtime::simir::ProcessId process,
+        runtime::SystemVerilogClassHandle handle, std::string_view step,
+        std::span<const runtime::PackedLogic4> actuals);
 
     [[nodiscard]] runtime::PackedLogic4 invoke_source_randomization_mode(
         const runtime::SystemVerilogClassHandle handle,
@@ -366,6 +482,12 @@ struct Simulation::Impl {
         const std::string_view declared_type,
         const std::string_view allocation_scope = "$api");
 
+    // The identity a host service (clone, the factory) passes to
+    // construct_class for the class `specialization`: a user UVM class is
+    // constructed by generated code (`@service-construct:`), a library class
+    // by the simulation.
+    [[nodiscard]] std::string service_construct_identity(
+        std::string_view specialization);
     [[nodiscard]] runtime::SystemVerilogClassHandle construct_class(
         const std::string_view specialization_identity,
         const std::string_view declared_type,
@@ -422,7 +544,7 @@ struct Simulation::Impl {
     // A method called on a phase object of the native run.
     [[nodiscard]] std::optional<runtime::PackedLogic4> invoke_uvm_phase_method(
         runtime::SystemVerilogClassHandle phase_object,
-        std::string_view method,
+        support::UvmRole method,
         std::span<const runtime::PackedLogic4> actuals,
         std::span<const std::string> string_actuals);
     // The object a phase callback receives for a phase: a tagged handle
@@ -452,11 +574,47 @@ struct Simulation::Impl {
         bool ended { };
     };
     UvmRunTestState uvm_run_test;
+    // The request the generated UVM dispatch process takes from the host
+    // (kind 0: none; support::uvm_api_function_methods): a component's
+    // library virtual function, called as generated code.
+    struct UvmApiRequest {
+        std::uint32_t kind { };
+        runtime::SystemVerilogClassHandle receiver { };
+        runtime::SystemVerilogClassHandle phase { };
+        // The dispatch process has read the request.
+        bool taken { };
+        // The failure of the base construction of a construct request (a
+        // duplicate component name): it is raised to the caller of the
+        // request once the process has finished it.
+        std::exception_ptr error;
+    };
+    UvmApiRequest uvm_api_request;
+    // The dispatch process has been started and primed (start_uvm_api_dispatch).
+    bool uvm_api_primed { };
+    // Runs the library virtual function `method` of `component` in the
+    // generated dispatch process and returns once it has finished; false
+    // when the design has no such process or the method is not one it
+    // dispatches.
+    // Starts the run and settles its time-zero events before the first
+    // phase call, so the dispatch process can be woken by a request.
+    void start_uvm_api_dispatch();
+    // Runs the constructor chain of `component`, allocated without being
+    // constructed, in the generated dispatch process with the given name and
+    // parent; true when a lowered chain ran it (the object no longer waits
+    // in uvm_pending_constructions).
+    [[nodiscard]] bool dispatch_uvm_api_construct(
+        runtime::SystemVerilogClassHandle component);
+    void dispatch_uvm_api_function(
+        runtime::SystemVerilogClassHandle component,
+        support::UvmRole method, runtime::SystemVerilogClassHandle phase);
     // The object each TLM port, export or imp was constructed for, and the
     // connections made from each analysis port or export (IEEE 1800.2-2020
     // 12.2.10).
     std::map<runtime::SystemVerilogClassHandle, runtime::SystemVerilogClassHandle>
         uvm_tlm_owners;
+    // The ports constructed as implementations (their port type the
+    // library's UVM_IMPLEMENTATION, IEEE 1800.2-2020 5.4.2.1).
+    std::set<runtime::SystemVerilogClassHandle> uvm_tlm_implementations;
     std::map<runtime::SystemVerilogClassHandle,
         std::vector<runtime::SystemVerilogClassHandle>>
         uvm_analysis_connections;
@@ -480,6 +638,52 @@ struct Simulation::Impl {
         const semantic::sv::ClassSpecialization& specialization,
         runtime::SystemVerilogClassHandle handle,
         std::string_view allocation_scope);
+    // The UVM base state of a new object of a class deriving from the UVM
+    // library, which the simulation's UVM services keep for the library
+    // constructors: made from the actuals of the library constructor, and
+    // what a failed construction undoes.
+    struct UvmBaseConstruction {
+        bool component { };
+        bool object_initialized { };
+        bool automatic_root_created { };
+        runtime::SystemVerilogUvmRootHandle automatic_root { };
+        std::string automatic_root_identity;
+    };
+    void construct_uvm_base(
+        const semantic::sv::ClassSpecialization& specialization,
+        runtime::SystemVerilogClassHandle handle,
+        std::span<const runtime::PackedLogic4> actuals,
+        std::span<const std::string> string_actuals,
+        std::span<const std::string> actual_names,
+        std::string_view allocation_scope,
+        runtime::SystemVerilogUvmRootHandle requested_root,
+        UvmBaseConstruction& state);
+    // The objects a process allocated for a lowered constructor chain that
+    // has not reached the library constructor yet, with the scope and root
+    // of their allocation. Empty between process steps: a constructor is a
+    // function and does not suspend (IEEE 1800-2023 8.7).
+    struct UvmPendingConstruction {
+        std::string allocation_scope;
+        runtime::SystemVerilogUvmRootHandle requested_root { };
+        // The name and parent the constructor chain gets (IEEE 1800.2-2020
+        // 5.3.2, 13.1.2).
+        std::string name;
+        runtime::SystemVerilogClassHandle parent { };
+        // The simulation made the UVM base state when it allocated the
+        // object (a service a design process called), so the chain's
+        // library constructor only completes the construction.
+        bool base_made { };
+    };
+    std::map<runtime::SystemVerilogClassHandle, UvmPendingConstruction>
+        uvm_pending_constructions;
+    // The object a factory create or the run's test creation allocates
+    // without constructing it when its class is among the newline-separated
+    // `lowered` classes, whose constructor chains the calling process runs;
+    // zero when the class is not one of them.
+    [[nodiscard]] runtime::SystemVerilogClassHandle allocate_uvm_lowered(
+        const runtime::SystemVerilogUvmTypeHandle wrapper,
+        std::string_view lowered,
+        runtime::SystemVerilogUvmRootHandle requested_root);
     // The report object of the root, for reports outside any component.
     runtime::SystemVerilogClassHandle uvm_root_report_object { };
     /// The root's report object, allocated on first use without running the
@@ -503,11 +707,37 @@ struct Simulation::Impl {
     /// uvm_cmdline_processor::get_inst do in 1800.2-2020.3.1.
     [[nodiscard]] runtime::SystemVerilogClassHandle uvm_singleton(
         const std::string& identity);
+    /// The core service the library keeps in its static `inst` (IEEE
+    /// 1800.2-2020 F.4.1.3): the simulation's native services stand for the
+    /// initialization `uvm_init` makes, so a read of `inst` that finds no
+    /// service finds the default one, made without running the library's
+    /// initialization (which would make the root, report server and the
+    /// rest a second time). A set of `inst` by `uvm_coreservice_t::set`
+    /// is kept.
+    void seed_uvm_coreservice(std::string_view owner, std::string_view name);
     /// The signals of the library's variables that hold a singleton
     /// (`uvm_top`, `uvm_cmdline_proc`), by variable name; searched once, the
     /// optional is empty when the design has none.
     std::map<std::string, std::optional<runtime::simir::SignalId>,
         std::less<>> uvm_singleton_variable_signals;
+    // A method of the design's classes as the native UVM services see it:
+    // its recorded role (support::UvmRole), the role of its class, and its
+    // virtual slot.
+    struct UvmMethodRole {
+        support::UvmRole role { };
+        support::UvmRole owner { };
+        std::optional<std::uint32_t> virtual_slot { };
+    };
+    std::optional<std::map<std::string, UvmMethodRole, std::less<>>>
+        uvm_method_roles;
+    std::optional<std::uint32_t> uvm_object_type_slot { };
+    // The method `canonical_identity` names, by its canonical identity.
+    [[nodiscard]] UvmMethodRole uvm_method_role(
+        std::string_view canonical_identity);
+    // The virtual slot of the library's uvm_object::get_object_type; an
+    // override of it in a derived class shares the slot.
+    [[nodiscard]] std::optional<std::uint32_t>
+    uvm_object_get_object_type_slot();
     /// The children of a component, or of the root, in name order.
     [[nodiscard]] std::vector<runtime::SystemVerilogClassHandle>
     uvm_sorted_children(runtime::SystemVerilogClassHandle component) const;
@@ -524,7 +754,7 @@ struct Simulation::Impl {
     /// uvm_root::print_topology: the table of the native hierarchy.
     void print_uvm_topology(runtime::SystemVerilogClassHandle printer);
     [[nodiscard]] std::optional<runtime::PackedLogic4> invoke_uvm_root_method(
-        std::string_view method,
+        support::UvmRole method,
         std::vector<runtime::PackedLogic4>& actuals,
         std::vector<std::string>& string_actuals,
         std::span<const std::string> actual_names);
@@ -555,6 +785,12 @@ struct Simulation::Impl {
 
     [[nodiscard]] runtime::SystemVerilogVpiValueError apply_vpi_value_state(
         const runtime::SystemVerilogVpiValueStateUpdate& update);
+    // A force or release of a word of a net array whose elements a packed
+    // bridge signal holds: the word's bits of that signal (IEEE 1800-2023
+    // 37.17, 38.34).
+    [[nodiscard]] runtime::SystemVerilogVpiValueError force_vpi_bridge_word(
+        const runtime::SystemVerilogVpiValueStateUpdate& update,
+        runtime::simir::ContainerObjectId container, std::size_t ordinal);
 
     void publish_vpi_stored_signal(const SignalId signal);
 
@@ -612,6 +848,11 @@ struct Simulation::Impl {
     void publish_vpi_strings();
     void sync_vpi_live_memory(runtime::simir::ContainerObjectId object,
         const runtime::simir::ContainerValue& value);
+    // The kernel container object of a static unpacked-array class property
+    // (identity `owner::name`, holding specialization).
+    [[nodiscard]] std::optional<runtime::simir::ContainerObjectId>
+    class_static_container_object(
+        std::string_view identity, std::string_view specialization) const;
     void publish_vpi_container(
         const runtime::simir::ContainerObjectId object);
 
@@ -633,8 +874,11 @@ struct Simulation::Impl {
 
     void compact_scalar_signal_observer_snapshot() noexcept;
 
-    void publish_vpi_assertion(
-        const ConcurrentAssertionEvent& event);
+    // design_process, when the caller has it, finds the assertion object
+    // without comparing the process's hierarchical name.
+    void publish_vpi_assertion(const ConcurrentAssertionEvent& event,
+        std::optional<runtime::simir::ProcessId> design_process
+        = std::nullopt);
 
     void publish_assertion_attempt_start(
         runtime::simir::ProcessId design_process, std::int64_t start);
@@ -851,6 +1095,10 @@ struct Simulation::Impl {
     /// interpreter takes the design; IEEE 1800-2023 8.9, 8.25.1).
     std::map<std::string, runtime::simir::ContainerObjectId, std::less<>>
         class_static_containers;
+    /// The static kernel's code generator, which counts its use of the code
+    /// built ahead of time (native_cache_statistics); null without one.
+    /// Set by create_simulation_interpreter, so declared before interpreter.
+    std::shared_ptr<runtime::simir::StaticKernelCodegen> static_kernel_codegen;
     std::unique_ptr<runtime::simir::Interpreter> interpreter;
 
     std::unique_ptr<runtime::SystemVerilogVpiObjectRegistry> vpi_registry;
@@ -880,8 +1128,8 @@ struct Simulation::Impl {
         std::vector<runtime::CodeCoverageCounterId>>
         vpi_statement_counters;
 
-    std::map<fsim_vpi_handle_v1, std::vector<std::string>>
-        vpi_assertion_coverage_keys;
+    // The concurrent assertion objects published as coverage targets.
+    std::set<fsim_vpi_handle_v1> vpi_assertion_coverage_targets;
 
     std::map<SignalId, std::vector<SystemVerilogVpiDriverBinding>>
         vpi_driver_bindings;
@@ -891,11 +1139,11 @@ struct Simulation::Impl {
     // 38.35).
     std::map<fsim_vpi_handle_v1, SignalId> vpi_event_signals;
 
-    std::map<std::string, fsim_vpi_handle_v1, std::less<>>
-        vpi_assertion_handles;
-
     std::map<fsim_vpi_handle_v1, std::set<runtime::simir::ProcessId>>
         vpi_assertion_processes;
+    // The design process occurrence each concurrent assertion object was
+    // published for.
+    std::map<fsim_vpi_handle_v1, std::uint32_t> vpi_assertion_occurrences;
 
     std::map<SignalId, runtime::SystemVerilogScalarKind> vpi_scalar_kinds;
 
@@ -970,6 +1218,9 @@ struct Simulation::Impl {
     std::optional<std::uint64_t> vpi_value_state_observer;
 
     std::set<SignalId> vpi_forced_signals;
+    // The words of net arrays held by a packed bridge signal that a VPI
+    // force holds (IEEE 1800-2023 37.17, 38.34).
+    std::set<fsim_vpi_handle_v1> vpi_forced_words;
 
     std::recursive_mutex vpi_bridge_mutex;
 
@@ -1288,9 +1539,10 @@ struct Simulation::Impl {
 
     AssertionAttemptHook assertion_attempt_hook;
     AssertionStepHook assertion_step_hook;
+    AssertionControlTaskHook assertion_control_task_hook;
 
     // The VPI assertion object of each design process that owns one.
-    std::map<runtime::simir::ProcessId, fsim_vpi_handle_v1>
+    std::unordered_map<runtime::simir::ProcessId, fsim_vpi_handle_v1>
         vpi_process_assertions;
 
     VhdlPslAttemptHook vhdl_psl_attempt_hook;
@@ -1384,6 +1636,18 @@ struct Simulation::Impl {
         std::string_view outcome) const;
 
     ClassPropertyChangeHook class_property_change_hook;
+    ClassPropertyContainerChangeHook class_property_container_change_hook;
+    // The array properties whose elements a VPI value-change callback
+    // watches: watch count by (object, property index).
+    std::map<std::pair<runtime::SystemVerilogClassHandle, std::size_t>,
+        std::uint32_t>
+        class_container_watches;
+    ClassStaticContainerChangeHook class_static_container_change_hook;
+    // The static class containers a VPI watch follows: identity and
+    // specialization by kernel container object.
+    std::map<runtime::simir::ContainerObjectId,
+        std::pair<std::string, std::string>>
+        class_static_container_watches;
 
     // The elaborated notifier that waits on class properties depend on; it
     // toggles whenever a class property changes.

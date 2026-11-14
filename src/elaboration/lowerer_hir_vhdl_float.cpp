@@ -12,17 +12,12 @@ using namespace runtime::simir;
 
 namespace {
 
-bool float_type_name(const std::string_view spelling)
-{
-    const auto name = lowercase_vhdl_simple_name(spelling);
-    return name == "float" || name == "unresolved_float"
-        || name == "u_float" || name == "float32"
-        || name == "unresolved_float32" || name == "u_float32";
-}
-
+// A subtype of IEEE.FLOAT_PKG's FLOAT, by the identity analysis stamped on
+// the type mark where it is written (12.3, 12.4): a type that only spells like
+// FLOAT is another type.
 bool float_subtype_name(const semantic::vhdl::SubtypeIndication& subtype)
 {
-    return float_type_name(subtype.type_mark.spelling);
+    return subtype.provided_type == semantic::vhdl::ProvidedType::ieee_float;
 }
 
 bool float_result_name(const std::string_view name)
@@ -114,9 +109,9 @@ bool Lowerer::hir_vhdl_float_valued(
     auto subtype = hir_vhdl_expression_subtype(expression_id);
     // A user subtype of a float type (`subtype t is float32`) is one too.
     const auto float_subtype = [&](const semantic::vhdl::SubtypeIndication& value) {
+        const auto effective = hir_effective_vhdl_subtype(value);
         return float_subtype_name(value)
-            || float_type_name(
-                hir_vhdl_subtype_chain(value, source.scope).spelling);
+            || (effective && float_subtype_name(*effective));
     };
     if (subtype && !float_subtype(*subtype)) {
         subtype = hir_effective_vhdl_subtype(*subtype);
@@ -162,9 +157,13 @@ bool Lowerer::is_hir_vhdl_float_operator(
                     return formal && formal->vhdl != nullptr
                         && formal->vhdl->subtype
                         && (float_subtype_name(*formal->vhdl->subtype)
-                            || float_type_name(hir_vhdl_subtype_chain(
-                                *formal->vhdl->subtype,
-                                formal->vhdl->scope).spelling));
+                            || [&] {
+                                   const auto effective
+                                       = hir_effective_vhdl_subtype(
+                                           *formal->vhdl->subtype);
+                                   return effective
+                                       && float_subtype_name(*effective);
+                               }());
                 });
             if (formals.empty() || float_formal) {
                 return false;
@@ -358,8 +357,7 @@ bool Lowerer::validate_hir_vhdl_float_context(
     const auto effective = hir_effective_vhdl_subtype(context)
         .value_or(context);
     auto valid = float_subtype_name(effective)
-        || float_type_name(
-            hir_vhdl_subtype_chain(context, expression->vhdl->scope).spelling);
+        || float_subtype_name(context);
     if (valid && !effective.constraints.empty()) {
         const auto& range = effective.constraints.front();
         const auto left = hir_range_left(range);

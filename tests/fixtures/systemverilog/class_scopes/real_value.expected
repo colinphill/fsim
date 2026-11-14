@@ -1,0 +1,4 @@
+d 1.00 2.00 e 2.50 5.00 h 2.00
+same 1 1 dflt 0
+top.s1 Y=2.50 m=5.00 twice=10.00 same=0
+top.s2 Y=1.25 m=2.50 twice=5.00 same=1

@@ -2,7 +2,6 @@
 #include "fsim/runtime/uvm_register_model.hpp"
 
 #include <algorithm>
-#include <limits>
 
 namespace fsim::runtime {
 namespace {

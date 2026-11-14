@@ -1,9 +1,26 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_simulation_internal.hpp"
+#include "application_internal.hpp"
+#include "fsim/app/application.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_hooks.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include "fsim/runtime/systemverilog_chandle.hpp"
+#include "fsim/runtime/systemverilog_scalar.hpp"
 
-#include <algorithm>
 #include <memory>
 #include <numeric>
+#include <utility>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <optional>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <vector>
 
 namespace fsim::app {
 // Included by application_simulation.cpp after Simulation::Impl is complete.
@@ -126,12 +143,60 @@ PackedLogic4 Simulation::read_process_call_result(
     return impl_->interpreter->read_call_result(process, slot);
 }
 
+std::string Simulation::read_process_call_result_string(
+    const runtime::simir::ProcessId process, const std::size_t slot) const
+{
+    return impl_->interpreter->read_call_result_string(process, slot);
+}
+
+runtime::simir::ContainerValue Simulation::read_process_call_result_container(
+    const runtime::simir::ProcessId process, const std::size_t slot) const
+{
+    return impl_->interpreter->read_call_result_container(process, slot);
+}
+
 void Simulation::write_process_local(
     const runtime::simir::ProcessId process,
     const std::size_t local_index,
-    const PackedLogic4& value)
+    const PackedLogic4& value, const std::size_t newer_activations)
 {
-    impl_->interpreter->write_debug_local(process, local_index, value);
+    impl_->interpreter->write_debug_local(
+        process, local_index, value, newer_activations);
+}
+
+void Simulation::force_process_local(const runtime::simir::ProcessId process,
+    const std::size_t local_index, const PackedLogic4& value,
+    const std::size_t offset, const std::size_t width)
+{
+    impl_->interpreter->force_debug_local(
+        process, local_index, value, offset, width);
+}
+
+void Simulation::release_process_local(const runtime::simir::ProcessId process,
+    const std::size_t local_index, const std::size_t offset,
+    const std::size_t width)
+{
+    impl_->interpreter->release_debug_local(process, local_index, offset, width);
+}
+
+bool Simulation::process_local_forced(const runtime::simir::ProcessId process,
+    const std::size_t local_index, const std::size_t offset,
+    const std::size_t width) const
+{
+    return impl_->interpreter->debug_local_forced(
+        process, local_index, offset, width);
+}
+
+void Simulation::watch_process_local(const runtime::simir::ProcessId process,
+    const std::size_t local_index, const bool watched)
+{
+    impl_->interpreter->watch_debug_local(process, local_index, watched);
+}
+
+void Simulation::set_process_local_change_hook(
+    runtime::simir::DebugLocalChangeHook hook)
+{
+    impl_->interpreter->set_debug_local_change_hook(std::move(hook));
 }
 
 runtime::SystemVerilogScalarValue Simulation::read_process_scalar_local(

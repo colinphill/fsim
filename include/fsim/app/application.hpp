@@ -1,27 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include "fsim/app/trace_archive.hpp"
-#include "fsim/artifact/coverage_identity.hpp"
-#include "fsim/artifact/object.hpp"
 #include "fsim/cli/driver.hpp"
-#include "fsim/elaboration/elaborator.hpp"
-#include "fsim/elaboration/sdf_net_delay_split.hpp"
-#include "fsim/frontend/design.hpp"
 #include "fsim/library/artifact.hpp"
 #include "fsim/project/project.hpp"
 #include "fsim/runtime/class_methods.hpp"
 #include "fsim/runtime/run_state_sections.hpp"
-#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_hooks.hpp"
+#include "fsim/runtime/simir_ids.hpp"
 #include "fsim/runtime/systemverilog_chandle.hpp"
-#include "fsim/runtime/systemverilog_coverage_state.hpp"
 #include "fsim/runtime/uvm_activity.hpp"
 #include "fsim/runtime/uvm_callback.hpp"
 #include "fsim/runtime/uvm_checkpoint.hpp"
 #include "fsim/runtime/uvm_command_line.hpp"
 #include "fsim/runtime/uvm_component.hpp"
 #include "fsim/runtime/uvm_config_db.hpp"
-#include "fsim/runtime/uvm_context.hpp"
 #include "fsim/runtime/uvm_factory.hpp"
 #include "fsim/runtime/uvm_foreign.hpp"
 #include "fsim/runtime/uvm_object.hpp"
@@ -39,26 +32,28 @@
 #include "fsim/runtime/vhdl_psl.hpp"
 #include "fsim/runtime/vhpi_object.hpp"
 #include "fsim/runtime/vpi_callback.hpp"
-#include "fsim/runtime/vpi_control.hpp"
-#include "fsim/semantic/compiled_design.hpp"
-#include "fsim/semantic/systemverilog_class_specialization.hpp"
 #include "fsim/runtime/vpi_coverage.hpp"
 #include "fsim/runtime/vpi_data_read.hpp"
 #include "fsim/runtime/vpi_object.hpp"
 #include "fsim/runtime/vpi_system.hpp"
 #include "fsim/runtime/vpi_time.hpp"
 #include "fsim/runtime/vpi_value_control.hpp"
-#include "fsim/semantic/design_ir.hpp"
-#include "fsim/semantic/model.hpp"
-#include "fsim/semantic/systemverilog_hir.hpp"
-#include "fsim/semantic/vhdl_hir.hpp"
+#include "fsim/app/trace_api.hpp"
+#include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/runtime/class_heap.hpp"
+#include "fsim/runtime/class_static.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/systemverilog_scalar.hpp"
+#include "fsim/runtime/vhpi_abi.h"
+#include "fsim/runtime/vpi_abi.h"
+#include "fsim/runtime/vpi_value.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <iosfwd>
-#include <map>
 #include <memory>
 #include <optional>
 #include <span>
@@ -66,9 +61,52 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <utility>
 
 namespace fsim::systemc {
 class HierarchyRegistry;
+}
+
+namespace fsim::elaboration {
+class ElaboratedDesign;
+struct SdfNetDelayInfo;
+struct SdfDeviceGateDelay;
+}
+
+namespace fsim::semantic {
+class Model;
+}
+namespace fsim::semantic::design {
+class DesignIr;
+}
+namespace fsim::semantic::sv {
+class Hir;
+struct ClassSpecialization;
+}
+namespace fsim::semantic::vhdl {
+class Hir;
+}
+
+namespace fsim::runtime {
+struct SystemVerilogCoverageState;
+class SystemVerilogVpiAssertionApi;
+class SystemVerilogVpiControlService;
+}
+namespace fsim::runtime::sva {
+struct StepRecord;
+}
+namespace fsim::runtime::simir {
+class Interpreter;
+struct DriveStrength;
+struct DriverTransaction;
+struct NativeRegionAllocationTestAccess;
+struct Process;
+struct RunStateTestAccess;
+struct SystemCBridgeTestAccess;
+struct SystemVerilogScalarSignalSnapshot;
+struct TransitionDelays;
+struct NetDelayTable;
+struct ContainerValue;
 }
 
 namespace fsim::app {
@@ -77,291 +115,10 @@ class SdfPhaseArtifact;
 class SdfSessionPublication;
 class SdfReannotationApplication;
 struct SdfReannotationCommitResult;
-
-struct CheckedSource {
-    std::filesystem::path path;
-    std::string language;
-    std::string standard;
-    /// SHA-256 of the exact root bytes supplied to analysis/preprocessing.
-    std::string content_digest;
-    struct Dependency {
-        std::filesystem::path path;
-        std::string content_digest;
-        frontend::StandardRevision standard_revision {
-            frontend::StandardRevision::SystemVerilog2017
-        };
-    };
-    /// Exact transitive preprocessing inputs, in deterministic first-use order.
-    std::vector<Dependency> dependencies;
-    /// Digest of every ordered root/include snapshot in this compilation unit.
-    std::string compilation_unit_digest;
-    /// Optional consumer-local backing file for a relocatable logical path.
-    std::filesystem::path backing_path;
-    /// Coverage facts recorded with a compiled object. When present, code
-    /// coverage takes the source's identity and controls from them and never
-    /// reads the source.
-    std::optional<artifact::ObjectSourceCoverage> coverage;
-    frontend::StandardRevision standard_revision {
-        frontend::StandardRevision::SystemVerilog2017
-    };
-};
-
-struct SystemVerilogUvmProvenance {
-    project::SystemVerilogUvmRelease release {
-        project::SystemVerilogUvmRelease::none
-    };
-    // Content-derived identity of the exact roots, dependencies, or portable
-    // objects which supplied the selected release.
-    std::string source_identity;
-
-    friend bool operator==(
-        const SystemVerilogUvmProvenance&,
-        const SystemVerilogUvmProvenance&) = default;
-};
-
-struct CheckedProject : semantic::CompiledDesign {
-    struct ObjectProvenance {
-        std::filesystem::path directory;
-        std::string metadata_digest;
-        std::string compilation_digest;
-        std::string language;
-        std::string standard;
-        std::string compatibility_profile { "none" };
-        std::string library;
-        artifact::CodeCoverageArtifactIdentity code_coverage;
-        std::vector<library::VhdlPackageDependency> vhdl_package_dependencies;
-        std::vector<std::string> unit_checksums;
-        project::SourceSet source_settings;
-    };
-    struct MappedLibrary {
-        std::string library;
-        std::filesystem::path directory;
-        std::string metadata_digest;
-        std::vector<frontend::StandardRevision> standard_revisions;
-        std::vector<library::VhdlPackageDependency> vhdl_package_dependencies;
-        std::vector<std::string> unit_checksums;
-        std::vector<project::SourceSet> source_settings;
-        bool native_accepted { };
-        std::string native_kind;
-        std::string native_fingerprint;
-        std::filesystem::path systemc_plugin;
-        std::vector<std::filesystem::path> systemc_sources;
-    };
-    /// Parser-independent class specializations owned with the compiled HIR.
-    std::vector<semantic::sv::ClassSpecialization>
-        compiled_systemverilog_class_specializations;
-    /// HDL roots named by the project manifest, in manifest order.
-    std::vector<CheckedSource> hdl_sources;
-    /// SystemC translation-unit roots named by the manifest. These participate
-    /// in the owning semantic source table even though the host compiler, not
-    /// the HDL parser, consumes them.
-    std::vector<CheckedSource> systemc_sources;
-    /// Checksum-pinned compiler-supplied standard-library roots.
-    std::vector<CheckedSource> standard_sources;
-    /// Lazily opened precompiled libraries in deterministic dependency order.
-    std::vector<MappedLibrary> mapped_libraries;
-    /// Explicit non-project objects in command-line declaration order.
-    std::vector<ObjectProvenance> objects;
-    SystemVerilogUvmProvenance systemverilog_uvm_provenance;
-    std::size_t source_count { };
-    /// Relocation-safe trace policy restored from object or mapped-library input.
-    std::shared_ptr<const TraceArchiveSnapshot> trace_archive;
-};
-
-struct MappedLibraryProvenance {
-    struct Input {
-        std::string language;
-        std::string standard;
-        std::string compatibility_profile { "none" };
-    };
-    std::string library;
-    std::string metadata_digest;
-    std::vector<std::string> unit_checksums;
-    bool native_accepted { };
-    std::string native_kind;
-    std::string native_fingerprint;
-    /// The language, standard and profile of the library's units.
-    std::vector<Input> inputs;
-    std::vector<library::VhdlPackageDependency> vhdl_package_dependencies;
-};
-
-/// Source-profile identity retained for each analyzed VHDL library unit. The
-/// semantic unit ID is the stable join key used by elaborated hierarchy,
-/// debugger, trace, and VHPI publication; compiler package implementations do
-/// not become hierarchy objects.
-struct VhdlUnitProvenance {
-    semantic::UnitId unit { };
-    std::string standard;
-    std::string predefined_environment;
-    std::string compatibility_profile;
-    std::vector<library::VhdlPackageDependency> package_dependencies;
-};
-
-/// Public owning-unit identity for an elaborated Verilog/SystemVerilog scope.
-/// Cache keys and compiler implementation objects are intentionally excluded.
-struct VerilogScopeProvenance {
-    std::string path;
-    semantic::UnitId unit { };
-    semantic::SourceSpanId source { };
-    semantic::Language language { semantic::Language::system_verilog };
-    std::string library;
-    std::string unit_name;
-    std::string semantic_unit;
-    std::string source_path;
-    std::uint32_t source_line { };
-    std::uint32_t source_column { };
-    std::string standard;
-    std::string compatibility_profile;
-};
-
-struct BuiltProject {
-    elaboration::ElaboratedDesign design;
-    /// Stable-ID elaborated hierarchy and executable metadata. The legacy
-    /// `design` remains the Task 8 compatibility/runtime adapter.
-    semantic::design::DesignIr design_ir;
-    /// Owner for every semantic ID referenced by `design_ir`.
-    semantic::Model semantics;
-    /// Owning SystemVerilog class/constraint HIR used by live source
-    /// randomization and restored from the durable constraint-HIR payload.
-    semantic::sv::Hir systemverilog_hir;
-    /// Owning VHDL declaration/PSL HIR used by live temporal execution. Durable
-    /// artifact restoration is added with the other VHDL/PSL schemas in Change 16.
-    semantic::vhdl::Hir vhdl_hir;
-    std::string cache_key;
-    std::string time_resolution;
-    std::filesystem::path cache_path;
-    project::Optimization optimization { project::Optimization::o2 };
-    /// Dense specialization-ID-indexed provenance keys for native modules.
-    std::vector<std::string> specialization_cache_keys;
-    /// Linked .fsimscplugin artifacts, or the shared library of a plug-in
-    /// built from a mapped library's sources.
-    std::vector<std::filesystem::path> systemc_plugins;
-    std::shared_ptr<systemc::HierarchyRegistry> systemc_hierarchy;
-    std::vector<std::uint64_t> systemc_roots;
-    std::uint64_t seed { 1 };
-    bool entropy_seed { };
-    bool cache_hit { };
-    /// Manifest directory used as the sandbox root for HDL file operations.
-    std::filesystem::path file_root;
-    /// Every logical-library-specific SystemC plug-in used by this build.
-    std::vector<std::shared_ptr<systemc::HierarchyRegistry>>
-        systemc_hierarchies;
-    std::vector<MappedLibraryProvenance> mapped_libraries;
-    std::vector<CheckedProject::ObjectProvenance> objects;
-    SystemVerilogUvmProvenance systemverilog_uvm_provenance;
-    /// Content-only identity of a loaded standalone design artifact. Project
-    /// builds leave this empty; standalone native-cache keys include it.
-    std::string artifact_identity;
-    /// Parser-independent specialization records retained with their owning
-    /// semantic model and SystemVerilog HIR. No syntax-backed class payload is
-    /// retained after compilation.
-    std::vector<semantic::sv::ClassSpecialization>
-        compiled_systemverilog_class_specializations;
-    /// Mutable ID-keyed coverage state. Declaration structure remains owned
-    /// exactly once by `systemverilog_hir`.
-    runtime::SystemVerilogCoverageState systemverilog_coverage;
-    /// Versioned, pointer-free UVM bootstrap state loaded from a portable design.
-    std::optional<runtime::SystemVerilogUvmCheckpointArtifact>
-        systemverilog_uvm_checkpoint;
-    std::vector<VhdlUnitProvenance> vhdl_unit_provenance;
-    std::map<std::string, frontend::StandardRevision, std::less<>>
-        verilog_unit_revisions;
-    std::map<std::string, std::string, std::less<>>
-        verilog_unit_compatibility_profiles;
-    /// Validated immutable SDF state carried across non-project phase boundaries.
-    std::vector<std::shared_ptr<const SdfPhaseArtifact>> sdf_phase_artifacts { };
-    /// Versioned trace policy carried across object/design/cache/checkpoint phases.
-    std::shared_ptr<const TraceArchiveSnapshot> trace_archive;
-    enum class CompiledProcessSelection : std::uint8_t {
-        selected,
-        all,
-    };
-    /// Retained for source compatibility only: the per-process JIT was
-    /// removed in the engine-v4 migration, so this choice has no effect.
-    CompiledProcessSelection compiled_process_selection {
-        CompiledProcessSelection::selected
-    };
-    /// Immutable opt-in capability. Disabled builds do not create coverage
-    /// inventories, counters, callbacks, or runtime-operation checks.
-    bool code_coverage_enabled { };
-    /// Opt-in A2 combinational cone fusion for this in-memory consumer. Set
-    /// only when no observer outside SimIR processes (trace output, debugger,
-    /// coverage) can inspect hidden internal nets; hidden nets are still
-    /// materialized before any runtime observation.
-    bool cone_fusion { };
-    /// What replaces the whole-design static-kernel gates for this
-    /// in-memory consumer (foreign libraries, trace output, coverage): the
-    /// planner keeps the signals those clients can reach as host signals.
-    /// `admit` lets the kernel run although cone fusion is off.
-    elaboration::StaticKernelAccessPlan kernel_access { };
-    /// Validated file inputs awaiting the design digest assigned at publication.
-    std::vector<std::shared_ptr<const SdfSessionPublication>>
-        sdf_session_publications { };
-    /// Restored from a trusted design artifact (checksummed, from a matching
-    /// build): derived state it carries is not re-derived and cross-checked.
-    /// FSIM_VERIFY_ARTIFACT=1 keeps the checks.
-    bool trusted_artifact { };
-    /// The build annotated the VITAL timing generics of the SDF files it was
-    /// given (IEEE 1076.4-2000 5.1.1), so the SDF session leaves VHDL cells
-    /// to it.
-    bool sdf_vital_applied { };
-};
-
-[[nodiscard]] bool code_coverage_enabled(
-    const project::Config& config) noexcept;
-
-[[nodiscard]] std::vector<VerilogScopeProvenance>
-verilog_scope_provenance(const BuiltProject& project);
-[[nodiscard]] std::optional<VerilogScopeProvenance>
-verilog_scope_provenance(
-    const BuiltProject& project,
-    std::string_view path);
-
-/// Parse all HDL source files in deterministic manifest order. Independent
-/// compilation units may be analyzed concurrently; roots within a shared
-/// Verilog/SV unit remain ordered. Units are merged back into source order;
-/// VHDL primary, secondary, visibility, and binding dependencies must name
-/// previously analyzed units.
-[[nodiscard]] std::optional<CheckedProject> check_project(
-    const project::Config& config,
-    diagnostic::Engine& diagnostics);
-
-/// Load and merge explicitly compiled HDL objects in declaration order.
-/// Every indexed payload is checksum-verified and deserialized directly;
-/// producer sources are never preprocessed or parsed again.
-[[nodiscard]] std::optional<CheckedProject> load_objects(
-    std::span<const std::filesystem::path> objects,
-    diagnostic::Engine& diagnostics);
-
-// Checks and publishes one project-built logical library as a relocatable,
-// read-only .fsimlib directory. Existing destinations are not overwritten.
-[[nodiscard]] bool export_library(
-    const project::Config& config,
-    std::string_view logical_library,
-    const std::filesystem::path& destination,
-    diagnostic::Engine& diagnostics);
-
-/// Check and elaborate the selected top, then populate the persistent analysis
-/// cache. The interpreter remains the reference/default engine when LLVM is not
-/// configured or when the process is outside the current JIT subset.
-[[nodiscard]] std::optional<BuiltProject> build_project(
-    const project::Config& config,
-    diagnostic::Engine& diagnostics);
-
-/// Elaborate an already compiled, ordered HDL object set without preprocessing
-/// or parsing producer sources.
-[[nodiscard]] std::optional<BuiltProject> build_objects(
-    const project::Config& config,
-    std::span<const std::filesystem::path> objects,
-    diagnostic::Engine& diagnostics);
-
-/// Elaborate ordered portable HDL objects and linked SystemC plug-in artifacts
-/// in one manifest-free hierarchy. Either input span may be empty.
-[[nodiscard]] std::optional<BuiltProject> build_objects(
-    const project::Config& config,
-    std::span<const std::filesystem::path> objects,
-    std::span<const std::filesystem::path> systemc_plugins,
-    diagnostic::Engine& diagnostics);
+struct BuiltProject;
+struct MappedLibraryProvenance;
+struct VhdlUnitProvenance;
+struct VerilogScopeProvenance;
 
 enum class SimulationEngine : std::uint8_t {
     /// Use the reference SimIR evaluator for every process.
@@ -414,6 +171,9 @@ struct SystemVerilogClassExecutionStatistics {
     std::size_t hir_functions { };
     std::size_t hir_tasks { };
     std::size_t frontend_adapter_fallbacks { };
+    /// How many times the host class executor was entered: a function,
+    /// task or constructor body that no generated code runs.
+    std::uint64_t invocations { };
 };
 
 struct ClassPackedTraceValue {
@@ -674,15 +434,15 @@ public:
         const runtime::SystemVerilogScalarValue&,
         runtime::SimulationTick,
         std::uint64_t)>;
-    using ExecutionPointHook = runtime::simir::Interpreter::ExecutionPointHook;
-    using OutputHook = runtime::simir::Interpreter::OutputHook;
-    using ReportHook = runtime::simir::Interpreter::ReportHook;
-    using SystemCommandHook = runtime::simir::Interpreter::SystemCommandHook;
+    using ExecutionPointHook = runtime::simir::ExecutionPointHook;
+    using OutputHook = runtime::simir::OutputHook;
+    using ReportHook = runtime::simir::ReportHook;
+    using SystemCommandHook = runtime::simir::SystemCommandHook;
     using SystemVerilogDpiFunctionHook
-        = runtime::simir::Interpreter::DpiFunctionCallHook;
+        = runtime::simir::DpiFunctionCallHook;
     using SystemVerilogDpiSiteHooks
-        = runtime::simir::Interpreter::DpiSiteHooks;
-    using VcdControlHook = runtime::simir::Interpreter::VcdControlHook;
+        = runtime::simir::DpiSiteHooks;
+    using VcdControlHook = runtime::simir::VcdControlHook;
     using ConcurrentAssertionHook = std::function<void(const ConcurrentAssertionEvent&)>;
     /// An attempt of the VPI assertion object (a handle) started at the tick
     /// (IEEE 1800-2023 39.4.2 cbAssertionStart).
@@ -693,22 +453,38 @@ public:
     /// cbAssertionStepSuccess / cbAssertionStepFailure, 39.5.2).
     using AssertionStepHook
         = std::function<void(std::uint64_t, const runtime::sva::StepRecord&)>;
+    /// An assertion control task of the design ran (IEEE 1800-2023 20.11,
+    /// Table 20-8): its control_type (Table 20-5, 1 to 11), whether it was
+    /// called without arguments (the assertion system callback of 39.4.1),
+    /// and else the VPI assertion objects it changed (the assertion callbacks
+    /// of 39.4.2).
+    using AssertionControlTaskHook = std::function<void(
+        int, bool, std::span<const std::uint64_t>)>;
     using VhdlPslAttemptHook = runtime::VhdlPslCompletionHook;
     using UvmActivityHook = runtime::SystemVerilogUvmActivityService::Observer;
     using UvmTaskPhaseContinuation = runtime::SystemVerilogUvmPhaseService::TaskPhaseCallback;
     using SafePointHook = runtime::Scheduler::SafePointHook;
     using ForceStatementHook
-        = runtime::simir::Interpreter::ForceStatementHook;
+        = runtime::simir::ForceStatementHook;
     using SignalTransactionHook
-        = runtime::simir::Interpreter::SignalTransactionHook;
+        = runtime::simir::SignalTransactionHook;
     using DriverTransactionHook
-        = runtime::simir::Interpreter::DriverTransactionHook;
+        = runtime::simir::DriverTransactionHook;
     using ClassPropertyChangeHook = std::function<void(
         runtime::SystemVerilogClassHandle,
         std::string_view,
         const runtime::PackedLogic4&,
         runtime::SimulationTick,
         std::uint64_t)>;
+    // A container property of a live object was written back whole (the
+    // kernel's element writes reach the class services this way).
+    using ClassPropertyContainerChangeHook = std::function<void(
+        runtime::SystemVerilogClassHandle, std::string_view)>;
+    // A static unpacked-array property the kernel holds was written: its
+    // identity (`owner::name`) and the specialization given to
+    // watch_class_static_container.
+    using ClassStaticContainerChangeHook
+        = std::function<void(std::string_view, std::string_view)>;
     using ClassStaticPropertyChangeHook = std::function<void(
         std::string_view,
         std::string_view,
@@ -740,6 +516,10 @@ public:
     /// payloads transfer out of the elaborated adapter at simulation setup.
     [[nodiscard]] const runtime::simir::Process& process_program(
         runtime::simir::ProcessId process) const;
+    /// The net a nettype resolution function's process resolves (IEEE
+    /// 1800-2023 6.6.7, 37.43 detail 6).
+    [[nodiscard]] std::optional<runtime::simir::SignalId>
+    nettype_resolution_signal(runtime::simir::ProcessId process) const;
     [[nodiscard]] const semantic::design::DesignIr& design_ir() const noexcept;
     [[nodiscard]] const semantic::vhdl::Hir& vhdl_hir() const noexcept;
     [[nodiscard]] const semantic::sv::Hir& systemverilog_hir() const noexcept;
@@ -780,6 +560,11 @@ public:
     [[nodiscard]] runtime::PackedLogic4 read_driver(
         runtime::simir::ProcessId process,
         runtime::simir::SignalId signal) const;
+    /// Whether null transactions turned off `process`'s driver of every
+    /// bit of [offset, offset + width) of `signal` (IEEE 1076-2019 14.7.2).
+    [[nodiscard]] bool driver_disconnected(runtime::simir::ProcessId process,
+        runtime::simir::SignalId signal, std::uint32_t offset,
+        std::uint32_t width) const;
     [[nodiscard]] runtime::simir::DriveStrength read_signal_strength(
         runtime::simir::SignalId signal) const;
     /// `newer_activations` reads an outer activation of a recursive callable
@@ -797,15 +582,68 @@ public:
     /// (`Process::call_results`, IEEE 1800-2023 37.42, 38.15).
     [[nodiscard]] runtime::PackedLogic4 read_process_call_result(
         runtime::simir::ProcessId process, std::size_t slot) const;
+    // The string or container such a slot holds when the function returns
+    // one (its DebugLocalStorage).
+    [[nodiscard]] std::string read_process_call_result_string(
+        runtime::simir::ProcessId process, std::size_t slot) const;
+    [[nodiscard]] runtime::simir::ContainerValue
+    read_process_call_result_container(
+        runtime::simir::ProcessId process, std::size_t slot) const;
     /// Deposit a value into a variable of a process (VHPI 22.5.2).
     void write_process_local(runtime::simir::ProcessId process,
-        std::size_t local_index, const runtime::PackedLogic4& value);
+        std::size_t local_index, const runtime::PackedLogic4& value,
+        std::size_t newer_activations = 0U);
+    /// Force or release bits [offset, offset + width) of a variable of a
+    /// process (VHPI 22.5.2).
+    void force_process_local(runtime::simir::ProcessId process,
+        std::size_t local_index, const runtime::PackedLogic4& value,
+        std::size_t offset, std::size_t width);
+    void release_process_local(runtime::simir::ProcessId process,
+        std::size_t local_index, std::size_t offset, std::size_t width);
+    [[nodiscard]] bool process_local_forced(runtime::simir::ProcessId process,
+        std::size_t local_index, std::size_t offset, std::size_t width) const;
+    /// Report the changes of a variable of a process to `hook` (VHPI
+    /// 21.3.2.2); one hook for the simulation.
+    void watch_process_local(runtime::simir::ProcessId process,
+        std::size_t local_index, bool watched);
+    void set_process_local_change_hook(
+        runtime::simir::DebugLocalChangeHook hook);
     [[nodiscard]] runtime::SystemVerilogScalarValue read_process_scalar_local(
         runtime::simir::ProcessId process, std::size_t local_index) const;
     [[nodiscard]] std::string read_process_string_local(
-        runtime::simir::ProcessId process, std::size_t local_index) const;
+        runtime::simir::ProcessId process, std::size_t local_index,
+        std::size_t newer_activations = 0U) const;
     void write_process_string_local(runtime::simir::ProcessId process,
-        std::size_t local_index, std::string_view value);
+        std::size_t local_index, std::string_view value,
+        std::size_t newer_activations = 0U);
+    /// An automatic variable of a frame of a method the host class executor
+    /// runs (IEEE 1800-2023 37.43 detail 1): its HIR declaration index and
+    /// name, and whether it holds a string.
+    struct HostFrameVariable {
+        std::uint32_t declaration { };
+        std::string name;
+        bool string_value { };
+    };
+    /// The automatic variables of such a frame (`frame` is the serial its
+    /// execution points carry), in declaration order; empty once it ended.
+    [[nodiscard]] std::vector<HostFrameVariable> host_frame_variables(
+        std::uint64_t frame) const;
+    /// The value of one of them while the frame runs, and a value written to
+    /// it with no delay (37.43 detail 3); none or false once the frame ended.
+    [[nodiscard]] std::optional<runtime::PackedLogic4> read_host_frame_packed(
+        std::uint64_t frame, std::uint32_t declaration) const;
+    [[nodiscard]] std::optional<std::string> read_host_frame_string(
+        std::uint64_t frame, std::uint32_t declaration) const;
+    bool write_host_frame_packed(std::uint64_t frame,
+        std::uint32_t declaration, const runtime::PackedLogic4& value);
+    bool write_host_frame_string(std::uint64_t frame,
+        std::uint32_t declaration, std::string_view value);
+    /// Triggers the event object a handle register holds (vpi_put_value on
+    /// a frame's automatic event, IEEE 1800-2023 37.43).
+    bool trigger_dynamic_event(std::uint64_t handle);
+    /// A new event object (IEEE 1800-2023 15.5, 7.4): the handle an element
+    /// of an event array that no thread has used yet takes on its first use.
+    [[nodiscard]] std::uint64_t create_dynamic_event();
     void write_process_container_local(runtime::simir::ProcessId process,
         std::size_t local_index, const runtime::simir::ContainerValue& value);
     [[nodiscard]] runtime::simir::ContainerValue
@@ -1096,6 +934,11 @@ public:
     systemverilog_vpi_assertions() noexcept;
     [[nodiscard]] const runtime::SystemVerilogVpiAssertionApi&
     systemverilog_vpi_assertions() const noexcept;
+    // The design process occurrence (its index) a concurrent assertion
+    // object was published for; none for another handle.
+    [[nodiscard]] std::optional<std::uint32_t>
+    systemverilog_vpi_assertion_occurrence(
+        fsim_vpi_handle_v1 assertion) const;
     [[nodiscard]] runtime::SystemVerilogVpiCoverageService&
     systemverilog_vpi_coverage() noexcept;
     [[nodiscard]] const runtime::SystemVerilogVpiCoverageService&
@@ -1485,8 +1328,12 @@ public:
     [[nodiscard]] std::size_t compiled_process_count() const noexcept;
     /// Stub kept for API compatibility: always zero.
     [[nodiscard]] std::size_t compiled_module_count() const noexcept;
-    /// Stub kept for API compatibility: all counters are zero (there is no
-    /// per-process native-object cache any more).
+    /// How the v4 kernel used the code built ahead of time (`elaborate
+    /// --aot`) in the design's cache. A run whose kernel finds the index of
+    /// such a build looks each template and attempt automaton up in it: hits
+    /// load its code, misses compile it. A run without one compiles in memory
+    /// and looks nothing up; an ahead-of-time build counts its stores. All
+    /// counters are zero on the interpreter.
     [[nodiscard]] NativeCacheStatistics
     native_cache_statistics(bool synchronize = true) const noexcept;
     /// Stub kept for API compatibility: no-op (no background compilation).
@@ -1606,6 +1453,7 @@ public:
     void set_concurrent_assertion_hook(ConcurrentAssertionHook hook);
     void set_assertion_attempt_hook(AssertionAttemptHook hook);
     void set_assertion_step_hook(AssertionStepHook hook);
+    void set_assertion_control_task_hook(AssertionControlTaskHook hook);
     /// vpiAssertionEnableStep / vpiAssertionDisableStep for the attempt of
     /// the VPI assertion object that starts at the tick (IEEE 1800-2023
     /// 39.5.2). `attempt_started`: the attempt has already started, so its
@@ -1626,6 +1474,29 @@ public:
     [[nodiscard]] std::uint64_t add_uvm_activity_hook(UvmActivityHook hook);
     void remove_uvm_activity_hook(std::uint64_t token) noexcept;
     void set_class_property_change_hook(ClassPropertyChangeHook hook);
+    void set_class_property_container_change_hook(
+        ClassPropertyContainerChangeHook hook);
+    // Adds (or drops) one watch on the elements of an object's array
+    // property (its index in the object): a method's writes of a watched
+    // property reach the hook above after each statement.
+    void watch_class_container(runtime::SystemVerilogClassHandle handle,
+        std::size_t property, bool watched);
+    // The value of a static unpacked-array property of a class held by the
+    // kernel (identity `owner::name`, the class specialization that holds
+    // it); none when the kernel holds no such storage.
+    // A mailbox or semaphore by the handle a class variable holds (IEEE
+    // 1800-2023 37.33 details 3 and 4); none for any other value.
+    [[nodiscard]] std::optional<runtime::simir::SynchronizationObject>
+    synchronization_object(std::uint64_t handle) const;
+    [[nodiscard]] std::optional<runtime::simir::ContainerValue>
+    class_static_container_value(
+        std::string_view identity, std::string_view specialization) const;
+    // Reports each kernel write of such a property through the hook below;
+    // false when the kernel holds no such storage.
+    bool watch_class_static_container(
+        std::string_view identity, std::string_view specialization);
+    void set_class_static_container_change_hook(
+        ClassStaticContainerChangeHook hook);
     void set_class_static_property_change_hook(
         ClassStaticPropertyChangeHook hook);
 

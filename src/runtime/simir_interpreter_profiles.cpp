@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-#include "fsim/runtime/systemverilog_string.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 #include "fsim/support/teardown.hpp"
 #include "simir_internal.hpp"
 
@@ -9,9 +9,7 @@
 #include <cctype>
 #include <cstddef>
 #include <cstdlib>
-#include <iomanip>
 #include <iostream>
-#include <limits>
 #include <map>
 #include <numeric>
 #include <ranges>

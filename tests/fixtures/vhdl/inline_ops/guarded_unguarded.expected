@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+wide guard 0 u='0' uv=1101 b='0'
+wide guard 1 u='0' uv=1101 b='Z'
+wide guard 2 u='0' uv=1101 b='Z'
+wide guard 3 u='1' uv=1011 b='1'
+wide guard 4 u='-' uv=1011 b='-'

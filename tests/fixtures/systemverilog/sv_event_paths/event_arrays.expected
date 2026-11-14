@@ -1,0 +1,7 @@
+sep e1[1] 1
+sep e2[2] 2
+sep big[69999] 3
+sep g[0].ge[8] 4
+sep top g[1].ge[7] 5
+sep joined 5
+sep g[1].ge[8] 6

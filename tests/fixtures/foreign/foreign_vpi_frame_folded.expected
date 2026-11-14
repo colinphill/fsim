@@ -1,0 +1,14 @@
+#c refused cbCreateObj: vpi_register_cb: the request failed
+#c thread start type=vpiThread parent=0 threads=1
+#c frame start depth=1 type=vpiFrame active=1 current=1 thread=1 origin=vpiFuncCall line=11 caller=0
+#c automatics=1
+#c twice start depth=1
+#c frame end depth=1 active=1 stmt=8
+#c frame start depth=1 type=vpiFrame active=1 current=1 thread=1 origin=vpiFuncCall line=12 caller=0
+#c automatics=1
+#c twice start depth=1
+#c frame end depth=1 active=1 stmt=8
+#c done n=8 m=16
+#c thread end parent=0 children=0
+#c enters=1
+#c stale frame type=-1

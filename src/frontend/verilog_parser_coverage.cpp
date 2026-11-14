@@ -1,7 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "verilog_parser_coverage_internal.hpp"
+#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/diagnostic.hpp"
+#include "fsim/frontend/source.hpp"
+#include "fsim/frontend/systemverilog_scalars.hpp"
+#include "fsim/frontend/token.hpp"
+#include "verilog_parser_assertion_support.hpp"
+#include "verilog_parser_internal.hpp"
 
-#include "fsim/frontend/coverage_sampling.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -11,6 +18,15 @@
 #include <span>
 #include <unordered_set>
 #include <utility>
+#include <cstddef>
+#include <cstdint>
+#include <iterator>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <unordered_map>
+#include <vector>
 
 namespace fsim::frontend {
 

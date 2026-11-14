@@ -3,7 +3,6 @@
 
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/artifact/object.hpp"
-#include "fsim/compiler/object_cache.hpp"
 #include "fsim/library/artifact.hpp"
 #include "fsim/library/source_mapping.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
@@ -16,8 +15,6 @@
 #include "fsim/version.hpp"
 
 #include <algorithm>
-#include <atomic>
-#include <chrono>
 #include <fstream>
 #include <iomanip>
 #include <map>

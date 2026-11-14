@@ -1,0 +1,6 @@
+#c edge 1 q1=0 q2=0
+#c edge 2 q1=10 q2=0
+#c edge 3 q1=20 q2=10
+#c edge 4 q1=30 q2=20
+#c edge 5 q1=40 q2=30
+#c edge 6 q1=50 q2=40

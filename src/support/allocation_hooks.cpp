@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/support/allocation_hooks.hpp"
 
-#include <atomic>
 #include <cstdlib>
-#include <new>
 
 namespace fsim::support {
 

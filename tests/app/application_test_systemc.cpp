@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_test_support.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/semantic/design_ir.hpp"
 
-#include "fsim/systemc/hierarchy.hpp"
 #include "../../src/app/application_simulation_internal.hpp"
 #include "../../src/runtime/simir_internal.hpp"
 
@@ -19,7 +21,6 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <tuple>
 #include <utility>
 #include <vector>

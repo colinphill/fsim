@@ -1,15 +1,31 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "frontend_test_support.hpp"
-#include "fsim/frontend/frontend.hpp"
+#include "fsim/frontend/class_resolution.hpp"
+#include "fsim/frontend/coverage_execution.hpp"
+#include "fsim/frontend/coverage_observation.hpp"
+#include "fsim/frontend/coverage_percentage.hpp"
+#include "fsim/frontend/coverage_report.hpp"
+#include "fsim/frontend/coverage_resolution.hpp"
+#include "fsim/frontend/coverage_sampling.hpp"
+#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/diagnostic.hpp"
+#include "fsim/frontend/parser.hpp"
+#include "fsim/frontend/preprocessor.hpp"
+#include "fsim/frontend/source.hpp"
+#include "fsim/frontend/token.hpp"
 
 #include <algorithm>
 #include <array>
 #include <limits>
-#include <ranges>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <cstdint>
+#include <optional>
+#include <span>
+#include <vector>
 
 namespace fsim::tests::frontend {
 

@@ -13,11 +13,11 @@
 #include "../../src/runtime/run_state_archive.hpp"
 #include "fsim/runtime/run_state_image.hpp"
 #include "fsim/runtime/run_state_sections.hpp"
-#include "../../src/runtime/run_state_value_codecs.hpp"
 #include "fsim/runtime/scheduler.hpp"
 #include "fsim/runtime/scheduler_events.hpp"
 #include "fsim/runtime/simir.hpp"
 #include "fsim/runtime/simir_coverage.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 #include "fsim/runtime/uvm_component.hpp"
 #include "fsim/runtime/uvm_object.hpp"
 #include "fsim/runtime/uvm_phase.hpp"
@@ -36,6 +36,7 @@
 #include <unordered_set>
 #include <variant>
 #include <vector>
+#include "../../src/runtime/run_state_value_codecs.hpp"
 
 namespace fsim::tests::runtime {
 namespace {

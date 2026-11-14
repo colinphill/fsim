@@ -2,6 +2,7 @@
 #pragma once
 
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
 #include "fsim/diagnostic/diagnostic.hpp"
 #include "fsim/elaboration/elaborator.hpp"
 #include "fsim/semantic/compiled_design.hpp"
@@ -19,15 +20,7 @@
 
 namespace fsim::app {
 
-inline constexpr std::uint32_t kRuntimeStateSchema = 108;
-inline constexpr std::uint32_t kSemanticStateSchema = 5;
-inline constexpr std::uint32_t kDesignIrStateSchema = 8;
-inline constexpr std::uint32_t kCompiledHirBundleSchema = 3;
-inline constexpr std::uint32_t kSystemVerilogConstraintHirStateSchema = 24;
-inline constexpr std::uint32_t kSystemVerilogCoverageStateSchema = 7;
-inline constexpr std::uint32_t kSystemVerilogUvmStateSchema = 3;
-inline constexpr std::uint32_t kSystemVerilogClassSpecializationStateSchema = 1;
-inline constexpr std::uint32_t kVhdlHirStateSchema = 13;
+// The payload schema constants are in fsim/app/artifact_schema.hpp.
 // A UVM testbench's compiled HIR decodes to about 270 MiB.
 inline constexpr std::size_t kCompiledHirDecodeBudgetBytes
     = 512U * 1024U * 1024U;

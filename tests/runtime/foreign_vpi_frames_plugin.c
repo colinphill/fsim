@@ -8,7 +8,6 @@
 #include "sv_vpi_user.h"
 #include "vpi_user.h"
 
-#include <stdio.h>
 #include <string.h>
 
 static int accepted;

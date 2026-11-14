@@ -8,7 +8,6 @@
 #include <cstdint>
 #include <iostream>
 #include <new>
-#include <stdexcept>
 #include <utility>
 
 namespace {

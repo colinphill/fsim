@@ -5,7 +5,6 @@
 #include "fsim/runtime/vpi_abi.h"
 #include "sv_vpi_user.h"
 
-#include <stdio.h>
 #include <string.h>
 
 static const char* text(PLI_INT32 property, vpiHandle object)

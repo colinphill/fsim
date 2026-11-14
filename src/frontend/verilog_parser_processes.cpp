@@ -1,8 +1,24 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "verilog_parser_internal.hpp"
+#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/output_format.hpp"
+#include "fsim/frontend/source.hpp"
+#include "fsim/frontend/token.hpp"
 
 #include <array>
-#include <functional>
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <iterator>
+#include <limits>
+#include <memory>
+#include <numeric>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 namespace fsim::frontend {
 
@@ -1348,6 +1364,166 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
         return statement;
     }
 
+    // A string literal argument as the expression parse_expression makes of
+    // it (VPI vpiArgument, IEEE 1800-2023 37.62).
+    const auto output_string_argument = [&](const Token& token) {
+        auto literal = Expression {
+            ExpressionKind::StringLiteral, token.text, { }, token.span
+        };
+        literal.decoded_string = decoded_string_literal_text(token);
+        literal.generated_text = token.generated_text;
+        return literal;
+    };
+    // Whether the output argument list whose first argument starts `first`
+    // tokens ahead has an empty argument, or a string literal after its
+    // first argument: such a list is formatted left to right, an empty
+    // argument printing a space and every string literal argument being a
+    // format consuming the following arguments (IEEE 1364-2005 17.1.1; the
+    // file forms take the same arguments after the descriptor, IEEE
+    // 1800-2023 21.3.2).
+    const auto general_output_arguments = [&](const std::size_t first) {
+        std::size_t depth { };
+        bool argument_start = true;
+        bool first_argument = true;
+        for (std::size_t offset = first;
+            !at(TokenKind::EndOfFile, offset); ++offset) {
+            const bool close = at(TokenKind::RightParen, offset);
+            if (depth == 0U
+                && (at(TokenKind::Comma, offset) || close)) {
+                if (argument_start) {
+                    return true;
+                }
+                if (close) {
+                    return false;
+                }
+                argument_start = true;
+                first_argument = false;
+                continue;
+            }
+            if (depth == 0U && argument_start && !first_argument
+                && at(TokenKind::StringLiteral, offset)
+                && (at(TokenKind::Comma, offset + 1U)
+                    || at(TokenKind::RightParen, offset + 1U))) {
+                return true;
+            }
+            argument_start = false;
+            if (at(TokenKind::LeftParen, offset)
+                || at(TokenKind::LeftBrace, offset)
+                || at(TokenKind::LeftBracket, offset)) {
+                ++depth;
+            } else if (close || at(TokenKind::RightBrace, offset)
+                || at(TokenKind::RightBracket, offset)) {
+                if (depth == 0U) {
+                    return false;
+                }
+                --depth;
+            }
+        }
+        return false;
+    };
+    // The arguments of such a list up to its closing parenthesis, each kept
+    // as written (vpiArgument) and as the output items it formats.
+    const auto parse_general_output_arguments
+        = [&](Statement& statement, const std::string_view task_name,
+              const OutputFormat default_format,
+              const std::string& semantic_code, const char* const format_code,
+              const bool unformatted_allowed) {
+        std::string pending;
+        const auto argument_end = [&] {
+            return at(TokenKind::Comma) || at(TokenKind::RightParen);
+        };
+        for (;;) {
+            if (argument_end()) {
+                // An empty argument prints a space (21.2.1.1) and is kept
+                // as written, an expression of no kind (37.42 detail 8).
+                pending += ' ';
+                statement.output_arguments.push_back(Expression { });
+            } else if (at(TokenKind::StringLiteral)
+                && (at(TokenKind::Comma, 1U)
+                    || at(TokenKind::RightParen, 1U))) {
+                const auto format_token = advance();
+                statement.output_arguments.push_back(
+                    output_string_argument(format_token));
+                if (statement.output_source.size() == 1U
+                    && statement.output_values.empty()
+                    && pending.empty()
+                    && format_token.generated_text
+                        == GeneratedTextKind::none) {
+                    statement.output_source.push_back(
+                        decoded_string_literal_text(format_token));
+                }
+                auto parsed_format = parse_output_format(
+                    decoded_string_literal_text(format_token));
+                // %u and %z write raw data, as for $fwrite (IEEE 1800-2017
+                // 21.2.1.7).
+                if (!parsed_format.valid
+                    || (!unformatted_allowed
+                        && std::ranges::any_of(parsed_format.conversions,
+                            [](const auto& conversion) {
+                                return conversion.format
+                                    == OutputFormat::Unformatted2
+                                    || conversion.format
+                                    == OutputFormat::Unformatted4;
+                            }))) {
+                    error(
+                        format_token,
+                        format_code,
+                        "the current formatted-output slice supports "
+                        "%b, %h/%x, %o, %d, %c, %s, %e/%f/%g, %m, or %t "
+                        "conversion, field width, left/zero padding, "
+                        "and %%");
+                }
+                for (auto& conversion : parsed_format.conversions) {
+                    Expression value;
+                    const bool takes_value
+                        = conversion.format != OutputFormat::Hierarchy
+                        && conversion.format != OutputFormat::Library;
+                    if (takes_value && at(TokenKind::Comma)
+                        && !at(TokenKind::Comma, 1U)
+                        && !at(TokenKind::RightParen, 1U)) {
+                        advance();
+                        value = parse_expression();
+                        statement.output_arguments.push_back(value);
+                    } else if (takes_value
+                        && conversion.format != OutputFormat::Time) {
+                        error(
+                            format_token,
+                            semantic_code,
+                            std::string { task_name }
+                                + " format conversions require matching "
+                                  "value arguments");
+                    }
+                    statement.output_values.push_back(OutputValue {
+                        std::move(value),
+                        conversion.format,
+                        pending + conversion.prefix,
+                        conversion.suppress_leading_zero,
+                        conversion.minimum_width,
+                        conversion.left_justify,
+                        conversion.zero_pad,
+                        conversion.precision });
+                    pending.clear();
+                }
+                pending += parsed_format.trailing_text;
+            } else {
+                auto value = parse_expression();
+                statement.output_arguments.push_back(value);
+                statement.output_values.push_back(OutputValue {
+                    std::move(value),
+                    default_format,
+                    std::exchange(pending, std::string { }) });
+            }
+            if (!match(TokenKind::Comma)) {
+                break;
+            }
+        }
+        if (statement.output_values.empty()) {
+            statement.output_text = std::move(pending);
+        } else {
+            statement.output_trailing_text = std::move(pending);
+        }
+    };
+
     if (keyword("$fdisplay") || keyword("$fdisplayb")
         || keyword("$fdisplayh") || keyword("$fdisplayo")
         || keyword("$fwrite") || keyword("$fwriteb")
@@ -1384,14 +1560,31 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
                 "FSIM-SV-PARSE-152");
         }
         if (!has_arguments) {
+        } else if (general_output_arguments(0U)) {
+            parse_general_output_arguments(statement, task_name,
+                default_format, "FSIM-SV-SEM-076", "FSIM-SV-SEM-076",
+                task_name == "$fwrite");
         } else if (!at(TokenKind::StringLiteral)) {
             do {
+                auto value = parse_expression();
+                statement.output_arguments.push_back(value);
                 statement.output_values.push_back(
-                    OutputValue {
-                        parse_expression(), default_format, { } });
+                    OutputValue { std::move(value), default_format, { } });
             } while (match(TokenKind::Comma));
         } else {
             const auto format_token = advance();
+            // The arguments after the file descriptor as written, the format
+            // string included (VPI vpiArgument, IEEE 1800-2023 37.42, 37.62).
+            {
+                auto literal = Expression {
+                    ExpressionKind::StringLiteral, format_token.text, { },
+                    format_token.span
+                };
+                literal.decoded_string
+                    = decoded_string_literal_text(format_token);
+                literal.generated_text = format_token.generated_text;
+                statement.output_arguments.push_back(std::move(literal));
+            }
             statement.output_generated_text = format_token.generated_text;
             // Generated text (`__FILE__`) is rebuilt where it is used.
             if (format_token.generated_text == GeneratedTextKind::none) {
@@ -1409,6 +1602,7 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
             std::vector<Expression> values;
             while (match(TokenKind::Comma)) {
                 values.push_back(parse_expression());
+                statement.output_arguments.push_back(values.back());
             }
             const auto consumes_value =
                 [](const OutputFormat format) {
@@ -1552,149 +1746,12 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
         statement.output_newline = newline;
         statement.output_postponed = postponed;
         statement.output_monitor = monitor;
-        // A string literal argument as the expression parse_expression
-        // makes of it (VPI vpiArgument, IEEE 1800-2023 37.62).
-        const auto string_argument = [&](const Token& token) {
-            auto literal = Expression {
-                ExpressionKind::StringLiteral, token.text, { }, token.span
-            };
-            literal.decoded_string = decoded_string_literal_text(token);
-            literal.generated_text = token.generated_text;
-            return literal;
-        };
-        // An argument list with an empty argument, or with a string literal
-        // after the first argument, is formatted left to right: an empty
-        // argument prints a space, and every string literal argument is a
-        // format consuming the following arguments (IEEE 1364-2005 17.1.1).
-        const auto general_arguments = [&] {
-            if (!at(TokenKind::LeftParen) || at(TokenKind::RightParen, 1)) {
-                return false;
-            }
-            std::size_t depth { };
-            bool argument_start = true;
-            bool first_argument = true;
-            for (std::size_t offset = 1U;
-                !at(TokenKind::EndOfFile, offset); ++offset) {
-                const bool close = at(TokenKind::RightParen, offset);
-                if (depth == 0U
-                    && (at(TokenKind::Comma, offset) || close)) {
-                    if (argument_start) {
-                        return true;
-                    }
-                    if (close) {
-                        return false;
-                    }
-                    argument_start = true;
-                    first_argument = false;
-                    continue;
-                }
-                if (depth == 0U && argument_start && !first_argument
-                    && at(TokenKind::StringLiteral, offset)
-                    && (at(TokenKind::Comma, offset + 1U)
-                        || at(TokenKind::RightParen, offset + 1U))) {
-                    return true;
-                }
-                argument_start = false;
-                if (at(TokenKind::LeftParen, offset)
-                    || at(TokenKind::LeftBrace, offset)
-                    || at(TokenKind::LeftBracket, offset)) {
-                    ++depth;
-                } else if (close || at(TokenKind::RightBrace, offset)
-                    || at(TokenKind::RightBracket, offset)) {
-                    if (depth == 0U) {
-                        return false;
-                    }
-                    --depth;
-                }
-            }
-            return false;
-        }();
-        if (general_arguments) {
+        if (at(TokenKind::LeftParen) && !at(TokenKind::RightParen, 1)
+            && general_output_arguments(1U)) {
             expect(TokenKind::LeftParen, "'(' after " + std::string { task_name },
                 close_code);
-            std::string pending;
-            const auto argument_end = [&] {
-                return at(TokenKind::Comma) || at(TokenKind::RightParen);
-            };
-            for (;;) {
-                if (argument_end()) {
-                    pending += ' ';
-                } else if (at(TokenKind::StringLiteral)
-                    && (at(TokenKind::Comma, 1U)
-                        || at(TokenKind::RightParen, 1U))) {
-                    const auto format_token = advance();
-                    statement.output_arguments.push_back(
-                        string_argument(format_token));
-                    if (statement.output_source.size() == 1U
-                        && statement.output_values.empty()
-                        && pending.empty()
-                        && format_token.generated_text
-                            == GeneratedTextKind::none) {
-                        statement.output_source.push_back(
-                            decoded_string_literal_text(format_token));
-                    }
-                    auto parsed_format = parse_output_format(
-                        decoded_string_literal_text(format_token));
-                    // %u and %z write raw data, as for $fwrite (IEEE 1800-2017
-                    // 21.2.1.7).
-                    if (!parsed_format.valid) {
-                        error(
-                            format_token,
-                            "FSIM-SV-SEM-042",
-                            "the current formatted-output slice supports "
-                            "%b, %h/%x, %o, %d, %c, %s, %e/%f/%g, %m, or %t "
-                            "conversion, field width, left/zero padding, "
-                            "and %%");
-                    }
-                    for (auto& conversion : parsed_format.conversions) {
-                        Expression value;
-                        const bool takes_value
-                            = conversion.format != OutputFormat::Hierarchy
-                            && conversion.format != OutputFormat::Library;
-                        if (takes_value && at(TokenKind::Comma)
-                            && !at(TokenKind::Comma, 1U)
-                            && !at(TokenKind::RightParen, 1U)) {
-                            advance();
-                            value = parse_expression();
-                            statement.output_arguments.push_back(value);
-                        } else if (takes_value
-                            && conversion.format != OutputFormat::Time) {
-                            error(
-                                format_token,
-                                semantic_code,
-                                std::string { task_name }
-                                    + " format conversions require matching "
-                                      "value arguments");
-                        }
-                        statement.output_values.push_back(OutputValue {
-                            std::move(value),
-                            conversion.format,
-                            pending + conversion.prefix,
-                            conversion.suppress_leading_zero,
-                            conversion.minimum_width,
-                            conversion.left_justify,
-                            conversion.zero_pad,
-                            conversion.precision });
-                        pending.clear();
-                    }
-                    pending += parsed_format.trailing_text;
-                } else {
-                    auto value = parse_expression();
-                    statement.output_arguments.push_back(value);
-                    statement.output_values.push_back(OutputValue {
-                        std::move(value),
-                        default_format,
-                        std::exchange(pending, std::string { }) });
-                }
-                if (!match(TokenKind::Comma)) {
-                    break;
-                }
-            }
-            if (statement.output_values.empty()) {
-                statement.output_text = std::move(pending);
-            } else {
-                statement.output_trailing_text = std::move(pending);
-            }
+            parse_general_output_arguments(statement, task_name,
+                default_format, semantic_code, "FSIM-SV-SEM-042", true);
             expect(
                 TokenKind::RightParen,
                 "')' after " + std::string { task_name } + " arguments",
@@ -1704,7 +1761,7 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
                 if (at(TokenKind::StringLiteral)) {
                     const auto format_token = advance();
                     statement.output_arguments.push_back(
-                        string_argument(format_token));
+                        output_string_argument(format_token));
                     statement.output_generated_text
                         = format_token.generated_text;
                     if (format_token.generated_text == GeneratedTextKind::none) {

@@ -1,6 +1,25 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fsim/app/sdf_pulse_timing.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
+#include "fsim/app/sdf_annotation_scope.hpp"
+#include "fsim/app/sdf_cell_resolution.hpp"
+#include "fsim/app/sdf_endpoint_resolution.hpp"
+#include "fsim/app/sdf_mapping_validation.hpp"
+#include "fsim/app/sdf_target_plan.hpp"
+#include "fsim/app/sdf_value_policy.hpp"
+#include "fsim/elaboration/elaborator.hpp"
+#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/diagnostic.hpp"
+#include "fsim/frontend/sdf.hpp"
+#include "fsim/frontend/source.hpp"
+#include "fsim/frontend/token.hpp"
+#include "fsim/runtime/logic.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_ids.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -12,6 +31,9 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+#include <cstddef>
+#include <exception>
+#include <optional>
 
 namespace {
 using fsim::runtime::SimulationTick;

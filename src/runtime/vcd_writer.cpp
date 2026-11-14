@@ -11,7 +11,6 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
-#include <utility>
 #include <vector>
 
 namespace fsim::runtime {
@@ -41,6 +40,14 @@ namespace {
 }
 
 [[nodiscard]] std::string escaped_name(std::string_view value) {
+  // An escaped identifier is written as declared; its terminating space is
+  // the token separator the caller appends (IEEE 1800-2023 5.6.1, 21.7.2).
+  if (value.size() > 1U && value.front() == '\\') {
+    while (value.size() > 1U && value.back() == ' ') {
+      value.remove_suffix(1U);
+    }
+    return std::string(value);
+  }
   const auto simple = !value.empty() &&
                       std::all_of(value.begin(), value.end(), [](char c) {
                         const auto byte = static_cast<unsigned char>(c);

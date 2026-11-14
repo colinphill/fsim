@@ -200,6 +200,9 @@ GenerateRegion VhdlParser::parse_vhdl_selection_generate(
   const Token& start) {
   GenerateRegion result;
   result.kind = GenerateKind::Selection;
+  // The statement's label names it, as for the other generate statements
+  // (IEEE 1076-2008 11.8; a block configuration names it, 3.4.2).
+  result.then_scope = vhdl_name(label.text);
   result.condition = parse_expression();
   expect_keyword("generate", true, "FSIM-VHDL-PARSE-069");
   bool saw_default = false;

@@ -7,7 +7,6 @@
 #include "fsim/runtime/vpi_abi.h"
 #include "sv_vpi_user.h"
 
-#include <stdio.h>
 #include <string.h>
 
 static PLI_INT32 observed(PLI_INT32 reason, p_vpi_time time,

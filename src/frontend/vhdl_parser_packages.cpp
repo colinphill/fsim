@@ -473,6 +473,12 @@ std::string VhdlParser::parse_vhdl_resolution_indication(
     if (!at(TokenKind::Identifier, lookahead + depth)) {
       return {};
     }
+    // An element resolution indication is a VHDL-2008 form (IEEE 1076-2008
+    // 6.3); VHDL-1987 and VHDL-1993 resolve only whole subtypes by name.
+    (void)require_vhdl_standard(
+        current(), VhdlStandard::Vhdl2008, "an element resolution indication",
+        "select VHDL-2008 or declare an array type of the resolved element "
+        "subtype");
     for (std::size_t opening = 0; opening < depth; ++opening) {
       match(TokenKind::LeftParen);
     }

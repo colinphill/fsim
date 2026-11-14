@@ -1,9 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_test_support.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 #include "fsim/support/environment.hpp"
 #include "../../src/app/application_runtime_path_codec.hpp"
 #include "../../src/elaboration/elaborated_design_process_access.hpp"
 #include "../../src/runtime/simir_internal.hpp"
+#include "../../src/runtime/simir_process_program.hpp"
+#include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/elaboration/elaborator.hpp"
+#include "fsim/frontend/parser.hpp"
+#include "fsim/frontend/token.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_ids.hpp"
 
 #include <algorithm>
 #include <array>
@@ -15,6 +25,11 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <cassert>
+#include <cstdint>
+#include <iostream>
+#include <stdlib.h>
+#include <streambuf>
 
 namespace fsim::runtime::simir {
 

@@ -25,6 +25,12 @@ const runtime::simir::Process& Simulation::process_program(
     return impl_->interpreter->process_program(process);
 }
 
+std::optional<runtime::simir::SignalId> Simulation::nettype_resolution_signal(
+    const runtime::simir::ProcessId process) const
+{
+    return impl_->interpreter->nettype_resolution_signal(process);
+}
+
 const semantic::design::DesignIr& Simulation::design_ir() const noexcept
 {
     return impl_->built.design_ir;
@@ -559,6 +565,13 @@ PackedLogic4 Simulation::read_driver(
     return impl_->interpreter->driver_value(process, signal);
 }
 
+bool Simulation::driver_disconnected(const runtime::simir::ProcessId process,
+    const SignalId signal, const std::uint32_t offset,
+    const std::uint32_t width) const
+{
+    return impl_->interpreter->driver_disconnected(process, signal, offset, width);
+}
+
 runtime::simir::DriveStrength Simulation::read_signal_strength(
     const SignalId signal) const
 {
@@ -567,17 +580,67 @@ runtime::simir::DriveStrength Simulation::read_signal_strength(
 
 std::string Simulation::read_process_string_local(
     const runtime::simir::ProcessId process,
-    const std::size_t local_index) const
+    const std::size_t local_index, const std::size_t newer_activations) const
 {
     return impl_->interpreter->read_debug_string_local(
-        process, local_index);
+        process, local_index, newer_activations);
+}
+
+std::vector<Simulation::HostFrameVariable> Simulation::host_frame_variables(
+    const std::uint64_t frame) const
+{
+    std::vector<HostFrameVariable> variables;
+    for (auto& variable : impl_->class_hir_execution.frame_variables(frame)) {
+        variables.push_back({ variable.declaration.value(),
+            std::move(variable.name), variable.string_value });
+    }
+    return variables;
+}
+
+std::optional<runtime::PackedLogic4> Simulation::read_host_frame_packed(
+    const std::uint64_t frame, const std::uint32_t declaration) const
+{
+    return impl_->class_hir_execution.read_frame_packed(
+        frame, semantic::DeclarationId::from_index(declaration));
+}
+
+std::optional<std::string> Simulation::read_host_frame_string(
+    const std::uint64_t frame, const std::uint32_t declaration) const
+{
+    return impl_->class_hir_execution.read_frame_string(
+        frame, semantic::DeclarationId::from_index(declaration));
+}
+
+bool Simulation::write_host_frame_packed(const std::uint64_t frame,
+    const std::uint32_t declaration, const runtime::PackedLogic4& value)
+{
+    return impl_->class_hir_execution.write_frame_packed(
+        frame, semantic::DeclarationId::from_index(declaration), value);
+}
+
+bool Simulation::write_host_frame_string(const std::uint64_t frame,
+    const std::uint32_t declaration, const std::string_view value)
+{
+    return impl_->class_hir_execution.write_frame_string(
+        frame, semantic::DeclarationId::from_index(declaration), value);
 }
 
 void Simulation::write_process_string_local(
     const runtime::simir::ProcessId process, const std::size_t local_index,
-    const std::string_view value)
+    const std::string_view value, const std::size_t newer_activations)
 {
-    impl_->interpreter->write_debug_string_local(process, local_index, value);
+    impl_->interpreter->write_debug_string_local(
+        process, local_index, value, newer_activations);
+}
+
+bool Simulation::trigger_dynamic_event(const std::uint64_t handle)
+{
+    return impl_->interpreter->trigger_dynamic_event(handle);
+}
+
+std::uint64_t Simulation::create_dynamic_event()
+{
+    return impl_->interpreter->create_dynamic_event();
 }
 
 void Simulation::write_process_container_local(
@@ -943,6 +1006,7 @@ runtime::SystemVerilogClassHandle Simulation::allocate_uvm_object(
         throw std::logic_error { "simulation class heap is no longer mutable" };
     }
     application_detail::ensure_systemverilog_uvm_object_type(
+        impl_->built.compiled_systemverilog_class_specializations,
         impl_->class_specialization(specialization_identity),
         impl_->uvm_objects);
     const auto handle = impl_->allocate_class(
@@ -985,6 +1049,7 @@ runtime::SystemVerilogClassHandle Simulation::allocate_uvm_component(
         throw std::logic_error { "simulation class heap is no longer mutable" };
     }
     application_detail::ensure_systemverilog_uvm_object_type(
+        impl_->built.compiled_systemverilog_class_specializations,
         impl_->class_specialization(specialization_identity),
         impl_->uvm_objects);
     const auto component_name = name;
@@ -994,7 +1059,8 @@ runtime::SystemVerilogClassHandle Simulation::allocate_uvm_component(
     };
     std::array string_actuals { std::move(name), std::string { } };
     const auto handle = impl_->construct_class(
-        specialization_identity, declared_type, actuals, string_actuals,
+        "@api-construct:" + std::string { specialization_identity },
+        declared_type, actuals, string_actuals,
         std::span<const std::string> { }, "$api", root);
     if (impl_->uvm_components.contains(handle))
         return handle;

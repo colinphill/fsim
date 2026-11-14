@@ -7,7 +7,11 @@
 #c g NP type=vpiParameter typespec=vpiLogicTypespec name=nib_t value=3
 #c g GP type=vpiParameter typespec=vpiIntTypespec name=gint_t value=5
 #c g BP type=vpiParameter typespec=vpiIntTypespec name=- value=7
-#c watch sa[1] 1
-#c watch label 1
-#c change sa[1] value=c
-#c change label value=y
+#c top.RI type=vpiStructVar size=2 typespec=vpiStructTypespec name=-
+#c top.RI member a type=vpiIntVar value=4
+#c top.RI member b type=vpiReg value=6
+#c lp_pkg::PK type=vpiStructVar size=2 typespec=vpiStructTypespec name=prec_t
+#c lp_pkg::PK member a type=vpiIntVar value=9
+#c lp_pkg::PK member b type=vpiReg value=33
+#c watch sa[1] 0
+#c watch label 0

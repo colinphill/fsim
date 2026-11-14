@@ -1,0 +1,12 @@
+#c f1 a: vpiLogicTypespec decl 3:0
+#c f1 c: vpiClassTypespec decl -99:-99
+#c f1 q: vpiArrayTypespec queue of vpiIntTypespec decl -99:-99
+#c f1 da: vpiArrayTypespec dynamic of vpiIntTypespec decl -99:-99
+#c f1 aa: vpiArrayTypespec associative of vpiIntTypespec decl -99:-99
+#c f1 fx: vpiArrayTypespec static of vpiIntTypespec decl -99:-99
+#c f1 t: vpiArrayTypespec queue of vpiIntTypespec decl -99:-99
+#c f1 plain: vpiIntTypespec decl -99:-99
+#c f1 result: vpiLogicTypespec decl 3:0
+#c f2 x: vpiIntTypespec decl -99:-99
+#c f2 result: vpiClassTypespec decl -99:-99
+#c f3 result: vpiArrayTypespec queue of vpiIntTypespec decl -99:-99

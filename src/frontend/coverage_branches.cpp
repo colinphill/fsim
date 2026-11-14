@@ -2,6 +2,10 @@
 #include "fsim/frontend/coverage_branches.hpp"
 
 #include "fsim/frontend/source.hpp"
+#include "fsim/elaboration/coverage_branches.hpp"
+#include "fsim/frontend/coverage_point_identity.hpp"
+#include "fsim/frontend/coverage_source_identity.hpp"
+#include "fsim/frontend/design_core.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -10,6 +14,9 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+#include <cstddef>
+#include <functional>
+#include <span>
 
 namespace fsim::frontend {
 

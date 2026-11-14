@@ -1,7 +1,31 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "simir_execution_context.hpp"
 #include "simir_execution_shared.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 #include "fsim/runtime/systemverilog_string.hpp"
+#include "fsim/runtime/code_coverage.hpp"
+#include "fsim/runtime/file_operations.hpp"
+#include "fsim/runtime/logic.hpp"
+#include "fsim/runtime/output_format.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_container_value.hpp"
+#include "fsim/runtime/simir_coverage.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include "fsim/runtime/systemverilog_scalar.hpp"
+#include "simir_internal.hpp"
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <optional>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 namespace fsim::runtime::simir {
 
@@ -535,6 +559,14 @@ void Interpreter::Impl::ExecutionContext::write_file_formatted(
         const auto decoded = decode_systemverilog_scalar_payload(
             value, scalar_kind);
         const auto tick = decoded ? decoded.value.as_time() : std::nullopt;
+        if (!tick && has_unknown_bits(value)) {
+            owner.write_file(process, handle,
+                make_unknown_time_output(prefix, suffix, value, owner.time_format,
+                    minimum_width == 0 && !suppress_leading_zero, minimum_width,
+                    left_justify, zero_pad),
+                false);
+            return;
+        }
         if (!tick) {
             throw std::runtime_error {
                 "invalid time payload for formatted file output"
@@ -1397,6 +1429,10 @@ void Interpreter::Impl::ExecutionContext::display_formatted(
         : std::nullopt;
     auto text = tick
         ? make_time_output(prefix, suffix, *tick, owner.time_format,
+              minimum_width == 0 && !suppress_leading_zero, minimum_width,
+              left_justify, zero_pad)
+        : format == OutputFormat::time && has_unknown_bits(value)
+        ? make_unknown_time_output(prefix, suffix, value, owner.time_format,
               minimum_width == 0 && !suppress_leading_zero, minimum_width,
               left_justify, zero_pad)
         : make_formatted_output(

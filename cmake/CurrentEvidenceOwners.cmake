@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
+include("${CMAKE_CURRENT_LIST_DIR}/CTestMetadata.cmake")
+
 function(fsim_current_registered_ctests FSIM_NAMES_OUT)
   foreach(FSIM_VARIABLE IN ITEMS FSIM_BINARY_DIR FSIM_CTEST_COMMAND)
     if(NOT DEFINED ${FSIM_VARIABLE}
@@ -16,23 +18,22 @@ function(fsim_current_registered_ctests FSIM_NAMES_OUT)
   if(NOT FSIM_STATUS EQUAL 0)
     message(FATAL_ERROR "cannot enumerate registered CTests: ${FSIM_ERROR}")
   endif()
-  string(JSON FSIM_COUNT ERROR_VARIABLE FSIM_JSON_ERROR
-    LENGTH "${FSIM_JSON}" tests)
-  if(FSIM_JSON_ERROR OR FSIM_COUNT LESS 1)
-    message(FATAL_ERROR "CTest returned no usable inventory: ${FSIM_JSON_ERROR}")
+  fsim_ctest_test_objects("${FSIM_JSON}" FSIM_COUNT FSIM_TEST)
+  if(FSIM_COUNT LESS 1)
+    message(FATAL_ERROR "CTest returned no usable inventory")
   endif()
   math(EXPR FSIM_LAST "${FSIM_COUNT} - 1")
   set(FSIM_NAMES)
   foreach(FSIM_INDEX RANGE 0 ${FSIM_LAST})
     string(JSON FSIM_NAME ERROR_VARIABLE FSIM_JSON_ERROR
-      GET "${FSIM_JSON}" tests ${FSIM_INDEX} name)
+      GET "${FSIM_TEST_${FSIM_INDEX}}" name)
     if(FSIM_JSON_ERROR)
       message(FATAL_ERROR "invalid CTest name at index ${FSIM_INDEX}")
     endif()
-    list(FIND FSIM_NAMES "${FSIM_NAME}" FSIM_DUPLICATE)
-    if(NOT FSIM_DUPLICATE EQUAL -1)
+    if(DEFINED "FSIM_SEEN_${FSIM_NAME}")
       message(FATAL_ERROR "duplicate registered CTest name: ${FSIM_NAME}")
     endif()
+    set("FSIM_SEEN_${FSIM_NAME}" TRUE)
     list(APPEND FSIM_NAMES "${FSIM_NAME}")
   endforeach()
   set(${FSIM_NAMES_OUT} "${FSIM_NAMES}" PARENT_SCOPE)

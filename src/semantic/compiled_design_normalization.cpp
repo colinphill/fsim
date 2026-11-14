@@ -13,7 +13,6 @@
 #include <memory>
 #include <optional>
 #include <set>
-#include <span>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -943,7 +942,7 @@ std::optional<ConstantValue> constant_name_value(
     // other references stay names for the lowerer to convert.
     if (value && declaration->form == sv::DeclarationForm::local_parameter
         && declaration->type
-        && (declaration->type->target.spelling != "implicit"
+        && (!declaration->type->implicit
             || declaration->type->packed_range)) {
         const auto& spelling = declaration->type->target.spelling;
         // int and integer carry their intrinsic [31:0] range.

@@ -10,6 +10,8 @@
 # operations that run through an operation helper (FSIM_PROFILE_PHASES): the
 # comparison must be compiled inline, so no `Binary` may be among them.
 
+include("${CMAKE_CURRENT_LIST_DIR}/../../../cmake/FsimTestWorkspace.cmake")
+
 if(NOT DEFINED FSIM_EXECUTABLE OR NOT EXISTS "${FSIM_EXECUTABLE}")
   message(FATAL_ERROR "FSIM_EXECUTABLE must name the built fsim command")
 endif()
@@ -23,7 +25,7 @@ endforeach()
 
 string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef workspace_id)
 set(case_dir "${CMAKE_CURRENT_BINARY_DIR}/fsim-vhdl-wide-match-${workspace_id}")
-file(MAKE_DIRECTORY "${case_dir}")
+fsim_test_workspace("${case_dir}")
 file(COPY_FILE "${FSIM_FIXTURE_DIR}/wide_match.vhd" "${case_dir}/wide_match.vhd")
 
 function(run_fsim_step STEP_NAME)
@@ -75,3 +77,6 @@ if("${kernel_stderr}" MATCHES "reason=generic:Binary")
     "wide_match: a Binary operation runs through the operation helper\n"
     "stderr:\n${kernel_stderr}\nworkspace: ${case_dir}")
 endif()
+
+# Passed: remove this run's workspaces (a failure above keeps them).
+fsim_test_workspace_cleanup()

@@ -6,12 +6,10 @@
 #include "fsim/runtime/simir.hpp"
 #include "fsim/runtime/simir_driver_inventory.hpp"
 #include "fsim/runtime/vpi_types.hpp"
-#include "fsim/semantic/compiled_design.hpp"
 #include "fsim/semantic/hierarchy_path.hpp"
 #include "fsim/systemc_abi.h"
 
 #include <algorithm>
-#include <compare>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -33,8 +31,13 @@ struct StaticKernelRuntimeSpec;
 struct ProcessProgramTemplate;
 }
 
+namespace fsim::semantic {
+class CompiledDesign;
+}
+
 namespace fsim::semantic::sv {
 class ClassSpecializationIndex;
+struct ClassSpecialization;
 }
 
 namespace fsim::elaboration {
@@ -552,6 +555,15 @@ struct VhdlModeViewBinding {
     frontend::SourceSpan source;
 };
 
+// The array of named events a signal is an element of (IEEE 1800-2023 7.4,
+// 37.43): the declared name and the array's typespec, whose range gives the
+// elements their indexes in declaration order, and the element's position
+// in that order.
+struct VpiEventArrayDeclaration {
+    std::string name;
+    std::shared_ptr<const runtime::SystemVerilogVpiTypespec> typespec { };
+    std::uint32_t position { };
+};
 struct SignalInfo {
     runtime::simir::SignalId id { };
     std::string name;
@@ -595,6 +607,8 @@ struct SignalInfo {
     // 37.25); empty when its type has no typespec model.
     std::shared_ptr<const runtime::SystemVerilogVpiTypespec>
         vpi_typespec { };
+    // Set on each element of an array of named events.
+    std::shared_ptr<const VpiEventArrayDeclaration> vpi_event_array { };
 };
 
 /// The signal descriptions of a design. While elaboration builds the design
@@ -956,15 +970,50 @@ struct VpiPackageParameterInfo {
     // The typespec of the parameter's type (37.28 vpiTypespec); null for a
     // built-in type.
     std::shared_ptr<const runtime::SystemVerilogVpiTypespec> typespec { };
+    // A class parameter (vpi_class_parameters): the class specialization
+    // whose value it records, empty for the class declaration's own; and
+    // whether it is a type parameter, whose typespec is the type it names
+    // and which has no value (IEEE 1800-2023 37.28, 37.31, 37.32).
+    std::string specialization { };
+    bool type_parameter { };
 };
 
 /// A typedef a package or `$unit` declares, as a typespec (IEEE 1800-2023
 /// 3.12.1, 37.10 vpiTypedef). The package is named by its library and name,
 /// `lib::name`.
+/// The type a cast `T'(x)` to a named type resolved to, as a typespec (IEEE
+/// 1800-2023 6.24.1, 37.59 details 3 and 5): the compiler resolved the name
+/// where the cast is, through the visibility rules of 26.3. `expression` is
+/// the HIR cast expression.
+struct VpiCastTypespecInfo {
+    semantic::ExpressionId expression;
+    std::shared_ptr<const runtime::SystemVerilogVpiTypespec> typespec { };
+};
+
 struct VpiPackageTypedefInfo {
     std::string package;
     std::string name;
     std::shared_ptr<const runtime::SystemVerilogVpiTypespec> typespec { };
+    // A class property's typespec is recorded for the class declaration
+    // (empty) and for each specialization of it, by its identity (IEEE
+    // 1800-2023 37.32, 37.33): a class parameter an actual reads has its
+    // value there.
+    std::string specialization { };
+};
+
+// A call of a user task or function in an instance's unit with the callable
+// the lowerer bound it to (IEEE 1800-2023 37.42 vpiFunction, 37.38
+// vpiTask): the call expression (or the task call statement), the callable's
+// declaration, and the path of the instance that owns the callable; empty
+// for one of the caller's own instance or of a package.
+struct VpiCalleeInfo {
+    bool statement { };
+    std::uint32_t id { };
+    semantic::DeclarationId declaration;
+    std::string instance;
+    // The DPI import a call is bound to (IEEE 1800-2023 35.5.4, 37.40);
+    // `declaration` is then unset.
+    semantic::OriginId dpi { };
 };
 
 struct SpecializationInfo {
@@ -1018,6 +1067,16 @@ struct SpecializationInfo {
     std::vector<semantic::StatementId> coverage_concurrent_statements;
     // The typedefs the instance declares, in declaration order.
     std::vector<VpiTypedefInfo> vpi_typedefs;
+    // The typespec of each cast to a named type in the instance's unit.
+    std::vector<VpiCastTypespecInfo> vpi_cast_typespecs;
+    // Each let expression of the instance's unit with the body expression
+    // of the let declaration it names, resolved as the lowerer expands it
+    // (IEEE 1800-2023 11.12, 37.57 vpiLetExpr).
+    std::vector<std::pair<semantic::ExpressionId, semantic::ExpressionId>>
+        vpi_let_uses;
+    // The callable each user task or function call of the instance's unit
+    // is bound to, as the lowerer bound it.
+    std::vector<VpiCalleeInfo> vpi_callees;
     // The typespecs of named formal and result types of the instance's
     // tasks and functions, keyed "<callable>/<formal>" ("<callable>/" for
     // the result) (37.41).
@@ -1048,6 +1107,29 @@ struct SpecializationInfo {
     // `package` holds the class's declaration identity (IEEE 1800-2023
     // 37.17, 37.20, 37.25), recorded once with the packages.
     std::vector<VpiPackageTypedefInfo> vpi_class_property_typespecs;
+    // The typedefs each class declares, as the typespecs a use of each
+    // would have (`package` holds the class's declaration identity): the
+    // declaration's, and each specialization's whose value parameters all
+    // have integral values (IEEE 1800-2023 37.25, 37.32 vpiTypedef),
+    // recorded once with the packages.
+    std::vector<VpiPackageTypedefInfo> vpi_class_typedefs;
+    // The parameters of each class's parameter port list, as for a package
+    // (`package` holds the class's declaration identity): the declaration's
+    // value and typespec, and each specialization's (IEEE 1800-2023 37.28,
+    // 37.31, 37.32), recorded once with the packages.
+    std::vector<VpiPackageParameterInfo> vpi_class_parameters;
+    // The block and generate statement occurrences a VHDL instance
+    // elaborated, in elaboration order: the path relative to the instance
+    // (`g[1]`, `h[0].e[3]`, `k`) and the declaration of the region whose
+    // occurrence it is: the generate statement for each value of a for
+    // generate statement's range and for the first alternative of an if
+    // generate statement, else the region of the chosen alternative (the
+    // else branch of an if generate statement, an alternative of a case
+    // generate statement), or a block statement; also an occurrence that
+    // holds no signal, instance or process (IEEE 1076-2019 14.5.2, 14.5.3,
+    // 19.4.2).
+    std::vector<std::pair<std::string, semantic::DeclarationId>>
+        vhdl_generate_occurrences;
 };
 
 using UdpTableId = std::uint32_t;
@@ -1404,6 +1486,9 @@ struct ElaboratedDesignState {
     /// ElaboratedDesign::uses_simulation_control(), computed once when the
     /// process rows are final.
     bool uses_simulation_control { };
+    /// ElaboratedDesign::class_container_types(), sorted by identity.
+    std::vector<std::pair<std::string, runtime::simir::ContainerType>>
+        class_container_types { };
 };
 
 /// One pure acyclic continuous-assignment cone selected for A2 fusion. The
@@ -1634,6 +1719,15 @@ public:
     sdf_net_delays() const noexcept;
     [[nodiscard]] const std::vector<HierarchicalSignalRead>&
     hierarchical_reads() const noexcept;
+    /// The kernel's container type of each class property that holds a
+    /// fixed-size array of values, by property identity: an object holds
+    /// its elements from construction (IEEE 1800-2023 7.4, 8.7).
+    [[nodiscard]] const std::unordered_map<std::string,
+        runtime::simir::ContainerType>&
+    class_container_types() const noexcept;
+    /// Notes the container type the lowerer gives a class property.
+    void record_class_container_type(
+        std::string identity, runtime::simir::ContainerType type);
     [[nodiscard]] const std::vector<SystemCInstanceInfo>&
     systemc_instances() const noexcept;
     [[nodiscard]] const std::vector<SystemCProcessInfo>&
@@ -1770,6 +1864,11 @@ private:
     [[nodiscard]] runtime::simir::ProcessProgramView process_view(
         std::size_t process) const noexcept;
     void finalize_process_rows();
+    // Notes the callable the lowerer bound a call of instance `caller` to;
+    // finalize_process_rows gives it to the caller's specialization, and a
+    // call of the caller's own callables to every specialization of its
+    // unit (a replayed process is not lowered again).
+    void record_vpi_callee(std::string caller, VpiCalleeInfo callee);
     [[nodiscard]] bool scan_simulation_control();
     [[nodiscard]] runtime::simir::SignalDriverInventory
     compute_signal_driver_inventory() const;
@@ -1824,6 +1923,9 @@ private:
     std::shared_ptr<detail::RuntimeProcessProgramTableBuilder>
         process_builder_;
     bool uses_simulation_control_ { };
+    std::vector<std::pair<std::string, VpiCalleeInfo>> pending_vpi_callees_;
+    std::unordered_map<std::string, runtime::simir::ContainerType>
+        class_container_types_;
     std::vector<SpecializationInfo> specializations_;
     struct SpecializationPathHash {
         using is_transparent = void;
@@ -1893,6 +1995,13 @@ private:
     std::unordered_map<runtime::simir::SignalId,
         std::vector<std::pair<std::int64_t, std::int64_t>>>
         signal_packed_shape_;
+    // Construction draft: the element signals of a named-event array by the
+    // array's full path, as (index, signal) in declared range order, so a
+    // select of an array named hierarchically (`g[1].e[i]`) finds its
+    // elements (IEEE 1800-2023 15.5, 23.6).
+    std::unordered_map<std::string,
+        std::vector<std::pair<std::int32_t, runtime::simir::SignalId>>>
+        event_array_by_name_;
     // Construction draft: the unpacked dimensions of a fixed-size unpacked
     // array signal, outermost first; its elements are equally wide and the
     // rightmost element of the last dimension is at bit 0, so a select
@@ -1934,6 +2043,12 @@ struct ElaborationResult {
     // never cross the elaboration boundary.
     std::vector<SelectedSystemVerilogClass>
         selected_systemverilog_classes;
+    // The class specializations lowering made for types whose actuals read
+    // the parameters of the design element instance that names them
+    // (`C #(N) c;` in `sub #(5)`, IEEE 1800-2023 8.25, 23.2.2): the compiled
+    // design's own specialization pass cannot know them.
+    std::shared_ptr<const std::vector<semantic::sv::ClassSpecialization>>
+        instance_class_specializations;
 
     [[nodiscard]] bool ok() const noexcept
     {

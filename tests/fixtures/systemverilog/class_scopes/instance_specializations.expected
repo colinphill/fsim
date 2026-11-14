@@ -1,0 +1,7 @@
+sub N=2 seen=2 width=2 bits=2 next=3/3
+sub N=3 seen=3 width=3 bits=3 next=4/4
+sub N=5 seen=5 width=5 bits=5 next=6/6
+sp P=3 N=22 width=22 seen=22 bits=22
+sq Q=21 N=22 width=22 seen=22 bits=22
+sp P=5 N=36 width=36 seen=36 bits=36
+sq Q=35 N=36 width=36 seen=36 bits=36

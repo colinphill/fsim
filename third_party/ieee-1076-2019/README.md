@@ -15,8 +15,7 @@ The upstream `ieee/` and `std/` source directories, `LICENSE`, and
 file. `inventory.cmake` supplies fsim's dependency-ordered review and loading
 inventory; it does not modify the upstream sources.
 
-Bundling a file does not by itself claim executable support. The feature
-matrix identifies the reviewed profiles that fsim analyzes and executes. In
-particular, `std.standard` is language-predefined rather than parsed as an
-ordinary source, and packages remain inactive until their Batch 120 review
-stage is complete.
+These files are included for reference only. fsim simulates the IEEE
+packages with its built-in models; the one exception is `math_complex`, which
+it analyzes from its source here. `std.standard` is language-predefined
+rather than parsed as an ordinary source.

@@ -393,6 +393,6 @@
 #c     actual=vhpisigdeclk :top:sub:sig2
 #c   assoc pos=1 formal=vhpiconstparamdeclk d
 #c     actual=vhpiintliteralk 7
-#c variable r read=1 value=2 put=0 now=9 force=1
+#c variable r read=1 value=2 put=0 now=9 force=0
 #c variable count read=1 value=3 put=0
 #c variable count after the process ran: 11

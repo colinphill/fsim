@@ -7,7 +7,6 @@
 
 #include <limits>
 #include <cstddef>
-#include <compare>
 #include <cstdint>
 #include <functional>
 #include <map>

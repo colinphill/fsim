@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include "elaboration_targets.hpp"
 #include "fsim/elaboration/elaborator.hpp"
-#include "fsim/semantic/compiled_design_specialization.hpp"
+#include "fsim/semantic/compiled_design.hpp"
 #include "fsim/support/index_distance.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
 #include "fsim/support/vhdl_time.hpp"
@@ -13,19 +12,12 @@
 #include <cctype>
 #include <cstdint>
 #include <cstdlib>
-#include <deque>
-#include <functional>
 #include <limits>
 #include <map>
-#include <memory>
 #include <optional>
-#include <ranges>
-#include <set>
 #include <span>
 #include <string>
 #include <string_view>
-#include <unordered_map>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -34,11 +26,6 @@ namespace fsim::elaboration::elaboration_detail {
 using runtime::Logic4;
 using runtime::PackedLogic4;
 using namespace runtime::simir;
-
-// Dynamic event-array selection emits one branch per static element. Keep
-// both elaboration materialization and executable dispatch bounded.
-inline constexpr std::uint64_t maximum_compiled_event_array_elements
-    = 65'536U;
 
 using support::vhdl_time_units;
 

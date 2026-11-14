@@ -97,7 +97,8 @@ std::optional<Lowerer::HirSvValuePath> Lowerer::hir_class_subarray_element(
 }
 
 std::optional<Lowerer::HirSvValuePath> Lowerer::hir_sv_value_path(
-    const semantic::ExpressionId expression_id) const
+    const semantic::ExpressionId expression_id,
+    const bool allow_string_element) const
 {
     // FSIM_SV_VALUE_PATH_TRACE names the line that rejected a path.
     const auto rejected = [&](const int line)
@@ -152,7 +153,10 @@ std::optional<Lowerer::HirSvValuePath> Lowerer::hir_sv_value_path(
             && (source.text == "index" || source.text.starts_with("index."))
             && source.operands.size() >= 2U) {
             // `a[i].x.y` keeps its member suffix in the index text.
-            if (source.text.size() > 6U) {
+            if (source.text.size() > 6U
+                && !(hir_value_path_event_element_
+                    && current == expression_id
+                    && source.text == "index.triggered")) {
                 auto members = dotted_names(
                     std::string_view { source.text }.substr(6U));
                 for (auto member = members.rbegin();
@@ -223,7 +227,8 @@ std::optional<Lowerer::HirSvValuePath> Lowerer::hir_sv_value_path(
                 }
             }
             if (!root) {
-                // `s.a.b` names an unpacked structure and its members.
+                // `s.a.b` names an unpacked structure and its members, of
+                // a variable or of a net (IEEE 1800-2023 6.7.1, 6.7.2).
                 const auto names = dotted_names(source.text);
                 if (names.size() < 2U) {
                     return rejected(__LINE__);
@@ -236,7 +241,9 @@ std::optional<Lowerer::HirSvValuePath> Lowerer::hir_sv_value_path(
                                       == semantic::sv::DeclarationForm::
                                           variable
                                   || candidate.systemverilog->form
-                                      == semantic::sv::DeclarationForm::port);
+                                      == semantic::sv::DeclarationForm::port
+                                  || candidate.systemverilog->form
+                                      == semantic::sv::DeclarationForm::net);
                       };
                 auto declaration
                     = hir_resolver()
@@ -244,19 +251,10 @@ std::optional<Lowerer::HirSvValuePath> Lowerer::hir_sv_value_path(
                               object, false)
                           .unique();
                 // The implicit result variable of the function being
-                // lowered (IEEE 1800-2017 13.4.1).
-                if (!declaration && active_hir_callable_
-                    && *active_hir_callable_ < hir_callable_frames_.size()) {
-                    const auto& frame
-                        = hir_callable_frames_[*active_hir_callable_];
-                    const auto callable = frame.container_result
-                        ? specialized_hir_unit_->find_declaration(
-                              frame.declaration)
-                        : std::nullopt;
-                    if (callable && callable->systemverilog != nullptr
-                        && callable->systemverilog->name == names.front()) {
-                        declaration = frame.declaration;
-                    }
+                // lowered (IEEE 1800-2023 13.4.1).
+                if (!declaration) {
+                    declaration = hir_function_result_variable(
+                        names.front(), source.scope);
                 }
                 if (!declaration) {
                     return rejected(__LINE__);
@@ -608,6 +606,13 @@ std::optional<Lowerer::HirSvValuePath> Lowerer::hir_sv_value_path(
             leaf.dimensions.clear();
             leaf.maximum_elements.reset();
             path.type = std::move(leaf);
+            continue;
+        }
+        if (allow_string_element
+            && path.type.element_kind == ContainerElementKind::String
+            && ordinal + 1U == pending.size()) {
+            // The last step selects one string element of the container.
+            path.string_element = true;
             continue;
         }
         const auto element = nested_element_container_type(path.type);
@@ -1491,6 +1496,91 @@ namespace fsim::elaboration {
 // A nonblocking write of a packed member of an unpacked structure object,
 // or of an array of them (IEEE 1800-2017 10.4.2): the member is published
 // in the NBA region.
+std::optional<StringRegisterId>
+Lowerer::lower_hir_sv_value_path_string_element_read(const HirSvValuePath& path)
+{
+    if (!path.string_element || path.steps.empty()
+        || path.steps.back().member || path.steps.back().indices.empty()) {
+        return std::nullopt;
+    }
+    const auto cursor = lower_hir_sv_value_path_descend(path);
+    if (!cursor) {
+        return std::nullopt;
+    }
+    const auto& leaf = path.steps.back();
+    const auto index = lower_hir_sv_value_path_index(
+        path, leaf, cursor->container);
+    if (!index) {
+        return std::nullopt;
+    }
+    const auto linear = leaf.indices.size() > 1U;
+    const auto destination = allocate_string_register();
+    process_.operations.emplace_back(ContainerStringRead {
+        destination, cursor->container, *index,
+        linear || leaf.container.signed_indices, linear,
+        !linear && leaf.container.string_indices, { } });
+    return destination;
+}
+
+bool Lowerer::lower_hir_sv_value_path_string_nonblocking_write(
+    const HirSvValuePath& path, const StringRegisterId value,
+    const std::function<bool()>& before_write)
+{
+    if (!path.string_element || path.root.local || path.class_root
+        || path.root.read_only || path.steps.empty()
+        || path.steps.back().member || path.steps.back().indices.empty()) {
+        return false;
+    }
+    const auto cursor = lower_hir_sv_value_path_descend(path);
+    if (!cursor) {
+        return false;
+    }
+    const auto& leaf = path.steps.back();
+    const auto leaf_index = lower_hir_sv_value_path_index(
+        path, leaf, cursor->container);
+    if (!leaf_index) {
+        return false;
+    }
+    // The value and every index are those of this execution, not of the
+    // variables a later statement may change.
+    const auto capture_index = [&](const RegisterId index, const bool text) {
+        if (text) {
+            const auto copy = allocate_string_register();
+            process_.operations.emplace_back(
+                CopyStringRegister { copy, index });
+            return static_cast<RegisterId>(copy);
+        }
+        const auto copy = allocate_register(
+            register_width(index), register_domain(index));
+        process_.operations.emplace_back(CopyRegister { copy, index });
+        return copy;
+    };
+    const auto captured = allocate_string_register();
+    process_.operations.emplace_back(CopyStringRegister { captured, value });
+    WriteContainerObjectString write;
+    write.object = path.root.object;
+    write.source = captured;
+    write.nonblocking = true;
+    for (const auto& level : cursor->levels) {
+        ContainerStringPathLevel step;
+        step.index = capture_index(level.index, level.string_index);
+        step.signed_index = level.signed_index;
+        step.string_index = level.string_index;
+        step.linear_index = level.linear_index;
+        step.members = level.members;
+        write.levels.push_back(std::move(step));
+    }
+    write.linear_index = leaf.indices.size() > 1U;
+    write.signed_index = write.linear_index || leaf.container.signed_indices;
+    write.string_index = !write.linear_index && leaf.container.string_indices;
+    write.index = capture_index(*leaf_index, write.string_index);
+    if (before_write && !before_write()) {
+        return false;
+    }
+    process_.operations.emplace_back(std::move(write));
+    return true;
+}
+
 bool Lowerer::lower_hir_sv_value_path_nonblocking_write(
     const HirSvValuePath& path, const RegisterId value,
     const std::function<bool()>& before_write)

@@ -5,11 +5,13 @@
 #include "sv_vpi_user.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <vector>
 
 namespace fsim::app::application_detail {
@@ -317,12 +319,117 @@ enum class Truth : std::uint8_t { no, yes, unknown };
 
 } // namespace operation_value_detail
 
+/// The integral type a cast converts to: its width, signedness and whether
+/// it is two-state (IEEE 1800-2023 6.11, 6.24.1).
+struct VpiCastShape {
+    std::size_t width { };
+    bool is_signed { };
+    bool two_state { };
+};
+
+/// The value of `operand` converted to the integral type `target` as an
+/// assignment would (6.24.1, 6.12.2): sign extended when the operand is
+/// signed, truncated, a two-state type turning x and z into 0, a real
+/// rounded to the nearest integer.
+[[nodiscard]] inline std::optional<VpiOperationValue> evaluate_integral_cast(
+    const VpiCastShape& target, const VpiOperationValue& operand)
+{
+    using namespace operation_value_detail;
+    Bits source;
+    bool source_signed = operand.is_signed;
+    if (operand.real_value) {
+        const auto rounded = std::round(operand.real);
+        if (!std::isfinite(rounded) || rounded < -9223372036854775808.0
+            || rounded >= 9223372036854775808.0) {
+            return std::nullopt;
+        }
+        const auto number = static_cast<std::uint64_t>(
+            static_cast<std::int64_t>(rounded));
+        for (std::size_t bit = 0U; bit < 64U; ++bit) {
+            source.push_back(((number >> bit) & 1U) != 0U ? Logic4::one
+                                                          : Logic4::zero);
+        }
+        source_signed = true;
+    } else {
+        source = to_bits(operand.bits);
+    }
+    auto bits = extended(std::move(source), target.width, source_signed);
+    if (target.two_state) {
+        for (auto& bit : bits) {
+            if (!known(bit)) {
+                bit = Logic4::zero;
+            }
+        }
+    }
+    return vector_result(bits, target.is_signed);
+}
+
+/// The value of a cast `T'(e)` of `operand` (IEEE 1800-2023 6.24.1): `type`
+/// is the casting type as written, a built-in type or `signed`, `unsigned`
+/// or `const`; `size` is the width of a size cast `n'(e)`, whose signedness
+/// passes through unchanged. An integral result holds the operand as an
+/// assignment to its type would (sign extended when the operand is signed,
+/// truncated, a two-state type turning x and z into 0, 6.12.2 rounding a
+/// real to the nearest integer); a real result converts the operand (6.12.2).
+/// None for a cast to a user-defined type or a conversion it cannot make.
+[[nodiscard]] inline std::optional<VpiOperationValue> evaluate_cast(
+    const std::string_view type, const std::optional<std::size_t> size,
+    const VpiOperationValue& operand)
+{
+    using namespace operation_value_detail;
+    if (!size && type == "const") {
+        return operand;
+    }
+    if (!size && (type == "real" || type == "realtime" || type == "shortreal")) {
+        const auto number = as_real(operand);
+        return real_result(type == "shortreal"
+                ? static_cast<double>(static_cast<float>(number))
+                : number);
+    }
+    std::optional<VpiCastShape> target;
+    if (size) {
+        if (operand.real_value || *size == 0U) {
+            return std::nullopt;
+        }
+        target = VpiCastShape { *size, operand.is_signed, false };
+    } else if (type == "signed" || type == "unsigned") {
+        if (operand.real_value) {
+            return std::nullopt;
+        }
+        target = VpiCastShape { operand.bits.width(), type == "signed", false };
+    } else {
+        static constexpr struct {
+            std::string_view name;
+            VpiCastShape target;
+        } atoms[] {
+            { "byte", { 8U, true, true } },
+            { "shortint", { 16U, true, true } },
+            { "int", { 32U, true, true } },
+            { "longint", { 64U, true, true } },
+            { "integer", { 32U, true, false } },
+            { "time", { 64U, false, false } },
+            { "bit", { 1U, false, true } },
+            { "logic", { 1U, false, false } },
+            { "reg", { 1U, false, false } },
+        };
+        for (const auto& atom : atoms) {
+            if (atom.name == type) {
+                target = atom.target;
+            }
+        }
+    }
+    if (!target) {
+        return std::nullopt;
+    }
+    return evaluate_integral_cast(*target, operand);
+}
+
 /// The value of an operation expression (IEEE 1800-2023 11.4, 11.6, 11.8,
 /// 37.78) from the values of its operands in source order: the expression is
 /// self-determined, so its width is the widest operand of a context-determined
 /// operator, and it is signed when all of those operands are. None for an
-/// operator that has no value as an expression (an increment, a streaming
-/// operator, a cast) or for operand values it cannot combine.
+/// operator that has no value as an expression (a cast is evaluate_cast) or for operand values it cannot
+/// combine.
 [[nodiscard]] inline std::optional<VpiOperationValue> evaluate_operation(
     const PLI_INT32 op_type, const std::span<const VpiOperationValue> operands)
 {
@@ -395,6 +502,68 @@ enum class Truth : std::uint8_t { no, yes, unknown };
         const bool invert = op_type == vpiUnaryNandOp || op_type == vpiUnaryNorOp
             || op_type == vpiUnaryXNorOp;
         return bit_result(invert ? bit_not(accumulated) : accumulated);
+    }
+    // Increment and decrement (11.4.2): the value of `x++` is x before the
+    // step and that of `++x` the stepped value, in the variable's own width
+    // and sign. Reading the value performs no step.
+    case vpiPostIncOp:
+    case vpiPostDecOp:
+        return count == 1U ? std::optional { operands[0] } : std::nullopt;
+    case vpiPreIncOp:
+    case vpiPreDecOp: {
+        if (count != 1U) {
+            return std::nullopt;
+        }
+        const bool increment = op_type == vpiPreIncOp;
+        if (any_real) {
+            return real_result(operands[0].real + (increment ? 1.0 : -1.0));
+        }
+        Bits one = filled(operands[0].bits.width(), Logic4::zero);
+        if (one.empty()) {
+            return std::nullopt;
+        }
+        one.front() = Logic4::one;
+        const std::array<VpiOperationValue, 2U> pair {
+            operands[0], vector_result(one, operands[0].is_signed) };
+        return evaluate_operation(increment ? vpiAddOp : vpiSubOp, pair);
+    }
+    // Streaming concatenation (11.4.14): the first operand is the slice
+    // size (1 when none is written), the others the streamed items, the first
+    // leftmost. `>>` keeps the stream; `<<` cuts it into slices from the
+    // right and puts them in the opposite order, a short last slice staying
+    // whole (11.4.14.1).
+    case vpiStreamLROp:
+    case vpiStreamRLOp: {
+        if (count < 2U || any_real) {
+            return std::nullopt;
+        }
+        const auto size_bits = bits_of(0U);
+        const auto size_limbs = to_limbs(size_bits);
+        if (!all_known(size_bits)
+            || std::ranges::any_of(std::span { size_limbs }.subspan(1U),
+                [](const std::uint32_t limb) { return limb != 0U; })
+            || size_limbs[0] == 0U) {
+            return std::nullopt;
+        }
+        Bits stream;
+        for (std::size_t index = count; index-- > 1U;) {
+            const auto part = bits_of(index);
+            stream.insert(stream.end(), part.begin(), part.end());
+        }
+        if (op_type == vpiStreamLROp || size_limbs[0] >= stream.size()) {
+            return vector_result(stream, false);
+        }
+        const std::size_t slice = size_limbs[0];
+        const std::size_t slices = (stream.size() + slice - 1U) / slice;
+        Bits reversed;
+        for (std::size_t index = slices; index-- > 0U;) {
+            const auto first = index * slice;
+            const auto last = std::min(first + slice, stream.size());
+            reversed.insert(reversed.end(),
+                stream.begin() + static_cast<std::ptrdiff_t>(first),
+                stream.begin() + static_cast<std::ptrdiff_t>(last));
+        }
+        return vector_result(reversed, false);
     }
     // Concatenation: the first operand is the most significant (11.4.12).
     case vpiConcatOp: {

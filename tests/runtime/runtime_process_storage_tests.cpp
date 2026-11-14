@@ -3,6 +3,7 @@
 #include "../../src/runtime/simir_process_storage.hpp"
 #include "runtime_owned_driver_demotion_test_access.hpp"
 #include "runtime_test_support.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 
 #include <cassert>
 #include <cstddef>

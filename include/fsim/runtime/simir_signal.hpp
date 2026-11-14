@@ -9,9 +9,11 @@ enum class ResolutionKind : std::uint8_t {
     vhdl_user_and,
     sv_wand,
     sv_wor,
-    sv_user_first,
-    // A VHDL resolution function run as the signal's resolver program.
-    vhdl_user_function,
+    // A resolution function of the design's own run as the signal's
+    // resolver program: a VHDL resolution function (IEEE 1076-2019
+    // 14.7.3.2) or the function of a user-defined nettype (IEEE 1800-2023
+    // 6.6.7).
+    user_function,
 };
 
 enum class ValueKind : std::uint8_t {
@@ -74,6 +76,10 @@ struct VhdlSignalResolver {
   // resolves k connected drivers (k below the driver count).
   std::uint8_t guarded_kind{};
   std::vector<VhdlResolverVariant> variants{};
+  // A bus's value with no connected driver: the resolution function's
+  // result for a null array (14.7.3.2). The function is pure, so elaboration
+  // evaluates it once; variants[0] then has no program.
+  std::optional<PackedLogic4> null_value{};
   // A port-association conversion (IEEE 1076-2008 6.5.7.1): the program
   // reads these signals and runs, in the same simulation cycle, whenever
   // one of them changes. Such a signal has no drivers of its own, unless
@@ -84,11 +90,21 @@ struct VhdlSignalResolver {
   // formal's drivers in the same simulation cycle; the formal's out-side
   // conversion reads it.
   std::optional<SignalId> driving_mirror{};
+  // For an inout formal whose subtype has a resolution function (IEEE
+  // 1076-2019 4.6, 14.7.3.2): the function's program over the formal's
+  // drivers (`driving_drivers`, the first in the most significant position),
+  // whose result is the formal's driving value, which the mirror holds.
+  std::optional<VhdlResolverVariant> driving_resolver{};
+  std::vector<ProcessId> driving_drivers{};
+  // The function of a user-defined nettype (IEEE 1800-2023 6.6.7): every
+  // driver is a source, and a released net takes the resolved value.
+  bool systemverilog_nettype{};
 
   /// The program that serves a created-driver count the fixed variants do
   /// not (vhdl_resolver_static_created_drivers), or null.
   [[nodiscard]] const VhdlResolverVariant* dynamic_variant() const noexcept {
-    const auto fixed = drivers.size() + vhdl_resolver_static_created_drivers + 1U;
+    const auto declared = driving_drivers.empty() ? drivers.size() : driving_drivers.size();
+    const auto fixed = declared + vhdl_resolver_static_created_drivers + 1U;
     return variants.size() > fixed
             && variants[fixed].process != std::numeric_limits<ProcessId>::max()
         ? &variants[fixed]

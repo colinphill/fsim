@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "api_abi_contract.h"
 #include "fsim/runtime/simir_driver_inventory.hpp"
 #include "fsim/semantic/hierarchy_path.hpp"
 #include "fsim/systemc/kernel_backend_binding_inventory.hpp"
+#include "fsim/api.h"
+#include "fsim/systemc/kernel_backend_inventory.hpp"
 
 #include <cassert>
 #include <cstddef>

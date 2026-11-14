@@ -2,7 +2,6 @@
 #include "fsim/runtime/simir_region_graph.hpp"
 
 #include <array>
-#include <cstddef>
 #include <stdexcept>
 #include <utility>
 #include <vector>

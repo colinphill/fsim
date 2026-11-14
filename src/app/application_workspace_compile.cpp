@@ -9,14 +9,39 @@
 #include "fsim/semantic/compiled_design_linker.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
+#include "application_workspace.hpp"
+#include "application_workspace_objects.hpp"
+#include "application_workspace_store.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/cli/driver.hpp"
+#include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/frontend/diagnostic.hpp"
+#include "fsim/frontend/token.hpp"
+#include "fsim/library/artifact.hpp"
+#include "fsim/project/project.hpp"
+#include "fsim/semantic/compiled_design.hpp"
+#include "fsim/semantic/model.hpp"
+#include "fsim/semantic/systemverilog_hir.hpp"
+#include "fsim/semantic/vhdl_hir.hpp"
+#include "fsim/support/vhdl_identifier.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cstdlib>
-#include <fstream>
 #include <iterator>
 #include <map>
 #include <set>
+#include <cstdint>
+#include <filesystem>
+#include <functional>
+#include <ios>
+#include <optional>
+#include <ostream>
+#include <span>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 namespace fsim::app::application_detail {
 namespace {
@@ -40,11 +65,67 @@ namespace {
         const project::SourceSet& sources, std::span<const std::string> replaced_sources,
         std::vector<CompiledUnitAvailability>& available_units)
     {
+        // The units the compiled sources replace.
+        std::set<std::string> replaced_units;
+        for (const auto& catalog : catalogs) {
+            if (catalog.location.name != sources.library) {
+                continue;
+            }
+            for (const auto& artifact : catalog.artifacts) {
+                for (const auto& owned : artifact.units) {
+                    if (std::ranges::find(replaced_sources, owned.source_key)
+                        != replaced_sources.end()) {
+                        replaced_units.insert(workspace::unit_identity(owned.unit));
+                    }
+                }
+            }
+        }
+        // An object built on a unit that changed since, or that this compile
+        // replaces, was compiled against another version of it (a package's
+        // sequences copied from its source, IEEE 1800-2023 26.3): it is no
+        // environment of the current one, and elaboration refuses it until
+        // it is recompiled (FSIM-WS-002).
+        const auto stale = [&](const workspace::ArtifactRecord& artifact) {
+            return std::ranges::any_of(artifact.dependencies,
+                [&](const workspace::UnitDependency& dependency) {
+                    const auto identity = workspace::unit_identity(dependency.unit);
+                    if (dependency.library == sources.library
+                        && replaced_units.contains(identity)) {
+                        return true;
+                    }
+                    for (const auto& catalog : catalogs) {
+                        if (catalog.location.name != dependency.library) {
+                            continue;
+                        }
+                        for (const auto& provider : catalog.artifacts) {
+                            if (std::ranges::any_of(provider.units,
+                                    [&](const auto& owned) {
+                                        return workspace::unit_identity(owned.unit)
+                                            == identity;
+                                    })) {
+                                return provider.fingerprint != dependency.fingerprint;
+                            }
+                        }
+                    }
+                    return true;
+                });
+        };
+        // Judged on the whole catalogs, before any unit is left out.
+        std::set<std::pair<std::string, std::string>> outdated_artifacts;
+        for (const auto& catalog : catalogs) {
+            for (const auto& artifact : catalog.artifacts) {
+                if (artifact.kind == workspace::ArtifactKind::Hdl && stale(artifact)) {
+                    outdated_artifacts.emplace(catalog.location.name, artifact.id);
+                }
+            }
+        }
         for (auto& catalog : catalogs) {
             for (auto& artifact : catalog.artifacts) {
                 if (artifact.kind != workspace::ArtifactKind::Hdl) {
                     continue;
                 }
+                const bool outdated
+                    = outdated_artifacts.contains({ catalog.location.name, artifact.id });
                 std::erase_if(artifact.units, [&](const auto& owned) {
                     if (catalog.location.name == sources.library
                         && std::ranges::find(replaced_sources, owned.source_key)
@@ -52,7 +133,7 @@ namespace {
                         return true;
                     }
                     if (compatible_compile_unit(owned.unit, sources)) {
-                        return false;
+                        return outdated;
                     }
                     if (owned.unit.language == "vhdl") {
                         available_units.push_back({ catalog.location.name, owned.unit });

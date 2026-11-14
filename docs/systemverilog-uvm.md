@@ -13,12 +13,14 @@ portable artifacts, start with the
 
 ## Supported releases and source policy
 
-Fsim does not vendor or patch either UVM library. The governed harness accepts
-only the immutable archives, complete extracted trees, and exact entry points
-listed in [the source-provenance record](uvm-source-provenance.md). Normal
-configuration uses `FSIM_UVM_SOURCE_MODE=OFF` and performs no UVM network
-access. `FETCH` is explicit; `ARCHIVE` consumes predownloaded archives. All
-materialized sources and manifests remain outside authored-source inventories.
+Fsim vendors both UVM libraries unmodified under `third_party/uvm-1.2` and
+`third_party/uvm-2020.3.1` and does not patch them. The governed harness
+validates the vendored trees, and the official archives when asked, against the
+immutable archive identities, complete trees, and exact entry points listed in
+[the source-provenance record](uvm-source-provenance.md). Normal configuration
+uses `FSIM_UVM_SOURCE_MODE=VENDORED` and performs no UVM network access.
+`FETCH` is explicit; `ARCHIVE` consumes predownloaded archives. The installed
+package carries both releases under `share/fsim/uvm/<release>/`.
 
 The reviewed entry point for either release is `src/uvm_pkg.sv`; ordinary user
 code may include/import the corresponding `uvm_macros.svh` and `uvm_pkg` names.
@@ -36,6 +38,27 @@ fsim compile --library work --lang systemverilog --standard 2017 \
 Use `--uvm-release 2020.3.1` with its matching source tree. fsim normalizes
 aliases, verifies the release against the parsed `uvm_pkg` API, and rejects
 mixed source/object releases before publishing compiled state.
+
+fsim identifies the library by the release, never by spelling. When a source
+set is compiled with `--uvm-release`, the package `uvm_pkg` it declares is the
+governed library, and the compiler records once, on each of its classes,
+methods, properties, package functions, variables and types, the role it has
+in the library (IEEE 1800.2-2017, IEEE 1800.2-2020): `uvm_object`,
+`uvm_component`, `uvm_root`, the factory, the configuration and resource
+databases, the phase callbacks, the report functions, the printer knobs and so
+on. Every later stage (class resolution, lowering, elaboration and the native
+UVM services of the run) reads the recorded role, which compiled objects,
+libraries and design artifacts carry with the HIR. A method keeps its role in
+a class that overrides it. A `uvm_pkg` compiled without `--uvm-release` is an
+ordinary user package: its declarations have no roles, so none of them is
+served natively and no diagnostic is issued; a user class named like a
+library class is likewise an ordinary class.
+
+The registry's static `create` and `get` are two such roles (IEEE 1800.2-2020
+8.2.4.2): `C::type_id::get()`, `type_id::get()` in a method of C, and
+`uvm_object_registry #(C, "C")::get()` answer C's type wrapper, the object
+`C::get_type()` returns, from the run's registry, so a user method calling
+them is compiled code like any other.
 
 ### Governed release difference matrix
 

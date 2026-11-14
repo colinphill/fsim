@@ -3,7 +3,6 @@
 
 #include "fsim/runtime/uvm_register_model.hpp"
 
-#include <array>
 #include <functional>
 #include <limits>
 #include <stdexcept>

@@ -10,7 +10,6 @@
 #include "fsim/runtime/vpi_abi.h"
 #include "sv_vpi_user.h"
 
-#include <stdio.h>
 #include <string.h>
 
 static vpiHandle assertion_handle;

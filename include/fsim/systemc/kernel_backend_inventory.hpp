@@ -3,6 +3,8 @@
 
 #include "fsim/semantic/hierarchy_path.hpp"
 #include "fsim/systemc/kernel_backend_value_codec.hpp"
+#include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/systemc/kernel_backend_protocol.hpp"
 
 #include <cstddef>
 #include <cstdint>

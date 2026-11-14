@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/runtime/simir.hpp"
 #include "fsim/app/artifact_phase.hpp"
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/support/path.hpp"
-#include "application_workflow_test_support.hpp"
 #include "../api/api_workspace_support.hpp"
 #include "assertion_application_support.hpp"
 
@@ -14,8 +15,6 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <map>
-#include <sstream>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -1473,11 +1472,11 @@ module eventually_properties;
   logic clock;
   logic acknowledge;
   logic never;
-  property weak_match; @(posedge clock) eventually acknowledge; endproperty
+  property weak_match; @(posedge clock) eventually [0:4] acknowledge; endproperty
   property strong_match;
     @(posedge clock) s_eventually acknowledge;
   endproperty
-  property weak_end; @(posedge clock) eventually never; endproperty
+  property weak_end; @(posedge clock) eventually [0:4] never; endproperty
   property strong_end; @(posedge clock) s_eventually never; endproperty
   weak_match_check: assert property (weak_match)
     $display("weak eventually pass"); else $display("weak eventually fail");

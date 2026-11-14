@@ -1,8 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_simulation_internal.hpp"
+#include "application_internal.hpp"
+#include "fsim/app/application.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include "fsim/semantic/design_ir.hpp"
+#include "fsim/systemc/hierarchy.hpp"
 
 #include <algorithm>
 #include <stdexcept>
+#include <cstdint>
+#include <memory>
+#include <random>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 namespace fsim::app::application_detail {
 

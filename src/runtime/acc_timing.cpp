@@ -5,13 +5,11 @@
 #include "acc_internal.hpp"
 #include "fsim/runtime/tf_containment.hpp"
 
-#include <array>
 #include <cstdarg>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
-#include <string_view>
 #include <vector>
 
 namespace {
@@ -78,7 +76,7 @@ using fsim::runtime::acc_detail::publish_error;
   return (fsim::runtime::acc_detail::type_matches(metadata.type, accPort) ||
           fsim::runtime::acc_detail::type_matches(metadata.full_type, accPort) ||
           metadata.type == accPortBit || metadata.full_type == accPortBit) &&
-         metadata.direction == accInput;
+         (metadata.direction == accInput || metadata.direction == accInout);
 }
 
 [[nodiscard]] bool delay_target(

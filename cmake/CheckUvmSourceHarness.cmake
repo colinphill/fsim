@@ -89,9 +89,40 @@ if(NOT changed_count EQUAL 2 OR changed_digest STREQUAL first_digest)
   message(FATAL_ERROR "UVM tree identity did not detect a content change")
 endif()
 
+# The vendored trees are the default source: each must equal the frozen archive
+# identity and be listed completely, with matching digests, in its SHA256SUMS.
+foreach(release IN LISTS FSIM_UVM_RELEASE_IDS)
+  fsim_uvm_release_field("${release}" VENDORED_DIR vendored_dir)
+  set(vendored_root "${FSIM_SOURCE_DIR}/${vendored_dir}")
+  fsim_uvm_validate_source_tree("${release}" "${vendored_root}")
+  get_filename_component(vendored_parent "${vendored_root}" DIRECTORY)
+  foreach(required IN ITEMS README.md SHA256SUMS)
+    if(NOT EXISTS "${vendored_parent}/${required}")
+      message(FATAL_ERROR "vendored ${release} omits ${required}")
+    endif()
+  endforeach()
+  file(STRINGS "${vendored_parent}/SHA256SUMS" sums)
+  set(summed)
+  foreach(entry IN LISTS sums)
+    string(SUBSTRING "${entry}" 0 64 expected)
+    string(SUBSTRING "${entry}" 66 -1 relative_path)
+    file(SHA256 "${vendored_parent}/${relative_path}" actual)
+    if(NOT actual STREQUAL expected)
+      message(FATAL_ERROR "vendored ${release} checksum mismatch: ${relative_path}")
+    endif()
+    list(APPEND summed "${relative_path}")
+  endforeach()
+  list(LENGTH summed summed_count)
+  fsim_uvm_release_field("${release}" TREE_FILE_COUNT tree_count)
+  if(NOT summed_count EQUAL tree_count)
+    message(FATAL_ERROR "vendored ${release} SHA256SUMS is incomplete")
+  endif()
+endforeach()
+
 file(READ "${root_cmake}" root_cmake_contents)
 foreach(token IN ITEMS
     "FSIM_UVM_SOURCE_MODE"
+    "VENDORED"
     "FSIM_UVM_WORK_ROOT"
     "FSIM_UVM_1_2_ARCHIVE"
     "FSIM_UVM_2020_3_1_ARCHIVE"

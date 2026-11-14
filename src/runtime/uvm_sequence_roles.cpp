@@ -15,7 +15,6 @@ constexpr std::string_view kForeignHandle{"FSIM-UVM-SEQ-002"};
 constexpr std::string_view kInvalidLifecycle{"FSIM-UVM-SEQ-005"};
 constexpr std::string_view kResourceLimit{"FSIM-UVM-SEQ-006"};
 constexpr std::string_view kInvalidRole{"FSIM-UVM-SEQ-012"};
-constexpr std::string_view kAgentModeType{"uvm_pkg::uvm_active_passive_enum"};
 
 [[noreturn]] void fail(const std::string_view code,
                        const std::string_view message) {
@@ -128,8 +127,10 @@ void SystemVerilogUvmSequenceService::validate_role_hierarchy(
         !descriptor.analysis_type.empty() || descriptor.analysis_dispatch) {
       fail(kInvalidRole, "UVM agent role has incompatible bindings");
     }
-    if (descriptor.active_config_field.empty()) {
-      fail(kInvalidRole, "UVM agent active/passive config field is empty");
+    if (descriptor.active_config_field.empty() ||
+        descriptor.active_config_type.empty()) {
+      fail(kInvalidRole,
+           "UVM agent active/passive config field or type is empty");
     }
     return;
   }
@@ -196,6 +197,7 @@ SystemVerilogUvmSequenceService::register_role(
       next_role_order_ == std::numeric_limits<std::uint64_t>::max() ||
       role_events_.size() >= limits_.maximum_role_events ||
       descriptor.active_config_field.size() > limits_.maximum_name_bytes ||
+      descriptor.active_config_type.size() > limits_.maximum_profile_bytes ||
       descriptor.analysis_type.size() > limits_.maximum_profile_bytes) {
     fail(kResourceLimit, "UVM sequence role registration ceiling exceeded");
   }
@@ -249,6 +251,7 @@ SystemVerilogUvmSequenceService::register_role(
     selected.function_dispatch = std::move(descriptor.function_dispatch);
     selected.task_dispatch = std::move(descriptor.task_dispatch);
     selected.active_config_field = std::move(descriptor.active_config_field);
+    selected.active_config_type = std::move(descriptor.active_config_type);
     selected.objection_source = objections_->bind_source(descriptor.component);
     roles_.emplace(slot, std::move(selected));
     roles_by_component_.emplace(descriptor.component, slot);
@@ -334,7 +337,8 @@ void SystemVerilogUvmSequenceService::resolve_agent_mode(Role &selected) {
       component.depth};
   const auto configured =
       configuration_->get(context, {}, selected.active_config_field,
-                          kAgentModeType, selected.value.full_name);
+                          selected.active_config_type,
+                          selected.value.full_name);
   if (!configured)
     return;
   const auto packed = std::get_if<PackedLogic4>(&*configured);

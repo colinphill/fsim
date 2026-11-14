@@ -5,6 +5,7 @@
 #include "fsim/semantic/compiled_design.hpp"
 
 #include <filesystem>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -54,6 +55,22 @@ struct CompiledReferenceIdentity {
 [[nodiscard]] frontend::SystemVerilogPackageMember compiled_package_member(
     const semantic::CompiledDesign&, std::string_view library,
     std::string_view package, std::string_view member);
+
+// The sequence and property declarations of a compiled package (IEEE
+// 1800-2023 26.3, 16.8, 16.12) as their source tokens, for the importing
+// parser to parse again; none for a package the design does not hold. The
+// source files those tokens come from are added to `files`, for the
+// importing model to record them as the library does.
+[[nodiscard]] std::optional<frontend::SystemVerilogPackageAssertions>
+compiled_package_assertions(const semantic::CompiledDesign&,
+    std::string_view library, std::string_view package,
+    std::vector<semantic::SourceFile>& files);
+
+// A compiled source span and token as the frontend reports them.
+[[nodiscard]] frontend::SourceSpan frontend_source_span(
+    const semantic::Model&, semantic::SourceSpanId);
+[[nodiscard]] frontend::Token frontend_source_token(
+    const semantic::Model&, const semantic::sv::SourceToken&);
 
 // Unit IDs are relocated when compiled inputs are linked. Remember the source
 // definitions by identity and recover their final IDs after the merge.

@@ -5,12 +5,36 @@
 #include "fsim/semantic/systemverilog_class_specialization.hpp"
 #include "fsim/semantic/systemverilog_structure_image.hpp"
 #include "fsim/semantic/systemverilog_type_descriptor.hpp"
-#include "fsim/support/uvm_identity.hpp"
 #include "fsim/support/vhdl_standard_enumeration.hpp"
 #include "fsim/support/vhdl_time.hpp"
 #include "hierarchy_sv_constant_evaluator.hpp"
 #include "hierarchy_sv_type_layout_internal.hpp"
 #include "lowerer_internal.hpp"
+#include "fsim/support/uvm_api_methods.hpp"
+#include "elaborator_internal.hpp"
+#include "fsim/elaboration/elaborator.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/parser.hpp"
+#include "fsim/frontend/source.hpp"
+#include "fsim/frontend/systemverilog_scalars.hpp"
+#include "fsim/frontend/token.hpp"
+#include "fsim/runtime/constraint_solver.hpp"
+#include "fsim/runtime/file_operations.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_container_value.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include "fsim/runtime/simir_shared_vector.hpp"
+#include "fsim/runtime/systemverilog_scalar.hpp"
+#include "fsim/semantic/compiled_design.hpp"
+#include "fsim/semantic/compiled_design_resolver.hpp"
+#include "fsim/semantic/compiled_design_specialization.hpp"
+#include "fsim/semantic/model.hpp"
+#include "fsim/semantic/systemverilog_hir.hpp"
+#include "fsim/semantic/vhdl_hir.hpp"
+#include "fsim/support/index_distance.hpp"
+#include "fsim/support/vhdl_identifier.hpp"
+#include "scoped_bindings.hpp"
 
 #include <array>
 #include <charconv>
@@ -19,44 +43,29 @@
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
-#include <mutex>
 #include <new>
 #include <set>
 #include <tuple>
 #include <unordered_map>
+#include <algorithm>
+#include <cctype>
+#include <cstddef>
+#include <functional>
+#include <iterator>
+#include <limits>
+#include <map>
+#include <memory>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <unordered_set>
+#include <utility>
+#include <variant>
+#include <vector>
 
 namespace fsim::elaboration {
-
-namespace {
-
-// A callable frame key reserved before its frame exists, so recursive calls
-// in the body find the frame; the reservation is dropped when the frame is not
-// created, so the key never names the index a later frame takes.
-class CallableKeyReservation {
-public:
-    CallableKeyReservation() = default;
-    CallableKeyReservation(const CallableKeyReservation&) = delete;
-    CallableKeyReservation& operator=(const CallableKeyReservation&) = delete;
-    ~CallableKeyReservation()
-    {
-        if (indices_ != nullptr) {
-            indices_->erase(key_);
-        }
-    }
-    void reserve(std::unordered_map<std::string, std::size_t>& indices,
-        std::string key)
-    {
-        indices_ = &indices;
-        key_ = std::move(key);
-    }
-    void commit() noexcept { indices_ = nullptr; }
-
-private:
-    std::unordered_map<std::string, std::size_t>* indices_ { };
-    std::string key_;
-};
-
-} // namespace
 
 namespace {
 
@@ -422,23 +431,6 @@ namespace {
         Value& target_;
         Value saved_;
     };
-
-    PackedLogic4 callable_default_value(
-        const std::size_t width,
-        const frontend::ValueDomain domain)
-    {
-        if (domain == frontend::ValueDomain::Logic9) {
-            return PackedLogic4::from_logic9_msb_string(
-                std::string(width, 'U'));
-        }
-        return PackedLogic4(
-            width,
-            domain == frontend::ValueDomain::Bit2
-                    || domain == frontend::ValueDomain::Boolean
-                    || domain == frontend::ValueDomain::Integer
-                ? Logic4::zero
-                : Logic4::x);
-    }
 
     bool callable_scalar_domain(const frontend::ValueDomain domain)
     {
@@ -852,9 +844,11 @@ std::optional<ContainerType> Lowerer::hir_systemverilog_container_type(
             || simple_spelling(candidate.target.spelling) == "string") {
             result.element_kind = ContainerElementKind::String;
             result.element_width = 0U;
-        } else if (simple_spelling(candidate.target.spelling) == "event") {
-            // An event element holds its event object's handle (IEEE
-            // 1800-2017 15.5); 0 until the element is first used.
+        } else if (hir_type_is_event(
+                       candidate, specialized_hir_unit_->scope())) {
+            // An event element, whatever typedef names its type, holds its
+            // event object's handle (IEEE 1800-2023 6.18, 15.5); 0 until the
+            // element is first used.
             result.element_width = 64U;
             result.two_state = true;
         } else {
@@ -2584,6 +2578,35 @@ Lowerer::hir_class_property_profile(
         return std::nullopt;
     }
     const auto& access = *expression->systemverilog;
+    // A property is written unless it is a parameter or a constant; an
+    // instance constant (a const property declared without `static` and
+    // without an initializer) takes its value in its own class's
+    // constructor (IEEE 1800-2023 8.19).
+    const auto writable = [&](const auto& property) {
+        if (property.parameter) {
+            return false;
+        }
+        if (!property.constant) {
+            return true;
+        }
+        if (property.static_storage || property.initializer
+            || !active_hir_callable_) {
+            return false;
+        }
+        const auto frame
+            = hir_callable_frames_[*active_hir_callable_].declaration;
+        return std::ranges::any_of(
+            specialized_hir_unit_->design().systemverilog_hir.classes(),
+            [&](const semantic::sv::ClassDeclaration& owner) {
+                return std::ranges::any_of(owner.methods,
+                    [&](const semantic::sv::ClassMethod& method) {
+                        return method.kind
+                                == semantic::sv::ClassMethodKind::constructor
+                            && method.declaration == frame
+                            && method.owner_identity == property.owner_identity;
+                    });
+            });
+    };
     // `T::p`: a static property of the class a type parameter or typedef
     // denotes (IEEE 1800-2017 8.25.1).
     if (access.kind == semantic::sv::ExpressionKind::name
@@ -2730,7 +2753,7 @@ Lowerer::hir_class_property_profile(
     // An event property holds its event object's handle (IEEE 1800-2017
     // 15.5).
     const bool event_property = selected != nullptr
-        && selected->type.target.spelling == "event"
+        && hir_class_property_is_event(*selected)
         && !selected->type.container_form;
     // The property's type in the specialization the access selects
     // (IEEE 1800-2017 8.25).
@@ -2824,7 +2847,7 @@ Lowerer::hir_class_property_profile(
             result.receiver = access.operands.front();
         }
         result.static_storage = selected->static_storage;
-        result.writable = !selected->constant && !selected->parameter;
+        result.writable = writable(*selected);
         result.type = type;
         return result;
     }
@@ -2859,7 +2882,7 @@ Lowerer::hir_class_property_profile(
                 : frontend::ValueDomain::Bit2;
             result.signed_value = !handle && type.signed_value;
             result.static_storage = selected->static_storage;
-            result.writable = !selected->constant && !selected->parameter;
+            result.writable = writable(*selected);
             result.type = type;
             if (constant_specialization) {
                 result.constant = selected->initializer;
@@ -2984,7 +3007,7 @@ Lowerer::hir_class_property_profile(
         result.signed_value = false;
     }
     result.static_storage = selected->static_storage;
-    result.writable = !selected->constant && !selected->parameter;
+    result.writable = writable(*selected);
     return result;
 }
 
@@ -3192,6 +3215,392 @@ bool Lowerer::lower_hir_class_property_member_write(
     }
     process_.operations.emplace_back(ClassPropertyWrite {
         *receiver, updated, member.profile.identity });
+    return true;
+}
+
+// The selects (`[i]`, `[m:l]`, `[b+:w]`, `[b-:w]`) applied to a packed
+// class property or to a member of one, outermost last (IEEE 1800-2023
+// 7.4.3, 7.4.6, 8.5, 11.5.1).
+std::optional<Lowerer::HirClassPropertySelectPath>
+Lowerer::hir_class_property_select_path(
+    const semantic::ExpressionId expression) const
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return std::nullopt;
+    }
+    HirClassPropertySelectPath path;
+    auto current = expression;
+    for (;;) {
+        const auto record = specialized_hir_unit_->find_expression(current);
+        if (!record || record->systemverilog == nullptr) {
+            return std::nullopt;
+        }
+        const auto& source = *record->systemverilog;
+        const bool index = source.kind == semantic::sv::ExpressionKind::index
+            && source.operands.size() == 2U;
+        const bool slice = source.kind == semantic::sv::ExpressionKind::slice
+            && source.operands.size() == 3U
+            && (source.text == ":" || source.text == "+:"
+                || source.text == "-:");
+        if (!index && !slice) {
+            break;
+        }
+        path.selects.push_back(current);
+        current = source.operands.front();
+    }
+    if (path.selects.empty()) {
+        return std::nullopt;
+    }
+    std::ranges::reverse(path.selects);
+    path.root = current;
+    // Only a class property or a member select of one can be the root.
+    if (const auto root = specialized_hir_unit_->find_expression(current);
+        !root || root->systemverilog == nullptr
+        || (root->systemverilog->kind
+                != semantic::sv::ExpressionKind::class_property
+            && root->systemverilog->kind
+                != semantic::sv::ExpressionKind::class_static_property
+            && !(root->systemverilog->kind
+                    == semantic::sv::ExpressionKind::call
+                && root->systemverilog->text.starts_with("@sv-select:")))) {
+        return std::nullopt;
+    }
+    if (auto member = hir_class_property_member(current)) {
+        path.property = member->profile;
+        path.member = std::move(*member);
+    } else if (auto property = hir_class_property_profile(current)) {
+        path.property = std::move(*property);
+    } else {
+        return std::nullopt;
+    }
+    // An unpacked array property's elements take the container paths.
+    if (path.property->event || path.property->constant
+        || path.property->width == 0U
+        || path.property->type.container_form
+        || !path.property->type.unpacked_dimensions.empty()) {
+        return std::nullopt;
+    }
+    return path;
+}
+
+// The position of one select within the value it selects from: the offset
+// of its least significant bit, unknown for an unknown index, and its
+// width. An index outside the range puts the part outside the value.
+std::optional<Lowerer::HirClassPropertySelectLevel>
+Lowerer::lower_hir_class_property_select_level(
+    const semantic::ExpressionId select, const std::size_t enclosing_width,
+    std::vector<HirPackedRange>& shape)
+{
+    const auto record = specialized_hir_unit_->find_expression(select);
+    if (!record || record->systemverilog == nullptr) {
+        return std::nullopt;
+    }
+    const auto& source = *record->systemverilog;
+    // The value's outermost packed dimension; a value without declared
+    // dimensions (an int, a structure) is numbered [w-1:0] (7.2.1, 7.4.1).
+    if (shape.empty()) {
+        shape.push_back(HirPackedRange { static_cast<std::int64_t>(
+            enclosing_width) - 1, 0, true });
+    }
+    const auto range = std::optional { shape.front() };
+    const auto count = support::index_distance(range->left, range->right)
+        + 1U;
+    if (count == 0U || enclosing_width % count != 0U) {
+        return std::nullopt;
+    }
+    const auto element = enclosing_width / count;
+    const bool descending = range->left >= range->right;
+    const auto constant = [&](const std::int64_t value) {
+        return load_constant(
+            unsigned_value(static_cast<std::uint64_t>(value), 32U),
+            frontend::ValueDomain::Logic4);
+    };
+    const auto index_value = [&](const semantic::ExpressionId operand)
+        -> std::optional<RegisterId> {
+        // The index at its own self-determined width (11.5.1).
+        const auto width = hir_expression_width(operand, hir_process_scope_);
+        if (!width || *width == 0U) {
+            return std::nullopt;
+        }
+        auto lowered = lower_hir_expression(operand, *width);
+        if (!lowered) {
+            return std::nullopt;
+        }
+        if (register_width(*lowered) != 32U) {
+            lowered = resize_register(
+                *lowered, 32U, hir_expression_signed(operand));
+        }
+        return lowered;
+    };
+    const auto binary = [&](const BinaryOperator operation,
+                            const RegisterId lhs, const RegisterId rhs) {
+        const auto result = allocate_register(
+            32U, frontend::ValueDomain::Logic4);
+        process_.operations.emplace_back(
+            Binary { operation, result, lhs, rhs });
+        return result;
+    };
+    std::optional<RegisterId> end;
+    std::size_t elements { 1U };
+    if (source.kind == semantic::sv::ExpressionKind::index) {
+        end = index_value(source.operands[1]);
+    } else if (source.text == ":") {
+        const auto first = hir_constant_integer(source.operands[1]);
+        const auto second = hir_constant_integer(source.operands[2]);
+        if (!first || !second) {
+            return std::nullopt;
+        }
+        elements = support::index_distance(*first, *second) + 1U;
+        end = constant(descending ? std::min(*first, *second)
+                                  : std::max(*first, *second));
+    } else {
+        const auto width = hir_constant_integer(source.operands[2]);
+        if (!width || *width <= 0) {
+            return std::nullopt;
+        }
+        elements = static_cast<std::size_t>(*width);
+        end = index_value(source.operands[1]);
+        // The end nearest the least significant bit.
+        if (end && (source.text == "+:") != descending) {
+            end = binary(source.text == "+:" ? BinaryOperator::add_signed
+                                             : BinaryOperator::subtract_signed,
+                *end, constant(*width - 1));
+        }
+    }
+    if (!end) {
+        return std::nullopt;
+    }
+    const auto position = descending
+        ? binary(BinaryOperator::subtract_signed, *end, constant(range->right))
+        : binary(BinaryOperator::subtract_signed, constant(range->right), *end);
+    const auto offset = element == 1U
+        ? position
+        : binary(BinaryOperator::multiply_signed, position,
+              constant(static_cast<std::int64_t>(element)));
+    // An index leaves the element's dimensions; a slice keeps its own
+    // count of elements before them.
+    shape.erase(shape.begin());
+    if (source.kind != semantic::sv::ExpressionKind::index) {
+        shape.insert(shape.begin(), HirPackedRange {
+            static_cast<std::int64_t>(elements) - 1, 0, true });
+    }
+    return HirClassPropertySelectLevel { offset, elements * element };
+}
+
+// The width of a select of a packed class property: an index has its
+// element's width, a slice its elements' (7.4.6, 11.5.1).
+std::optional<std::size_t> Lowerer::hir_class_property_select_width(
+    const semantic::ExpressionId expression) const
+{
+    const auto path = hir_class_property_select_path(expression);
+    if (!path) {
+        return std::nullopt;
+    }
+    auto width = path->member ? path->member->member.width
+                              : path->property->width;
+    auto shape = hir_class_property_select_shape(*path);
+    for (const auto select : path->selects) {
+        const auto record = specialized_hir_unit_->find_expression(select);
+        if (!record || record->systemverilog == nullptr || width == 0U) {
+            return std::nullopt;
+        }
+        const auto& source = *record->systemverilog;
+        if (shape.empty()) {
+            shape.push_back(HirPackedRange {
+                static_cast<std::int64_t>(width) - 1, 0, true });
+        }
+        const auto count = support::index_distance(
+                               shape.front().left, shape.front().right)
+            + 1U;
+        if (count == 0U || width % count != 0U) {
+            return std::nullopt;
+        }
+        const auto element = width / count;
+        std::size_t elements { 1U };
+        if (source.kind == semantic::sv::ExpressionKind::slice) {
+            if (source.text == ":") {
+                const auto first = hir_constant_integer(source.operands[1]);
+                const auto second = hir_constant_integer(source.operands[2]);
+                if (!first || !second) {
+                    return std::nullopt;
+                }
+                elements = support::index_distance(*first, *second) + 1U;
+            } else {
+                const auto count_value
+                    = hir_constant_integer(source.operands[2]);
+                if (!count_value || *count_value <= 0) {
+                    return std::nullopt;
+                }
+                elements = static_cast<std::size_t>(*count_value);
+            }
+        }
+        shape.erase(shape.begin());
+        if (source.kind != semantic::sv::ExpressionKind::index) {
+            shape.insert(shape.begin(), HirPackedRange {
+                static_cast<std::int64_t>(elements) - 1, 0, true });
+        }
+        width = elements * element;
+    }
+    return width;
+}
+
+// The packed dimensions of the value a select path starts from, outermost
+// first (7.4.1); empty when it has none of its own.
+std::vector<Lowerer::HirPackedRange> Lowerer::hir_class_property_select_shape(
+    const HirClassPropertySelectPath& path) const
+{
+    if (path.member) {
+        if (!path.member->member.shape.empty()) {
+            return path.member->member.shape;
+        }
+        if (path.member->member.range) {
+            return { *path.member->member.range };
+        }
+        return { };
+    }
+    const auto record = specialized_hir_unit_->find_expression(path.root);
+    const auto scope = record && record->systemverilog != nullptr
+        ? record->systemverilog->scope
+        : hir_process_scope_;
+    const auto type = fully_effective_systemverilog_type(
+        hir_resolver(), path.property->type, scope);
+    const auto bound = [&](const std::optional<std::int64_t>& value,
+                           const std::optional<semantic::ExpressionId>&
+                               expression) -> std::optional<std::int64_t> {
+        if (value) {
+            return value;
+        }
+        return expression
+            ? specialized_hir_unit_->evaluate_integral_expression(*expression)
+            : std::nullopt;
+    };
+    std::vector<HirPackedRange> shape;
+    const auto add = [&](const semantic::sv::PackedRange& range) {
+        const auto left = bound(range.left, range.left_expression);
+        const auto right = bound(range.right, range.right_expression);
+        if (!left || !right) {
+            return false;
+        }
+        shape.push_back(HirPackedRange { *left, *right, *left >= *right });
+        return true;
+    };
+    if (!type.packed_dimensions.empty()) {
+        for (const auto& range : type.packed_dimensions) {
+            if (!add(range)) {
+                return { };
+            }
+        }
+    } else if (type.packed_range && !add(*type.packed_range)) {
+        return { };
+    }
+    return shape;
+}
+
+std::optional<RegisterId> Lowerer::lower_hir_class_property_select_read(
+    const semantic::ExpressionId expression)
+{
+    const auto path = hir_class_property_select_path(expression);
+    if (!path) {
+        return std::nullopt;
+    }
+    auto value = path->member
+        ? lower_hir_class_property_member(*path->member)
+        : lower_hir_expression(path->root, path->property->width);
+    if (!value) {
+        return std::nullopt;
+    }
+    const auto domain = register_domain(*value);
+    auto shape = hir_class_property_select_shape(*path);
+    for (const auto select : path->selects) {
+        const auto level = lower_hir_class_property_select_level(
+            select, register_width(*value), shape);
+        if (!level) {
+            return std::nullopt;
+        }
+        // Bits outside the value read as X, or 0 for a 2-state one
+        // (11.5.1, 7.4.6).
+        const auto part = allocate_register(level->width, domain);
+        process_.operations.emplace_back(DynamicPartSelect {
+            part, *value, level->offset,
+            static_cast<std::int64_t>(register_width(*value)) - 1, 0,
+            static_cast<std::uint32_t>(level->width), true, true,
+            domain == frontend::ValueDomain::Bit2, 0U });
+        value = part;
+    }
+    return value;
+}
+
+bool Lowerer::lower_hir_class_property_select_write(
+    const semantic::ExpressionId target, const semantic::ExpressionId value)
+{
+    const auto path = hir_class_property_select_path(target);
+    if (!path || !path->property->writable) {
+        return false;
+    }
+    auto whole = path->member
+        ? lower_hir_class_property_member(*path->member)
+        : lower_hir_expression(path->root, path->property->width);
+    if (!whole) {
+        return false;
+    }
+    const auto domain = register_domain(*whole);
+    std::vector<RegisterId> values { *whole };
+    std::vector<HirClassPropertySelectLevel> levels;
+    auto shape = hir_class_property_select_shape(*path);
+    for (const auto select : path->selects) {
+        const auto level = lower_hir_class_property_select_level(
+            select, register_width(values.back()), shape);
+        if (!level) {
+            return false;
+        }
+        levels.push_back(*level);
+        if (levels.size() == path->selects.size()) {
+            break;
+        }
+        const auto part = allocate_register(level->width, domain);
+        process_.operations.emplace_back(DynamicPartSelect {
+            part, values.back(), level->offset,
+            static_cast<std::int64_t>(register_width(values.back())) - 1, 0,
+            static_cast<std::uint32_t>(level->width), true, true,
+            domain == frontend::ValueDomain::Bit2, 0U });
+        values.push_back(part);
+    }
+    auto updated = lower_hir_expression(value, levels.back().width);
+    if (!updated) {
+        return false;
+    }
+    if (register_width(*updated) != levels.back().width) {
+        updated = resize_register(
+            *updated, levels.back().width, hir_expression_signed(value));
+    }
+    // Only the bits inside each enclosing value are written; an unknown
+    // index writes nothing (11.5.1, 7.4.6).
+    for (auto level = levels.size(); level-- > 0U;) {
+        const auto enclosing = values[level];
+        const auto result = allocate_register(
+            register_width(enclosing), domain);
+        process_.operations.emplace_back(DynamicPartInsert {
+            result, enclosing, *updated,
+            DynamicPartIndex { levels[level].offset,
+                static_cast<std::int64_t>(register_width(enclosing)) - 1, 0,
+                0U, static_cast<std::uint32_t>(levels[level].width), true,
+                true } });
+        updated = result;
+    }
+    if (path->member) {
+        return lower_hir_class_property_member_write(*path->member, *updated);
+    }
+    if (path->property->static_storage) {
+        process_.operations.emplace_back(ClassStaticPropertyWrite {
+            *updated, path->property->identity });
+        return true;
+    }
+    const auto receiver = lower_hir_expression(*path->property->receiver, 64U);
+    if (!receiver || register_width(*receiver) != 64U) {
+        return false;
+    }
+    process_.operations.emplace_back(ClassPropertyWrite {
+        *receiver, *updated, path->property->identity });
     return true;
 }
 
@@ -4356,6 +4765,37 @@ std::optional<std::uint32_t> Lowerer::hir_context_class_specialization(
 }
 
 
+std::optional<std::uint32_t> Lowerer::hir_running_class_specialization()
+    const
+{
+    return active_hir_callable_
+            && *active_hir_callable_ < hir_callable_frames_.size()
+        ? hir_callable_frames_[*active_hir_callable_].class_specialization
+        : hir_static_initializer_specialization_;
+}
+
+std::optional<std::uint32_t> Lowerer::hir_instance_class_specialization(
+    const semantic::sv::TypeReference& type,
+    const semantic::SourceSpanId source) const
+{
+    if (specialized_hir_unit_ == nullptr || type.class_identity.empty()
+        || type.interface_parameter_actuals.empty()) {
+        return std::nullopt;
+    }
+    const auto values
+        = semantic::sv::class_instance_actuals(*specialized_hir_unit_, type,
+            [&](const semantic::ExpressionId id) {
+                return evaluate_hir_systemverilog_real(
+                    *specialized_hir_unit_, id);
+            });
+    if (values.empty()) {
+        return std::nullopt;
+    }
+    const auto context = hir_running_class_specialization();
+    return class_specializations().specialize(
+        type, context, source, values);
+}
+
 std::optional<std::uint32_t> Lowerer::hir_declaration_class_specialization(
     const semantic::DeclarationId declaration) const
 {
@@ -4363,10 +4803,19 @@ std::optional<std::uint32_t> Lowerer::hir_declaration_class_specialization(
         return std::nullopt;
     }
     auto& index = class_specializations();
+    const auto record = specialized_hir_unit_->find_declaration(declaration);
+    // Actuals that read the instance's parameters select the instance's
+    // specialization, not the one of the declaration's defaults.
+    if (record && record->systemverilog != nullptr
+        && record->systemverilog->type) {
+        if (const auto instance = hir_instance_class_specialization(
+                *record->systemverilog->type, record->systemverilog->source)) {
+            return instance;
+        }
+    }
     if (const auto declared = index.for_declaration(declaration)) {
         return declared;
     }
-    const auto record = specialized_hir_unit_->find_declaration(declaration);
     if (!record || record->systemverilog == nullptr
         || !record->systemverilog->type) {
         return std::nullopt;
@@ -4376,10 +4825,7 @@ std::optional<std::uint32_t> Lowerer::hir_declaration_class_specialization(
     if (!type || type->class_identity.empty()) {
         return std::nullopt;
     }
-    const auto context = active_hir_callable_
-            && *active_hir_callable_ < hir_callable_frames_.size()
-        ? hir_callable_frames_[*active_hir_callable_].class_specialization
-        : std::nullopt;
+    const auto context = hir_running_class_specialization();
     return index.specialize(*type, context, record->systemverilog->source);
 }
 
@@ -4390,6 +4836,159 @@ std::optional<std::uint32_t> Lowerer::hir_class_call_specialization(
 {
     return hir_class_member_specialization(
         call, method.declaration, receiver);
+}
+
+std::optional<semantic::DeclarationId>
+Lowerer::hir_hierarchical_handle_declaration(
+    const semantic::ExpressionId receiver, bool* const element_of) const
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return std::nullopt;
+    }
+    // An element of an array or queue of handles starts at the array.
+    auto record = specialized_hir_unit_->find_expression(receiver);
+    bool element { };
+    while (record && record->systemverilog != nullptr
+        && record->systemverilog->kind == semantic::sv::ExpressionKind::index
+        && !record->systemverilog->operands.empty()) {
+        element = true;
+        record = specialized_hir_unit_->find_expression(
+            record->systemverilog->operands.front());
+    }
+    if (!record || record->systemverilog == nullptr
+        || record->systemverilog->kind != semantic::sv::ExpressionKind::name) {
+        return std::nullopt;
+    }
+    constexpr std::string_view root { "$root." };
+    const std::string_view text { record->systemverilog->text };
+    const bool rooted = text.starts_with(root);
+    const auto path = rooted ? text.substr(root.size()) : text;
+    // The scope names of the path, outside escapes and indices.
+    std::vector<std::string_view> components;
+    for (std::string_view rest = path;;) {
+        const auto separator = hierarchical_last_separator(rest);
+        if (separator == std::string_view::npos) {
+            components.insert(components.begin(), rest);
+            break;
+        }
+        components.insert(components.begin(), rest.substr(separator + 1U));
+        rest = rest.substr(0U, separator);
+    }
+    if (components.size() < 2U) {
+        return std::nullopt;
+    }
+    const auto instance_unit = [&](const std::string& full)
+        -> std::optional<semantic::UnitId> {
+        if (const auto* found = design_.find_specialization(full);
+            found != nullptr && found->source_unit) {
+            return *found->source_unit;
+        }
+        if (systemverilog_instance_units_ != nullptr) {
+            const auto found = systemverilog_instance_units_->find(full);
+            if (found != systemverilog_instance_units_->end()
+                && found->second) {
+                return found->second->unit();
+            }
+        }
+        return std::nullopt;
+    };
+    const auto& hir = specialized_hir_unit_->design().systemverilog_hir;
+    const auto& scopes = specialized_hir_unit_->design().semantics.scopes();
+    const auto base_name = [](const std::string_view name) {
+        return name.substr(0U, name.find('['));
+    };
+    const auto leaf = components.back();
+    // The instance is the longest prefix of the path that names one; the
+    // names after it are generate scopes of that instance (27.5, 23.6).
+    for (std::size_t length = components.size() - 1U; length >= 1U; --length) {
+        std::string instance_path;
+        for (std::size_t index = 0; index < length; ++index) {
+            instance_path += (index == 0U ? "" : ".")
+                + std::string { components[index] };
+        }
+        std::optional<semantic::UnitId> owner_unit;
+        hir_walk_hierarchical_name(
+            (rooted ? std::string { root } : std::string { }) + instance_path,
+            [&](const std::string& candidate) {
+                owner_unit = instance_unit(candidate);
+                return owner_unit.has_value();
+            });
+        if (!owner_unit) {
+            continue;
+        }
+        const auto unit = std::ranges::find(
+            hir.units(), *owner_unit, &semantic::sv::Unit::id);
+        if (unit == hir.units().end()) {
+            continue;
+        }
+        const auto between = std::span { components }.subspan(
+            length, components.size() - 1U - length);
+        for (const auto& candidate : hir.declarations()) {
+            if (candidate.name != leaf || !candidate.type
+                || !candidate.scope.valid()
+                || candidate.scope.value() >= scopes.size()) {
+                continue;
+            }
+            // The declaring scope is the instance's own, or the generate
+            // scopes between it and the instance, innermost last.
+            std::vector<std::string_view> chain;
+            auto scope = std::optional { candidate.scope };
+            while (scope && *scope != unit->scope
+                && scope->value() < scopes.size()) {
+                chain.insert(chain.begin(), base_name(scopes[scope->value()].name));
+                scope = scopes[scope->value()].parent;
+            }
+            if (!scope || *scope != unit->scope
+                || chain.size() != between.size()
+                || !std::ranges::equal(chain, between,
+                    [&](const std::string_view left,
+                        const std::string_view right) {
+                        return left == base_name(right);
+                    })) {
+                continue;
+            }
+            if (element_of != nullptr) {
+                *element_of = element;
+            }
+            return candidate.id;
+        }
+        if (length == 1U) {
+            break;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<std::uint32_t> Lowerer::hir_hierarchical_handle_class(
+    const semantic::ExpressionId receiver) const
+{
+    bool element { };
+    const auto id = hir_hierarchical_handle_declaration(receiver, &element);
+    if (!id || specialized_hir_unit_ == nullptr) {
+        return std::nullopt;
+    }
+    const auto* candidate
+        = specialized_hir_unit_->design().systemverilog_hir.find_declaration(
+            *id);
+    if (candidate == nullptr || !candidate->type) {
+        return std::nullopt;
+    }
+    auto& index = class_specializations();
+    if (const auto declared = index.for_declaration(*id)) {
+        return declared;
+    }
+    auto type = hir_resolver().effective_systemverilog_type(
+        *candidate->type, candidate->scope);
+    if (!type) {
+        return std::nullopt;
+    }
+    if (element && !type->container_element_types.empty()) {
+        type = type->container_element_types.front();
+    }
+    if (type->class_identity.empty()) {
+        return std::nullopt;
+    }
+    return index.specialize(*type, std::nullopt, candidate->source);
 }
 
 std::optional<std::uint32_t> Lowerer::hir_class_member_specialization(
@@ -4412,10 +5011,7 @@ std::optional<std::uint32_t> Lowerer::hir_class_member_specialization(
     std::optional<std::uint32_t> accessed;
     std::optional<std::uint32_t> specialization;
     const auto call_record = specialized_hir_unit_->find_expression(call);
-    const auto running = active_hir_callable_
-            && *active_hir_callable_ < hir_callable_frames_.size()
-        ? hir_callable_frames_[*active_hir_callable_].class_specialization
-        : std::nullopt;
+    const auto running = hir_running_class_specialization();
     if (call_record && call_record->systemverilog != nullptr
         && !call_record->systemverilog->class_owner.empty() && running) {
         // A selection in a class body is shared by every specialization
@@ -4445,6 +5041,13 @@ std::optional<std::uint32_t> Lowerer::hir_class_member_specialization(
             }
         } else if (declaration) {
             accessed = hir_declaration_class_specialization(*declaration);
+        } else if (const auto hierarchical = hir_hierarchical_handle_class(
+                       *receiver)) {
+            // A handle (or an element of an array or queue of handles)
+            // another design element instance declares (`s2.m.get()`,
+            // `s2.arr[1].get()`, IEEE 1800-2023 23.6): the class its
+            // declared type names.
+            accessed = hierarchical;
         } else if (record && record->systemverilog != nullptr
             && (record->systemverilog->kind
                     == semantic::sv::ExpressionKind::class_property
@@ -4532,10 +5135,7 @@ std::optional<std::uint32_t> Lowerer::hir_scoped_class_owner(
     const auto resolver = hir_resolver();
     const auto& design = specialized_hir_unit_->design();
     auto& index = class_specializations();
-    const auto context = active_hir_callable_
-            && *active_hir_callable_ < hir_callable_frames_.size()
-        ? hir_callable_frames_[*active_hir_callable_].class_specialization
-        : std::nullopt;
+    const auto context = hir_running_class_specialization();
     semantic::sv::TypeReference named;
     named.target.spelling = std::string { segments.front() };
     named.target.source = source;
@@ -4673,6 +5273,104 @@ Lowerer::hir_scoped_class_method(const semantic::sv::Expression& call) const
     return std::nullopt;
 }
 
+std::optional<Lowerer::HirScopedClassMethod>
+Lowerer::hir_type_parameter_class_method(
+    const semantic::sv::Expression& call) const
+{
+    // A method call on a handle is a call whose text is `.name` and whose
+    // first operand is the receiver: the form the frontend gives
+    // `receiver.name(...)` (class_expression_resolution_calls.cpp, where it
+    // prefixes the callee with '.'), which the HIR keeps as a plain call.
+    if (specialized_hir_unit_ == nullptr
+        || call.kind != semantic::sv::ExpressionKind::call
+        || !call.text.starts_with('.') || call.text.size() == 1U
+        || call.operands.empty()) {
+        return std::nullopt;
+    }
+    const auto receiver = specialized_hir_unit_->find_expression(
+        call.operands.front());
+    if (!receiver || receiver->systemverilog == nullptr) {
+        return std::nullopt;
+    }
+    const auto& handle = *receiver->systemverilog;
+    // The receiver's declared type: a class property, or a variable.
+    std::optional<semantic::sv::TypeReference> declared;
+    semantic::ScopeId scope = handle.scope;
+    if (handle.kind == semantic::sv::ExpressionKind::class_property
+        || handle.kind == semantic::sv::ExpressionKind::class_static_property) {
+        if (const auto property = hir_class_property_profile(
+                call.operands.front())) {
+            declared = property->type;
+        }
+    } else if (const auto declaration
+        = hir_referenced_declaration(call.operands.front())) {
+        const auto record = specialized_hir_unit_->find_declaration(
+            *declaration);
+        if (record && record->systemverilog != nullptr
+            && record->systemverilog->type) {
+            declared = *record->systemverilog->type;
+            scope = record->systemverilog->scope;
+        }
+    }
+    if (!declared) {
+        return std::nullopt;
+    }
+    // A class type parameter denotes the class the active specialization
+    // binds it to (IEEE 1800-2023 8.25). A method of a class that is no
+    // specialization of its own (`class my_drv extends uvm_driver #(pkt)`)
+    // reads a property its base declares with the base's type parameter
+    // (`REQ req`): the extends clause binds it, so the bindings of the
+    // class's base chain apply (8.13).
+    auto& index = class_specializations();
+    auto running = hir_running_class_specialization();
+    if (!running && active_hir_callable_
+        && *active_hir_callable_ < hir_callable_frames_.size()) {
+        if (const auto owner = hir_method_owner_identity(
+                specialized_hir_unit_->design(),
+                hir_callable_frames_[*active_hir_callable_].declaration)) {
+            running = index.default_for(*owner);
+        }
+    }
+    const SizeRestoreGuard context_frames { hir_generic_binding_frames_ };
+    if (running) {
+        hir_generic_binding_frames_.push_back(index.binding_frame(*running));
+    }
+    const auto effective = hir_resolver().effective_systemverilog_type(
+        *declared, scope);
+    if (!effective || effective->class_identity.empty()) {
+        return std::nullopt;
+    }
+    const auto current = index.specialize(*effective, running, handle.source);
+    if (!current) {
+        return std::nullopt;
+    }
+    const auto name = std::string_view { call.text }.substr(1U);
+    const auto resolver = hir_resolver();
+    for (const auto& method : std::vector(index.at(*current).methods)) {
+        if (method.name != name || method.static_method) {
+            continue;
+        }
+        const auto* selected = resolver.resolve_systemverilog_class_method(
+            method.canonical_identity, false).unique();
+        if (selected == nullptr) {
+            return std::nullopt;
+        }
+        HirScopedClassMethod result { selected, std::nullopt };
+        if (const auto declaring = hir_method_owner_identity(
+                specialized_hir_unit_->design(), selected->declaration)) {
+            result.specialization = index.ancestor(*current, *declaring);
+            if (result.specialization
+                && index.binding_frame(*result.specialization).empty()
+                && !semantic::sv::has_own_static_storage(
+                    index.at(*result.specialization))) {
+                result.specialization.reset();
+            }
+        }
+        return result;
+    }
+    return std::nullopt;
+}
+
 std::optional<Lowerer::HirClassMethodProfile>
 Lowerer::hir_class_method_profile(
     const semantic::ExpressionId expression_id,
@@ -4687,15 +5385,21 @@ Lowerer::hir_class_method_profile(
         return std::nullopt;
     }
     const auto& call = *expression->systemverilog;
-    const auto instance_call = call.kind
-        == semantic::sv::ExpressionKind::class_method_call;
     const auto scoped = call.kind == semantic::sv::ExpressionKind::call
         ? hir_scoped_class_method(call)
         : std::nullopt;
+    // A method called on a handle of a class type parameter.
+    const auto parameter_typed = call.kind == semantic::sv::ExpressionKind::call
+            && !scoped
+        ? hir_type_parameter_class_method(call)
+        : std::nullopt;
+    const auto instance_call = parameter_typed.has_value()
+        || call.kind == semantic::sv::ExpressionKind::class_method_call;
     const auto static_call = scoped.has_value()
         || call.kind == semantic::sv::ExpressionKind::class_static_method_call;
     if ((!instance_call && !static_call)
-        || (call.class_member_identity.empty() && !scoped)) {
+        || (call.class_member_identity.empty() && !scoped
+            && !parameter_typed)) {
         return std::nullopt;
     }
 
@@ -4744,6 +5448,7 @@ Lowerer::hir_class_method_profile(
             : (identity.starts_with("@uvm-run-test-")
                   && identity != "@uvm-run-test-ended")
                 || identity.starts_with("@uvm-registry-create:")
+                || identity.starts_with("@uvm-registry-get:")
                 || identity == "@uvm-report-object"
                 || identity.starts_with("@uvm-singleton:")
             ? 64U
@@ -4752,6 +5457,14 @@ Lowerer::hir_class_method_profile(
         result.result_domain = frontend::ValueDomain::Bit2;
         result.static_method = true;
         result.virtual_dispatch = false;
+        if (identity.starts_with("@uvm-registry-create:")
+            || identity.starts_with("@uvm-registry-get:")) {
+            if (const auto denoted
+                = class_specializations().for_expression(expression_id)) {
+                result.registry_specialization = class_specializations()
+                    .at(*denoted).specialization_identity;
+            }
+        }
         return result;
     }
     const auto builtin_randomize
@@ -4807,6 +5520,8 @@ Lowerer::hir_class_method_profile(
     const auto resolver = hir_resolver();
     const auto* selected = scoped
         ? scoped->method
+        : parameter_typed
+        ? parameter_typed->method
         : resolver.resolve_systemverilog_class_method(
               call.class_member_identity, static_call,
               semantic::sv::ClassMethodKind::function).unique();
@@ -4831,6 +5546,8 @@ Lowerer::hir_class_method_profile(
     // runs in (IEEE 1800-2017 8.25).
     const auto specialization = scoped
         ? scoped->specialization
+        : parameter_typed
+        ? parameter_typed->specialization
         : hir_class_call_specialization(expression_id, *selected,
               instance_call && !call.operands.empty()
                   ? std::optional { call.operands.front() }
@@ -5314,7 +6031,9 @@ Lowerer::hir_class_task_profile(
     // the one a static call selects (`C#(4)::t();`, which the statement
     // keeps as its value), and its formals take that specialization's
     // types (IEEE 1800-2023 8.25, 8.25.1).
-    if (class_call && selected != nullptr && !native_uvm) {
+    // A static call of a UVM library method runs in its specialization
+    // too (`uvm_callbacks#(T, CB)::add(...)`).
+    if (class_call && selected != nullptr && (!native_uvm || static_call)) {
         result.specialization = hir_class_member_specialization(
             static_call && call.value ? *call.value
                                       : semantic::ExpressionId { },
@@ -5349,6 +6068,7 @@ Lowerer::hir_uvm_database_actuals(const std::string_view identity,
     const auto report = identity.starts_with("@uvm-report-");
     const auto run_test = identity.starts_with("@uvm-run-test-")
         || identity.starts_with("@uvm-registry-create:") || report
+        || identity.starts_with("@uvm-registry-get:")
         || identity.starts_with("@uvm-singleton:");
     if (!config && !run_test && !identity.starts_with("@uvm-resource-db-")) {
         return std::nullopt;
@@ -5371,7 +6091,8 @@ Lowerer::hir_uvm_database_actuals(const std::string_view identity,
                     : index == 0U || index == 1U || index == 3U
                         || index == 5U)
             : run_test
-            ? identity.starts_with("@uvm-registry-create:") && index == 0U
+            ? (identity.starts_with("@uvm-registry-create:") && index == 0U)
+                || (identity == "@uvm-run-test-construct" && index < 2U)
             : index + 2U >= value_index && index < value_index;
         if (name_formal
             || hir_expression_is_string(*expressions[index], process_scope)) {
@@ -5634,6 +6355,7 @@ Lowerer::bind_hir_class_actuals(
         if (!bound[index]) {
             return std::nullopt;
         }
+        bound[index]->defaulted = true;
     }
     std::vector<HirClassMethodActual> result;
     result.reserve(bound.size());
@@ -5752,37 +6474,209 @@ bool Lowerer::hir_class_function_interpreted(
         });
 }
 
-bool Lowerer::hir_uvm_library_identity(const std::string_view identity) const
+bool Lowerer::hir_uvm_method_runs_in_host(
+    const semantic::DeclarationId declaration,
+    const std::string_view owner_identity) const
 {
-    if (!support::is_uvm_library_identity(identity)) {
+    // A method of a class that extends the UVM library is lowered like
+    // any other (the simulation's UVM services answer the library calls
+    // in its body), a static one and one a macro of the library declares
+    // (`get_type_name`, `create`) included. Two kinds stay with the
+    // services: the registration macros' `get_type` and `get_object_type`,
+    // which the simulation's registry answers, and a method whose body calls
+    // a static method of the library outside those the services answer
+    // (`uvm_coreservice_t::get`), which the class executor runs.
+    if (hir_uvm_library_identity(owner_identity)
+        || !hir_class_derives_from_uvm(owner_identity)) {
         return false;
     }
-    if (identity.starts_with("@uvm-")) {
-        return true;
+    if (const auto found = hir_uvm_host_methods_.find(declaration.value());
+        found != hir_uvm_host_methods_.end()) {
+        return found->second;
     }
-    if (!hir_uvm_library_declared_) {
-        const auto& classes
-            = specialized_hir_unit_->design().systemverilog_hir.classes();
-        hir_uvm_library_declared_ = std::ranges::any_of(classes,
-            [](const semantic::sv::ClassDeclaration& item) {
-                return support::is_uvm_library_identity(
-                           item.canonical_identity)
-                    && item.canonical_identity.ends_with(
-                        "uvm_pkg::uvm_object");
+    bool host { };
+    const auto record = specialized_hir_unit_->find_declaration(declaration);
+    const auto& design = specialized_hir_unit_->design();
+    // A static method hiding the library's `get_type` and an override of
+    // its `get_object_type` (the registration macros', IEEE 1800.2-2020
+    // B.2.1) are answered from the run's registry, as the library's own
+    // are: the class's type wrapper, whatever the body.
+    {
+        const auto& classes = design.systemverilog_hir.classes();
+        const auto library = std::ranges::find_if(classes,
+            [](const semantic::sv::ClassDeclaration& candidate) {
+                return !candidate.forward_declaration
+                    && candidate.uvm_role == support::UvmRole::object;
             });
+        const auto library_method = [&](const support::UvmRole role)
+            -> const semantic::sv::ClassMethod* {
+            if (library == classes.end()) {
+                return nullptr;
+            }
+            const auto found = std::ranges::find(library->methods, role,
+                &semantic::sv::ClassMethod::uvm_role);
+            return found == library->methods.end() ? nullptr : &*found;
+        };
+        const auto* library_get_type
+            = library_method(support::UvmRole::object_get_type);
+        const auto* library_get_object_type
+            = library_method(support::UvmRole::object_get_object_type);
+        if (library_get_object_type != nullptr
+            && std::ranges::any_of(hir_class_method_overrides(
+                                       library_get_object_type->declaration),
+                [&](const HirClassOverride& item) {
+                    return item.declaration == declaration;
+                })) {
+            host = true;
+        }
+        for (const auto& candidate : classes) {
+            for (const auto& method : candidate.methods) {
+                if (method.declaration == declaration && method.static_method
+                    && library_get_type != nullptr
+                    && method.name == library_get_type->name) {
+                    host = true;
+                }
+            }
+        }
     }
-    return *hir_uvm_library_declared_;
+    if (!host && record && record->systemverilog != nullptr
+        && record->systemverilog->nested_scope) {
+        const auto callable_scope = *record->systemverilog->nested_scope;
+        for (const auto& source_expression :
+            design.systemverilog_hir.expressions()) {
+            const auto expression = specialized_hir_unit_->find_expression(
+                source_expression.id);
+            if (!expression || expression->systemverilog == nullptr
+                || !semantic::scope_within(design.semantics,
+                    expression->systemverilog->scope, callable_scope)) {
+                continue;
+            }
+            const auto called = hir_class_method_profile(
+                source_expression.id, callable_scope);
+            if (called && called->static_method && called->receiver == std::nullopt
+                && hir_uvm_library_identity(called->identity)
+                && !called->identity.starts_with('@')) {
+                host = true;
+                break;
+            }
+        }
+    }
+    hir_uvm_host_methods_.emplace(declaration.value(), host);
+    return host;
+}
+
+bool Lowerer::hir_uvm_library_identity(const std::string_view identity) const
+{
+    if (identity.starts_with("@uvm-")) {
+        if (!hir_uvm_library_declared_) {
+            const auto& classes
+                = specialized_hir_unit_->design().systemverilog_hir.classes();
+            hir_uvm_library_declared_ = std::ranges::any_of(classes,
+                [](const semantic::sv::ClassDeclaration& item) {
+                    return item.uvm_role == support::UvmRole::object;
+                });
+        }
+        return *hir_uvm_library_declared_;
+    }
+    return support::uvm_library(hir_uvm_role(identity));
+}
+
+const semantic::sv::ClassDeclaration* Lowerer::hir_uvm_role_class(
+    const std::string_view identity) const
+{
+    const auto& classes
+        = specialized_hir_unit_->design().systemverilog_hir.classes();
+    const auto find = [&](const std::string_view name)
+        -> const semantic::sv::ClassDeclaration* {
+        const auto found = std::ranges::find_if(classes,
+            [&](const semantic::sv::ClassDeclaration& candidate) {
+                return !candidate.forward_declaration
+                    && (candidate.canonical_identity == name
+                        || semantic::sv::class_declaration_identity(candidate)
+                            == name);
+            });
+        return found == classes.end() ? nullptr : &*found;
+    };
+    if (const auto* found = find(identity)) {
+        return found;
+    }
+    if (const auto specialization = class_specializations().find(identity)) {
+        return find(class_specializations().at(*specialization)
+                .declaration_identity);
+    }
+    return nullptr;
+}
+
+support::UvmRole Lowerer::hir_uvm_role(const std::string_view identity) const
+{
+    if (identity.empty() || identity.starts_with('@')) {
+        return support::UvmRole::none;
+    }
+    if (const auto* declaration = hir_uvm_role_class(identity)) {
+        return declaration->uvm_role;
+    }
+    // A member `owner::name` of a library class: a method has the role
+    // recorded on it; any other member belongs to the library.
+    const auto separator = identity.rfind("::");
+    if (separator == std::string_view::npos) {
+        return support::UvmRole::none;
+    }
+    const auto* owner = hir_uvm_role_class(identity.substr(0U, separator));
+    if (owner == nullptr || !support::uvm_library(owner->uvm_role)) {
+        return support::UvmRole::none;
+    }
+    const auto name = identity.substr(separator + 2U);
+    const auto method = std::ranges::find(
+        owner->methods, name, &semantic::sv::ClassMethod::name);
+    return method == owner->methods.end() ? support::UvmRole::member
+                                          : method->uvm_role;
+}
+
+bool Lowerer::hir_class_chain_has_uvm_role(
+    const std::string_view identity, const support::UvmRole role) const
+{
+    std::set<std::string_view> visited;
+    for (auto current = identity; !current.empty()
+         && visited.insert(current).second;) {
+        const auto* found = hir_uvm_role_class(current);
+        if (found == nullptr) {
+            return false;
+        }
+        if (found->uvm_role == role) {
+            return true;
+        }
+        current = found->base_declaration_identity;
+    }
+    return false;
 }
 
 std::string Lowerer::hir_static_call_specialization(
     const std::string_view identity,
+    const semantic::DeclarationId declaration,
     const std::optional<std::uint32_t> specialization) const
 {
     // A runtime service (`@uvm-...`) is no method of a class.
-    if (!specialization || identity.empty() || identity.starts_with('@')) {
+    if (identity.empty() || identity.starts_with('@')) {
         return { };
     }
-    return class_specializations().at(*specialization).specialization_identity;
+    auto& index = class_specializations();
+    auto selected = specialization;
+    // A call naming no parameter values (`C::f()`, or a method of a class
+    // that has none) runs in the specialization the bare class name
+    // denotes (IEEE 1800-2023 8.25.1).
+    if (!selected && specialized_hir_unit_ != nullptr) {
+        if (const auto owner = hir_method_owner_identity(
+                specialized_hir_unit_->design(), declaration)) {
+            selected = index.default_for(*owner);
+        }
+    }
+    if (!selected) {
+        throw std::logic_error {
+            "class static method call '" + std::string { identity }
+            + "' has no class specialization"
+        };
+    }
+    return index.at(*selected).specialization_identity;
 }
 
 std::string Lowerer::hir_cast_target_identity(
@@ -5825,12 +6719,6 @@ bool Lowerer::hir_class_derives_from_uvm(
         if (found == classes.end()) {
             return false;
         }
-        // A base that did not resolve in this design names a separately
-        // compiled library class.
-        if (found->base && found->base_declaration_identity.empty()
-            && found->base->name.starts_with("uvm_")) {
-            return true;
-        }
         current = found->base_declaration_identity;
     }
     return false;
@@ -5854,7 +6742,11 @@ Lowerer::hir_lowerable_constructor_class(const std::string_view identity,
         return found == classes.end() ? nullptr : &*found;
     };
     const auto* const selected = find_class(identity);
-    if (hir_class_derives_from_uvm(identity)) {
+    // The simulation's UVM services build an object of a UVM library object
+    // class; a class deriving from one runs its own constructors down to the
+    // library's (lower_hir_uvm_library_construction).
+    if (selected == nullptr
+        || hir_uvm_native_class(selected->canonical_identity)) {
         return nullptr;
     }
     if (specialization
@@ -5869,11 +6761,30 @@ Lowerer::hir_lowerable_constructor_class(const std::string_view identity,
     std::set<std::string_view> visited;
     for (const auto* current = selected; current != nullptr;) {
         const auto specialized = current_specialization.has_value();
+        // The chain reaches the library: its constructor takes the actuals
+        // of `super.new` on to the simulation's UVM services. A library
+        // class without a constructor of its own gives them nothing to make
+        // the object's name and parent from, so the simulation constructs
+        // such an object itself.
+        if (current != selected
+            && hir_uvm_native_class(current->canonical_identity)) {
+            const bool constructs = std::ranges::any_of(current->methods,
+                [&](const semantic::sv::ClassMethod& method) {
+                    return method.kind
+                            == semantic::sv::ClassMethodKind::constructor
+                        && method.owner_identity
+                            == current->canonical_identity;
+                });
+            // An object has no parent and the name "" without a constructor
+            // actual (IEEE 1800.2-2020 5.3.2); a component needs both.
+            return constructs
+                    || !hir_class_is_uvm_component(current->canonical_identity)
+                ? selected
+                : nullptr;
+        }
         if (!visited.insert(current->canonical_identity).second
             || (!current->parameters.empty() && !specialized)
             || current->interface_class
-            || hir_uvm_library_identity(
-                current->canonical_identity)
             || (current->base && !current->base->actuals.empty()
                 && !specialized)) {
             return nullptr;
@@ -5895,6 +6806,1081 @@ Lowerer::hir_lowerable_constructor_class(const std::string_view identity,
         current = find_class(current->base_declaration_identity);
     }
     return nullptr;
+}
+
+const semantic::sv::ClassDeclaration*
+Lowerer::hir_construction_step_class(const std::string_view identity,
+    const std::optional<std::uint32_t> specialization) const
+{
+    if (!hir_uvm_native_class(identity)) {
+        return hir_lowerable_constructor_class(identity, specialization);
+    }
+    const auto& classes
+        = specialized_hir_unit_->design().systemverilog_hir.classes();
+    const auto found = std::ranges::find_if(classes,
+        [&](const semantic::sv::ClassDeclaration& candidate) {
+            return !candidate.forward_declaration
+                && (candidate.canonical_identity == identity
+                    || semantic::sv::class_declaration_identity(candidate)
+                        == identity);
+        });
+    return found == classes.end() ? nullptr : &*found;
+}
+
+bool Lowerer::hir_uvm_native_class(const std::string_view identity) const
+{
+    if (identity.starts_with("@uvm-")) {
+        return hir_uvm_library_identity(identity);
+    }
+    // A library class whose base chain reaches the library's uvm_object,
+    // and the library's uvm_port_base itself: the simulation's TLM services
+    // make a port's state from its constructor's actuals (name, parent,
+    // port type; IEEE 1800.2-2020 5.5.2.1). The library classes deriving
+    // from it pass their port type through `super.new`, so their
+    // constructors are lowered.
+    if (!hir_uvm_library_identity(identity)) {
+        return false;
+    }
+    if (const auto* own = hir_uvm_role_class(identity);
+        own != nullptr && own->uvm_role == support::UvmRole::port_base) {
+        return true;
+    }
+    return hir_class_chain_has_uvm_role(identity, support::UvmRole::object);
+}
+
+bool Lowerer::hir_class_is_uvm_component(
+    const std::string_view identity) const
+{
+    return hir_class_chain_has_uvm_role(identity, support::UvmRole::component);
+}
+
+bool Lowerer::lower_hir_uvm_library_construction(
+    const semantic::sv::ClassDeclaration& library, const RegisterId receiver,
+    const std::span<const semantic::sv::TaskAssociation> actuals,
+    const std::optional<std::uint32_t> specialization)
+{
+    // The library constructor's formals and defaults are those of the
+    // specialization (IEEE 1800-2017 8.25).
+    const SizeRestoreGuard specialization_frames {
+        hir_generic_binding_frames_
+    };
+    if (specialization) {
+        hir_generic_binding_frames_.push_back(
+            class_specializations().binding_frame(*specialization));
+    }
+    const auto constructor = std::ranges::find_if(library.methods,
+        [&](const semantic::sv::ClassMethod& method) {
+            return method.kind == semantic::sv::ClassMethodKind::constructor
+                && method.owner_identity == library.canonical_identity;
+        });
+    std::vector<HirClassMethodActual> bound;
+    if (constructor == library.methods.end()) {
+        // The implicit constructor calls `super.new()` (8.7).
+        if (!actuals.empty()) {
+            return false;
+        }
+        const auto base_specialization = specialization
+            ? class_specializations().base(*specialization)
+            : std::nullopt;
+        const auto base_identity = base_specialization
+            ? class_specializations()
+                  .at(*base_specialization)
+                  .declaration_identity
+            : library.base_declaration_identity;
+        if (!base_identity.empty()) {
+            const auto* const base = hir_construction_step_class(
+                base_identity, base_specialization);
+            return base != nullptr
+                && lower_hir_class_construction(*base, receiver, { },
+                    library.source, base_specialization);
+        }
+    } else {
+        auto result = bind_hir_class_actuals(
+            constructor->declaration, actuals, hir_process_scope_);
+        if (!result) {
+            return false;
+        }
+        bound = std::move(*result);
+    }
+    std::vector<RegisterId> registers;
+    std::vector<std::uint8_t> kinds;
+    std::vector<std::string> names;
+    std::vector<std::uint8_t> directions;
+    for (const auto& actual : bound) {
+        // A default is evaluated in the constructor's scope (13.5.3).
+        const ValueRestoreGuard default_receiver {
+            hir_class_receiver_register_
+        };
+        if (actual.defaulted) {
+            hir_class_receiver_register_ = receiver;
+        }
+        const auto formal = specialized_hir_unit_->find_declaration(
+            actual.formal);
+        if (actual.container || !formal || formal->systemverilog == nullptr) {
+            return false;
+        }
+        if (actual.string) {
+            const auto lowered = lower_hir_string_expression(
+                actual.expression);
+            if (!lowered) {
+                return false;
+            }
+            registers.push_back(*lowered);
+            kinds.push_back(1U);
+        } else {
+            auto lowered = lower_hir_expression(
+                actual.expression, actual.width);
+            if (!lowered) {
+                return false;
+            }
+            if (register_width(*lowered) != actual.width) {
+                lowered = resize_register(*lowered, actual.width,
+                    hir_actual_extension_signed(
+                        actual.expression, actual.signed_value));
+            }
+            registers.push_back(*lowered);
+            kinds.push_back(0U);
+        }
+        names.push_back(formal->systemverilog->name);
+        directions.push_back(
+            static_cast<std::uint8_t>(frontend::PortDirection::Input));
+    }
+    const auto destination = allocate_register(
+        1U, frontend::ValueDomain::Bit2);
+    flush_hir_class_container_caches();
+    process_.operations.emplace_back(ClassMethodCall {
+        destination,
+        receiver,
+        "@uvm-construct-base",
+        std::move(registers),
+        std::move(names),
+        std::move(directions),
+        1U,
+        false,
+        std::move(kinds),
+    });
+    reload_hir_class_container_caches();
+    return true;
+}
+
+std::optional<RegisterId> Lowerer::lower_hir_uvm_lowered_create(
+    const semantic::ExpressionId expression,
+    const HirClassMethodProfile& profile, const std::size_t expected_width)
+{
+    constexpr std::string_view create_prefix { "@uvm-registry-create:" };
+    const bool run_test = profile.identity == "@uvm-run-test-construct";
+    if (!lower_class_functions_
+        || (!run_test && !profile.identity.starts_with(create_prefix))) {
+        return std::nullopt;
+    }
+    const auto call = specialized_hir_unit_->find_expression(expression);
+    // The create's name, then its parent (a run's test is created as
+    // uvm_test_top without a parent after its type's name).
+    const std::size_t name_index = run_test ? 1U : 0U;
+    const std::size_t parent_index = name_index + 1U;
+    if (!call || call->systemverilog == nullptr
+        || profile.actuals.size() <= name_index
+        || !profile.actuals[name_index].string
+        || std::ranges::any_of(profile.actuals,
+            &HirClassMethodActual::container)) {
+        return std::nullopt;
+    }
+    const auto source = call->systemverilog->source;
+    const std::string declaration_identity = run_test
+        ? std::string { }
+        : profile.identity.substr(create_prefix.size());
+    struct Candidate {
+        std::uint32_t id { };
+        const semantic::sv::ClassDeclaration* lowerable { };
+        std::optional<std::uint32_t> specialization;
+        bool component { };
+    };
+    // Every class the create may make whose constructor chain lowers: the
+    // specializations of the named class and of the classes extending it,
+    // or for the run's test every component class.
+    const auto& classes
+        = specialized_hir_unit_->design().systemverilog_hir.classes();
+    // A factory override makes the create return an object of a class
+    // derived from the named one (IEEE 1800.2-2020 8.3.1.4.1): the named
+    // class and every class extending it.
+    const auto extends_named = [&](const std::string_view identity) {
+        std::set<std::string_view> visited;
+        for (auto current = identity; !current.empty()
+             && visited.insert(current).second;) {
+            const auto found = std::ranges::find_if(classes,
+                [&](const semantic::sv::ClassDeclaration& candidate) {
+                    return !candidate.forward_declaration
+                        && (candidate.canonical_identity == current
+                            || semantic::sv::class_declaration_identity(
+                                   candidate)
+                                == current);
+                });
+            if (found == classes.end()) {
+                return false;
+            }
+            if (semantic::sv::class_declaration_identity(*found)
+                    == declaration_identity
+                || found->canonical_identity == declaration_identity) {
+                return true;
+            }
+            current = found->base_declaration_identity;
+        }
+        return false;
+    };
+    std::vector<std::uint32_t> ids;
+    for (std::uint32_t id { }; id < class_specializations().size(); ++id) {
+        const auto& item = class_specializations().at(id);
+        if (item.generate_environment.empty()
+            && !hir_uvm_library_identity(item.declaration_identity)
+            && (run_test || extends_named(item.declaration_identity))) {
+            ids.push_back(id);
+        }
+    }
+    std::vector<Candidate> candidates;
+    for (const auto id : ids) {
+        const std::string identity {
+            class_specializations().at(id).declaration_identity
+        };
+        const auto declaration = std::ranges::find_if(classes,
+            [&](const semantic::sv::ClassDeclaration& candidate) {
+                return !candidate.forward_declaration
+                    && semantic::sv::class_declaration_identity(candidate)
+                        == identity;
+            });
+        if (declaration == classes.end() || declaration->virtual_class
+            || !hir_class_derives_from_uvm(declaration->canonical_identity)) {
+            continue;
+        }
+        const bool component
+            = hir_class_is_uvm_component(declaration->canonical_identity);
+        if (run_test && !component) {
+            continue;
+        }
+        const auto& item = class_specializations().at(id);
+        const auto specialization
+            = !item.parameters.empty() || class_specializations().base(id)
+            ? std::optional<std::uint32_t> { id }
+            : std::nullopt;
+        const auto* const lowerable
+            = hir_lowerable_constructor_class(identity, specialization);
+        if (lowerable != nullptr) {
+            candidates.push_back({ id, lowerable, specialization, component });
+        }
+    }
+    if (candidates.empty()) {
+        return std::nullopt;
+    }
+    const auto mark = process_.operations.size();
+    const auto frames = hir_callable_frames_.size();
+    const auto fail = [&] {
+        rollback_hir_lowering(mark, frames);
+        return std::optional<RegisterId> { };
+    };
+    std::vector<RegisterId> actuals;
+    std::vector<std::uint8_t> actual_kinds;
+    std::vector<std::string> actual_names;
+    std::vector<std::uint8_t> actual_directions;
+    for (const auto& actual : profile.actuals) {
+        if (actual.string) {
+            const auto lowered = lower_hir_string_expression(
+                actual.expression);
+            if (!lowered) {
+                return fail();
+            }
+            actuals.push_back(*lowered);
+            actual_kinds.push_back(1U);
+        } else {
+            auto lowered = lower_hir_expression(
+                actual.expression, actual.width);
+            if (!lowered) {
+                return fail();
+            }
+            if (register_width(*lowered) != actual.width) {
+                lowered = resize_register(*lowered, actual.width,
+                    hir_actual_extension_signed(
+                        actual.expression, actual.signed_value));
+            }
+            actuals.push_back(*lowered);
+            actual_kinds.push_back(0U);
+        }
+        actual_names.push_back(actual.name);
+        actual_directions.push_back(
+            static_cast<std::uint8_t>(frontend::PortDirection::Input));
+    }
+    // The runtime allocates an object of one of these classes without
+    // constructing it; it constructs any other class itself.
+    std::string lowered_classes;
+    for (const auto& candidate : candidates) {
+        lowered_classes
+            += class_specializations().at(candidate.id).specialization_identity;
+        lowered_classes.push_back('\n');
+    }
+    const auto list = allocate_string_register();
+    process_.operations.emplace_back(
+        LoadStringConstant { list, std::move(lowered_classes) });
+    actuals.push_back(list);
+    actual_kinds.push_back(1U);
+    actual_names.emplace_back("@lowered-constructors");
+    actual_directions.push_back(
+        static_cast<std::uint8_t>(frontend::PortDirection::Input));
+    const auto handle = allocate_register(64U, frontend::ValueDomain::Bit2);
+    flush_hir_class_container_caches();
+    ClassStaticMethodCall allocation {
+        handle,
+        profile.identity,
+        actuals,
+        actual_names,
+        actual_directions,
+        64U,
+        actual_kinds,
+    };
+    allocation.class_specialization = profile.registry_specialization;
+    process_.operations.emplace_back(std::move(allocation));
+    reload_hir_class_container_caches();
+    // The factory constructs the object with the create's name and parent
+    // (IEEE 1800.2-2020 8.2.4.2): the values already evaluated.
+    const auto name_expression = profile.actuals[name_index].expression;
+    const auto name_register = static_cast<StringRegisterId>(
+        actuals[name_index]);
+    const bool has_parent = profile.actuals.size() > parent_index
+        && !profile.actuals[parent_index].string;
+    for (const auto& candidate : candidates) {
+        const auto query = allocate_register(1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(ClassStaticMethodCall {
+            query,
+            "@uvm-pending-construction:"
+                + class_specializations()
+                      .at(candidate.id)
+                      .specialization_identity,
+            { handle },
+            { std::string { } },
+            { static_cast<std::uint8_t>(frontend::PortDirection::Input) },
+            1U,
+            { 0U },
+        });
+        const auto branch = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations.emplace_back(Branch {
+            query, branch + 1U, branch + 1U, UnknownBranchPolicy::when_false });
+        // The chain with the create's actuals: a component's constructor
+        // takes the name and parent, an object's the name, or none when the
+        // name is empty (`new()`, the uvm_object_registry's create_object,
+        // IEEE 1800.2-2020 8.2.4.2.1).
+        const auto construct = [&](const bool named) {
+            std::vector<semantic::sv::TaskAssociation> associations;
+            if (named) {
+                associations.push_back(
+                    { std::nullopt, name_expression, source });
+            }
+            const auto saved_name = hir_captured_strings_.find(
+                name_expression.value());
+            const auto previous_name
+                = saved_name == hir_captured_strings_.end()
+                ? std::optional<StringRegisterId> { }
+                : std::optional<StringRegisterId> { saved_name->second };
+            hir_captured_strings_.insert_or_assign(
+                name_expression.value(), name_register);
+            std::optional<std::pair<std::uint32_t, std::optional<RegisterId>>>
+                parent_capture;
+            if (candidate.component && has_parent) {
+                const auto parent_expression
+                    = profile.actuals[parent_index].expression;
+                associations.push_back(
+                    { std::nullopt, parent_expression, source });
+                const auto saved = hir_captured_update_indices_.find(
+                    parent_expression.value());
+                parent_capture.emplace(parent_expression.value(),
+                    saved == hir_captured_update_indices_.end()
+                        ? std::optional<RegisterId> { }
+                        : std::optional<RegisterId> { saved->second });
+                hir_captured_update_indices_.insert_or_assign(
+                    parent_expression.value(), actuals[parent_index]);
+            }
+            const bool built = lower_hir_class_construction(
+                *candidate.lowerable, handle, associations, source,
+                candidate.specialization);
+            if (previous_name) {
+                hir_captured_strings_.insert_or_assign(
+                    name_expression.value(), *previous_name);
+            } else {
+                hir_captured_strings_.erase(name_expression.value());
+            }
+            if (parent_capture) {
+                if (parent_capture->second) {
+                    hir_captured_update_indices_.insert_or_assign(
+                        parent_capture->first, *parent_capture->second);
+                } else {
+                    hir_captured_update_indices_.erase(parent_capture->first);
+                }
+            }
+            return built;
+        };
+        if (candidate.component) {
+            if (!construct(true)) {
+                return fail();
+            }
+        } else {
+            const auto length = allocate_register(
+                32U, frontend::ValueDomain::Integer);
+            process_.operations.emplace_back(
+                StringLength { length, name_register });
+            const auto zero = allocate_register(
+                32U, frontend::ValueDomain::Integer);
+            process_.operations.emplace_back(
+                LoadConstant { zero, unsigned_value(0U, 32U) });
+            const auto unnamed = allocate_register(
+                1U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(
+                Binary { BinaryOperator::equal, unnamed, length, zero });
+            const auto split = static_cast<InstructionIndex>(
+                process_.operations.size());
+            process_.operations.emplace_back(Branch {
+                unnamed, 0U, 0U, UnknownBranchPolicy::when_false });
+            const auto named_start = static_cast<InstructionIndex>(
+                process_.operations.size());
+            if (!construct(true)) {
+                return fail();
+            }
+            const auto join = static_cast<InstructionIndex>(
+                process_.operations.size());
+            process_.operations.emplace_back(Jump { 0U });
+            const auto unnamed_start = static_cast<InstructionIndex>(
+                process_.operations.size());
+            if (!construct(false)) {
+                return fail();
+            }
+            process_.operations[split] = Branch { unnamed, unnamed_start,
+                named_start, UnknownBranchPolicy::when_false };
+            process_.operations[join] = Jump { static_cast<InstructionIndex>(
+                process_.operations.size()) };
+        }
+        // The constructor chain has completed (IEEE 1800-2023 38.36.1
+        // cbCreateObj); only the probe plan runs the point.
+        emit_debug_point(DebugPointKind::class_constructed,
+            hir_source_span(source), candidate.lowerable->canonical_identity);
+        process_.operations[branch] = Branch {
+            query,
+            branch + 1U,
+            static_cast<InstructionIndex>(process_.operations.size()),
+            UnknownBranchPolicy::when_false,
+        };
+    }
+    // An object of a class none of the chains above ran for waits in the
+    // host: its constructor does not lower, which the host reports.
+    flush_hir_class_container_caches();
+    process_.operations.emplace_back(ClassStaticMethodCall {
+        allocate_register(1U, frontend::ValueDomain::Bit2),
+        "@uvm-pending-check", { handle }, { std::string { } },
+        { static_cast<std::uint8_t>(frontend::PortDirection::Input) }, 1U,
+        { 0U }, { } });
+    reload_hir_class_container_caches();
+    class_functions_lowered_ = true;
+    if (expected_width != 0U && expected_width != 64U) {
+        return resize_register(handle, expected_width, false);
+    }
+    return handle;
+}
+
+bool Lowerer::hir_design_uses_uvm_library() const
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return false;
+    }
+    const auto& classes
+        = specialized_hir_unit_->design().systemverilog_hir.classes();
+    return std::ranges::any_of(classes,
+        [&](const semantic::sv::ClassDeclaration& candidate) {
+            return !candidate.forward_declaration
+                && hir_uvm_library_identity(candidate.canonical_identity);
+        });
+}
+
+std::optional<Process> Lowerer::lower_uvm_api_process(
+    const frontend::Language language, const std::string_view hierarchy)
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return std::nullopt;
+    }
+    const auto& units = specialized_hir_unit_->design().systemverilog_hir.units();
+    const auto unit = std::ranges::find(units, specialized_hir_unit_->unit(),
+        &semantic::sv::Unit::id);
+    if (unit == units.end()) {
+        return std::nullopt;
+    }
+    HirProcessDescription description;
+    description.source = unit->source;
+    description.scope = unit->scope;
+    description.name = "$uvm_api";
+    description.kind = frontend::ProcessKind::VerilogAlways;
+    description.uvm_api_dispatch = true;
+    // The process runs when the host toggles the class heap notifier with a
+    // request; it does not start with the design.
+    const auto notifier = hir_class_heap_notifier();
+    if (!notifier) {
+        return std::nullopt;
+    }
+    description.sensitivities.push_back(
+        { *notifier, runtime::simir::EdgeKind::any });
+    auto lowered = lower_hir_process_body(description, language, hierarchy);
+    if (lowered) {
+        lowered->initialize = false;
+    }
+    return lowered;
+}
+
+bool Lowerer::lower_uvm_override_arms(
+    const semantic::sv::ClassMethod& method, const RegisterId receiver,
+    const RegisterId actual_register, const bool function)
+{
+    using namespace runtime::simir;
+    const auto& design = specialized_hir_unit_->design();
+    // The library callbacks' argument is this register: it stands in for
+    // the actual's expression through the captured-register mechanism.
+    const auto placeholder = design.systemverilog_hir.expressions().front().id;
+    const auto saved_capture
+        = hir_captured_update_indices_.find(placeholder.value());
+    const auto previous = saved_capture == hir_captured_update_indices_.end()
+        ? std::optional<RegisterId> { }
+        : std::optional<RegisterId> { saved_capture->second };
+    hir_captured_update_indices_.insert_or_assign(
+        placeholder.value(), actual_register);
+    std::vector<InstructionIndex> arm_exits;
+    bool lowered { true };
+    // The most derived override first (IEEE 1800-2023 8.20).
+    for (const auto& item : hir_class_method_overrides(method.declaration)) {
+        // The library's own overrides run in the library's flow.
+        if (hir_uvm_library_identity(item.identity)) {
+            continue;
+        }
+        const auto callable = specialized_hir_unit_->find_declaration(
+            item.declaration);
+        if (!callable || callable->systemverilog == nullptr
+            || !callable->systemverilog->callable) {
+            lowered = false;
+            break;
+        }
+        const auto selected = allocate_register(
+            1U, frontend::ValueDomain::Logic4);
+        process_.operations.emplace_back(ClassMethodCall {
+            selected, receiver, "@checked-cast:" + item.owner_identity,
+            { }, { }, { }, 1U, false });
+        const auto branch = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations.emplace_back(Branch {
+            selected, branch + 1U, 0U, UnknownBranchPolicy::when_false });
+        HirClassTaskProfile profile;
+        profile.declaration = item.declaration;
+        profile.identity = item.identity;
+        profile.static_method = false;
+        profile.specialization = item.specialization;
+        for (const auto formal : callable->systemverilog->callable->formals) {
+            HirClassMethodActual actual;
+            actual.formal = formal;
+            actual.expression = placeholder;
+            actual.direction = frontend::PortDirection::Input;
+            actual.width = 64U;
+            actual.domain = frontend::ValueDomain::Bit2;
+            profile.actuals.push_back(std::move(actual));
+        }
+        if (!lower_hir_class_callable_invocation(
+                method.source, profile, receiver, function)) {
+            lowered = false;
+            break;
+        }
+        arm_exits.push_back(static_cast<InstructionIndex>(
+            process_.operations.size()));
+        process_.operations.emplace_back(Jump { 0U });
+        process_.operations[branch] = Branch {
+            selected, branch + 1U,
+            static_cast<InstructionIndex>(process_.operations.size()),
+            UnknownBranchPolicy::when_false };
+    }
+    const auto after = static_cast<InstructionIndex>(
+        process_.operations.size());
+    for (const auto exit : arm_exits) {
+        process_.operations[exit] = Jump { after };
+    }
+    if (previous) {
+        hir_captured_update_indices_.insert_or_assign(
+            placeholder.value(), *previous);
+    } else {
+        hir_captured_update_indices_.erase(placeholder.value());
+    }
+    return lowered;
+}
+
+bool Lowerer::lower_uvm_api_dispatch()
+{
+    using namespace runtime::simir;
+    if (specialized_hir_unit_ == nullptr) {
+        return false;
+    }
+    const auto& design = specialized_hir_unit_->design();
+    const auto& classes = design.systemverilog_hir.classes();
+    // A design with no uvm_component has no phase to dispatch.
+    const auto library = std::ranges::find_if(classes,
+        [&](const semantic::sv::ClassDeclaration& candidate) {
+            return !candidate.forward_declaration
+                && candidate.uvm_role == support::UvmRole::component;
+        });
+    class_functions_lowered_ = true;
+    const auto host_query = [&](const std::string& identity,
+                                const std::size_t width) {
+        const auto result = allocate_register(
+            width, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(ClassStaticMethodCall {
+            result, identity, { }, { }, { },
+            static_cast<std::uint32_t>(width), { } });
+        return result;
+    };
+    // The request: the host sets it and toggles the class heap notifier,
+    // which wakes this process (its static sensitivity).
+    const auto kind = host_query("@uvm-api-request", 32U);
+    const auto zero = allocate_register(32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(
+        LoadConstant { zero, unsigned_value(0U, 32U) });
+    const auto none = allocate_register(1U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(
+        Binary { BinaryOperator::equal, none, kind, zero });
+    const auto no_request = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations.emplace_back(Branch {
+        none, 0U, no_request + 1U, UnknownBranchPolicy::when_false });
+    const auto receiver = host_query("@uvm-api-receiver", 64U);
+    const auto phase = host_query("@uvm-api-phase", 64U);
+    bool lowered { true };
+    for (std::size_t index {}; library != classes.end() && lowered
+         && index < support::uvm_api_function_methods.size(); ++index) {
+        const auto method = std::ranges::find(library->methods,
+            support::uvm_api_function_methods[index],
+            &semantic::sv::ClassMethod::uvm_role);
+        if (method == library->methods.end() || !method->virtual_method) {
+            continue;
+        }
+        const bool function
+            = method->kind == semantic::sv::ClassMethodKind::function;
+        const auto expected = allocate_register(
+            32U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(LoadConstant {
+            expected, unsigned_value(
+                static_cast<std::uint32_t>(index) + 1U, 32U) });
+        const auto matches = allocate_register(
+            1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(
+            Binary { BinaryOperator::equal, matches, kind, expected });
+        const auto kind_branch = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations.emplace_back(Branch {
+            matches, 0U, 0U, UnknownBranchPolicy::when_false });
+        const auto arm = static_cast<InstructionIndex>(
+            process_.operations.size());
+        // A task phase runs in a thread of its own, as a task call in a
+        // `fork ... join_none` does (IEEE 1800-2023 9.3.2), so a phase that
+        // waits does not hold the next request.
+        std::optional<InstructionIndex> fork_jump;
+        if (!function) {
+            process_.operations.emplace_back(Fork {
+                { static_cast<InstructionIndex>(arm + 2U) },
+                ForkJoinKind::none, false });
+            fork_jump = static_cast<InstructionIndex>(
+                process_.operations.size());
+            process_.operations.emplace_back(Jump { 0U });
+        }
+        lowered = lower_uvm_override_arms(*method, receiver, phase, function);
+        auto after = static_cast<InstructionIndex>(
+            process_.operations.size());
+        if (fork_jump) {
+            process_.operations.emplace_back(ForkEnd { });
+            after = static_cast<InstructionIndex>(process_.operations.size());
+            process_.operations[*fork_jump] = Jump { after };
+        }
+        process_.operations[kind_branch] = Branch {
+            matches, arm, after, UnknownBranchPolicy::when_false };
+    }
+    if (!lowered || !lower_uvm_api_construct_arm(kind, receiver)) {
+        return false;
+    }
+    (void)host_query("@uvm-api-done", 1U);
+    const auto end = static_cast<InstructionIndex>(process_.operations.size());
+    process_.operations[no_request] = Branch {
+        none, end, no_request + 1U, UnknownBranchPolicy::when_false };
+    process_.operations.emplace_back(LoadConstant {
+        allocate_register(1U, frontend::ValueDomain::Bit2),
+        unsigned_value(0U, 1U) });
+    return true;
+}
+
+bool Lowerer::lower_uvm_api_construct_arm(
+    const RegisterId kind, const RegisterId receiver)
+{
+    using namespace runtime::simir;
+    const auto expected = allocate_register(
+        32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(LoadConstant {
+        expected, unsigned_value(support::uvm_api_construct_kind, 32U) });
+    const auto matches = allocate_register(1U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(
+        Binary { BinaryOperator::equal, matches, kind, expected });
+    const auto kind_branch = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations.emplace_back(
+        Branch { matches, 0U, 0U, UnknownBranchPolicy::when_false });
+    const auto arm = static_cast<InstructionIndex>(
+        process_.operations.size());
+    if (!lower_uvm_pending_chains(receiver, false)) {
+        return false;
+    }
+    const auto after = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations[kind_branch] = Branch {
+        matches, arm, after, UnknownBranchPolicy::when_false };
+    return true;
+}
+
+bool Lowerer::lower_uvm_pending_chains(
+    const RegisterId handle, const bool announce)
+{
+    using namespace runtime::simir;
+    const auto& design = specialized_hir_unit_->design();
+    const auto& classes = design.systemverilog_hir.classes();
+    struct Candidate {
+        std::uint32_t id { };
+        const semantic::sv::ClassDeclaration* lowerable { };
+        std::optional<std::uint32_t> specialization;
+    };
+    // Every UVM object or component class whose constructor chain lowers,
+    // bound by its specialization: the host names the one an allocated
+    // object waits for (`@uvm-pending-construction:`), never a spelling of
+    // the class.
+    std::vector<Candidate> candidates;
+    for (std::uint32_t id {}; id < class_specializations().size(); ++id) {
+        const auto& item = class_specializations().at(id);
+        if (!item.generate_environment.empty()
+            || hir_uvm_library_identity(item.declaration_identity)) {
+            continue;
+        }
+        const auto declaration = std::ranges::find_if(classes,
+            [&](const semantic::sv::ClassDeclaration& candidate) {
+                return !candidate.forward_declaration
+                    && semantic::sv::class_declaration_identity(candidate)
+                        == item.declaration_identity;
+            });
+        if (declaration == classes.end() || declaration->virtual_class
+            || !hir_class_derives_from_uvm(declaration->canonical_identity)) {
+            continue;
+        }
+        const auto specialization
+            = !item.parameters.empty() || class_specializations().base(id)
+            ? std::optional<std::uint32_t> { id }
+            : std::nullopt;
+        const auto* const lowerable = hir_lowerable_constructor_class(
+            item.declaration_identity, specialization);
+        if (lowerable != nullptr) {
+            candidates.push_back({ id, lowerable, specialization });
+        }
+    }
+    const auto input = static_cast<std::uint8_t>(
+        frontend::PortDirection::Input);
+    // The host reports an object whose class has no lowered chain here
+    // (its constructor is not generated code), instead of leaving it
+    // unconstructed.
+    const auto check = [&] {
+        flush_hir_class_container_caches();
+        process_.operations.emplace_back(ClassStaticMethodCall {
+            allocate_register(1U, frontend::ValueDomain::Bit2),
+            "@uvm-pending-check", { handle }, { std::string { } }, { input },
+            1U, { 0U }, { } });
+        reload_hir_class_container_caches();
+    };
+    if (candidates.empty()) {
+        check();
+        return true;
+    }
+    // The name and parent the host recorded for the object.
+    const auto name = allocate_string_register();
+    process_.operations.emplace_back(ClassStaticMethodCall {
+        allocate_register(1U, frontend::ValueDomain::Bit2),
+        "@uvm-pending-name", { handle, static_cast<RegisterId>(name) },
+        { std::string { }, std::string { } }, { input, input }, 1U,
+        { 0U, 1U }, { } });
+    const auto parent = allocate_register(64U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(ClassStaticMethodCall {
+        parent, "@uvm-pending-parent", { handle }, { std::string { } },
+        { input }, 64U, { 0U }, { } });
+    std::vector<InstructionIndex> exits;
+    for (const auto& candidate : candidates) {
+        const auto mark = process_.operations.size();
+        const auto frames = hir_callable_frames_.size();
+        const auto query = allocate_register(1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(ClassStaticMethodCall {
+            query,
+            "@uvm-pending-construction:"
+                + class_specializations()
+                      .at(candidate.id)
+                      .specialization_identity,
+            { handle }, { std::string { } }, { input }, 1U, { 0U } });
+        const auto branch = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations.emplace_back(Branch {
+            query, branch + 1U, 0U, UnknownBranchPolicy::when_false });
+        flush_hir_class_container_caches();
+        if (!lower_uvm_api_constructor(*candidate.lowerable,
+                candidate.specialization, handle, name, parent)) {
+            // A chain that does not lower is reported by the host when an
+            // object of the class is reached (`@uvm-pending-check`).
+            rollback_hir_lowering(mark, frames);
+            reload_hir_class_container_caches();
+            continue;
+        }
+        reload_hir_class_container_caches();
+        if (announce) {
+            // The constructor chain has completed (IEEE 1800-2023 38.36.1
+            // cbCreateObj); only the probe plan runs the point.
+            emit_debug_point(DebugPointKind::class_constructed,
+                hir_source_span(candidate.lowerable->source),
+                candidate.lowerable->canonical_identity);
+        }
+        exits.push_back(static_cast<InstructionIndex>(
+            process_.operations.size()));
+        process_.operations.emplace_back(Jump { 0U });
+        process_.operations[branch] = Branch {
+            query, branch + 1U,
+            static_cast<InstructionIndex>(process_.operations.size()),
+            UnknownBranchPolicy::when_false };
+    }
+    const auto after = static_cast<InstructionIndex>(
+        process_.operations.size());
+    for (const auto exit : exits) {
+        process_.operations[exit] = Jump { after };
+    }
+    check();
+    return true;
+}
+
+bool Lowerer::lower_uvm_construct_drain()
+{
+    using namespace runtime::simir;
+    class_functions_lowered_ = true;
+    const auto next = allocate_register(64U, frontend::ValueDomain::Bit2);
+    const auto top = static_cast<InstructionIndex>(process_.operations.size());
+    process_.operations.emplace_back(ClassStaticMethodCall {
+        next, "@uvm-pending-next", { }, { }, { }, 64U, { }, { } });
+    const auto zero = allocate_register(64U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(
+        LoadConstant { zero, unsigned_value(0U, 64U) });
+    const auto none = allocate_register(1U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(
+        Binary { BinaryOperator::equal, none, next, zero });
+    const auto leave = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations.emplace_back(Branch {
+        none, 0U, 0U, UnknownBranchPolicy::when_false });
+    if (!lower_uvm_pending_chains(next, true)) {
+        return false;
+    }
+    process_.operations.emplace_back(Jump { top });
+    process_.operations[leave] = Branch { none,
+        static_cast<InstructionIndex>(process_.operations.size()),
+        leave + 1U, UnknownBranchPolicy::when_false };
+    return true;
+}
+
+std::optional<RegisterId> Lowerer::lower_uvm_clone(const RegisterId receiver)
+{
+    using namespace runtime::simir;
+    const auto input = static_cast<std::uint8_t>(
+        frontend::PortDirection::Input);
+    const auto copy = allocate_register(64U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(ClassStaticMethodCall {
+        copy, "@uvm-clone-allocate", { receiver }, { std::string { } },
+        { input }, 64U, { 0U }, { } });
+    if (!lower_uvm_construct_drain()) {
+        return std::nullopt;
+    }
+    process_.operations.emplace_back(ClassStaticMethodCall {
+        allocate_register(1U, frontend::ValueDomain::Bit2),
+        "@uvm-clone-finish", { copy, receiver },
+        { std::string { }, std::string { } }, { input, input }, 1U,
+        { 0U, 0U }, { } });
+    // copy() calls do_copy of the copy with the original as its argument
+    // (IEEE 1800.2-2020 5.3.7).
+    const auto& classes
+        = specialized_hir_unit_->design().systemverilog_hir.classes();
+    const auto library = std::ranges::find_if(classes,
+        [&](const semantic::sv::ClassDeclaration& candidate) {
+            return !candidate.forward_declaration
+                && candidate.uvm_role == support::UvmRole::object;
+        });
+    if (library != classes.end()) {
+        const auto method = std::ranges::find(library->methods,
+            support::UvmRole::object_do_copy, &semantic::sv::ClassMethod::uvm_role);
+        if (method != library->methods.end() && method->virtual_method
+            && method->kind == semantic::sv::ClassMethodKind::function
+            && !lower_uvm_override_arms(*method, copy, receiver, true)) {
+            return std::nullopt;
+        }
+    }
+    return copy;
+}
+
+bool Lowerer::lower_uvm_api_constructor(
+    const semantic::sv::ClassDeclaration& lowerable,
+    const std::optional<std::uint32_t> specialization,
+    const RegisterId receiver, const StringRegisterId name,
+    const RegisterId parent)
+{
+    const auto& expressions
+        = specialized_hir_unit_->design().systemverilog_hir.expressions();
+    if (expressions.size() < 2U) {
+        return false;
+    }
+    // Placeholders that the constructor's actuals read as the name string
+    // and the parent handle registers.
+    const auto name_expression = expressions[0].id;
+    const auto parent_expression = expressions[1].id;
+    const SizeRestoreGuard specialization_frames {
+        hir_generic_binding_frames_
+    };
+    if (specialization) {
+        hir_generic_binding_frames_.push_back(
+            class_specializations().binding_frame(*specialization));
+    }
+    const auto constructor = std::ranges::find_if(lowerable.methods,
+        [&](const semantic::sv::ClassMethod& method) {
+            return method.kind == semantic::sv::ClassMethodKind::constructor
+                && method.owner_identity == lowerable.canonical_identity;
+        });
+    if (constructor == lowerable.methods.end()) {
+        return lower_hir_class_construction(
+            lowerable, receiver, { }, lowerable.source, specialization);
+    }
+    if (!constructor->defined || constructor->pure) {
+        return false;
+    }
+    const auto declaration = specialized_hir_unit_->find_declaration(
+        constructor->declaration);
+    if (!declaration || declaration->systemverilog == nullptr
+        || !declaration->systemverilog->callable) {
+        return false;
+    }
+    // `new(string name, uvm_component parent)` of a component, `new(string
+    // name = ...)` of an object, or none: the allocation's name and parent
+    // (IEEE 1800.2-2020 5.3.2, 13.1.2). An object allocated without a name
+    // runs its constructor with the declared defaults.
+    const auto& formals = declaration->systemverilog->callable->formals;
+    if (formals.size() > 2U) {
+        return false;
+    }
+    if (formals.empty()) {
+        return lower_hir_class_construction(
+            lowerable, receiver, { }, lowerable.source, specialization);
+    }
+    std::optional<InstructionIndex> named_branch;
+    std::optional<InstructionIndex> named_exit;
+    if (formals.size() == 1U) {
+        const auto length = allocate_register(
+            32U, frontend::ValueDomain::Integer);
+        process_.operations.emplace_back(StringLength { length, name });
+        const auto zero = allocate_register(
+            32U, frontend::ValueDomain::Integer);
+        process_.operations.emplace_back(
+            LoadConstant { zero, unsigned_value(0U, 32U) });
+        const auto unnamed = allocate_register(
+            1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(
+            Binary { BinaryOperator::equal, unnamed, length, zero });
+        named_branch = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations.emplace_back(Branch {
+            unnamed, 0U, 0U, UnknownBranchPolicy::when_false });
+        // Unnamed: the declared defaults.
+        const auto unnamed_start = static_cast<InstructionIndex>(
+            process_.operations.size());
+        if (!lower_hir_class_construction(
+                lowerable, receiver, { }, lowerable.source, specialization)) {
+            return false;
+        }
+        named_exit = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations.emplace_back(Jump { 0U });
+        process_.operations[*named_branch] = Branch { unnamed, unnamed_start,
+            static_cast<InstructionIndex>(process_.operations.size()),
+            UnknownBranchPolicy::when_false };
+    }
+    std::vector<HirClassMethodActual> bound;
+    for (std::size_t index {}; index < formals.size(); ++index) {
+        const auto formal = specialized_hir_unit_->find_declaration(
+            formals[index]);
+        if (!formal || formal->systemverilog == nullptr
+            || !formal->systemverilog->type
+            || class_method_direction(formal->systemverilog->direction)
+                != frontend::PortDirection::Input) {
+            return false;
+        }
+        const auto& type = *formal->systemverilog->type;
+        HirClassMethodActual actual;
+        actual.formal = formals[index];
+        actual.direction = frontend::PortDirection::Input;
+        if (index == 0U) {
+            if (type.value_form != semantic::sv::TypeForm::string) {
+                return false;
+            }
+            actual.expression = name_expression;
+            actual.string = true;
+            actual.domain = frontend::ValueDomain::String;
+        } else {
+            if (type.class_identity.empty()
+                && type.value_form != semantic::sv::TypeForm::class_handle) {
+                return false;
+            }
+            actual.expression = parent_expression;
+            actual.width = 64U;
+            actual.domain = frontend::ValueDomain::Bit2;
+        }
+        bound.push_back(std::move(actual));
+    }
+    const HirClassTaskProfile profile {
+        constructor->declaration,
+        constructor->canonical_identity,
+        std::nullopt,
+        std::nullopt,
+        std::move(bound),
+        false,
+        true,
+        specialization,
+    };
+    const auto saved_name = hir_captured_strings_.find(name_expression.value());
+    const auto previous_name = saved_name == hir_captured_strings_.end()
+        ? std::optional<StringRegisterId> { }
+        : std::optional<StringRegisterId> { saved_name->second };
+    const auto saved_parent
+        = hir_captured_update_indices_.find(parent_expression.value());
+    const auto previous_parent
+        = saved_parent == hir_captured_update_indices_.end()
+        ? std::optional<RegisterId> { }
+        : std::optional<RegisterId> { saved_parent->second };
+    hir_captured_strings_.insert_or_assign(name_expression.value(), name);
+    hir_captured_update_indices_.insert_or_assign(
+        parent_expression.value(), parent);
+    const bool built = lower_hir_class_callable_invocation(
+        lowerable.source, profile, receiver, false).has_value();
+    if (previous_name) {
+        hir_captured_strings_.insert_or_assign(
+            name_expression.value(), *previous_name);
+    } else {
+        hir_captured_strings_.erase(name_expression.value());
+    }
+    if (previous_parent) {
+        hir_captured_update_indices_.insert_or_assign(
+            parent_expression.value(), *previous_parent);
+    } else {
+        hir_captured_update_indices_.erase(parent_expression.value());
+    }
+    if (named_exit) {
+        process_.operations[*named_exit] = Jump { static_cast<InstructionIndex>(
+            process_.operations.size()) };
+    }
+    return built;
 }
 
 bool Lowerer::lower_hir_class_property_initializers(
@@ -6165,6 +8151,10 @@ bool Lowerer::lower_hir_class_construction(
     const semantic::SourceSpanId source,
     const std::optional<std::uint32_t> specialization)
 {
+    if (hir_uvm_native_class(declaration.canonical_identity)) {
+        return lower_hir_uvm_library_construction(
+            declaration, receiver, actuals, specialization);
+    }
     // Formals, property types and initializers are those of the
     // specialization (IEEE 1800-2017 8.25).
     const SizeRestoreGuard specialization_frames {
@@ -6214,7 +8204,7 @@ bool Lowerer::lower_hir_class_construction(
         ? class_specializations().at(*base_specialization).declaration_identity
         : declaration.base_declaration_identity;
     if (!base_identity.empty()) {
-        const auto* const base = hir_lowerable_constructor_class(
+        const auto* const base = hir_construction_step_class(
             base_identity, base_specialization);
         if (base == nullptr
             || !lower_hir_class_construction(*base, receiver, { }, source,
@@ -6476,7 +8466,7 @@ bool Lowerer::lower_hir_constructor_prologue(
         ? class_specializations().at(*base_specialization).declaration_identity
         : owner->base_declaration_identity;
     if (!base_identity.empty()) {
-        const auto* const base = hir_lowerable_constructor_class(
+        const auto* const base = hir_construction_step_class(
             base_identity, base_specialization);
         if (base == nullptr
             || !lower_hir_class_construction(
@@ -6517,7 +8507,7 @@ bool Lowerer::lower_hir_base_constructor_call(
     if (base_identity.empty()) {
         return false;
     }
-    const auto* const base = hir_lowerable_constructor_class(
+    const auto* const base = hir_construction_step_class(
         base_identity, base_specialization);
     if (base == nullptr) {
         return false;
@@ -6683,7 +8673,40 @@ std::optional<ContainerType> Lowerer::hir_class_value_container_type(
         && !hir_systemverilog_boxed_aggregate(property->type)) {
         return std::nullopt;
     }
+    // A fixed-size array holds its elements from construction (7.4, 8.7):
+    // the class descriptor builds them with the type the kernel reads.
+    if (type && type->fixed && !type->aggregate_value) {
+        design_.record_class_container_type(std::string { identity }, *type);
+    }
     return type;
+}
+
+void Lowerer::record_class_container_types(
+    const std::string_view specialization) const
+{
+    const auto& index = class_specializations();
+    std::vector<std::string_view> followed;
+    auto current = index.find(specialization);
+    if (!current) {
+        current = index.default_for(specialization);
+    }
+    while (current) {
+        const auto& owner = index.at(*current);
+        if (std::ranges::find(followed, owner.specialization_identity)
+            != followed.end()) {
+            break;
+        }
+        followed.push_back(owner.specialization_identity);
+        for (const auto& property : owner.properties) {
+            if (!property.static_storage && property.type.container_form) {
+                (void)hir_class_value_container_type(
+                    property.canonical_identity);
+            }
+        }
+        current = owner.base
+            ? index.find(owner.base->specialization_identity)
+            : std::nullopt;
+    }
 }
 
 std::optional<Lowerer::HirClassContainerAccess>
@@ -6825,10 +8848,17 @@ Lowerer::hir_class_static_container_binding(
         hir_generic_binding_frames_.push_back(
             class_specializations().binding_frame(*specialization));
     }
-    const auto container_type = hir_systemverilog_container_type(type);
+    auto container_type = hir_systemverilog_container_type(type);
     if (!container_type
         || (!type.container_form && container_type->aggregate_value
             && !hir_systemverilog_boxed_aggregate(type))) {
+        return std::nullopt;
+    }
+    // The storage follows the declaration as a package variable's does: an
+    // array too large to hold densely keeps only its written elements
+    // (7.4, 8.9).
+    if (!hierarchy_sv_type_layout_detail::materialize_container_storage(
+            *container_type)) {
         return std::nullopt;
     }
     // Before its first write the property holds its initializer's
@@ -6848,6 +8878,23 @@ Lowerer::hir_class_static_container_binding(
         }
         initial = std::move(*constant);
     }
+    // The static storage of a class belongs to the unit that declares the
+    // class: a static initializer of that package, or of a class or
+    // package that depends on it, may write it before any procedure starts
+    // (8.9, 6.21).
+    std::uint32_t owner { };
+    const auto& compiled = specialized_hir_unit_->design();
+    if (const auto declaration = compiled.find_declaration(
+            property->declaration);
+        declaration && declaration->systemverilog != nullptr) {
+        const auto* scope = compiled.find_scope(
+            declaration->systemverilog->scope);
+        const auto unit = scope != nullptr ? compiled.find_unit(scope->unit)
+                                           : std::nullopt;
+        if (unit && *unit && unit->identity->id == scope->unit) {
+            owner = unit->identity->id.value() + 1U;
+        }
+    }
     guard_design_write();
     const auto object = static_cast<ContainerObjectId>(
         design_.container_objects_.size());
@@ -6855,7 +8902,7 @@ Lowerer::hir_class_static_container_binding(
         object, name, *container_type, hir_source_span(property->source),
         false, frontend::PortDirection::Unknown, std::nullopt });
     design_.container_objects_.push_back(
-        ContainerObject { name, std::move(initial), std::nullopt });
+        ContainerObject { name, std::move(initial), std::nullopt, owner });
     design_.container_by_name_.emplace(name, object);
     return HirContainerObjectBinding { property->declaration, name, object,
         std::nullopt, &design_.container_object_info_.back().type, false };
@@ -6878,6 +8925,26 @@ void Lowerer::flush_hir_class_container_caches()
     for (const auto& cache : hir_class_container_caches_) {
         process_.operations.emplace_back(ClassPropertyContainerWrite {
             *hir_class_receiver_register_, cache.value, cache.identity });
+    }
+}
+
+void Lowerer::write_back_changed_hir_class_caches(const std::size_t mark)
+{
+    if (!hir_class_receiver_register_) {
+        return;
+    }
+    for (const auto& cache : hir_class_container_caches_) {
+        bool written = false;
+        for (std::size_t index = mark;
+             !written && index < process_.operations.size(); ++index) {
+            written = hir_operation_writes_container(
+                process_.operations[index], cache.value);
+        }
+        if (written) {
+            process_.operations.emplace_back(ClassPropertyContainerWrite {
+                *hir_class_receiver_register_, cache.value, cache.identity,
+                true });
+        }
     }
 }
 
@@ -6915,12 +8982,13 @@ Lowerer::lower_hir_class_function_call(
     if ((!lower_class_functions_ && !retry_input_container_actuals)
         || profile.static_method != !receiver
         || profile.identity.empty() || profile.identity.starts_with('@')
-        || hir_uvm_library_identity(profile.identity)) {
+        || (hir_uvm_library_identity(profile.identity)
+            && !profile.static_method)) {
         return std::nullopt;
     }
     if (const auto separator = profile.identity.rfind("::");
         separator != std::string::npos
-        && hir_class_derives_from_uvm(
+        && hir_uvm_method_runs_in_host(profile.declaration,
             std::string_view { profile.identity }.substr(0U, separator))) {
         return std::nullopt;
     }
@@ -6968,7 +9036,7 @@ Lowerer::lower_hir_class_function_call(
     if (!record || record->systemverilog == nullptr || !type
         || type->string != profile.string_result
         || type->container.has_value() != profile.container_result
-        || (pure_dispatch && (type->string || type->container))) {
+        || (pure_dispatch && type->container && type->container->fixed)) {
         return std::nullopt;
     }
     if (const auto exact = receiver
@@ -7000,6 +9068,12 @@ Lowerer::lower_hir_class_function_call(
     auto overrides = profile.virtual_dispatch && receiver
         ? hir_class_method_overrides(profile.declaration)
         : std::vector<HirClassOverride> { };
+    if (std::ranges::any_of(overrides, [&](const HirClassOverride& item) {
+            return hir_uvm_method_runs_in_host(
+                item.declaration, item.owner_identity);
+        })) {
+        return std::nullopt;
+    }
     if ((pure_dispatch && overrides.empty())
         || (receiver && std::ranges::any_of(overrides, [&](const auto& item) {
                return class_method_reads_enclosing_unit_parameter(
@@ -7315,12 +9389,29 @@ Lowerer::lower_hir_class_function_call(
     }
     if (pure_dispatch || (instance_dispatch && result.packed)) {
         // Only a null handle matches no candidate: the runtime call reports
-        // it as it reports any method call through a null handle.
+        // it as it reports any method call through a null handle. A string
+        // or container result then holds its type's default value (IEEE
+        // 1800-2023 6.16, 7.5, 7.8, 7.10).
+        const auto reported = result.packed
+            ? *result.packed
+            : allocate_register(1U, frontend::ValueDomain::Logic4);
         process_.operations.emplace_back(ClassMethodCall {
-            *result.packed, *receiver, profile.identity, { }, { }, { },
-            static_cast<std::uint32_t>(register_width(*result.packed)),
+            reported, *receiver, profile.identity, { }, { }, { },
+            static_cast<std::uint32_t>(register_width(reported)),
             true,
         });
+        if (result.string) {
+            process_.operations.emplace_back(
+                LoadStringConstant { *result.string, { } });
+        } else if (result.container) {
+            const auto zero = allocate_register(
+                32U, frontend::ValueDomain::Integer);
+            process_.operations.emplace_back(
+                LoadConstant { zero, unsigned_value(0U, 32U) });
+            process_.operations.emplace_back(ResizeContainer {
+                result.container->value, zero, std::nullopt,
+                result.container->type.queue });
+        }
     } else {
         const auto value = lower_hir_class_callable_invocation(
             source, call, receiver, true);
@@ -7398,6 +9489,12 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
             return std::nullopt;
         }
     }
+    if (!receiver) {
+        if (const auto created = lower_hir_uvm_lowered_create(
+                expression, *profile, expected_width)) {
+            return created;
+        }
+    }
     // A class function runs as a lowered subroutine when it can; otherwise
     // the runtime interprets it.
     if (receiver.has_value() != profile->static_method
@@ -7432,6 +9529,38 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
             return lowered->packed;
         }
         rollback_hir_lowering(mark, frames);
+        // A function of a class outside the UVM library runs as generated
+        // code or is reported; the host class executor never runs it. The
+        // simulation's UVM services answer only the methods that run in the
+        // host (hir_uvm_method_runs_in_host), for the call or any override
+        // a virtual call dispatches to.
+        const auto runs_in_host = [&] {
+            const auto separator = profile->identity.rfind("::");
+            if (separator != std::string::npos
+                && hir_uvm_method_runs_in_host(profile->declaration,
+                    std::string_view { profile->identity }.substr(
+                        0U, separator))) {
+                return true;
+            }
+            return profile->virtual_dispatch && receiver
+                && std::ranges::any_of(
+                    hir_class_method_overrides(profile->declaration),
+                    [&](const HirClassOverride& item) {
+                        return hir_uvm_method_runs_in_host(
+                            item.declaration, item.owner_identity);
+                    });
+        };
+        if (!profile->identity.starts_with('@')
+            && !hir_uvm_library_identity(profile->identity)
+            && !runs_in_host()) {
+            report("FSIM-ELAB-HIR-001",
+                "class function '" + profile->identity
+                    + "' could not be lowered to generated code",
+                hir_source_span(
+                    specialized_hir_unit_->find_expression(expression)
+                        ->systemverilog->source));
+            return std::nullopt;
+        }
     }
 
     // Container actuals must use the typed callable-frame copy path above.
@@ -7465,6 +9594,13 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
     actual_names.reserve(profile->actuals.size());
     actual_directions.reserve(profile->actuals.size());
     for (const auto& actual : profile->actuals) {
+        // A default is evaluated in the method's scope (13.5.3).
+        const ValueRestoreGuard default_receiver {
+            hir_class_receiver_register_
+        };
+        if (actual.defaulted && receiver) {
+            hir_class_receiver_register_ = *receiver;
+        }
         if (actual.container) {
             const auto value
                 = lower_hir_static_container_value(actual.expression);
@@ -7589,6 +9725,51 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
         profile->result_width, profile->result_domain);
     // The method sees, and may change, this object's container properties.
     flush_hir_class_container_caches();
+    if (receiver && !profile->static_method
+        && profile->identity == "@builtin-randomize"
+        && lower_hir_randomize_with_callbacks(expression, *receiver,
+            ClassMethodCall {
+                destination,
+                *receiver,
+                "@builtin-randomize-solve",
+                actuals,
+                actual_names,
+                actual_directions,
+                static_cast<std::uint32_t>(profile->result_width),
+                profile->virtual_dispatch,
+                actual_kinds,
+                *inline_constraints,
+            })) {
+        reload_hir_class_container_caches();
+        if (expected_width != 0U
+            && expected_width != profile->result_width) {
+            return resize_register(
+                destination, expected_width, profile->result_signed);
+        }
+        return destination;
+    }
+    // `clone()` of a uvm_object: the copy's constructor chain and do_copy
+    // run in this process (IEEE 1800.2-2020 5.3.8).
+    if (receiver && !profile->static_method && lower_class_functions_
+        && profile->actuals.empty() && !profile->string_result
+        && profile->result_width == 64U
+        && hir_uvm_role(profile->identity) == support::UvmRole::object_clone) {
+        const auto cloned = lower_uvm_clone(*receiver);
+        reload_hir_class_container_caches();
+        if (!cloned) {
+            return std::nullopt;
+        }
+        return *cloned;
+    }
+    // The call precedes the frame the runtime activates for its method
+    // (IEEE 1800-2023 37.43 detail 6), as a call lowered inline does; a
+    // call the simulation's services answer (`@...`) activates none.
+    if (const auto call = specialized_hir_unit_->find_expression(expression);
+        call && call->systemverilog != nullptr
+        && !profile->identity.starts_with('@')) {
+        emit_debug_point(
+            DebugPointKind::call, hir_source_span(call->systemverilog->source));
+    }
     if (profile->static_method) {
         ClassStaticMethodCall operation {
             destination,
@@ -7600,7 +9781,10 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
             actual_kinds,
         };
         operation.class_specialization = hir_static_call_specialization(
-            profile->identity, profile->specialization);
+            profile->identity, profile->declaration, profile->specialization);
+        if (!profile->registry_specialization.empty()) {
+            operation.class_specialization = profile->registry_specialization;
+        }
         process_.operations.emplace_back(std::move(operation));
     } else {
         ClassMethodCall operation {
@@ -7618,6 +9802,17 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
         process_.operations.emplace_back(std::move(operation));
     }
     reload_hir_class_container_caches();
+    // A factory create allocates an object of a user class without
+    // constructing it; this process runs its constructor chain.
+    if (lower_class_functions_ && profile->result_width == 64U
+        && support::uvm_factory_creates(hir_uvm_role(profile->identity))) {
+        flush_hir_class_container_caches();
+        const bool drained = lower_uvm_construct_drain();
+        reload_hir_class_container_caches();
+        if (!drained) {
+            return std::nullopt;
+        }
+    }
     for (std::size_t index { }; index < profile->actuals.size(); ++index) {
         const auto& actual = profile->actuals[index];
         if (!class_method_copy_out(actual.direction)) {
@@ -7646,6 +9841,350 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
             destination, expected_width, profile->result_signed);
     }
     return destination;
+}
+
+// The classes whose `name` callback (pre_randomize or post_randomize)
+// an object of the class runs, most derived first: an object runs the
+// callback of its own class or of its nearest base that declares one (IEEE
+// 1800-2023 18.6.1, 8.20). A class whose callback generated code does not
+// run here (a UVM library class or one derived from it, a callback the
+// runtime reports) is listed with no declaration: the runtime runs it. A
+// class of a design element instance or generate scope is listed once per
+// scope that made it.
+std::vector<Lowerer::HirClassOverride>
+Lowerer::hir_randomize_callback_classes(const std::string_view name) const
+{
+    const auto& design = specialized_hir_unit_->design();
+    const auto& classes = design.systemverilog_hir.classes();
+    const auto find_class = [&](const std::string& identity)
+        -> const semantic::sv::ClassDeclaration* {
+        const auto found = std::ranges::find(classes, identity,
+            &semantic::sv::ClassDeclaration::canonical_identity);
+        return found == classes.end() ? nullptr : &*found;
+    };
+    struct Ranked {
+        HirClassOverride item;
+        std::size_t depth { };
+    };
+    std::vector<Ranked> ranked;
+    auto& index = class_specializations();
+    for (const auto& candidate : classes) {
+        const auto method = std::ranges::find_if(candidate.methods,
+            [&](const semantic::sv::ClassMethod& item) {
+                return item.name == name && item.defined;
+            });
+        if (method == candidate.methods.end()) {
+            continue;
+        }
+        std::size_t depth { };
+        std::set<std::string> visited;
+        for (auto* current = &candidate; current != nullptr
+             && !current->base_declaration_identity.empty()
+             && visited.insert(current->canonical_identity).second;
+             current = find_class(current->base_declaration_identity)) {
+            ++depth;
+        }
+        const auto record = specialized_hir_unit_->find_declaration(
+            method->declaration);
+        const auto identity = semantic::sv::class_declaration_identity(
+            candidate);
+        const auto type = hir_callable_type(method->declaration);
+        const auto generate_iterators = index.generate_iterators(identity);
+        const bool scoped = !generate_iterators.empty();
+        // A callback is a nonstatic void function without arguments
+        // (18.6.1); the runtime reports one that is not.
+        const bool host = method->kind != semantic::sv::ClassMethodKind::function
+            || method->static_method || method->pure
+            || !record || record->systemverilog == nullptr
+            || !record->systemverilog->callable
+            || !record->systemverilog->callable->formals.empty()
+            || !type || type->string || type->container
+            || hir_uvm_library_identity(candidate.canonical_identity)
+            || hir_class_function_interpreted(method->declaration)
+            || (!scoped
+                && class_method_reads_enclosing_unit_parameter(
+                    *specialized_hir_unit_, method->declaration));
+        if (!host && scoped) {
+            // Each generate iteration and each design element instance has
+            // a class of its own (IEEE 1800-2023 6.22, 27.4, 8.2); its
+            // callback runs in the scope that made it, reading that scope's
+            // genvars and parameters.
+            for (const auto id : index.generated_specializations(identity)) {
+                ranked.push_back({ { index.at(id).specialization_identity,
+                                       method->declaration,
+                                       method->canonical_identity,
+                                       std::optional { id } },
+                    depth });
+            }
+            // The classes of the instances not yet elaborated are
+            // candidates too: lower the call once every instance exists.
+            if (hierarchical_reference_retry_
+                && generate_iterators.front()
+                    == semantic::sv::class_instance_environment) {
+                hierarchical_reference_missed_ = true;
+                hir_class_dispatch_deferred_ = true;
+            }
+            continue;
+        }
+        if (host) {
+            ranked.push_back({ { candidate.canonical_identity,
+                                   semantic::DeclarationId { },
+                                   method->canonical_identity, std::nullopt },
+                depth });
+            continue;
+        }
+        if (candidate.parameters.empty()) {
+            ranked.push_back({ { candidate.canonical_identity,
+                                   method->declaration,
+                                   method->canonical_identity, std::nullopt },
+                depth });
+            continue;
+        }
+        // Each specialization of a parameterized class is a class of its
+        // own whose callback runs with its parameters (8.25).
+        for (semantic::sv::ClassSpecializationId id { }; id < index.size();
+             ++id) {
+            const auto& specialization = index.at(id);
+            if (specialization.declaration_identity != identity) {
+                continue;
+            }
+            ranked.push_back({ { specialization.specialization_identity,
+                                   method->declaration,
+                                   method->canonical_identity,
+                                   index.bound(id)
+                                       ? std::optional { id }
+                                       : std::nullopt },
+                depth });
+        }
+    }
+    std::ranges::stable_sort(ranked, std::greater { }, &Ranked::depth);
+    std::vector<HirClassOverride> result;
+    result.reserve(ranked.size());
+    for (auto& item : ranked) {
+        result.push_back(std::move(item.item));
+    }
+    return result;
+}
+
+// Run the callback of `object`'s class among `classes` (none for a null
+// handle or a class without one).
+bool Lowerer::lower_hir_randomize_callback(const semantic::SourceSpanId source,
+    const RegisterId object, const std::vector<HirClassOverride>& classes,
+    const std::string_view name)
+{
+    // The runtime runs a callback no generated code runs: that of a class
+    // listed without one, or of a class this list does not know.
+    const auto runtime_callback = [&] {
+        const auto discarded = allocate_register(
+            1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(ClassMethodCall {
+            discarded, object,
+            "@randomize-callback:" + std::string { name },
+            { }, { }, { }, 1U, false,
+        });
+    };
+    std::vector<InstructionIndex> exits;
+    for (const auto& item : classes) {
+        const auto selected = allocate_register(
+            1U, frontend::ValueDomain::Logic4);
+        process_.operations.emplace_back(ClassMethodCall {
+            selected, object, "@checked-cast:" + item.owner_identity,
+            { }, { }, { }, 1U, false,
+        });
+        const auto branch = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations.emplace_back(Branch {
+            selected, branch + 1U, 0U, UnknownBranchPolicy::when_false });
+        const HirClassTaskProfile call {
+            item.declaration,
+            item.identity,
+            std::nullopt,
+            std::nullopt,
+            { },
+            false,
+            true,
+            item.specialization,
+        };
+        if (!item.declaration.valid()) {
+            runtime_callback();
+        } else {
+            // The runtime names the callback a run error leaves, as it
+            // does for one it runs (18.6.1).
+            const auto marker = [&](std::string method) {
+                const auto discarded = allocate_register(
+                    1U, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(ClassMethodCall {
+                    discarded, object, std::move(method),
+                    { }, { }, { }, 1U, false,
+                });
+            };
+            marker("@randomize-callback-enter:" + std::string { name });
+            if (!lower_hir_class_callable_invocation(
+                    source, call, object, true)) {
+                return false;
+            }
+            marker("@randomize-callback-leave");
+        }
+        exits.push_back(static_cast<InstructionIndex>(
+            process_.operations.size()));
+        process_.operations.emplace_back(Jump { });
+        process_.operations[branch] = Branch {
+            selected,
+            branch + 1U,
+            static_cast<InstructionIndex>(process_.operations.size()),
+            UnknownBranchPolicy::when_false,
+        };
+    }
+    runtime_callback();
+    for (const auto exit : exits) {
+        process_.operations[exit] = Jump {
+            static_cast<InstructionIndex>(process_.operations.size()) };
+    }
+    return true;
+}
+
+// `p.kill()` (IEEE 1800-2023 9.7). A process that kills itself or an
+// ancestor never returns from the kill: the randomize() calls and callbacks
+// it is in end there (18.6.1). The runtime sets them aside before the kill
+// and takes them back once the kill returns.
+void Lowerer::lower_hir_process_kill(const RegisterId receiver)
+{
+    const auto none = allocate_register(64U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(
+        LoadConstant { none, unsigned_value(0U, 64U) });
+    const auto marker = [&](std::string method) {
+        const auto discarded = allocate_register(
+            1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(ClassMethodCall {
+            discarded, none, std::move(method), { }, { }, { }, 1U, false,
+        });
+    };
+    marker("@process-kill-begin");
+    process_.operations.emplace_back(ProcessKill { receiver });
+    marker("@process-kill-end");
+}
+
+// The callback of each object that joins the solve with its callbacks, in
+// the order `@randomize-begin` collected them (18.6.1).
+bool Lowerer::lower_hir_randomize_member_callbacks(
+    const semantic::SourceSpanId source, const RegisterId receiver,
+    const RegisterId count, const std::vector<HirClassOverride>& classes,
+    const std::string_view name)
+{
+    if (classes.empty()) {
+        return true;
+    }
+    const auto counter = allocate_register(32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(
+        LoadConstant { counter, unsigned_value(0U, 32U) });
+    const auto one = allocate_register(32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(
+        LoadConstant { one, unsigned_value(1U, 32U) });
+    const auto head = static_cast<InstructionIndex>(process_.operations.size());
+    const auto more = allocate_register(1U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(Binary {
+        BinaryOperator::less_unsigned, more, counter, count });
+    const auto branch = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations.emplace_back(Branch {
+        more, branch + 1U, 0U, UnknownBranchPolicy::when_false });
+    const auto member = allocate_register(64U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(ClassMethodCall {
+        member, receiver, "@randomize-member", { counter },
+        { std::string { } },
+        { static_cast<std::uint8_t>(frontend::PortDirection::Input) }, 64U,
+        false, { 0U },
+    });
+    if (!lower_hir_randomize_callback(source, member, classes, name)) {
+        return false;
+    }
+    process_.operations.emplace_back(Binary {
+        BinaryOperator::add_unsigned, counter, counter, one });
+    process_.operations.emplace_back(Jump { head });
+    process_.operations[branch] = Branch {
+        more,
+        branch + 1U,
+        static_cast<InstructionIndex>(process_.operations.size()),
+        UnknownBranchPolicy::when_false,
+    };
+    return true;
+}
+
+// obj.randomize() with its callbacks as generated code (IEEE 1800-2023
+// 18.6.1): the object's pre_randomize, then that of each object that joins
+// the solve through a rand handle; the solve; and on success the object's
+// post_randomize, then the members'. The callbacks run in the calling
+// process and draw from its random stream (18.14). False, with nothing
+// emitted, when a callback needs the runtime.
+bool Lowerer::lower_hir_randomize_with_callbacks(
+    const semantic::ExpressionId expression, const RegisterId receiver,
+    ClassMethodCall solve)
+{
+    if (!lower_class_functions_) {
+        return false;
+    }
+    const auto record = specialized_hir_unit_->find_expression(expression);
+    const auto pre = hir_randomize_callback_classes("pre_randomize");
+    const auto post = hir_randomize_callback_classes("post_randomize");
+    // No class has a callback (a library class's would be listed): the
+    // runtime's randomize() has none to run either.
+    if (!record || record->systemverilog == nullptr
+        || (pre.empty() && post.empty())) {
+        return false;
+    }
+    const auto source = record->systemverilog->source;
+    const auto mark = process_.operations.size();
+    const auto frames = hir_callable_frames_.size();
+    const auto fail = [&] {
+        rollback_hir_lowering(mark, frames);
+        return false;
+    };
+    if (!lower_hir_randomize_callback(
+            source, receiver, pre, "pre_randomize")) {
+        return fail();
+    }
+    const auto count = allocate_register(32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(ClassMethodCall {
+        count, receiver, "@randomize-begin", { }, { }, { }, 32U, false,
+    });
+    if (!lower_hir_randomize_member_callbacks(
+            source, receiver, count, pre, "pre_randomize")) {
+        return fail();
+    }
+    const auto result = solve.destination;
+    const auto width = solve.result_width;
+    process_.operations.emplace_back(std::move(solve));
+    if (!post.empty()) {
+        // post_randomize runs only after a successful solve (18.6.1).
+        const auto zero = allocate_register(width, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(
+            LoadConstant { zero, unsigned_value(0U, width) });
+        const auto solved = allocate_register(1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::not_equal, solved, result, zero });
+        const auto branch = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations.emplace_back(Branch {
+            solved, branch + 1U, 0U, UnknownBranchPolicy::when_false });
+        if (!lower_hir_randomize_callback(
+                source, receiver, post, "post_randomize")
+            || !lower_hir_randomize_member_callbacks(
+                source, receiver, count, post, "post_randomize")) {
+            return fail();
+        }
+        process_.operations[branch] = Branch {
+            solved,
+            branch + 1U,
+            static_cast<InstructionIndex>(process_.operations.size()),
+            UnknownBranchPolicy::when_false,
+        };
+    }
+    const auto ended = allocate_register(1U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(ClassMethodCall {
+        ended, receiver, "@randomize-end", { }, { }, { }, 1U, false,
+    });
+    class_functions_lowered_ = true;
+    return true;
 }
 
 void Lowerer::transfer_hir_static_formals(
@@ -7792,8 +10331,8 @@ bool Lowerer::ensure_hir_class_static_local(
     }
     if (declared.container_form) {
         if (declared.container_element_types.size() == 1U
-            && declared.container_element_types.front().target.spelling
-                == "event") {
+            && hir_type_is_event(
+                declared.container_element_types.front(), source.scope)) {
             return false;
         }
         const auto container = hir_systemverilog_container_type(declared);
@@ -7967,8 +10506,13 @@ bool Lowerer::allocate_hir_static_callable_declarations(
             : frame_debug_name };
     hir_process_scope_ = *callable->systemverilog->nested_scope;
     active_hir_callable_.reset();
+    const auto saved_initializer_specialization
+        = std::exchange(hir_static_initializer_specialization_,
+            hir_callable_frames_[frame_index].class_specialization);
 
     const auto restore = [&] {
+        hir_static_initializer_specialization_
+            = saved_initializer_specialization;
         active_hir_callable_ = saved_active;
         local_scope_ = std::move(saved_local_scope);
         string_locals_ = std::move(saved_string_locals);
@@ -8180,7 +10724,14 @@ Lowerer::hir_virtual_interface_instances(const std::string_view receiver,
         hierarchical_reference_missed_ = true;
         return std::nullopt;
     }
-    const auto& interface_type = virtual_type->interface_type;
+    // The instances of the interface definition the type designates: the
+    // definition's identity is compared, never its name.
+    const auto* const interface_definition = virtual_interface_definition(
+        specialized_hir_unit_->design(), declaration->systemverilog->scope,
+        *virtual_type);
+    if (interface_definition == nullptr) {
+        return std::nullopt;
+    }
     std::vector<std::pair<std::uint64_t, std::string>> instances;
     // A specialization named by the virtual interface type designates only
     // its own instances (IEEE 1800-2023 25.9); with none of them elaborated
@@ -8189,7 +10740,7 @@ Lowerer::hir_virtual_interface_instances(const std::string_view receiver,
         std::set<std::uint64_t> seen;
         for (const auto& [path, type] : *systemverilog_interface_types_) {
             const auto handle = systemverilog_interface_handles_->find(path);
-            if (type == interface_type
+            if (type.unit == interface_definition->id
                 && handle != systemverilog_interface_handles_->end()
                 && (steps.empty()
                     || systemverilog_interface_handles_->contains(
@@ -8266,6 +10817,10 @@ bool Lowerer::lower_hir_class_task_call(
     if (hir_task_receiver_override_ && !profile->static_method) {
         profile->interface_receiver
             = *std::exchange(hir_task_receiver_override_, std::nullopt);
+    }
+    if (!profile->static_method && !profile->receiver) {
+        record_vpi_callee(true, statement_id.value(), profile->declaration,
+            profile->interface_receiver.value_or(std::string { }));
     }
     if (!profile->static_method) {
         if (const auto exact = hir_class_receiver_instance_specialization(
@@ -8428,7 +10983,8 @@ bool Lowerer::lower_hir_class_task_call(
     // analysis imp the port reaches (IEEE 1800.2-2020 12.2.10.1): the
     // runtime enumerates them, and each runs the write of its own class.
     if (native_uvm && receiver && !profile->static_method
-        && profile->identity.ends_with("::uvm_analysis_port::write")
+        && hir_uvm_role(profile->identity)
+            == support::UvmRole::analysis_port_write
         && profile->actuals.size() == 1U) {
         const auto& classes
             = specialized_hir_unit_->design().systemverilog_hir.classes();
@@ -8607,15 +11163,10 @@ bool Lowerer::lower_hir_class_task_call(
     // The sequence-item handshake waits on the class heap (IEEE 1800.2-2020
     // 14.2.6, 15.2.2.1): a driver's pull-port get until the sequencer holds
     // an item, a sequence's finish_item until a driver took the item.
-    const auto native_method = [&] {
-        const auto separator = profile->identity.rfind("::");
-        return separator == std::string::npos
-            ? std::string_view { }
-            : std::string_view { profile->identity }.substr(separator + 2U);
-    }();
-    const auto sequence_method = native_uvm && receiver
-        && profile->identity.find("::uvm_sequence_base::")
-            != std::string::npos;
+    // The library method the call names, by its recorded role.
+    const auto native_method = native_uvm && receiver
+        ? hir_uvm_role(profile->identity)
+        : support::UvmRole::none;
     const auto wait_for_uvm = [&](const std::string_view query,
                                   const RegisterId operand) {
         const auto notifier = hir_class_heap_notifier();
@@ -8643,10 +11194,9 @@ bool Lowerer::lower_hir_class_task_call(
         };
         return true;
     };
-    if (native_uvm && receiver
-        && profile->identity.find("::uvm_seq_item_pull_") != std::string::npos
-        && (native_method == "get" || native_method == "get_next_item"
-            || native_method == "peek")
+    if ((native_method == support::UvmRole::pull_get
+            || native_method == support::UvmRole::pull_get_next_item
+            || native_method == support::UvmRole::pull_peek)
         && !wait_for_uvm("@uvm-sequence-item-ready", *receiver)) {
         return false;
     }
@@ -8662,6 +11212,13 @@ bool Lowerer::lower_hir_class_task_call(
         actual_names.reserve(profile->actuals.size());
         actual_directions.reserve(profile->actuals.size());
         for (const auto& actual : profile->actuals) {
+            // A default is evaluated in the method's scope (13.5.3).
+            const ValueRestoreGuard default_receiver {
+                hir_class_receiver_register_
+            };
+            if (actual.defaulted && receiver) {
+                hir_class_receiver_register_ = *receiver;
+            }
             if (actual.container) {
                 // A queue or dynamic array of class handles a library method
                 // fills (`uvm_root::find_all`, `get_children`): kind 6 in,
@@ -8710,6 +11267,16 @@ bool Lowerer::lower_hir_class_task_call(
                 static_cast<std::uint8_t>(actual.direction));
         }
         emit_deferred_assertion_action_handoff();
+        // The call precedes the frame the runtime activates for its task
+        // (IEEE 1800-2023 37.43 detail 6); a call the simulation's services
+        // answer (`@...`) activates none.
+        if (const auto call = specialized_hir_unit_->find_statement(
+                statement_id);
+            call && call->systemverilog != nullptr
+            && !profile->identity.starts_with('@')) {
+            emit_debug_point(DebugPointKind::call,
+                hir_source_span(call->systemverilog->source));
+        }
         const auto destination = allocate_register(
             1U, frontend::ValueDomain::Bit2);
         if (profile->static_method) {
@@ -8723,7 +11290,8 @@ bool Lowerer::lower_hir_class_task_call(
                 actual_kinds,
             };
             operation.class_specialization = hir_static_call_specialization(
-                profile->identity, profile->specialization);
+                profile->identity, profile->declaration,
+                profile->specialization);
             process_.operations.emplace_back(std::move(operation));
         } else {
             // A runtime method sees, and may change, this object's container
@@ -8760,24 +11328,35 @@ bool Lowerer::lower_hir_class_task_call(
                 return false;
             }
         }
-        if (sequence_method && native_method == "finish_item"
+        if (native_method == support::UvmRole::sequence_finish_item
             && !actuals.empty()
             && !wait_for_uvm("@uvm-sequence-item-done", actuals.front())) {
             return false;
         }
         // `seq.start(sequencer)` runs the sequence's callbacks and body
         // (IEEE 1800.2-2020 14.2.4.1): the overrides of the object's class.
-        if (sequence_method && native_method == "start") {
-            const auto prefix = std::string_view { profile->identity }.substr(
-                0U, profile->identity.size() - native_method.size());
+        if (native_method == support::UvmRole::sequence_start) {
+            const auto* sequence_base = hir_uvm_role_class(
+                std::string_view { profile->identity }.substr(
+                    0U, profile->identity.rfind("::")));
             const auto resolver = hir_resolver();
-            for (const std::string_view callback :
-                { "pre_start", "pre_body", "body", "post_body",
-                    "post_start" }) {
+            for (const auto callback : { support::UvmRole::sequence_pre_start,
+                     support::UvmRole::sequence_pre_body,
+                     support::UvmRole::sequence_body,
+                     support::UvmRole::sequence_post_body,
+                     support::UvmRole::sequence_post_start }) {
+                if (sequence_base == nullptr) {
+                    break;
+                }
+                const auto declared = std::ranges::find(
+                    sequence_base->methods, callback,
+                    &semantic::sv::ClassMethod::uvm_role);
+                if (declared == sequence_base->methods.end()) {
+                    continue;
+                }
                 const auto* callback_method = resolver
                     .resolve_systemverilog_class_method(
-                        std::string { prefix } + std::string { callback },
-                        false)
+                        declared->canonical_identity, false)
                     .unique();
                 if (callback_method == nullptr) {
                     continue;
@@ -9012,6 +11591,36 @@ std::vector<Lowerer::HirClassOverride> Lowerer::hir_class_method_overrides(
         std::string declaration_identity;
     };
     std::vector<Ranked> overrides;
+    // A class that extends a type parameter (`class P #(type IF) extends
+    // IF`) derives from the class each specialization's actual names
+    // (IEEE 1800-2023 8.20, 8.25): the classes whose specializations have
+    // the owner in their base chain, with the fewest steps to it.
+    std::map<std::string, std::size_t, std::less<>> specialization_derived;
+    {
+        auto& index = class_specializations();
+        const auto owner_declaration
+            = semantic::sv::class_declaration_identity(*owner);
+        for (semantic::sv::ClassSpecializationId id { };
+             id < index.size(); ++id) {
+            std::size_t steps { };
+            std::set<semantic::sv::ClassSpecializationId> seen { id };
+            for (auto current = index.base(id);
+                 current && seen.insert(*current).second;
+                 current = index.base(*current)) {
+                ++steps;
+                if (index.at(*current).declaration_identity
+                    != owner_declaration) {
+                    continue;
+                }
+                const auto [entry, inserted] = specialization_derived.emplace(
+                    index.at(id).declaration_identity, steps);
+                if (!inserted) {
+                    entry->second = std::min(entry->second, steps);
+                }
+                break;
+            }
+        }
+    }
     for (const auto& candidate : classes) {
         if (&candidate == owner) {
             continue;
@@ -9029,6 +11638,51 @@ std::vector<Lowerer::HirClassOverride> Lowerer::hir_class_method_overrides(
                 break;
             }
             current = find_class(current->base_declaration_identity);
+        }
+        // A class implements an interface class its own declaration or a
+        // base class implements, also through interface classes that extend
+        // it (IEEE 1800-2023 8.26.2, 8.26.5); the steps to it rank the
+        // overrides.
+        if (!derived) {
+            std::set<std::string> reached { candidate.canonical_identity };
+            std::vector<const semantic::sv::ClassDeclaration*> level {
+                &candidate };
+            std::size_t steps { };
+            while (!derived && !level.empty()) {
+                ++steps;
+                std::vector<const semantic::sv::ClassDeclaration*> next;
+                const auto visit = [&](const std::string& identity) {
+                    if (identity.empty() || !reached.insert(identity).second) {
+                        return;
+                    }
+                    if (identity == owner->canonical_identity) {
+                        derived = true;
+                    } else if (const auto* found = find_class(identity)) {
+                        next.push_back(found);
+                    }
+                };
+                for (const auto* current : level) {
+                    visit(current->base_declaration_identity);
+                    for (const auto& relation : current->implemented_interfaces) {
+                        visit(relation.declaration_identity);
+                    }
+                    for (const auto& relation : current->extended_interfaces) {
+                        visit(relation.declaration_identity);
+                    }
+                }
+                level = std::move(next);
+            }
+            if (derived) {
+                depth = steps;
+            }
+        }
+        if (!derived) {
+            if (const auto found = specialization_derived.find(
+                    semantic::sv::class_declaration_identity(candidate));
+                found != specialization_derived.end()) {
+                derived = true;
+                depth = found->second;
+            }
         }
         if (!derived) {
             continue;
@@ -9316,6 +11970,13 @@ bool Lowerer::lower_hir_class_task_invocation(
         actual_directions.reserve(
             profile.actuals.size() + hidden_string_result);
         for (const auto& actual : profile.actuals) {
+            // A default is evaluated in the method's scope (13.5.3).
+            const ValueRestoreGuard default_receiver {
+                hir_class_receiver_register_
+            };
+            if (actual.defaulted && receiver) {
+                hir_class_receiver_register_ = *receiver;
+            }
             if (actual.container) {
                 return false;
             }
@@ -9694,6 +12355,14 @@ Lowerer::lower_hir_class_callable_invocation(
         const auto& actual = profile.actuals[index];
         if (ref_signals[index]) {
             return true;
+        }
+        // A default is evaluated in the method's scope (13.5.3): `this` in
+        // it is the object the method is called on.
+        const ValueRestoreGuard default_receiver {
+            hir_class_receiver_register_
+        };
+        if (actual.defaulted && receiver) {
+            hir_class_receiver_register_ = *receiver;
         }
         if (actual.container) {
             const auto formal_type
@@ -10343,12 +13012,26 @@ Lowerer::hir_vhdl_type_actual(
         }
     }
 
-    auto name = expression->vhdl->text;
-    lowercase_ascii(name);
+    // A type the compiler provides that the name denotes where it is
+    // written: a type or subtype of STD.STANDARD (IEEE 1076-2019 16.3), or
+    // STD_ULOGIC or STD_LOGIC of IEEE.STD_LOGIC_1164 (16.7), through its
+    // simple or expanded name (12.3, 12.4), by the resolver's identity. The
+    // mark is the declaration's simple name in its package.
+    const auto resolver = hir_resolver();
+    const auto& text = expression->vhdl->text;
+    const auto scope = expression->vhdl->scope;
+    const auto identity = resolver.resolve_vhdl_type_identity(text, scope);
     semantic::vhdl::SubtypeIndication result;
     result.type_mark.source = expression->vhdl->source;
-    result.type_mark.spelling = name;
-    if (name == "integer" || name == "natural" || name == "positive") {
+    using Scalar = semantic::CompiledVhdlStandardScalarIdentity;
+    if (!identity.type && identity.standard_scalar_type != Scalar::none) {
+        result.type_mark.spelling
+            = semantic::vhdl_standard_scalar_declaration_name(
+                identity.standard_scalar_type,
+                identity.standard_scalar_subtype);
+    }
+    switch (identity.type ? Scalar::none : identity.standard_scalar_type) {
+    case Scalar::integer: {
         const auto width = frontend::vhdl_predefined_integer_storage_width(
             vhdl_integer_standard());
         result.domain = semantic::vhdl::ValueDomain::integer;
@@ -10357,44 +13040,52 @@ Lowerer::hir_vhdl_type_actual(
         result.signed_value = true;
         return result;
     }
-    if (support::is_vhdl_time_type_name(name)) {
+    case Scalar::time:
         // TIME is a 64-bit physical type (IEEE 1076-2008 5.2.4.2).
         result.domain = semantic::vhdl::ValueDomain::integer;
         result.executable_width = 64U;
         result.integer_storage_width = 64U;
         result.signed_value = true;
         return result;
-    }
-    if (name == "real") {
+    case Scalar::real:
         result.domain = semantic::vhdl::ValueDomain::bit2;
         result.executable_width = 64U;
         return result;
-    }
-    if (name == "boolean") {
+    case Scalar::boolean:
         result.domain = semantic::vhdl::ValueDomain::boolean;
         result.executable_width = 1U;
         return result;
-    }
-    if (name == "bit") {
+    case Scalar::bit:
         result.domain = semantic::vhdl::ValueDomain::bit2;
         result.executable_width = 1U;
         return result;
-    }
-    if (name == "std_logic" || name == "std_ulogic") {
-        result.domain = semantic::vhdl::ValueDomain::logic9;
-        result.executable_width = 1U;
-        return result;
-    }
-    if (name == "character") {
+    case Scalar::character:
         result.domain = semantic::vhdl::ValueDomain::bit2;
         result.executable_width = 8U;
         return result;
-    }
-    if (const auto* enumeration
-        = support::find_vhdl_standard_enumeration(name)) {
+    case Scalar::severity_level:
+    case Scalar::file_open_kind:
+    case Scalar::file_open_status:
+    case Scalar::range_direction: {
+        const auto* enumeration = support::find_vhdl_standard_enumeration(
+            result.type_mark.spelling);
+        if (enumeration == nullptr) {
+            return std::nullopt;
+        }
         result.domain = semantic::vhdl::ValueDomain::bit2;
         result.executable_width
             = support::vhdl_standard_enumeration_width(*enumeration);
+        return result;
+    }
+    case Scalar::none:
+        break;
+    }
+    if (identity.status == semantic::CompiledResolutionStatus::not_found
+        && resolver.resolve_vhdl_intrinsic_enumeration(text, scope)
+            == support::VhdlIntrinsicEnumeration::std_ulogic) {
+        result.type_mark.spelling = lowercase_vhdl_simple_name(text);
+        result.domain = semantic::vhdl::ValueDomain::logic9;
+        result.executable_width = 1U;
         return result;
     }
     return std::nullopt;
@@ -11185,14 +13876,10 @@ Lowerer::hir_interface_instance_through_modport(
             type != systemverilog_interface_types_->end()
             && systemverilog_interface_handles_->contains(path)) {
             const auto& design = specialized_hir_unit_->design();
-            const auto unit = std::ranges::find_if(
-                design.systemverilog_hir.units(),
-                [&](const semantic::sv::Unit& candidate) {
-                    return candidate.kind
-                            == semantic::sv::UnitKind::interface
-                        && candidate.name == type->second;
-                });
-            if (unit != design.systemverilog_hir.units().end()
+            const auto found_unit = design.find_unit(type->second.unit);
+            const auto* const unit
+                = found_unit ? found_unit->systemverilog : nullptr;
+            if (unit != nullptr
                 && std::ranges::find(unit->modports, modport,
                        &semantic::sv::Modport::name)
                     != unit->modports.end()) {
@@ -11235,14 +13922,10 @@ std::optional<semantic::DeclarationId> Lowerer::hir_interface_port_prototype(
             type != systemverilog_interface_types_->end()
             && systemverilog_interface_handles_->contains(path)) {
             const auto& design = specialized_hir_unit_->design();
-            const auto unit = std::ranges::find_if(
-                design.systemverilog_hir.units(),
-                [&](const semantic::sv::Unit& candidate) {
-                    return candidate.kind
-                            == semantic::sv::UnitKind::interface
-                        && candidate.name == type->second;
-                });
-            if (unit == design.systemverilog_hir.units().end()) {
+            const auto found_unit = design.find_unit(type->second.unit);
+            const auto* const unit
+                = found_unit ? found_unit->systemverilog : nullptr;
+            if (unit == nullptr) {
                 return std::nullopt;
             }
             for (const auto id : unit->declarations) {
@@ -17451,6 +20134,7 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
 {
     HirDpiFunctionProfile result;
     result.linkage_name = declaration.linkage_name;
+    result.origin = declaration.origin;
     result.owner_scope = declaration.owner_scope;
     // Typedef names resolve in the declaration's scope (35.5.6).
     const auto resolver = hir_resolver();
@@ -18241,7 +20925,8 @@ std::optional<RegisterId> Lowerer::lower_hir_callable_actual(
             const auto view = specialized_hir_unit_->find_declaration(id);
             return view && view->systemverilog != nullptr
                 && view->systemverilog->type
-                && view->systemverilog->type->target.spelling == "event";
+                && hir_type_is_event(
+                    *view->systemverilog->type, view->systemverilog->scope);
         };
         if (const auto declaration = hir_referenced_declaration(actual);
             declaration && event_type(*declaration) && !event_type(formal)) {
@@ -19527,6 +22212,11 @@ Lowerer::lower_hir_function_call_value(
         : interface_callable
             ? hir_callable_resolution(interface_callable->declaration)
                    : std::nullopt;
+    if (resolution && expression && expression->systemverilog != nullptr) {
+        record_vpi_callee(false, expression_id.value(), resolution->body,
+            interface_callable ? std::string_view { interface_callable->receiver }
+                               : std::string_view { });
+    }
     if (!resolution) {
         if (const auto predefined = expression && expression->vhdl != nullptr
                 ? lower_hir_vhdl_predefined_interface_call(expression_id)
@@ -20340,6 +23030,7 @@ Lowerer::lower_hir_function_call_value(
         }
     }
 
+    record_hir_call_site(true, expression_id.value(), frame_index);
     std::vector<std::optional<RegisterId>> lowered_actuals(
         actuals->size());
     std::vector<std::optional<StringRegisterId>> lowered_string_actuals(
@@ -21277,6 +23968,7 @@ std::optional<RegisterId> Lowerer::lower_hir_dpi_function_call(
         || expression->systemverilog == nullptr) {
         return std::nullopt;
     }
+    record_vpi_callee(false, expression_id.value(), { }, { }, profile->origin);
     auto destination = emit_hir_dpi_call(
         *profile, hir_source_span(expression->systemverilog->source));
     if (destination && expected_width != 0U
@@ -21305,6 +23997,7 @@ std::optional<StringRegisterId> Lowerer::lower_hir_dpi_string_call(
         || expression->systemverilog == nullptr) {
         return std::nullopt;
     }
+    record_vpi_callee(false, expression_id.value(), { }, { }, profile->origin);
     const auto text = allocate_string_register();
     if (!emit_hir_dpi_call(*profile,
             hir_source_span(expression->systemverilog->source), text)) {
@@ -21929,6 +24622,7 @@ bool Lowerer::lower_hir_dpi_block_exports_foreign()
 }
 
 std::optional<bool> Lowerer::lower_hir_dpi_call_statement(
+    const semantic::StatementId statement_id,
     const std::string_view name,
     const std::span<const semantic::sv::TaskAssociation> arguments,
     const frontend::SourceSpan& span,
@@ -21952,6 +24646,7 @@ std::optional<bool> Lowerer::lower_hir_dpi_call_statement(
         }
         return false;
     }
+    record_vpi_callee(true, statement_id.value(), { }, { }, profile->origin);
     return emit_hir_dpi_call(*profile, span).has_value();
 }
 
@@ -22959,6 +25654,7 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_function_call(
         }
     }
 
+    record_hir_call_site(true, expression_id.value(), frame_index);
     std::vector<std::optional<RegisterId>> lowered_actuals(
         actuals->size());
     std::vector<std::optional<StringRegisterId>> lowered_string_actuals(
@@ -24520,6 +27216,7 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
         key_reservation.commit();
     }
 
+    record_hir_call_site(false, statement_id.value(), frame_index);
     std::vector<std::optional<RegisterId>> lowered_actuals(
         actuals->size());
     std::vector<std::optional<StringRegisterId>> lowered_string_actuals(
@@ -25733,8 +28430,33 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
     // call-result table (`Process::call_results`, not a debug local, so the
     // debug-local listings and gates do not see it), named
     // `<callable>.@result` behind the lowering's suffix, which a run with the
-    // execution probes reads at the frame's end (`frame_exit`). A string,
-    // container or void result has no register to read.
+    // execution probes reads at the frame's end (`frame_exit`). A string or
+    // container result is a slot of that table too, numbering a string or
+    // container register (DebugLocalStorage); a void result has none.
+    if (initial_frame->function && declaration->systemverilog != nullptr
+        && !initial_frame->debug_name.empty()
+        && (initial_frame->type.string
+            || (initial_frame->type.container
+                && initial_frame->container_result))) {
+        const auto& function_record = *declaration->systemverilog;
+        const bool string = initial_frame->type.string;
+        process_.call_results.push_back(DebugLocal {
+            initial_frame->debug_name + ".@result@hir-callable-"
+                + std::to_string(initial_frame->invocation_identity),
+            function_record.type ? function_record.type->target.spelling
+                                 : std::string { },
+            string ? initial_frame->string_result
+                   : *initial_frame->container_result,
+            0U,
+            runtime_source_location(hir_source_span(function_record.source)),
+            std::nullopt,
+            std::nullopt,
+            ValueKind::logic4,
+            { },
+            frontend::SystemVerilogScalarKind::None,
+            string ? DebugLocalStorage::string : DebugLocalStorage::container,
+        });
+    }
     if (initial_frame->function && declaration->systemverilog != nullptr
         && (!declaration->systemverilog->type
             || declaration->systemverilog->type->target.spelling != "void")
@@ -25788,6 +28510,9 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
             process_.debug_locals.size(),
             process_.expression_profiles.size(),
             hir_callable_body_side_state() };
+        memo_start.call_results = process_.call_results.size();
+        memo_start.frame_locals = process_.frame_locals.size();
+        memo_start.local_bindings = process_.call_frames.locals.size();
         hir_callable_debug_name_log_ = &memo_debug_names;
     }
 
@@ -25927,6 +28652,37 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
     loop_controls_.clear();
     active_hir_callable_ = callable_index;
     hir_class_receiver_register_ = initial_frame->class_receiver;
+    // The object a class method runs on (`this`, IEEE 1800-2023 8.11) is a
+    // debug local of the frame bound to the method, named
+    // `<callable>.@receiver` behind the lowering's suffix so that the
+    // debug-local listings skip it: inside a call, VPI reads the members of
+    // that object (37.29 example 2).
+    if (initial_frame->class_receiver && !initial_frame->debug_name.empty()
+        && declaration->systemverilog != nullptr) {
+        const auto storage = *initial_frame->class_receiver;
+        auto debug_name = initial_frame->debug_name + ".@receiver@hir-callable-"
+            + std::to_string(initial_frame->invocation_identity);
+        if (!debug_local_names_.emplace(debug_name).second) {
+            debug_name += "#" + std::to_string(process_.debug_locals.size());
+            debug_local_names_.emplace(debug_name);
+        }
+        bind_hir_frame_local(callable_index, initial_frame->declaration, false,
+            process_.debug_locals.size(),
+            runtime::simir::FrameLocalStorage::packed, true);
+        process_.debug_locals.push_back(DebugLocal {
+            std::move(debug_name),
+            std::string { },
+            storage,
+            register_width(storage),
+            runtime_source_location(
+                hir_source_span(declaration->systemverilog->source)),
+            std::nullopt,
+            std::nullopt,
+            value_kind(register_domains_[storage]),
+            { },
+            frontend::SystemVerilogScalarKind::None,
+        });
+    }
     if (initial_frame->type.container
         && initial_frame->container_result
         && declaration->systemverilog != nullptr) {
@@ -25992,6 +28748,9 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
                             initial_frame->invocation_identity);
                     debug_local_names_.emplace(debug_name);
                 }
+                bind_hir_frame_local(callable_index, formal, false,
+                    process_.debug_container_locals.size(),
+                    runtime::simir::FrameLocalStorage::container);
                 process_.debug_container_locals.push_back(
                     DebugContainerLocal {
                         std::move(debug_name),
@@ -26026,6 +28785,9 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
                             initial_frame->invocation_identity);
                     debug_local_names_.emplace(debug_name);
                 }
+                bind_hir_frame_local(callable_index, formal, false,
+                    process_.debug_string_locals.size(),
+                    runtime::simir::FrameLocalStorage::string);
                 process_.debug_string_locals.push_back(DebugStringLocal {
                     std::move(debug_name),
                     initial_frame->string_arguments[index],
@@ -26057,6 +28819,16 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
             const auto storage = initial_frame->arguments[index];
             auto debug_name = hir_callable_formal_debug_name(
                 callable_index, formal, name);
+            bind_hir_frame_local(callable_index, formal, false,
+                process_.debug_locals.size());
+            if (record->vhdl != nullptr) {
+                if (initial_frame->profile_formals.size()
+                    == initial_frame->formals.size()) {
+                    bind_hir_frame_local(callable_index,
+                        initial_frame->profile_formals[index], false,
+                        process_.debug_locals.size());
+                }
+            }
             process_.debug_locals.push_back(DebugLocal {
                 std::move(debug_name),
                 type_name,
@@ -26073,11 +28845,17 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
             // A VHDL function cannot suspend, so its formals are no debug
             // locals; a running call reads them from the frame-local table
             // (IEEE 1076-2019 14.6 b).
-            add_hir_frame_local(callable_index, name,
+            add_hir_frame_local(callable_index, formal, name,
                 record->vhdl->subtype
                     ? record->vhdl->subtype->type_mark.spelling
                     : std::string { },
                 initial_frame->arguments[index], record->vhdl->source);
+            if (initial_frame->profile_formals.size()
+                == initial_frame->formals.size()) {
+                bind_hir_frame_local(callable_index,
+                    initial_frame->profile_formals[index], true,
+                    process_.frame_locals.size() - 1U);
+            }
         }
     }
 
@@ -26343,8 +29121,15 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
         : frame_declaration->name + "@hir-callable-"
             + std::to_string(initial_frame->invocation_identity);
     if (frame_declaration != nullptr && declarations_ready) {
+        // The point names the callable by its declaration, and the
+        // instance it belongs to by the receiver of a call through an
+        // interface port or virtual interface (none for the caller's own
+        // instance or a package).
         emit_debug_point(DebugPointKind::frame_entry,
-            hir_source_span(frame_declaration->source), frame_point_name);
+            hir_source_span(frame_declaration->source), frame_point_name,
+            hir_callable_frames_[callable_index].declaration,
+            hir_callable_frames_[callable_index].interface_receiver.value_or(
+                std::string { }));
     }
     if (declarations_ready && initial_frame->class_receiver) {
         cache_hir_class_container_properties(

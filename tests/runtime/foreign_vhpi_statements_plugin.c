@@ -761,7 +761,7 @@ static int deposit(vhpiHandleT variable, int number, vhpiPutValueModeT mode)
     return vhpi_put_value(variable, &value, mode);
 }
 
-// Variables of a process are read and deposited (22.5.2).
+// Variables of a process are read, deposited and forced (22.5.2).
 static void variables(void)
 {
     vhpiHandleT r = vhpi_handle_by_name("top.sub.expr.r", NULL);

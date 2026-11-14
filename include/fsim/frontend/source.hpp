@@ -8,7 +8,6 @@
 #include <string>
 #include <string_view>
 #include <utility>
-#include <vector>
 
 namespace fsim::frontend {
 
@@ -107,6 +106,17 @@ struct SourceLocation {
                                    const SourceLocation&) = default;
 };
 
+/// The definition of a macro: its name, the physical source file holding the
+/// `define and its position there (IEEE 1800-2023 22.5.1). A span produced by
+/// a macro expansion names the definition of the outermost macro.
+struct MacroOrigin {
+  std::string name;
+  SourceName definition_source;
+  SourceLocation definition;
+
+  friend bool operator==(const MacroOrigin&, const MacroOrigin&) = default;
+};
+
 struct SourceSpan {
   SourceName source_name;
   SourceLocation begin;
@@ -118,6 +128,9 @@ struct SourceSpan {
   // Parsed nodes own this copy so semantic provenance survives after the
   // preprocessor token stream is released.
   support::RareVector<std::string> expansion_stack;
+  // The definition of the outermost macro of `expansion_stack`; shared by
+  // every span of one macro, empty without an expansion.
+  std::shared_ptr<const MacroOrigin> macro_origin = nullptr;
 
   [[nodiscard]] bool empty() const noexcept {
     return begin.offset == end.offset;

@@ -1595,6 +1595,14 @@ Expression VerilogParser::parse_primary_impl()
                 expression.call_result_width = 32;
                 expression.call_result_domain = ValueDomain::Integer;
                 expression.call_result_signed = true;
+            } else if (canonical == "$__fsim_current") {
+                // The current value of a boolean in a generated assertion
+                // process, whose other reads are sampled: a sequence's
+                // triggered and matched states (IEEE 1800-2023 16.13.6:
+                // their sampled values are their current values).
+                expression.call_result_width = 1;
+                expression.call_result_domain = ValueDomain::Bit2;
+                expression.call_result_signed = false;
             } else if (canonical == "$__fsim_sva_tick"
                 || canonical == "$__fsim_sva_outcome"
                 || canonical == "$__fsim_sva_request"

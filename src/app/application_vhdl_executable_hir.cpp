@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
-#include "application_vhdl_hir_internal.hpp"
 
 #include <cstdint>
 #include <string>

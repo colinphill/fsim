@@ -18,9 +18,21 @@
 // alternate executor runs (SystemC, a foreign model) keeps its state inside
 // the executor and refuses the save (FSIM-SAVE-0007).
 #include "simir_run_state.hpp"
+#include "fsim/runtime/run_state_image.hpp"
+#include "fsim/runtime/run_state_sections.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include "run_state_archive.hpp"
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 namespace fsim::runtime::simir::run_state {
 

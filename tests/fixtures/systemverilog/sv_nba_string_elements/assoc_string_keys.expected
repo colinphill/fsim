@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+sns key same-step n=1 a=10 eb=0
+sns key next-step n=2 a=11 b=50 eb=1
+sns key mid n=3 c=21 ed=0
+sns key last n=4 d=70
+sns key sampled e=100 n=5
+sns key sampled-next e=6 x=7 y=8 n=7
+sns key logic p=5a q=xz01xxxx n=2

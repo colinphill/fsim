@@ -5,17 +5,50 @@
 #include "acc_internal.hpp"
 #include "fsim/runtime/tf_containment.hpp"
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cstdarg>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 
 thread_local std::string string_buffer;
+
+// ACC routines that return strings share one buffer (IEEE 1364-2001
+// 22.9.1): each string goes to the next free location, so an earlier string
+// stays valid until one no longer fits in the room left and the buffer
+// resets, writing from its start again (22.9.2), or until acc_reset_buffer
+// or acc_close. The buffer holds 64 KiB (22.9.2 asks for at least 4096
+// characters); a longer string resets it at the size that string needs.
+constexpr std::size_t shared_string_bytes = std::size_t{1} << 16U;
+thread_local std::vector<PLI_BYTE8> shared_strings;
+thread_local std::size_t shared_next{};
+
+// Places a copy of `text` in the shared buffer: its location there.
+[[nodiscard]] PLI_BYTE8* place_string(const std::string& text) noexcept {
+  try {
+    const auto needed = text.size() + 1U;
+    if (shared_strings.size() < std::max(shared_string_bytes, needed)) {
+      shared_strings.assign(std::max(shared_string_bytes, needed), '\0');
+      shared_next = 0;
+    } else if (shared_next + needed > shared_strings.size()) {
+      shared_next = 0;
+    }
+    auto* const at = shared_strings.data() + shared_next;
+    std::memcpy(at, text.data(), text.size());
+    at[text.size()] = '\0';
+    shared_next += needed;
+    return at;
+  } catch (...) {
+    return nullptr;
+  }
+}
 
 using fsim::runtime::acc_detail::publish_error;
 
@@ -164,7 +197,7 @@ enum class ReadStatus { Valid, NotFound, Error };
     return nullptr;
   }
   publish_error(false);
-  return string_buffer.data();
+  return place_string(string_buffer);
 }
 
 struct TypeName {
@@ -267,6 +300,7 @@ namespace fsim::runtime::acc_detail {
 void reset_read_borrowed_storage() noexcept {
   if (!string_buffer.empty()) string_buffer.front() = '\0';
   string_buffer.clear();
+  shared_next = 0;
 }
 
 }  // namespace fsim::runtime::acc_detail
@@ -356,7 +390,7 @@ PLI_BYTE8* acc_fetch_attribute_str(const handle object, ...) {
       }
     }
     publish_error(false);
-    return string_buffer.data();
+    return place_string(string_buffer);
   }
   if (status != ReadStatus::Valid ||
       !copy_native_string(result.attribute_string,
@@ -366,7 +400,7 @@ PLI_BYTE8* acc_fetch_attribute_str(const handle object, ...) {
     return nullptr;
   }
   publish_error(false);
-  return string_buffer.data();
+  return place_string(string_buffer);
 }
 
 PLI_BYTE8* acc_fetch_defname(const handle object) {
@@ -438,7 +472,7 @@ PLI_INT32 acc_fetch_location(p_location const location, const handle object) {
     return 0;
   }
   location->line_no = result.source_line;
-  location->filename = string_buffer.data();
+  location->filename = place_string(string_buffer);
   publish_error(false);
   return 1;
 }
@@ -589,7 +623,7 @@ PLI_BYTE8* acc_fetch_value(const handle object, PLI_BYTE8* const format,
       return nullptr;
     }
     publish_error(false);
-    return string_buffer.data();
+    return place_string(string_buffer);
   };
   switch (copied_format[1]) {
     case 'b': return return_string(result.binary_value, result.binary_value_size);
@@ -616,21 +650,21 @@ PLI_BYTE8* acc_fetch_value(const handle object, PLI_BYTE8* const format,
         publish_error(true);
         return nullptr;
       }
-      value->value.str = string_buffer.data();
+      value->value.str = place_string(string_buffer);
       break;
     case accOctStrVal:
       if (!copy_result_string(result.octal_value, result.octal_value_size)) {
         publish_error(true);
         return nullptr;
       }
-      value->value.str = string_buffer.data();
+      value->value.str = place_string(string_buffer);
       break;
     case accDecStrVal:
       if (!copy_result_string(result.decimal_value, result.decimal_value_size)) {
         publish_error(true);
         return nullptr;
       }
-      value->value.str = string_buffer.data();
+      value->value.str = place_string(string_buffer);
       break;
     case accHexStrVal:
       if (!copy_result_string(result.hexadecimal_value,
@@ -638,7 +672,7 @@ PLI_BYTE8* acc_fetch_value(const handle object, PLI_BYTE8* const format,
         publish_error(true);
         return nullptr;
       }
-      value->value.str = string_buffer.data();
+      value->value.str = place_string(string_buffer);
       break;
     case accStringVal:
       if (!copy_result_string(result.string_value, result.string_value_size,
@@ -646,7 +680,7 @@ PLI_BYTE8* acc_fetch_value(const handle object, PLI_BYTE8* const format,
         publish_error(true);
         return nullptr;
       }
-      value->value.str = string_buffer.data();
+      value->value.str = place_string(string_buffer);
       break;
     case accScalarVal:
       if (result.value_kind != FSIM_ACC_READ_VALUE_LOGIC4 ||

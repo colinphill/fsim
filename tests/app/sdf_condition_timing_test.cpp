@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fsim/app/sdf_condition_timing.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 #include "sdf_row_backed_test_support.hpp"
 
 #include <iostream>
 #include <memory>
-#include <ranges>
 #include <stdexcept>
 #include <string>
 #include <string_view>

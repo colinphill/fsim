@@ -11,11 +11,25 @@
 #include <functional>
 #include <limits>
 #include <set>
+#include <string_view>
+#include <type_traits>
 #include <utility>
 
 namespace fsim::app::application_detail {
 
 namespace {
+
+// The inline constraint block of a `randomize() with {...}` call, which the
+// HIR keeps as the call's association the lowering marks (18.7); null for
+// any other expression.
+[[nodiscard]] const auto* inline_constraint_of(const auto& record)
+{
+    const auto found = std::ranges::find(record.associations,
+        std::string_view { "@sv-inline-constraint" },
+        &std::remove_cvref_t<
+            decltype(record.associations.front())>::choice_spelling);
+    return found == record.associations.end() ? nullptr : &*found;
+}
 
 namespace sv = semantic::sv;
 using runtime::Logic4;
@@ -131,15 +145,11 @@ constexpr std::uint32_t body_case = 4U;
     return std::nullopt;
 }
 
+// The frontend records a built-in type's signedness, its default (6.11.3)
+// or the `signed`/`unsigned` written after it.
 [[nodiscard]] bool type_signed(const sv::TypeReference& type)
 {
-    if (type.signed_value) {
-        return true;
-    }
-    const auto word = type_word(type);
-    return (word == "int" || word == "integer" || word == "byte"
-               || word == "shortint" || word == "longint")
-        && type.target.spelling.find("unsigned") == std::string::npos;
+    return type.signed_value;
 }
 
 // A built-in type with its packed dimensions (IEEE 1800-2023 37.41); none
@@ -147,6 +157,15 @@ constexpr std::uint32_t body_case = 4U;
 [[nodiscard]] std::optional<VpiStatementModel::DeclaredType> declared_type_of(
     const sv::TypeReference& type)
 {
+    // A virtual interface type has the interface typespec of the interface,
+    // or of its modport (25.9, 37.30).
+    if (type.virtual_interface && !type.container_form
+        && type.unpacked_dimensions.empty()) {
+        VpiStatementModel::DeclaredType named;
+        named.interface_name = type.interface_type;
+        named.modport_name = type.interface_modport;
+        return named;
+    }
     auto word = type_word(type);
     if (word == "reg" || word.empty()) {
         word = "logic";
@@ -165,6 +184,50 @@ constexpr std::uint32_t body_case = 4U;
         VpiStatementModel::DeclaredType named;
         named.type_name = type.target.spelling;
         return named;
+    }
+    // A class handle: the class model gives its typespec (37.41, 37.31).
+    if (!type.container_form && type.unpacked_dimensions.empty()
+        && !type.class_identity.empty() && !type.virtual_interface) {
+        VpiStatementModel::DeclaredType named;
+        named.class_name = type.class_specialization.empty()
+            ? type.class_identity
+            : type.class_specialization;
+        return named;
+    }
+    // A container or fixed-size unpacked array: an array typespec of its
+    // element type (37.25 detail 2).
+    const bool dynamic = type.container_form == sv::TypeForm::dynamic_array;
+    const bool queue = type.container_form == sv::TypeForm::queue;
+    const bool associative
+        = type.container_form == sv::TypeForm::associative_array;
+    const bool fixed = type.container_form == sv::TypeForm::static_array
+        || (!type.container_form && !type.unpacked_dimensions.empty());
+    if (dynamic || queue || associative || fixed) {
+        VpiStatementModel::DeclaredType array;
+        array.array_kind = dynamic ? 2 : queue ? 3 : associative ? 4 : 1;
+        sv::TypeReference base = type;
+        base.container_form.reset();
+        base.unpacked_dimensions.clear();
+        base.associative_index.reset();
+        if (array.array_kind == 1) {
+            for (const auto& range : type.unpacked_dimensions) {
+                if (!range.left || !range.right) {
+                    return std::nullopt;
+                }
+                array.dimensions.emplace_back(*range.left, *range.right);
+            }
+        } else if (!type.container_element_types.empty()) {
+            base = type.container_element_types.front();
+        }
+        if (associative && type.associative_index) {
+            array.index_word = type.associative_index->spelling;
+        }
+        const auto element = declared_type_of(base);
+        if (!element) {
+            return std::nullopt;
+        }
+        array.element.push_back(*element);
+        return array;
     }
     if (!built_in.contains(word) || type.container_form
         || !type.unpacked_dimensions.empty()) {
@@ -189,8 +252,10 @@ constexpr std::uint32_t body_case = 4U;
     } else if (type.packed_range && !add(*type.packed_range)) {
         return std::nullopt;
     }
+    // An integer atom (`int`, `byte`, ...) carries its implicit packed range
+    // in the HIR; its typespec has no dimensions (37.25).
     if (!result.ranges.empty() && word != "logic" && word != "bit") {
-        return std::nullopt;
+        result.ranges.clear();
     }
     return result;
 }
@@ -273,6 +338,10 @@ declared_type_of_tokens(const std::vector<sv::SourceToken>& tokens,
 // 37.17).
 [[nodiscard]] PLI_INT32 variable_type(const sv::TypeReference& type)
 {
+    if (type.virtual_interface && !type.container_form
+        && type.unpacked_dimensions.empty()) {
+        return vpiVirtualInterfaceVar;
+    }
     const auto word = type_word(type);
     if (word == "int") {
         return vpiIntVar;
@@ -581,7 +650,52 @@ struct DpiTokenShape {
     return shape;
 }
 
+// The precedence of an operator (IEEE 1800-2023 11.3.2, Table 11-2): a
+// larger number binds tighter; primaries are 100.
+[[nodiscard]] int operator_precedence(
+    const std::string_view text, const std::size_t operands)
+{
+    if (operands == 1U) {
+        return 90;
+    }
+    if (text == "?:") {
+        return 20;
+    }
+    if (text == "->" || text == "<->") {
+        return 10;
+    }
+    static constexpr std::pair<std::string_view, int> binary[] = {
+        { "**", 80 }, { "*", 70 }, { "/", 70 }, { "%", 70 }, { "+", 60 },
+        { "-", 60 }, { "<<", 55 }, { ">>", 55 }, { "<<<", 55 },
+        { ">>>", 55 }, { "<", 50 }, { "<=", 50 }, { ">", 50 }, { ">=", 50 },
+        { "inside", 50 }, { "dist", 50 }, { "==", 45 }, { "!=", 45 },
+        { "===", 45 }, { "!==", 45 }, { "==?", 45 }, { "!=?", 45 },
+        { "&", 40 }, { "^", 38 }, { "~^", 38 }, { "^~", 38 }, { "|", 36 },
+        { "&&", 32 }, { "||", 30 },
+    };
+    for (const auto& [spelling, level] : binary) {
+        if (text == spelling) {
+            return level;
+        }
+    }
+    return 0;
+}
+
+
+// Restores the let frame a relation or iteration set (IEEE 1800-2023
+// 37.57).
+struct FrameRestore {
+    std::uint32_t& slot;
+    std::uint32_t saved;
+    ~FrameRestore() { slot = saved; }
+};
+
 } // namespace
+
+PLI_INT32 vpi_hir_variable_type(const sv::TypeReference& type)
+{
+    return variable_type(type);
+}
 
 VpiDpiResult vpi_dpi_result(const sv::DpiDeclaration& declaration)
 {
@@ -745,6 +859,7 @@ fsim_vpi_handle_v1 VpiStatementModel::node(const Kind kind,
     const auto [found, created] = index_.try_emplace(key, nodes_.size());
     if (created) {
         nodes_.push_back(Node { kind, id, aux, scope, parent, of_process });
+        serial_of_.emplace(hooks_.handle(found->second), found->second);
     }
     return hooks_.handle(found->second);
 }
@@ -917,16 +1032,478 @@ fsim_vpi_handle_v1 VpiStatementModel::expression_handle(
     if (record == nullptr) {
         return 0U;
     }
+    // A formal of the let whose body this is (IEEE 1800-2023 11.12): in a
+    // let expression the argument bound to it, seen where the let
+    // expression is; in the declaration a ref obj of the formal (37.57).
+    if (frame_ != 0U && record->kind == sv::ExpressionKind::name) {
+        const auto frame = let_frames_[frame_];
+        const auto& ports = frame.declaration->ports;
+        const auto port = std::ranges::find(
+            ports, record->text, &sv::LetPort::name);
+        if (port != ports.end()) {
+            if (!frame.use) {
+                return node(Kind::reference, id.value(), frame_, scope, parent);
+            }
+            const auto argument = let_argument(*frame.declaration, *frame.use,
+                static_cast<std::size_t>(port - ports.begin()));
+            if (!argument) {
+                return 0U;
+            }
+            const auto saved = std::exchange(frame_, frame.outer);
+            const auto handle = expression_handle(*argument, frame.scope, parent);
+            frame_ = saved;
+            return handle;
+        }
+    }
+    // A call or name that expands a let declaration is a let expression
+    // (11.12, 37.57).
+    if ((record->kind == sv::ExpressionKind::call
+            || record->kind == sv::ExpressionKind::name)
+        && hooks_.let_body) {
+        if (const auto body = hooks_.let_body(scope, id);
+            body && let_of_body(*body) != nullptr) {
+            return node(Kind::let_expr, id.value(), frame_, scope, parent);
+        }
+    }
     if (record->kind == sv::ExpressionKind::name) {
         const auto& name = record->referenced_name
             ? record->referenced_name->spelling
             : record->text;
-        if (const auto object = hooks_.resolve(scope, name)) {
-            return object;
+        // A name the link step resolved to a declaration of a package
+        // (`pkg::pv`, IEEE 1800-2023 26.3) is the object of that declaration
+        // (37.10).
+        if (record->referenced_name && record->referenced_name->selected
+            && hooks_.declared) {
+            if (const auto object = hooks_.declared(
+                    *record->referenced_name->selected)) {
+                return hooks_.reference ? hooks_.reference(object) : object;
+            }
         }
-        return node(Kind::reference, id.value(), 0U, scope, parent);
+        // A name of a variable a for statement declares is that variable,
+        // whose scope is the loop the name is in (12.7.1, 37.12 detail 2).
+        if (record->referenced_name && record->referenced_name->selected) {
+            const auto selected = *record->referenced_name->selected;
+            for (auto above = parent; above != 0U;) {
+                const auto found = serial_of_.find(above);
+                if (found == serial_of_.end()) {
+                    break;
+                }
+                const auto owner = nodes_[found->second];
+                if (owner.kind == Kind::statement) {
+                    const auto* const loop = statement(owner.id);
+                    if (loop != nullptr && loop->loop_variable_declared
+                        && statement_type(*loop) == vpiFor
+                        && std::ranges::find(loop->declarations, selected)
+                            != loop->declarations.end()) {
+                        return node(Kind::local_variable, selected.value(),
+                            owner.id, owner.scope, above);
+                    }
+                }
+                above = owner.parent;
+            }
+        }
+        // A formal or local of the class method the name is in (8.6): in a
+        // frame of a call of the method, that call's automatic variable
+        // (37.43), else the declared variable (37.29 example 2).
+        if (record->referenced_name && record->referenced_name->selected
+            && hooks_.method) {
+            const auto selected = *record->referenced_name->selected;
+            const auto method = hooks_.method(scope);
+            const auto* const callable
+                = method ? hir_.find_declaration(*method) : nullptr;
+            if (callable != nullptr && callable->callable
+                && (std::ranges::find(callable->callable->formals, selected)
+                        != callable->callable->formals.end()
+                    || std::ranges::find(callable->children, selected)
+                        != callable->children.end())) {
+                if (hooks_.frame_local) {
+                    if (const auto live = hooks_.frame_local(scope, selected);
+                        live != 0U) {
+                        return live;
+                    }
+                }
+                return node(Kind::local_variable, selected.value(),
+                    method->value(), scope, scope);
+            }
+        }
+        if (const auto object = hooks_.resolve(scope, name)) {
+            return hooks_.reference ? hooks_.reference(object) : object;
+        }
+        return node(Kind::reference, id.value(), frame_, scope, parent);
     }
-    return node(Kind::expression, id.value(), 0U, scope, parent);
+    // A property named in a method of its class through `this`, written or
+    // implicit (8.11): the class's property, or in a frame of a call of the
+    // method the property of the object the call runs on (37.29 example 2).
+    if (record->kind == sv::ExpressionKind::class_property && hooks_.member
+        && record->operands.size() == 1U) {
+        const auto* const receiver = expression(record->operands.front().value());
+        if (receiver != nullptr && receiver->kind == sv::ExpressionKind::name
+            && (receiver->referenced_name
+                    ? receiver->referenced_name->spelling
+                    : receiver->text)
+                == "this") {
+            if (const auto member
+                = hooks_.member(scope, record->class_member_identity);
+                member != 0U) {
+                return member;
+            }
+        }
+    }
+    return node(Kind::expression, id.value(), frame_, scope, parent);
+}
+
+fsim_vpi_handle_v1 VpiStatementModel::call_callee(
+    const std::uint32_t expression, const fsim_vpi_handle_v1 scope) const
+{
+    return hooks_.callee ? hooks_.callee(scope, false, expression)
+                         : fsim_vpi_handle_v1 { };
+}
+
+// vpiDecompile of an expression (IEEE 1800-2023 37.59 detail 2): a
+// functionally equivalent expression, each operand and operator separated by
+// one space, parentheses only where precedence needs them; none for an
+// expression the frontend generated with no source form.
+std::optional<std::string> VpiStatementModel::decompile(
+    const semantic::ExpressionId id, int* precedence) const
+{
+    const auto* const record = expression(id.value());
+    if (record == nullptr) {
+        return std::nullopt;
+    }
+    const auto set = [&](const int level) {
+        if (precedence != nullptr) {
+            *precedence = level;
+        }
+    };
+    set(100);
+    // An operand in parentheses when it binds less tightly than its
+    // operator, or as tightly on the side the operator does not associate
+    // to (all binary operators associate left but ?: and ->, 11.3.2).
+    const auto operand = [&](const semantic::ExpressionId child,
+                             const int level, const bool parenthesize_equal)
+        -> std::optional<std::string> {
+        int inner = 100;
+        auto text = decompile(child, &inner);
+        if (!text) {
+            return std::nullopt;
+        }
+        if (inner < level || (parenthesize_equal && inner == level)) {
+            return "(" + *text + ")";
+        }
+        return text;
+    };
+    const auto list = [&](const std::size_t first)
+        -> std::optional<std::string> {
+        std::string text;
+        for (std::size_t index = first; index < record->operands.size();
+             ++index) {
+            auto item = decompile(record->operands[index], nullptr);
+            if (!item) {
+                return std::nullopt;
+            }
+            if (index > first) {
+                text += ",";
+            }
+            if (index < record->argument_names.size()
+                && !record->argument_names[index].empty()) {
+                text += "." + record->argument_names[index] + "(" + *item + ")";
+            } else {
+                text += *item;
+            }
+        }
+        return text;
+    };
+    using enum sv::ExpressionKind;
+    switch (record->kind) {
+    case name:
+        return record->referenced_name ? record->referenced_name->spelling
+                                       : record->text;
+    case integer_literal:
+    case boolean_literal:
+    case logic_literal:
+        return record->text;
+    case string_literal:
+        if (record->text.size() >= 2U && record->text.front() == '"'
+            && record->text.back() == '"') {
+            return record->text;
+        }
+        return "\"" + record->text + "\"";
+    case class_null:
+        return std::string { "null" };
+    case unary: {
+        if (record->operands.size() != 1U) {
+            return std::nullopt;
+        }
+        set(90);
+        auto inner = operand(record->operands[0], 90, false);
+        return inner ? std::optional { record->text + " " + *inner }
+                     : std::nullopt;
+    }
+    case binary: {
+        if (record->operands.size() != 2U) {
+            return std::nullopt;
+        }
+        const auto level = operator_precedence(record->text, 2U);
+        if (level == 0) {
+            return std::nullopt;
+        }
+        set(level);
+        const bool right_associative = record->text == "->";
+        auto left = operand(record->operands[0], level, right_associative);
+        auto right = operand(record->operands[1], level, !right_associative);
+        if (!left || !right) {
+            return std::nullopt;
+        }
+        return *left + " " + record->text + " " + *right;
+    }
+    case call: {
+        if (record->text == "?:" && record->operands.size() == 3U) {
+            set(20);
+            auto condition = operand(record->operands[0], 20, true);
+            auto first = operand(record->operands[1], 20, true);
+            auto second = operand(record->operands[2], 20, false);
+            if (!condition || !first || !second) {
+                return std::nullopt;
+            }
+            return *condition + " ? " + *first + " : " + *second;
+        }
+        if (sv::is_expression_size_cast(*record)) {
+            auto size = operand(record->operands[0], 100, false);
+            auto value = decompile(record->operands[1], nullptr);
+            if (!size || !value) {
+                return std::nullopt;
+            }
+            return *size + "'(" + *value + ")";
+        }
+        if (record->text.starts_with("@sv-cast:")
+            && record->operands.size() == 1U) {
+            const auto type = std::string_view { record->text }.substr(
+                std::string_view { "@sv-cast:" }.size());
+            auto value = decompile(record->operands[0], nullptr);
+            if (!value || type.starts_with('@')) {
+                return std::nullopt;
+            }
+            return std::string { type } + "'(" + *value + ")";
+        }
+        if (record->text.empty() || record->text.starts_with('@')) {
+            return std::nullopt;
+        }
+        auto arguments = list(0U);
+        if (!arguments) {
+            return std::nullopt;
+        }
+        // A call with no arguments keeps its parentheses only for a user
+        // function (13.4.1); `$time` is written without them.
+        if (record->operands.empty() && record->text.starts_with('$')) {
+            return record->text;
+        }
+        return record->text + "(" + *arguments + ")";
+    }
+    case index: {
+        if (record->operands.size() < 2U) {
+            return std::nullopt;
+        }
+        auto base = operand(record->operands[0], 100, false);
+        if (!base) {
+            return std::nullopt;
+        }
+        std::string text = *base;
+        for (std::size_t position = 1U; position < record->operands.size();
+             ++position) {
+            auto item = decompile(record->operands[position], nullptr);
+            if (!item) {
+                return std::nullopt;
+            }
+            text += "[" + *item + "]";
+        }
+        return text;
+    }
+    case slice: {
+        if (record->operands.size() != 3U) {
+            return std::nullopt;
+        }
+        auto base = operand(record->operands[0], 100, false);
+        auto left = decompile(record->operands[1], nullptr);
+        auto right = decompile(record->operands[2], nullptr);
+        if (!base || !left || !right) {
+            return std::nullopt;
+        }
+        const auto separator = record->text == "+:" || record->text == "-:"
+            ? record->text
+            : std::string { ":" };
+        return *base + "[" + *left + separator + *right + "]";
+    }
+    case concatenation: {
+        auto items = list(0U);
+        return items ? std::optional { "{" + *items + "}" } : std::nullopt;
+    }
+    case replication: {
+        if (record->operands.empty()) {
+            return std::nullopt;
+        }
+        auto count = decompile(record->operands[0], nullptr);
+        auto items = list(1U);
+        if (!count || !items) {
+            return std::nullopt;
+        }
+        return "{" + *count + "{" + *items + "}}";
+    }
+    default:
+        return std::nullopt;
+    }
+}
+
+std::uint32_t VpiStatementModel::let_entry(const sv::LetDeclaration& declaration)
+{
+    const auto [found, created] = let_entry_of_.try_emplace(
+        &declaration, static_cast<std::uint32_t>(let_entries_.size()));
+    if (created) {
+        let_entries_.push_back(&declaration);
+    }
+    return found->second;
+}
+
+const sv::LetDeclaration* VpiStatementModel::let_of_body(
+    const semantic::ExpressionId body)
+{
+    if (!let_bodies_indexed_) {
+        let_bodies_indexed_ = true;
+        const auto add = [&](const std::vector<sv::LetDeclaration>& lets) {
+            for (const auto& let : lets) {
+                let_by_body_.insert_or_assign(let.expression.value(), &let);
+            }
+        };
+        const auto visit = [&](const auto& self,
+                               const sv::GenerateRegion& region) -> void {
+            add(region.lets);
+            for (const auto& nested : region.nested) {
+                self(self, nested);
+            }
+        };
+        for (const auto& unit : hir_.units()) {
+            add(unit.lets);
+            for (const auto& region : unit.generates) {
+                visit(visit, region);
+            }
+        }
+    }
+    const auto found = let_by_body_.find(body.value());
+    return found == let_by_body_.end() ? nullptr : found->second;
+}
+
+const sv::LetDeclaration* VpiStatementModel::let_of_use(const Node& entry)
+{
+    if (entry.kind != Kind::let_expr || !hooks_.let_body) {
+        return nullptr;
+    }
+    const auto body = hooks_.let_body(
+        entry.scope, semantic::ExpressionId::from_index(entry.id));
+    return body ? let_of_body(*body) : nullptr;
+}
+
+std::uint32_t VpiStatementModel::let_frame(
+    const sv::LetDeclaration& declaration,
+    const std::optional<semantic::ExpressionId> use, const std::uint32_t outer,
+    const fsim_vpi_handle_v1 scope)
+{
+    const auto key = std::tuple { &declaration,
+        use ? use->value() : ~std::uint32_t { }, outer, scope };
+    const auto [found, created] = let_frame_of_.try_emplace(
+        key, static_cast<std::uint32_t>(let_frames_.size()));
+    if (created) {
+        let_frames_.push_back(LetFrame { &declaration, use, outer, scope });
+    }
+    return found->second;
+}
+
+// The arguments bind to the formals by position, then by name (11.12); a
+// formal no argument names takes its default.
+std::optional<semantic::ExpressionId> VpiStatementModel::let_argument(
+    const sv::LetDeclaration& declaration, const semantic::ExpressionId use,
+    const std::size_t port) const
+{
+    const auto* const call = expression(use.value());
+    if (port >= declaration.ports.size() || call == nullptr) {
+        return std::nullopt;
+    }
+    if (call->kind == sv::ExpressionKind::call) {
+        for (std::size_t index = 0U; index < call->operands.size(); ++index) {
+            const bool named = index < call->argument_names.size()
+                && !call->argument_names[index].empty();
+            if (named ? call->argument_names[index]
+                        == declaration.ports[port].name
+                      : index == port) {
+                return call->operands[index];
+            }
+        }
+    }
+    return declaration.ports[port].default_value;
+}
+
+fsim_vpi_handle_v1 VpiStatementModel::cover_sequence_spec(const sv::Unit& unit,
+    const sv::ConcurrentAssertion& assertion, const fsim_vpi_handle_v1 scope,
+    const fsim_vpi_handle_v1 parent)
+{
+    if (assertion.form != sv::ConcurrentAssertionForm::sequence
+        || !assertion.inline_tree) {
+        return 0U;
+    }
+    const auto [found, created]
+        = cover_sequence_of_.try_emplace(&assertion, cover_sequences_.size());
+    if (created) {
+        // A property with the sequence as its expression (16.14.3): the
+        // name is no source name, so no scope lists it.
+        sv::AssertionDeclaration declaration;
+        declaration.kind = sv::AssertionDeclarationKind::property;
+        declaration.name = "$inline_property$cover";
+        if (!assertion.inline_clock_events.empty()) {
+            declaration.clock = sv::AssertionClock { };
+            declaration.clock->events = assertion.inline_clock_events;
+        }
+        if (assertion.inline_disable_condition) {
+            declaration.disable = sv::AssertionDisable { };
+            declaration.disable->condition = assertion.inline_disable_condition;
+        }
+        declaration.tree = assertion.inline_tree;
+        declaration.source = assertion.source;
+        cover_sequences_.push_back(std::move(declaration));
+    }
+    const auto& declaration = cover_sequences_[found->second];
+    return node(Kind::assertion_spec,
+        assertion_entry(declaration, &*declaration.tree, unit), 0U, scope,
+        parent);
+}
+
+std::vector<fsim_vpi_handle_v1> VpiStatementModel::let_declarations(
+    const VpiHirScope& scope)
+{
+    std::vector<fsim_vpi_handle_v1> found;
+    const auto container = locate(scope);
+    if (!container || container->lets == nullptr) {
+        return found;
+    }
+    for (const auto& let : *container->lets) {
+        found.push_back(node(
+            Kind::let_decl, let_entry(let), 0U, scope.handle, scope.handle));
+    }
+    return found;
+}
+
+fsim_vpi_handle_v1 VpiStatementModel::let_value_expression(
+    const std::uint64_t serial)
+{
+    const auto entry = nodes_.at(serial);
+    const auto* const declaration = let_of_use(entry);
+    if (declaration == nullptr) {
+        return 0U;
+    }
+    const auto saved = std::exchange(frame_,
+        let_frame(*declaration, semantic::ExpressionId::from_index(entry.id),
+            entry.aux, entry.scope));
+    const auto handle = expression_handle(
+        declaration->expression, entry.scope, hooks_.handle(serial));
+    frame_ = saved;
+    return handle;
 }
 
 const sv::Statement* VpiStatementModel::find_block(
@@ -979,25 +1556,55 @@ std::optional<VpiStatementModel::Container> VpiStatementModel::locate(
     container.declarations = unit->declarations;
     container.generates = &unit->generates;
     container.assertion_declarations = &unit->assertion_declarations;
-    for (const auto& [step, name] : scope.steps) {
+    container.aliases = &unit->aliases;
+    container.lets = &unit->lets;
+    for (std::size_t at = 0U; at < scope.steps.size(); ++at) {
+        const auto& [step, name] = scope.steps[at];
         switch (step) {
         case VpiHirScope::Step::generate: {
             if (container.generates == nullptr) {
                 return std::nullopt;
             }
             const auto wanted = base_name(name);
+            const auto selected = at < scope.regions.size()
+                ? scope.regions[at]
+                : semantic::DeclarationId { };
             const sv::GenerateRegion* region = nullptr;
+            // The first region of that name, taken when the elaborator's
+            // selection is unknown or none of them is it.
+            const sv::GenerateRegion* first = nullptr;
+            const auto take = [&](const sv::GenerateRegion& candidate) {
+                if (selected.valid() && candidate.declaration != selected) {
+                    if (first == nullptr) {
+                        first = &candidate;
+                    }
+                    return;
+                }
+                region = &candidate;
+            };
             // A generate block's region: a branch of a construct (its else
             // branch or case item) is a nested region of its own, named by
-            // its label (27.5); a region without a label adds no scope.
+            // its label (27.5); a region without a label adds no scope. An
+            // else branch that shares its if branch's name and scope has no
+            // label of its own: the selected branch of the two is the scope.
             const std::function<void(const sv::GenerateRegion&)> visit
                 = [&](const sv::GenerateRegion& candidate) {
                       if (region != nullptr) {
                           return;
                       }
                       if (candidate.label == wanted) {
-                          region = &candidate;
-                          return;
+                          take(candidate);
+                          for (const auto& branch : candidate.nested) {
+                              if (region == nullptr && branch.label.empty()
+                                  && branch.scope == candidate.scope
+                                  && branch.alternative_discriminator
+                                      != candidate.alternative_discriminator) {
+                                  take(branch);
+                              }
+                          }
+                          if (region != nullptr) {
+                              return;
+                          }
                       }
                       for (const auto& nested : candidate.nested) {
                           if (candidate.label.empty()
@@ -1014,6 +1621,9 @@ std::optional<VpiStatementModel::Container> VpiStatementModel::locate(
             };
             search(*container.generates);
             if (region == nullptr) {
+                region = first;
+            }
+            if (region == nullptr) {
                 return std::nullopt;
             }
             container = Container { };
@@ -1022,6 +1632,8 @@ std::optional<VpiStatementModel::Container> VpiStatementModel::locate(
             container.declarations = region->declarations;
             container.generates = &region->nested;
             container.assertion_declarations = &region->assertion_declarations;
+            container.aliases = &region->aliases;
+            container.lets = &region->lets;
             break;
         }
         case VpiHirScope::Step::callable: {
@@ -1114,6 +1726,27 @@ std::optional<std::vector<fsim_vpi_handle_v1>> VpiStatementModel::iterate_scope(
     return found;
 }
 
+std::vector<fsim_vpi_handle_v1> VpiStatementModel::alias_statements(
+    const VpiHirScope& scope)
+{
+    std::vector<fsim_vpi_handle_v1> found;
+    const auto container = locate(scope);
+    if (!container || container->aliases == nullptr) {
+        return found;
+    }
+    for (const auto& alias : *container->aliases) {
+        for (std::size_t terminal = 0U; terminal + 1U < alias.terminals.size();
+             ++terminal) {
+            alias_entries_.push_back(
+                { &alias, static_cast<std::uint32_t>(terminal) });
+            found.push_back(node(Kind::alias_stmt,
+                static_cast<std::uint32_t>(alias_entries_.size() - 1U), 0U,
+                scope.handle, scope.handle));
+        }
+    }
+    return found;
+}
+
 std::uint32_t VpiStatementModel::assertion_entry(
     const sv::AssertionDeclaration& declaration, const sv::AssertionTree* tree,
     const sv::Unit& unit)
@@ -1149,10 +1782,12 @@ std::vector<fsim_vpi_handle_v1> VpiStatementModel::assertion_declarations(
         return found;
     }
     for (const auto& declaration : *container->assertion_declarations) {
-        // The declarations the frontend synthesizes for inline properties
-        // are not declarations of the source.
+        // The declarations the frontend synthesizes for inline properties,
+        // and those a checker instance specializes into the scope (17.3),
+        // are not declarations written in it.
         if (declaration.kind == sv::AssertionDeclarationKind::checker
-            || declaration.name.starts_with('$')) {
+            || declaration.name.starts_with('$')
+            || !declaration.checker_instance.empty()) {
             continue;
         }
         const bool property
@@ -1177,6 +1812,7 @@ fsim_vpi_handle_v1 VpiStatementModel::assertion_declaration_named(
     }
     for (const auto& declaration : *container->assertion_declarations) {
         if (declaration.kind != sv::AssertionDeclarationKind::checker
+            && declaration.checker_instance.empty()
             && declaration.name == name && !name.starts_with('$')) {
             return assertion_decl_handle(declaration, *unit, scope.handle);
         }
@@ -1214,15 +1850,52 @@ fsim_vpi_handle_v1 VpiStatementModel::assertion_operand(
     const fsim_vpi_handle_v1 scope, const fsim_vpi_handle_v1 parent)
 {
     const auto& table = assertion_entries_.at(entry);
+    fsim_vpi_handle_v1 handle { };
     if (operand.node >= 0 && table.tree != nullptr
         && static_cast<std::size_t>(operand.node) < table.tree->nodes.size()) {
-        return node(Kind::assertion_op, entry,
+        handle = node(Kind::assertion_op, entry,
             static_cast<std::uint32_t>(operand.node), scope, parent);
+    } else if (operand.expression) {
+        // A plain name with match items, `(a, v = d)`, or a strength,
+        // `strong(a)`, is an occurrence of its own: a ref obj named like it
+        // whose vpiActual is the object (37.15, 37.52, 37.54), so each
+        // occurrence keeps its own items and strength.
+        const auto* const record = expression(operand.expression->value());
+        if (operand.strong) {
+            operand_strength_.insert_or_assign(
+                operand.expression->value(), *operand.strong);
+        }
+        handle = (!operand.match_items.empty() || operand.strong)
+                && record != nullptr
+                && record->kind == sv::ExpressionKind::name
+            ? node(Kind::reference, operand.expression->value(), 0U, scope,
+                  parent)
+            : expression_handle(*operand.expression, scope, parent);
     }
-    if (operand.expression) {
-        return expression_handle(*operand.expression, scope, parent);
+    if (handle != 0U && !operand.match_items.empty()) {
+        match_items_.insert_or_assign(
+            handle, MatchItems { operand.match_items, scope });
     }
-    return 0U;
+    return handle;
+}
+
+std::optional<std::vector<fsim_vpi_handle_v1>> VpiStatementModel::match_items(
+    const fsim_vpi_handle_v1 handle)
+{
+    const auto found = match_items_.find(handle);
+    if (found == match_items_.end()) {
+        return std::nullopt;
+    }
+    // Copied: creating statement nodes may add match items of other
+    // operands.
+    const auto entry = found->second;
+    std::vector<fsim_vpi_handle_v1> items;
+    for (const auto item : entry.items) {
+        if (const auto statement = statement_handle(item, entry.scope, handle)) {
+            items.push_back(statement);
+        }
+    }
+    return items;
 }
 
 PLI_INT32 VpiStatementModel::assertion_op_type(const sv::AssertionOperator op)
@@ -1363,6 +2036,20 @@ std::optional<bool> VpiStatementModel::local_automatic(
         return automatic_callable;
     }
     return std::nullopt;
+}
+
+std::optional<std::uint32_t> VpiStatementModel::referenced_declaration(
+    const std::uint64_t serial) const
+{
+    if (!owns(serial) || nodes_[serial].kind != Kind::reference) {
+        return std::nullopt;
+    }
+    const auto* const record = expression(nodes_[serial].id);
+    if (record == nullptr || !record->referenced_name
+        || !record->referenced_name->selected) {
+        return std::nullopt;
+    }
+    return record->referenced_name->selected->value();
 }
 
 std::optional<VpiStatementModel::BlockSource> VpiStatementModel::block_source(
@@ -1664,7 +2351,137 @@ std::optional<VpiStatementModel::DeclaredType> VpiStatementModel::declared_type(
             ? declared_type_of(profile.formals[formal].type)
             : std::nullopt;
     }
-    if (entry.kind != Kind::io_decl && entry.kind != Kind::return_variable) {
+    // A typed formal or a local variable of a property or sequence
+    // declaration (IEEE 1800-2023 37.51, 37.53 vpiTypespec): a built-in type
+    // from its declared type, a named type through the elaborator's typespec
+    // keyed by the declaration and the name. An untyped, sequence or
+    // property formal has none.
+    // A typed let formal (37.57, 37.53 vpiTypespec), keyed by the let and
+    // the formal like a callable's.
+    if (entry.kind == Kind::let_formal) {
+        if (entry.id >= let_entries_.size()
+            || entry.aux >= let_entries_[entry.id]->ports.size()
+            || !let_entries_[entry.id]->ports[entry.aux].type) {
+            return std::nullopt;
+        }
+        const auto& let = *let_entries_[entry.id];
+        auto result = declared_type_of(*let.ports[entry.aux].type);
+        if (result) {
+            result->scope = entry.scope;
+            result->callable = let.name;
+            result->formal = let.ports[entry.aux].name;
+        }
+        return result;
+    }
+    if (entry.kind == Kind::assertion_formal
+        || entry.kind == Kind::assertion_variable) {
+        const auto& table = assertion_entries_.at(entry.id);
+        const auto& declaration = *table.declaration;
+        const std::vector<sv::SourceToken>* tokens { };
+        std::vector<sv::SourceToken> dimensions;
+        std::string name;
+        if (entry.kind == Kind::assertion_formal) {
+            if (entry.aux >= declaration.formals.size()
+                || declaration.formals[entry.aux].kind
+                    != sv::AssertionFormalKind::value) {
+                return std::nullopt;
+            }
+            tokens = &declaration.formals[entry.aux].type_tokens;
+            name = declaration.formals[entry.aux].name;
+        } else {
+            if (entry.aux >= declaration.local_variables.size()) {
+                return std::nullopt;
+            }
+            const auto& local = declaration.local_variables[entry.aux];
+            tokens = &local.type_tokens;
+            name = local.name;
+            // Unpacked dimensions of the declarator.
+            for (const auto& token : local.declarator_tokens) {
+                if (token.text == "=") {
+                    break;
+                }
+                if (token.text == "[" || !dimensions.empty()) {
+                    dimensions.push_back(token);
+                }
+            }
+        }
+        auto result = declared_type_of_tokens(*tokens, { });
+        const bool named = !tokens->empty()
+            && (tokens->size() == 1U
+                || (tokens->size() == 3U && (*tokens)[1].text == "::"));
+        if (!result && named) {
+            result = DeclaredType { };
+            for (const auto& token : *tokens) {
+                result->type_name += token.text;
+            }
+        }
+        // A fixed-size unpacked array of the type (37.25 detail 2): `[n]`
+        // is `[0:n-1]` (7.4.2); a bound that is not a literal leaves it
+        // without a typespec.
+        if (result && !dimensions.empty()) {
+            DeclaredType array;
+            array.array_kind = 1;
+            const auto number = [](const std::string& text)
+                -> std::optional<std::int64_t> {
+                if (text.empty()
+                    || !std::ranges::all_of(text, [](const char digit) {
+                           return digit >= '0' && digit <= '9';
+                       })) {
+                    return std::nullopt;
+                }
+                return std::stoll(text);
+            };
+            for (std::size_t index = 0U; index < dimensions.size();) {
+                if (index + 2U < dimensions.size()
+                    && dimensions[index].text == "["
+                    && dimensions[index + 2U].text == "]") {
+                    const auto size = number(dimensions[index + 1U].text);
+                    if (!size || *size == 0) {
+                        return std::nullopt;
+                    }
+                    array.dimensions.emplace_back(0, *size - 1);
+                    index += 3U;
+                } else if (index + 4U < dimensions.size()
+                    && dimensions[index].text == "["
+                    && dimensions[index + 2U].text == ":"
+                    && dimensions[index + 4U].text == "]") {
+                    const auto left = number(dimensions[index + 1U].text);
+                    const auto right = number(dimensions[index + 3U].text);
+                    if (!left || !right) {
+                        return std::nullopt;
+                    }
+                    array.dimensions.emplace_back(*left, *right);
+                    index += 5U;
+                } else {
+                    return std::nullopt;
+                }
+            }
+            array.element.push_back(*result);
+            result = std::move(array);
+        }
+        if (result) {
+            result->scope = entry.scope;
+            result->callable = declaration.name;
+            result->formal = name;
+        }
+        return result;
+    }
+    // A for loop's own variable (12.7.1): a built-in type from its declared
+    // type, a named type through the typedef visible where the loop is.
+    if (entry.kind == Kind::local_variable) {
+        const auto* const declaration = hir_.find_declaration(
+            semantic::DeclarationId::from_index(entry.id));
+        if (declaration == nullptr || !declaration->type) {
+            return std::nullopt;
+        }
+        auto result = declared_type_of(*declaration->type);
+        if (result) {
+            result->scope = entry.scope;
+        }
+        return result;
+    }
+    if (entry.kind != Kind::io_decl && entry.kind != Kind::return_variable
+        && entry.kind != Kind::ref_formal) {
         return std::nullopt;
     }
     const auto* const declaration = hir_.find_declaration(
@@ -1672,7 +2489,7 @@ std::optional<VpiStatementModel::DeclaredType> VpiStatementModel::declared_type(
     if (declaration == nullptr) {
         return std::nullopt;
     }
-    auto result = entry.kind == Kind::io_decl
+    auto result = entry.kind != Kind::return_variable
         ? (declaration->type ? declared_type_of(*declaration->type)
                              : std::nullopt)
         : (declaration->callable
@@ -1680,7 +2497,7 @@ std::optional<VpiStatementModel::DeclaredType> VpiStatementModel::declared_type(
                 : std::nullopt);
     if (result) {
         result->scope = entry.scope;
-        if (entry.kind == Kind::io_decl) {
+        if (entry.kind != Kind::return_variable) {
             result->formal = declaration->name;
             if (const auto* const callable = hir_.find_declaration(
                     semantic::DeclarationId::from_index(entry.aux))) {
@@ -1691,6 +2508,95 @@ std::optional<VpiStatementModel::DeclaredType> VpiStatementModel::declared_type(
         }
     }
     return result;
+}
+
+fsim_vpi_handle_v1 VpiStatementModel::declaration_initializer(
+    const VpiHirScope& scope, const std::string& name)
+{
+    const auto container = locate(scope);
+    if (!container) {
+        return 0U;
+    }
+    for (const auto id : container->declarations) {
+        const auto* const declaration = hir_.find_declaration(id);
+        if (declaration != nullptr && declaration->name == name
+            && declaration->initializer) {
+            return expression_handle(
+                *declaration->initializer, scope.handle, scope.handle);
+        }
+    }
+    return 0U;
+}
+
+std::optional<VpiStatementModel::RefFormal> VpiStatementModel::ref_formal(
+    const std::uint64_t serial) const
+{
+    const auto entry = nodes_.at(serial);
+    if (entry.kind != Kind::ref_formal) {
+        return std::nullopt;
+    }
+    const auto* const callable = hir_.find_declaration(
+        semantic::DeclarationId::from_index(entry.aux));
+    if (callable == nullptr || !callable->callable) {
+        return std::nullopt;
+    }
+    const auto& formals = callable->callable->formals;
+    const auto found = std::ranges::find_if(formals, [&](const auto formal) {
+        return formal.value() == entry.id;
+    });
+    if (found == formals.end()) {
+        return std::nullopt;
+    }
+    return RefFormal { callable->name,
+        static_cast<std::size_t>(found - formals.begin()), entry.scope };
+}
+
+fsim_vpi_handle_v1 VpiStatementModel::call_actual_at(const std::string_view file,
+    const std::uint32_t line, const std::uint32_t column,
+    const std::size_t position, const fsim_vpi_handle_v1 scope)
+{
+    const auto begins_here = [&](const semantic::SourceSpanId source) {
+        if (!source.valid() || source.value() >= semantics_.source_spans().size()) {
+            return false;
+        }
+        const auto& location = semantics_.source_spans().at(source.value());
+        if (location.begin.line != line || location.begin.column != column) {
+            return false;
+        }
+        const auto* const physical = location.file.valid()
+                && location.file.value() < semantics_.source_files().size()
+            ? &semantics_.source_files().at(location.file.value()).physical_name
+            : nullptr;
+        // A point names the file by its last component.
+        const auto base = [](const std::string_view path) {
+            const auto slash = path.find_last_of("/\\");
+            return slash == std::string_view::npos ? path
+                                                   : path.substr(slash + 1U);
+        };
+        return file.empty() || base(location.logical_name) == base(file)
+            || (physical != nullptr && base(*physical) == base(file));
+    };
+    for (const auto& record : hir_.statements()) {
+        if (record.kind != sv::StatementKind::task_call
+            || !begins_here(record.source)) {
+            continue;
+        }
+        if (position < record.task_arguments.size()
+            && record.task_arguments[position].actual) {
+            return expression_handle(
+                *record.task_arguments[position].actual, scope, scope);
+        }
+    }
+    for (const auto& record : hir_.expressions()) {
+        if (record.kind != sv::ExpressionKind::call
+            || !begins_here(record.source)) {
+            continue;
+        }
+        if (position < record.operands.size()) {
+            return expression_handle(record.operands[position], scope, scope);
+        }
+    }
+    return 0U;
 }
 
 bool VpiStatementModel::extern_prototype(const VpiHirScope& scope)
@@ -2248,15 +3154,12 @@ std::vector<fsim_vpi_handle_v1> VpiStatementModel::immediate_assertions(
     return found;
 }
 
-VpiStatementModel::StatementPoint VpiStatementModel::statement_at(
-    const VpiHirScope& scope, const std::uint32_t process_id,
+VpiStatementModel::StatementPoint VpiStatementModel::find_statement(
+    const std::vector<semantic::StatementId>& statements,
+    const fsim_vpi_handle_v1 within, const fsim_vpi_handle_v1 parent,
     const std::string_view file, const std::uint32_t line,
     const std::uint32_t column)
 {
-    const auto container = locate(scope);
-    if (!container) {
-        return { };
-    }
     bool pass = false;
     const auto begins_here = [&](const sv::Statement& record) {
         if (!record.source.valid()
@@ -2283,10 +3186,10 @@ VpiStatementModel::StatementPoint VpiStatementModel::statement_at(
     fsim_vpi_handle_v1 found { };
     const std::function<bool(const std::vector<semantic::StatementId>&,
         fsim_vpi_handle_v1, fsim_vpi_handle_v1)>
-        walk = [&](const std::vector<semantic::StatementId>& statements,
-                   const fsim_vpi_handle_v1 within,
-                   const fsim_vpi_handle_v1 parent) {
-            for (const auto id : statements) {
+        walk = [&](const std::vector<semantic::StatementId>& items,
+                   const fsim_vpi_handle_v1 scope,
+                   const fsim_vpi_handle_v1 owner) {
+            for (const auto id : items) {
                 const auto* const record = statement(id.value());
                 if (record == nullptr) {
                     continue;
@@ -2294,15 +3197,15 @@ VpiStatementModel::StatementPoint VpiStatementModel::statement_at(
                 using Statement = sv::StatementKind;
                 const auto block = record->kind == Statement::block
                     || record->kind == Statement::fork;
-                const auto self = statement_handle(id, within, parent);
+                const auto self = statement_handle(id, scope, owner);
                 if (!block && begins_here(*record)) {
                     found = self;
                     return true;
                 }
-                auto inner = within;
+                auto inner = scope;
                 if (block && !record->label.empty()) {
                     if (const auto named
-                        = hooks_.child_scope(within, record->label)) {
+                        = hooks_.child_scope(scope, record->label)) {
                         inner = named;
                     }
                 }
@@ -2318,6 +3221,85 @@ VpiStatementModel::StatementPoint VpiStatementModel::statement_at(
             }
             return false;
         };
+    return walk(statements, within, parent) ? StatementPoint { found, pass }
+                                            : StatementPoint { };
+}
+
+fsim_vpi_handle_v1 VpiStatementModel::method_body(
+    const semantic::DeclarationId method, const fsim_vpi_handle_v1 scope)
+{
+    const auto* const record = hir_.find_declaration(method);
+    return record == nullptr
+        ? fsim_vpi_handle_v1 { }
+        : sequence(record->statements, method.value(), body_callable, scope,
+              scope);
+}
+
+std::vector<fsim_vpi_handle_v1> VpiStatementModel::method_formals(
+    const semantic::DeclarationId method, const fsim_vpi_handle_v1 scope)
+{
+    std::vector<fsim_vpi_handle_v1> found;
+    const auto* const record = hir_.find_declaration(method);
+    if (record == nullptr || !record->callable) {
+        return found;
+    }
+    for (const auto formal : record->callable->formals) {
+        found.push_back(
+            node(Kind::io_decl, formal.value(), method.value(), scope, scope));
+    }
+    return found;
+}
+
+fsim_vpi_handle_v1 VpiStatementModel::method_return(
+    const semantic::DeclarationId method, const fsim_vpi_handle_v1 scope)
+{
+    const auto* const record = hir_.find_declaration(method);
+    if (record == nullptr || record->form != sv::DeclarationForm::function
+        || !record->callable) {
+        return fsim_vpi_handle_v1 { };
+    }
+    const auto word = type_word(record->callable->return_type);
+    if (word.empty() || word == "void") {
+        return fsim_vpi_handle_v1 { };
+    }
+    return node(
+        Kind::return_variable, method.value(), method.value(), scope, scope);
+}
+
+std::optional<VpiStatementModel::DeclaredType>
+VpiStatementModel::declaration_type(
+    const semantic::DeclarationId declaration) const
+{
+    const auto* const record = hir_.find_declaration(declaration);
+    return record != nullptr && record->type ? declared_type_of(*record->type)
+                                             : std::nullopt;
+}
+
+VpiStatementModel::StatementPoint VpiStatementModel::method_statement_at(
+    const semantic::DeclarationId method, const fsim_vpi_handle_v1 scope,
+    const std::string_view file, const std::uint32_t line,
+    const std::uint32_t column)
+{
+    const auto* const record = hir_.find_declaration(method);
+    if (record == nullptr || record->statements.empty()) {
+        return { };
+    }
+    // A body of several statements is the method's begin-end, the parent
+    // of each (37.41 vpiStmt).
+    const auto body = method_body(method, scope);
+    return find_statement(record->statements, scope,
+        record->statements.size() == 1U ? scope : body, file, line, column);
+}
+
+VpiStatementModel::StatementPoint VpiStatementModel::statement_at(
+    const VpiHirScope& scope, const std::uint32_t process_id,
+    const std::string_view file, const std::uint32_t line,
+    const std::uint32_t column)
+{
+    const auto container = locate(scope);
+    if (!container) {
+        return { };
+    }
     // The event control of `always @(...)` runs at each activation, which
     // is the process's entry point at the process's own span (IEEE
     // 1800-2023 37.44, Table 38-6).
@@ -2352,10 +3334,13 @@ VpiStatementModel::StatementPoint VpiStatementModel::statement_at(
                          scope.handle, true),
                 false };
         }
-        if (walk(record->statements, scope.handle,
+        if (const auto point = find_statement(record->statements,
+                scope.handle,
                 node(Kind::process, id.value(), 0U, scope.handle,
-                    scope.handle))) {
-            return { found, pass };
+                    scope.handle),
+                file, line, column);
+            point.statement != 0U) {
+            return point;
         }
     }
     for (const auto id : container->declarations) {
@@ -2366,9 +3351,13 @@ VpiStatementModel::StatementPoint VpiStatementModel::statement_at(
             continue;
         }
         const auto callable = hooks_.child_scope(scope.handle, declaration->name);
-        if (callable != 0U
-            && walk(declaration->statements, callable, callable)) {
-            return { found, pass };
+        if (callable == 0U) {
+            continue;
+        }
+        if (const auto point = find_statement(declaration->statements,
+                callable, callable, file, line, column);
+            point.statement != 0U) {
+            return point;
         }
     }
     return { };
@@ -2647,6 +3636,15 @@ std::optional<std::string> VpiStatementModel::system_task_name(
     }
 }
 
+// A streaming concatenation `{>> n {a, b}}` or `{<< n {a, b}}` (IEEE
+// 1800-2023 11.4.14): the frontend spells it as a call whose first operand is
+// the slice size (1 when none is written) and the others the streamed items.
+static bool streaming_operator(const sv::Expression& record)
+{
+    return record.kind == sv::ExpressionKind::call
+        && (record.text == "@stream-left" || record.text == "@stream-right");
+}
+
 PLI_INT32 VpiStatementModel::expression_type(
     const sv::Expression& record) const
 {
@@ -2661,7 +3659,8 @@ PLI_INT32 VpiStatementModel::expression_type(
     case call:
         // The frontend spells a conditional operator as a "?:" call (11.4.11).
         if (sv::systemverilog_cast_value_operand(record)
-            || (record.text == "?:" && record.operands.size() == 3U)) {
+            || (record.text == "?:" && record.operands.size() == 3U)
+            || streaming_operator(record)) {
             return vpiOperation;
         }
         return record.text.starts_with('$') ? vpiSysFuncCall : vpiFuncCall;
@@ -2787,6 +3786,12 @@ PLI_INT32 VpiStatementModel::type(const std::uint64_t serial) const
             : vpiSeqFormalDecl;
     case Kind::assertion_spec:
         return vpiPropertySpec;
+    case Kind::let_decl:
+        return vpiLetDecl;
+    case Kind::let_formal:
+        return vpiSeqFormalDecl;
+    case Kind::let_expr:
+        return vpiLetExpr;
     case Kind::assertion_variable: {
         const auto& variables
             = assertion_entries_.at(entry.id).declaration->local_variables;
@@ -2821,13 +3826,15 @@ PLI_INT32 VpiStatementModel::type(const std::uint64_t serial) const
     }
     case Kind::cont_assign:
         return vpiContAssign;
+    case Kind::alias_stmt:
+        return vpiAliasStmt;
     case Kind::cont_assign_bit:
         return vpiContAssignBit;
     case Kind::reference:
         return vpiRefObj;
     case Kind::body:
         return vpiBegin;
-    case Kind::foreach_null:
+    case Kind::null_operation:
         return vpiOperation;
     case Kind::loop_init:
         return vpiAssignment;
@@ -2838,6 +3845,10 @@ PLI_INT32 VpiStatementModel::type(const std::uint64_t serial) const
     }
     case Kind::format:
         return vpiConstant;
+    case Kind::inline_constraint:
+        return vpiConstraint;
+    case Kind::ref_formal:
+        return vpiRefObj;
     case Kind::io_decl:
     case Kind::dpi_io_decl:
         return vpiIODecl;
@@ -2851,6 +3862,13 @@ PLI_INT32 VpiStatementModel::type(const std::uint64_t serial) const
             = hir_.find_declaration(semantic::DeclarationId::from_index(entry.id));
         return declaration != nullptr && declaration->callable
             ? variable_type(declaration->callable->return_type)
+            : vpiReg;
+    }
+    case Kind::local_variable: {
+        const auto* const declaration
+            = hir_.find_declaration(semantic::DeclarationId::from_index(entry.id));
+        return declaration != nullptr && declaration->type
+            ? variable_type(*declaration->type)
             : vpiReg;
     }
     }
@@ -2907,6 +3925,11 @@ std::optional<semantic::SourceSpanId> VpiStatementModel::source(
             return record->source;
         }
         return std::nullopt;
+    case Kind::inline_constraint:
+        if (const auto* const record = expression(entry.id)) {
+            return record->source;
+        }
+        return std::nullopt;
     case Kind::body: {
         const auto* const list = body_statements(entry);
         if (list == nullptr || list->empty()) {
@@ -2917,6 +3940,11 @@ std::optional<semantic::SourceSpanId> VpiStatementModel::source(
         }
         return std::nullopt;
     }
+    case Kind::alias_stmt:
+        if (entry.id < alias_entries_.size()) {
+            return alias_entries_[entry.id].alias->source;
+        }
+        return std::nullopt;
     case Kind::statement:
     case Kind::assignment_control:
     case Kind::cont_assign:
@@ -2925,7 +3953,7 @@ std::optional<semantic::SourceSpanId> VpiStatementModel::source(
     case Kind::delay_list:
     case Kind::loop_init:
     case Kind::loop_step:
-    case Kind::foreach_null:
+    case Kind::null_operation:
     case Kind::format:
         if (const auto* const record = statement(entry.id)) {
             return record->source;
@@ -2981,6 +4009,18 @@ std::optional<semantic::SourceSpanId> VpiStatementModel::source(
             return record->case_alternatives[entry.aux].source;
         }
         return std::nullopt;
+    case Kind::let_decl:
+        if (entry.id < let_entries_.size()) {
+            return let_entries_[entry.id]->source;
+        }
+        return std::nullopt;
+    case Kind::let_formal:
+        if (entry.id < let_entries_.size()
+            && entry.aux < let_entries_[entry.id]->ports.size()) {
+            return let_entries_[entry.id]->ports[entry.aux].source;
+        }
+        return std::nullopt;
+    case Kind::let_expr:
     case Kind::expression:
     case Kind::reference:
         if (const auto* const record = expression(entry.id)) {
@@ -2988,7 +4028,9 @@ std::optional<semantic::SourceSpanId> VpiStatementModel::source(
         }
         return std::nullopt;
     case Kind::io_decl:
+    case Kind::ref_formal:
     case Kind::return_variable:
+    case Kind::local_variable:
         if (const auto* const declaration = hir_.find_declaration(
                 semantic::DeclarationId::from_index(entry.id))) {
             return declaration->source;
@@ -3041,7 +4083,26 @@ std::optional<std::int64_t> VpiStatementModel::property(
             ? static_cast<std::int64_t>(location.begin.line)
             : static_cast<std::int64_t>(location.begin.column);
     }
+    // The strength of a sequence expr that is a boolean leaf (37.52
+    // detail 3).
+    if (property == vpiOpStrong
+        && (entry.kind == Kind::reference || entry.kind == Kind::expression)) {
+        if (const auto found = operand_strength_.find(entry.id);
+            found != operand_strength_.end()) {
+            return found->second ? 1 : 0;
+        }
+    }
     switch (entry.kind) {
+    // An inline constraint applies whenever its call runs, and is not
+    // virtual (37.34).
+    case Kind::inline_constraint:
+        if (property == vpiIsConstraintEnabled) {
+            return 1;
+        }
+        if (property == vpiVirtual) {
+            return 0;
+        }
+        return std::nullopt;
     case Kind::process:
         if (property == vpiAlwaysType) {
             const auto* const record = process(entry.id);
@@ -3192,6 +4253,12 @@ std::optional<std::int64_t> VpiStatementModel::property(
                     : record->text == "pre--"      ? vpiPreDecOp
                                                    : vpiPostDecOp;
             case call:
+                if (record->text == "@stream-right") {
+                    return vpiStreamLROp;
+                }
+                if (record->text == "@stream-left") {
+                    return vpiStreamRLOp;
+                }
                 return record->text == "?:" ? vpiConditionOp : vpiCastOp;
             default:
                 if (const auto op
@@ -3278,10 +4345,15 @@ std::optional<std::int64_t> VpiStatementModel::property(
         }
         return std::nullopt;
     }
+    case Kind::ref_formal:
     case Kind::io_decl: {
         const auto* const declaration = hir_.find_declaration(
             semantic::DeclarationId::from_index(entry.id));
         if (declaration == nullptr) {
+            return std::nullopt;
+        }
+        // A ref obj has no direction (37.15).
+        if (property == vpiDirection && entry.kind == Kind::ref_formal) {
             return std::nullopt;
         }
         if (property == vpiDirection) {
@@ -3299,6 +4371,31 @@ std::optional<std::int64_t> VpiStatementModel::property(
         }
         if (!declaration->type) {
             return std::nullopt;
+        }
+        // A formal of a fixed-size unpacked array type has the number of
+        // the array's elements as its size and is not signed (37.17 details
+        // 4 and 9, 37.41).
+        if (declaration->type->container_form == sv::TypeForm::static_array
+            || (!declaration->type->container_form
+                && !declaration->type->unpacked_dimensions.empty())) {
+            if (property == vpiSigned) {
+                return 0;
+            }
+            if (property != vpiSize) {
+                return std::nullopt;
+            }
+            if (declaration->type->unpacked_dimensions.empty()) {
+                return std::nullopt;
+            }
+            std::int64_t count = 1;
+            for (const auto& range : declaration->type->unpacked_dimensions) {
+                const auto extent = range_extent(range);
+                if (!extent) {
+                    return std::nullopt;
+                }
+                count *= *extent;
+            }
+            return count;
         }
         if (property == vpiSize) {
             return type_width(*declaration->type);
@@ -3398,6 +4495,28 @@ std::optional<std::int64_t> VpiStatementModel::property(
         }
         return std::nullopt;
     }
+    // A for loop's own variable is automatic (IEEE 1800-2023 12.7.1), as
+    // are the formals and locals of a class method (8.6).
+    case Kind::local_variable: {
+        const auto* const declaration = hir_.find_declaration(
+            semantic::DeclarationId::from_index(entry.id));
+        if (declaration == nullptr || !declaration->type) {
+            return std::nullopt;
+        }
+        if (property == vpiIsModPort && declaration->type->virtual_interface) {
+            return declaration->type->interface_modport.empty() ? 0 : 1;
+        }
+        if (property == vpiSize) {
+            return type_width(*declaration->type);
+        }
+        if (property == vpiSigned) {
+            return type_signed(*declaration->type) ? 1 : 0;
+        }
+        if (property == vpiAutomatic) {
+            return 1;
+        }
+        return std::nullopt;
+    }
     case Kind::sensitivity_list:
         if (property == vpiOpType) {
             return vpiEventOrOp;
@@ -3447,6 +4566,11 @@ std::optional<std::int64_t> VpiStatementModel::property(
         }
         return std::nullopt;
     }
+    case Kind::let_formal:
+        // A let formal has no direction (11.12, 37.53 seq formal decl).
+        return property == vpiDirection
+            ? std::optional<std::int64_t> { vpiNoDirection }
+            : std::nullopt;
     case Kind::assertion_formal: {
         const auto& table = assertion_entries_.at(entry.id);
         const auto& formals = table.declaration->formals;
@@ -3489,7 +4613,7 @@ std::optional<std::int64_t> VpiStatementModel::property(
                                                    : sv::EdgeKind::any;
         return edge == sv::EdgeKind::positive ? vpiPosedgeOp : vpiNegedgeOp;
     }
-    case Kind::foreach_null:
+    case Kind::null_operation:
         return property == vpiOpType ? std::optional<std::int64_t> { vpiNullOp }
                                      : std::nullopt;
     case Kind::loop_init:
@@ -3554,6 +4678,12 @@ std::optional<std::string> VpiStatementModel::string_property(
         }
         return std::nullopt;
     }
+    // Every expression has its source form (37.59 detail 2).
+    if (property == vpiDecompile
+        && (entry.kind == Kind::expression || entry.kind == Kind::reference
+            || entry.kind == Kind::let_expr)) {
+        return decompile(semantic::ExpressionId::from_index(entry.id), nullptr);
+    }
     switch (entry.kind) {
     case Kind::statement: {
         const auto* const record = statement(entry.id);
@@ -3584,18 +4714,39 @@ std::optional<std::string> VpiStatementModel::string_property(
         if (property == vpiName
             && (type == vpiSysFuncCall || type == vpiFuncCall
                 || type == vpiMethodFuncCall)) {
+            // A call of another instance's function is named as written,
+            // its prefix and the function (`a.twice`, IEEE 1800-2023 23.8).
+            if (record->kind == sv::ExpressionKind::call
+                && record->text.starts_with('.') && !record->operands.empty()
+                && call_callee(entry.id, entry.scope) != 0U) {
+                const auto* const prefix
+                    = expression(record->operands.front().value());
+                if (prefix != nullptr
+                    && prefix->kind == sv::ExpressionKind::name) {
+                    return prefix->text + record->text;
+                }
+            }
             return record->text;
         }
-        if (property == vpiDecompile && type == vpiConstant) {
-            // A string literal shows its escapes as written (5.9).
-            if (record->kind != sv::ExpressionKind::string_literal) {
-                return record->text;
-            }
-            if (record->text.size() >= 2U && record->text.front() == '"'
-                && record->text.back() == '"') {
-                return record->text;
-            }
-            return "\"" + record->text + "\"";
+        return std::nullopt;
+    }
+    case Kind::let_decl:
+    case Kind::let_formal: {
+        if (entry.id >= let_entries_.size()) {
+            return std::nullopt;
+        }
+        const auto& let = *let_entries_[entry.id];
+        const bool formal = entry.kind == Kind::let_formal;
+        if (formal && entry.aux >= let.ports.size()) {
+            return std::nullopt;
+        }
+        const auto& name = formal ? let.ports[entry.aux].name : let.name;
+        if (property == vpiName) {
+            return name;
+        }
+        if (property == vpiFullName) {
+            return hooks_.full_name(entry.scope) + "." + let.name
+                + (formal ? "." + name : std::string { });
         }
         return std::nullopt;
     }
@@ -3607,11 +4758,19 @@ std::optional<std::string> VpiStatementModel::string_property(
                     ? declaration.formals[entry.aux].name
                     : std::string { })
             : declaration.name;
+        // A declaration a checker instance specialized into the scope has
+        // its name as written in the checker, under the instance's path
+        // (17.3, 37.53).
+        const auto& instance = declaration.checker_instance;
+        const bool expanded = !instance.empty();
+        const auto& declared
+            = expanded ? declaration.checker_name : declaration.name;
         if (property == vpiName) {
-            return name;
+            return entry.kind == Kind::assertion_decl ? declared : name;
         }
         if (property == vpiFullName) {
-            return hooks_.full_name(entry.scope) + "." + declaration.name
+            return hooks_.full_name(entry.scope) + "."
+                + (expanded ? instance + "." : std::string { }) + declared
                 + (entry.kind == Kind::assertion_formal ? "." + name
                                                          : std::string { });
         }
@@ -3661,10 +4820,12 @@ std::optional<std::string> VpiStatementModel::string_property(
     // A formal is named by its declaration, the return variable by its
     // function (37.41 detail 1).
     case Kind::io_decl:
-    case Kind::return_variable: {
+    case Kind::ref_formal:
+    case Kind::return_variable:
+    case Kind::local_variable: {
         const auto* const declaration = hir_.find_declaration(
             semantic::DeclarationId::from_index(
-                entry.kind == Kind::io_decl ? entry.id : entry.aux));
+                entry.kind != Kind::return_variable ? entry.id : entry.aux));
         if (declaration == nullptr) {
             return std::nullopt;
         }
@@ -3740,6 +4901,132 @@ std::optional<fsim_vpi_handle_v1> VpiStatementModel::relation(
 {
     const auto entry = nodes_.at(serial);
     const auto self = hooks_.handle(serial);
+    const FrameRestore restore { frame_,
+        std::exchange(frame_, entry.kind == Kind::expression
+                || entry.kind == Kind::reference || entry.kind == Kind::let_expr
+            ? entry.aux
+            : 0U) };
+    // A formal used in a let declaration's body is a ref obj of the formal
+    // decl (IEEE 1800-2023 37.57).
+    if (entry.kind == Kind::reference && type == vpiActual && entry.aux != 0U
+        && entry.aux < let_frames_.size() && !let_frames_[entry.aux].use) {
+        const auto frame = let_frames_[entry.aux];
+        const auto* const record = expression(entry.id);
+        const auto& ports = frame.declaration->ports;
+        const auto port = record == nullptr ? ports.end()
+                                            : std::ranges::find(ports,
+                                                  record->text,
+                                                  &sv::LetPort::name);
+        return port == ports.end()
+            ? fsim_vpi_handle_v1 { }
+            : node(Kind::let_formal, let_entry(*frame.declaration),
+                  static_cast<std::uint32_t>(port - ports.begin()),
+                  entry.scope, entry.scope);
+    }
+    // A let declaration has its body, a formal its default and its
+    // declaration, a let expression the declaration it names (37.57).
+    if (entry.kind == Kind::let_decl || entry.kind == Kind::let_formal
+        || entry.kind == Kind::let_expr) {
+        if (type == vpiParent) {
+            return entry.kind == Kind::let_formal
+                ? node(Kind::let_decl, entry.id, 0U, entry.scope, entry.scope)
+                : entry.parent;
+        }
+        if (entry.kind == Kind::let_expr) {
+            const auto* const declaration = let_of_use(entry);
+            return type == vpiLetDecl && declaration != nullptr
+                ? node(Kind::let_decl, let_entry(*declaration), 0U,
+                      entry.scope, entry.scope)
+                : fsim_vpi_handle_v1 { };
+        }
+        if (type != vpiExpr || entry.id >= let_entries_.size()) {
+            return fsim_vpi_handle_v1 { };
+        }
+        const auto& let = *let_entries_[entry.id];
+        if (entry.kind == Kind::let_formal) {
+            return entry.aux < let.ports.size()
+                    && let.ports[entry.aux].default_value
+                ? expression_handle(
+                      *let.ports[entry.aux].default_value, entry.scope, self)
+                : fsim_vpi_handle_v1 { };
+        }
+        frame_ = let_frame(let, std::nullopt, 0U, entry.scope);
+        return expression_handle(let.expression, entry.scope, self);
+    }
+    // The io decl of a `ref` formal has its ref obj as the expression (IEEE
+    // 1800-2023 37.14 detail 2, 37.15 detail 2); a ref obj of a formal has no
+    // parent, which only a sub-element of a ref obj has (37.15 detail 4).
+    if (entry.kind == Kind::io_decl && type == vpiExpr) {
+        const auto* const declaration = hir_.find_declaration(
+            semantic::DeclarationId::from_index(entry.id));
+        return declaration != nullptr
+                && declaration->direction == sv::Direction::ref
+            ? node(Kind::ref_formal, entry.id, entry.aux, entry.scope, self)
+            : fsim_vpi_handle_v1 { };
+    }
+    if (entry.kind == Kind::ref_formal && type == vpiParent) {
+        return fsim_vpi_handle_v1 { };
+    }
+    // The object a reference names, when a scope holds it (37.15): a
+    // sequence operand that is a plain name with match items is a ref obj
+    // of its own (assertion_operand).
+    if (entry.kind == Kind::reference && type == vpiActual) {
+        const auto* const record = expression(entry.id);
+        if (record == nullptr) {
+            return fsim_vpi_handle_v1 { };
+        }
+        // A local variable or local formal argument of the property or
+        // sequence declaration whose expression the name is in (16.10,
+        // 37.51, 37.53): reached through the operands and match items up to
+        // the declaration's tree.
+        for (auto parent = entry.parent; parent != 0U;) {
+            const auto found = serial_of_.find(parent);
+            if (found == serial_of_.end()) {
+                break;
+            }
+            const auto& above = nodes_[found->second];
+            if (above.kind == Kind::assertion_op
+                || above.kind == Kind::assertion_spec
+                || above.kind == Kind::assertion_decl) {
+                const auto& declaration
+                    = *assertion_entries_.at(above.id).declaration;
+                const auto& locals = declaration.local_variables;
+                const auto local = std::ranges::find(
+                    locals, record->text, &sv::AssertionLocalVariable::name);
+                if (local != locals.end()) {
+                    return node(Kind::assertion_variable, above.id,
+                        static_cast<std::uint32_t>(local - locals.begin()),
+                        above.scope, above.scope);
+                }
+                const auto& formals = declaration.formals;
+                const auto formal = std::ranges::find_if(
+                    formals, [&](const sv::AssertionFormal& item) {
+                        return item.local && item.name == record->text;
+                    });
+                if (formal != formals.end()) {
+                    return node(Kind::assertion_formal, above.id,
+                        static_cast<std::uint32_t>(formal - formals.begin()),
+                        above.scope, above.scope);
+                }
+                break;
+            }
+            if (above.kind != Kind::expression && above.kind != Kind::reference
+                && above.kind != Kind::statement) {
+                break;
+            }
+            parent = above.parent;
+        }
+        if (record->referenced_name && record->referenced_name->selected
+            && hooks_.declared) {
+            if (const auto object
+                = hooks_.declared(*record->referenced_name->selected)) {
+                return object;
+            }
+        }
+        return hooks_.resolve(entry.scope,
+            record->referenced_name ? record->referenced_name->spelling
+                                    : record->text);
+    }
     // Property and sequence declarations, their formals and specs, and the
     // operations and instances of their expressions (IEEE 1800-2023
     // 37.50-37.54).
@@ -3868,6 +5155,12 @@ std::optional<fsim_vpi_handle_v1> VpiStatementModel::relation(
         }
         }
     }
+    // A for loop's own variable has the loop as its scope (37.12 detail 2),
+    // a class method's variable the method, and neither has another
+    // relation of the statement model.
+    if (entry.kind == Kind::local_variable) {
+        return type == vpiScope ? entry.parent : fsim_vpi_handle_v1 { };
+    }
     if (type == vpiScope) {
         return entry.scope;
     }
@@ -3948,6 +5241,17 @@ std::optional<fsim_vpi_handle_v1> VpiStatementModel::relation(
                     true);
         }
         return fsim_vpi_handle_v1 { };
+    }
+    // The aliased terminal and the terminal it is aliased to (37.76).
+    case Kind::alias_stmt: {
+        if ((type != vpiLhs && type != vpiRhs) || entry.id >= alias_entries_.size()) {
+            return fsim_vpi_handle_v1 { };
+        }
+        const auto& alias = alias_entries_[entry.id];
+        return expression_handle(type == vpiLhs
+                ? alias.alias->terminals[alias.terminal]
+                : alias.alias->terminals.back(),
+            entry.scope, self);
     }
     case Kind::statement:
     case Kind::cont_assign: {
@@ -4059,9 +5363,8 @@ std::optional<fsim_vpi_handle_v1> VpiStatementModel::relation(
             return record->kind == event_trigger ? expression_at(record->target)
                                                  : 0U;
         case vpiTask:
-            if (record->kind == task_call
-                && !record->task.spelling.starts_with('$')) {
-                return hooks_.resolve(entry.scope, record->task.spelling);
+            if (record->kind == task_call && hooks_.callee) {
+                return hooks_.callee(entry.scope, true, entry.id);
             }
             return fsim_vpi_handle_v1 { };
         default:
@@ -4159,9 +5462,29 @@ std::optional<fsim_vpi_handle_v1> VpiStatementModel::relation(
             }
             return fsim_vpi_handle_v1 { };
         }
+        // The inline constraint of a randomize call (18.7, 37.42 detail 1).
+        if ((kind == vpiFuncCall || kind == vpiMethodFuncCall)
+            && type == vpiWith && inline_constraint_of(*record) != nullptr) {
+            return node(Kind::inline_constraint, entry.id, 0U, entry.scope, self);
+        }
+        // The with expression of an array locator method (IEEE 1800-2023
+        // 7.12.1, 37.42 detail 1): the last operand after the array, which
+        // the parser keeps with the iterator argument, if any, before it.
+        if (kind == vpiFuncCall && type == vpiWith
+            && record->kind == sv::ExpressionKind::call
+            && record->operands.size() >= 2U) {
+            static const std::set<std::string, std::less<>> locators {
+                ".find", ".find_index", ".find_first", ".find_first_index",
+                ".find_last", ".find_last_index", ".min", ".max", ".unique",
+                ".unique_index" };
+            if (locators.contains(record->text)) {
+                return operand(record->operands.size() - 1U);
+            }
+            return fsim_vpi_handle_v1 { };
+        }
         if ((kind == vpiFuncCall || kind == vpiMethodFuncCall)
             && type == vpiFunction) {
-            return hooks_.resolve(entry.scope, record->text);
+            return call_callee(entry.id, entry.scope);
         }
         return fsim_vpi_handle_v1 { };
     }
@@ -4188,6 +5511,43 @@ std::optional<std::vector<fsim_vpi_handle_v1>> VpiStatementModel::iterate(
     const auto entry = nodes_.at(serial);
     const auto self = hooks_.handle(serial);
     std::vector<fsim_vpi_handle_v1> found;
+    const FrameRestore restore { frame_,
+        std::exchange(frame_, entry.kind == Kind::expression
+                || entry.kind == Kind::reference || entry.kind == Kind::let_expr
+            ? entry.aux
+            : 0U) };
+    // The formals of a let declaration; the arguments of a let expression
+    // in the order of the formals, a default where none is given (IEEE
+    // 1800-2023 37.57 detail 1).
+    if (entry.kind == Kind::let_decl && type == vpiSeqFormalDecl) {
+        if (entry.id < let_entries_.size()) {
+            for (std::uint32_t port = 0U;
+                 port < let_entries_[entry.id]->ports.size(); ++port) {
+                found.push_back(
+                    node(Kind::let_formal, entry.id, port, entry.scope, self));
+            }
+        }
+        return found;
+    }
+    if (entry.kind == Kind::let_expr && type == vpiArgument) {
+        if (const auto* const declaration = let_of_use(entry)) {
+            for (std::size_t port = 0U; port < declaration->ports.size();
+                 ++port) {
+                if (const auto argument = let_argument(*declaration,
+                        semantic::ExpressionId::from_index(entry.id), port)) {
+                    if (const auto handle
+                        = expression_handle(*argument, entry.scope, self)) {
+                        found.push_back(handle);
+                    }
+                }
+            }
+        }
+        return found;
+    }
+    if (entry.kind == Kind::let_decl || entry.kind == Kind::let_formal
+        || entry.kind == Kind::let_expr) {
+        return std::nullopt;
+    }
     const auto sensitivities = [&]() -> const std::vector<sv::Sensitivity>* {
         if (entry.of_process) {
             const auto* const record = process(entry.id);
@@ -4215,6 +5575,19 @@ std::optional<std::vector<fsim_vpi_handle_v1>> VpiStatementModel::iterate(
         return hooks_.resolve(entry.scope, item.signal);
     };
     switch (entry.kind) {
+    // The constraint items of an inline constraint: its expressions, in
+    // order (37.34).
+    case Kind::inline_constraint: {
+        const auto* const record = expression(entry.id);
+        const auto* const block
+            = record != nullptr ? inline_constraint_of(*record) : nullptr;
+        if (block != nullptr && type == vpiConstraintItem) {
+            for (const auto choice : block->choices) {
+                found.push_back(expression_handle(choice, entry.scope, self));
+            }
+        }
+        return found;
+    }
     case Kind::statement: {
         const auto* const record = statement(entry.id);
         if (record == nullptr) {
@@ -4235,13 +5608,25 @@ std::optional<std::vector<fsim_vpi_handle_v1>> VpiStatementModel::iterate(
                     }
                 }
             }
+        } else if (type == vpiVariables && statement_type(*record) == vpiFor
+            && record->loop_variable_declared) {
+            // The variables a for statement declares, of which it is the
+            // scope (12.7.1, 37.12 detail 2).
+            for (const auto id : record->declarations) {
+                const auto* const declaration = hir_.find_declaration(id);
+                if (declaration != nullptr
+                    && declaration->form == sv::DeclarationForm::variable) {
+                    found.push_back(node(Kind::local_variable, id.value(),
+                        entry.id, entry.scope, self));
+                }
+            }
         } else if (type == vpiLoopVars && record->foreach_collection) {
             for (std::size_t index = 0U; index < record->foreach_variables.size();
                  ++index) {
                 const auto& variable = record->foreach_variables[index];
                 found.push_back(variable
                         ? expression_handle(*variable, entry.scope, self)
-                        : node(Kind::foreach_null, entry.id,
+                        : node(Kind::null_operation, entry.id,
                             static_cast<std::uint32_t>(index), entry.scope,
                             self));
             }
@@ -4286,9 +5671,17 @@ std::optional<std::vector<fsim_vpi_handle_v1>> VpiStatementModel::iterate(
                 if (!record->output_arguments.empty()) {
                     // The arguments as written, in order: the literals the
                     // frontend folded into text are kept (37.62).
-                    for (const auto argument : record->output_arguments) {
-                        found.push_back(
-                            expression_handle(argument, entry.scope, self));
+                    // An empty argument is a vpiNullOp operation (37.42
+                    // detail 8).
+                    for (std::size_t index = 0U;
+                         index < record->output_arguments.size(); ++index) {
+                        const auto argument = record->output_arguments[index];
+                        found.push_back(argument
+                                ? expression_handle(
+                                      *argument, entry.scope, self)
+                                : node(Kind::null_operation, entry.id,
+                                      static_cast<std::uint32_t>(index),
+                                      entry.scope, self));
                     }
                 } else {
                     if (format_text(*record)) {
@@ -4393,7 +5786,11 @@ std::optional<std::vector<fsim_vpi_handle_v1>> VpiStatementModel::iterate(
             auto operands = std::span { record->operands };
             // An instance call's first operand is its receiver, the prefix
             // (37.42 detail 2), not an argument.
-            if (record->kind == sv::ExpressionKind::class_method_call
+            if ((record->kind == sv::ExpressionKind::class_method_call
+                    || (type == vpiArgument
+                        && record->kind == sv::ExpressionKind::call
+                        && record->text.starts_with('.')
+                        && call_callee(entry.id, entry.scope) != 0U))
                 && !operands.empty()) {
                 operands = operands.subspan(1U);
             }
@@ -4621,6 +6018,42 @@ VpiStatementModel::continuous_delay(const std::uint64_t serial) const
         }
     }
     return result;
+}
+
+std::optional<semantic::ExpressionId> VpiStatementModel::cast_expression(
+    const std::uint64_t serial) const
+{
+    const auto& entry = nodes_.at(serial);
+    if (entry.kind != Kind::expression) {
+        return std::nullopt;
+    }
+    const auto* const record = expression(entry.id);
+    if (record == nullptr || !sv::systemverilog_cast_value_operand(*record)) {
+        return std::nullopt;
+    }
+    return record->id;
+}
+
+std::optional<VpiStatementModel::CastTarget> VpiStatementModel::cast_target(
+    const std::uint64_t serial)
+{
+    const auto entry = nodes_.at(serial);
+    if (entry.kind != Kind::expression) {
+        return std::nullopt;
+    }
+    const auto* const record = expression(entry.id);
+    if (record == nullptr || !sv::systemverilog_cast_value_operand(*record)) {
+        return std::nullopt;
+    }
+    CastTarget target;
+    if (const auto size = sv::systemverilog_cast_size_operand(*record)) {
+        target.size
+            = expression_handle(*size, entry.scope, hooks_.handle(serial));
+        return target;
+    }
+    constexpr std::string_view prefix { "@sv-cast:" };
+    target.type = record->text.substr(prefix.size());
+    return target;
 }
 
 std::optional<VpiStatementValue> VpiStatementModel::value(

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "../../src/app/application_internal.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/elaboration/elaborator.hpp"
 #include "fsim/app/sdf_vital_reannotation.hpp"
 
 #include <algorithm>

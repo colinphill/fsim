@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "uvm_phase_tlm_register_probe.hpp"
+#include "fsim/semantic/systemverilog_class_specialization.hpp"
 
 #include "fsim/app/design_artifact.hpp"
 
@@ -8,7 +9,6 @@
 #include <cassert>
 #include <cstdint>
 #include <map>
-#include <ranges>
 #include <stdexcept>
 #include <string>
 #include <string_view>

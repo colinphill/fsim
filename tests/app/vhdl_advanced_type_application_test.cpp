@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/runtime/simir.hpp"
 
 #include "fsim/runtime/vcd_writer.hpp"
 
@@ -324,7 +326,7 @@ void verify_vhdl_1987_declaration_execution(
         output << R"(
 entity Legacy_Declarations is
   port (Result : out bit_vector(136 downto 0));
-end entity;
+end Legacy_Declarations;
 architecture rtl of Legacy_Declarations is
 begin
   exercise : process
@@ -333,7 +335,7 @@ begin
                << std::string(137U, '1') << R"(";
     wait;
   end process;
-end architecture;
+end rtl;
 )";
         assert(output.good());
     }

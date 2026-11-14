@@ -2,8 +2,9 @@
 #pragma once
 
 #include "fsim/frontend/coverage_point_identity.hpp"
-#include "fsim/frontend/coverage_source_control.hpp"
-#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/coverage_source_identity.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/runtime/code_coverage.hpp"
 
 #include <limits>
 #include <cstddef>
@@ -11,6 +12,7 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+#include <cstdint>
 
 namespace fsim::elaboration {
 

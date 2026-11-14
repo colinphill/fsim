@@ -1,18 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 #include "fsim/app/application.hpp"
-#include "application_compiled_source.hpp"
-#include "application_direct_read_map_cache.hpp"
-#include "../runtime/simir_process_program.hpp"
-#include "../runtime/simir_builtin_process_executor_capability.hpp"
+#include "fsim/app/built_project.hpp"
 
-#include "tcl.hpp"
 
 #include "fsim/compiler/object_cache.hpp"
 #include "fsim/runtime/simir.hpp"
 #include "fsim/frontend/class_specialization.hpp"
 #include "fsim/frontend/coverage_persistence.hpp"
-#include "fsim/frontend/coverage_percentage.hpp"
 #include "fsim/frontend/parser.hpp"
 #include "fsim/frontend/preprocessor.hpp"
 #include "fsim/library/source_mapping.hpp"
@@ -20,47 +15,26 @@
 #include "fsim/runtime/class_randomize.hpp"
 #include "fsim/runtime/constraint_solver.hpp"
 #include "fsim/runtime/vcd_writer.hpp"
-#include "fsim/support/environment.hpp"
-#include "fsim/support/sha256.hpp"
 #include "fsim/systemc/hierarchy.hpp"
-#include "fsim/systemc/incremental.hpp"
 #include "fsim/systemc/plugin_compiler.hpp"
-#include "fsim/version.hpp"
 
-#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cctype>
-#include <chrono>
-#include <charconv>
 #include <csignal>
 #include <cstddef>
 #include <cstdint>
-#include <exception>
 #include <filesystem>
 #include <fstream>
-#include <future>
 #include <iostream>
-#include <iterator>
-#include <limits>
 #include <map>
 #include <unordered_map>
 #include <memory>
-#include <mutex>
-#include <new>
-#include <numeric>
 #include <optional>
-#include <random>
 #include <set>
 #include <span>
-#include <sstream>
-#include <stdexcept>
 #include <string>
 #include <string_view>
-#include <system_error>
-#include <thread>
-#include <tuple>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -217,7 +191,9 @@ struct SystemVerilogVpiPublishedDesign {
     // 1800-2023 37.17 vpiStringVar).
     std::map<fsim_vpi_handle_v1, runtime::simir::StringObjectId>
         string_handles;
-    std::map<std::string, fsim_vpi_handle_v1, std::less<>> assertions;
+    // The design process occurrence (its index) each concurrent assertion
+    // object was published for (IEEE 1800-2023 37.49).
+    std::map<fsim_vpi_handle_v1, std::uint32_t> assertion_occurrences;
     std::map<runtime::simir::SignalId, runtime::SystemVerilogScalarKind>
         scalar_kinds;
     std::map<runtime::simir::SignalId,
@@ -280,6 +256,15 @@ make_systemverilog_vpi_design(
     const BuiltProject& project,
     const runtime::simir::Interpreter& interpreter);
 
+// The value of a recorded class parameter (its canonical identity, as the
+// elaborator recorded it in vpi_class_parameters) and whether it is signed;
+// none when the identity does not decode (IEEE 1800-2023 37.28).
+[[nodiscard]] std::optional<std::pair<runtime::SystemVerilogVpiStoredValue, bool>>
+decode_recorded_vpi_class_parameter(const semantic::sv::Hir& hir,
+    const std::string& name, const std::string& identity,
+    semantic::DeclarationId declaration_id,
+    const runtime::SystemVerilogVpiTypespec* typespec);
+
 [[nodiscard]] std::unique_ptr<runtime::SystemVerilogVpiObjectRegistry>
 make_empty_systemverilog_vpi_registry();
 
@@ -308,15 +293,21 @@ using runtime::simir::SignalId;
 class_property_descriptor(
     const semantic::sv::SpecializedClassProperty& property,
     const semantic::sv::Hir& hir,
-    bool qualified_name = false);
+    bool qualified_name = false,
+    const std::unordered_map<std::string, runtime::simir::ContainerType>*
+        container_types = nullptr);
 
 [[nodiscard]] std::uint64_t entropy_seed();
 
+// `compiled_sources` are the files of compiled library declarations the
+// parse read again (a package's sequences and properties), recorded with the
+// identities the library gives them.
 [[nodiscard]] semantic::Model build_semantic_model(
     const frontend::ParsedDesign& parsed,
     std::span<const CheckedSource> hdl_sources,
     std::span<const CheckedSource> systemc_sources,
-    std::span<const CheckedSource> standard_sources);
+    std::span<const CheckedSource> standard_sources,
+    std::span<const semantic::SourceFile> compiled_sources = {});
 
 [[nodiscard]] semantic::SourceSpanId intern_semantic_span(
     semantic::Model& model,
@@ -657,6 +648,7 @@ struct ParseGroup {
     std::string default_timescale;
     std::filesystem::path base_directory;
     frontend::SystemVerilogPackageMemberLookup package_member_lookup;
+    frontend::SystemVerilogPackageAssertionLookup package_assertion_lookup;
 };
 
 struct ParsedSnapshot {

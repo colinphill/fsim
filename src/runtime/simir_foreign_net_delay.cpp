@@ -10,6 +10,7 @@
 
 #include "simir_events.hpp"
 #include "simir_internal.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 
 #include <algorithm>
 #include <limits>

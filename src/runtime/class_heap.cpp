@@ -189,6 +189,14 @@ namespace {
       }
       property.packed = *descriptor_property.initial_packed;
     }
+    if (descriptor_property.initial_container) {
+      if (descriptor_property.kind != SystemVerilogClassPropertyKind::Container
+          || descriptor_property.handle_container) {
+        throw std::invalid_argument{
+            "class container default requires a value container property"};
+      }
+      property.container = *descriptor_property.initial_container;
+    }
     if (descriptor_property.initial_string) {
       if (descriptor_property.kind
           != SystemVerilogClassPropertyKind::String) {
@@ -442,16 +450,7 @@ SystemVerilogClassPropertyValue& SystemVerilogClassHeap::property(
     const SystemVerilogClassHandle handle,
     const std::string_view name) {
   auto& value = object(handle);
-  auto found = std::ranges::find(value.property_names, name);
-  if (found == value.property_names.end()) {
-    const auto suffix = "::" + std::string{name};
-    const auto reverse = std::find_if(
-        value.property_names.rbegin(), value.property_names.rend(),
-        [&](const auto& candidate) { return candidate.ends_with(suffix); });
-    if (reverse != value.property_names.rend()) {
-      found = std::prev(reverse.base());
-    }
-  }
+  const auto found = std::ranges::find(value.property_names, name);
   if (found == value.property_names.end()) {
     throw std::out_of_range{
         "SystemVerilog class property '" + std::string{name}
@@ -465,16 +464,7 @@ const SystemVerilogClassPropertyValue& SystemVerilogClassHeap::property(
     const SystemVerilogClassHandle handle,
     const std::string_view name) const {
   const auto& value = object(handle);
-  auto found = std::ranges::find(value.property_names, name);
-  if (found == value.property_names.end()) {
-    const auto suffix = "::" + std::string{name};
-    const auto reverse = std::find_if(
-        value.property_names.rbegin(), value.property_names.rend(),
-        [&](const auto& candidate) { return candidate.ends_with(suffix); });
-    if (reverse != value.property_names.rend()) {
-      found = std::prev(reverse.base());
-    }
-  }
+  const auto found = std::ranges::find(value.property_names, name);
   if (found == value.property_names.end()) {
     throw std::out_of_range{
         "SystemVerilog class property '" + std::string{name}
@@ -482,6 +472,35 @@ const SystemVerilogClassPropertyValue& SystemVerilogClassHeap::property(
   }
   return value.properties[static_cast<std::size_t>(
       std::distance(value.property_names.begin(), found))];
+}
+
+const SystemVerilogClassPropertyValue* SystemVerilogClassHeap::member(
+    const SystemVerilogClassHandle handle,
+    const std::string_view name,
+    const std::string_view scope) const {
+  const auto& value = object(handle);
+  // The chain lists the object's class first, then each base.
+  auto owner = value.assignable_declared_types.begin();
+  if (!scope.empty()) {
+    owner = std::ranges::find(value.assignable_declared_types, scope);
+  }
+  for (; owner != value.assignable_declared_types.end(); ++owner) {
+    const auto identity = *owner + "::" + std::string{name};
+    const auto found = std::ranges::find(value.property_names, identity);
+    if (found != value.property_names.end()) {
+      return &value.properties[static_cast<std::size_t>(
+          std::distance(value.property_names.begin(), found))];
+    }
+  }
+  return nullptr;
+}
+
+SystemVerilogClassPropertyValue* SystemVerilogClassHeap::member(
+    const SystemVerilogClassHandle handle,
+    const std::string_view name,
+    const std::string_view scope) {
+  return const_cast<SystemVerilogClassPropertyValue*>(
+      std::as_const(*this).member(handle, name, scope));
 }
 
 SystemVerilogClassRandomState& SystemVerilogClassHeap::random_state(
@@ -551,13 +570,7 @@ bool SystemVerilogClassHeap::constraint_mode(
     const SystemVerilogClassHandle handle,
     const std::string_view constraint) const {
   const auto& modes = object(handle).constraint_modes;
-  auto found = modes.find(constraint);
-  if (found == modes.end()) {
-    const auto suffix = "::" + std::string{constraint};
-    found = std::find_if(modes.begin(), modes.end(), [&](const auto& item) {
-      return item.first.ends_with(suffix);
-    });
-  }
+  const auto found = modes.find(constraint);
   if (found == modes.end()) {
     throw std::out_of_range{
         "SystemVerilog class constraint '" + std::string{constraint}
@@ -571,13 +584,7 @@ void SystemVerilogClassHeap::set_constraint_mode(
     const std::string_view constraint,
     const bool enabled) {
   auto& modes = object(handle).constraint_modes;
-  auto found = modes.find(constraint);
-  if (found == modes.end()) {
-    const auto suffix = "::" + std::string{constraint};
-    found = std::find_if(modes.begin(), modes.end(), [&](const auto& item) {
-      return item.first.ends_with(suffix);
-    });
-  }
+  const auto found = modes.find(constraint);
   if (found == modes.end()) {
     throw std::out_of_range{
         "SystemVerilog class constraint '" + std::string{constraint}

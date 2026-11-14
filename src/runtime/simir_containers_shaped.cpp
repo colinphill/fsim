@@ -4,10 +4,10 @@
 // packed layout plus one index range per dimension.
 #include "simir_internal.hpp"
 #include "simir_container_helpers.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <optional>
 #include <string>
 

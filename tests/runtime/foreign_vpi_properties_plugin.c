@@ -7,7 +7,6 @@
 #include "sv_vpi_user.h"
 #include "vpi_user.h"
 
-#include <stdio.h>
 #include <string.h>
 
 static const char* type_name(PLI_INT32 type)
@@ -27,6 +26,14 @@ static const char* type_name(PLI_INT32 type)
         return "vpiIntVar";
     case vpiReg:
         return "vpiReg";
+    case vpiRefObj:
+        return "vpiRefObj";
+    case vpiIntTypespec:
+        return "vpiIntTypespec";
+    case vpiLogicTypespec:
+        return "vpiLogicTypespec";
+    case vpiArrayTypespec:
+        return "vpiArrayTypespec";
     case vpiPropertyInst:
         return "vpiPropertyInst";
     case vpiSequenceInst:
@@ -53,6 +60,8 @@ static const char* op_name(PLI_INT32 op)
         return "vpiCycleDelayOp";
     case vpiPosedgeOp:
         return "vpiPosedgeOp";
+    case vpiCompAndOp:
+        return "vpiCompAndOp";
     default:
         return "other";
     }
@@ -108,7 +117,16 @@ static void dump(vpiHandle object, int depth, int show_strong)
         vpi_printf("#c %sconst %s\n", indent(depth),
             value.value.str != NULL ? value.value.str : "none");
     } else {
-        vpi_printf("#c %sname %s\n", indent(depth), text(vpiName, object));
+        // A boolean leaf under strong() or weak() carries its strength
+        // (37.52 detail 3); any other leaf has none.
+        PLI_INT32 const strength = show_strong
+            ? (PLI_INT32)vpi_get(vpiOpStrong, object) : vpiUndefined;
+        if (strength == 0 || strength == 1) {
+            vpi_printf("#c %sname %s type=%s strong=%d\n", indent(depth),
+                text(vpiName, object), type_name(type), (int)strength);
+        } else {
+            vpi_printf("#c %sname %s\n", indent(depth), text(vpiName, object));
+        }
     }
 }
 
@@ -184,7 +202,7 @@ static void sequence(vpiHandle declaration)
     }
 }
 
-static void assertion(const char* path)
+static void assertion_with(const char* path, int details)
 {
     vpiHandle const object = vpi_handle_by_name((PLI_BYTE8*)path, NULL);
     vpiHandle const named = object != NULL ? vpi_handle(vpiProperty, object) : NULL;
@@ -196,11 +214,82 @@ static void assertion(const char* path)
         type_name((PLI_INT32)vpi_get(vpiType, named)));
     if (vpi_get(vpiType, named) == vpiPropertySpec) {
         vpiHandle const expression = vpi_handle(vpiPropertyExpr, named);
+        if (details) {
+            vpiHandle const clock = vpi_handle(vpiClockingEvent, named);
+            vpiHandle const disable = vpi_handle(vpiDisableCondition, named);
+            vpi_printf("#c   cover sequence=%d disable=%s\n",
+                (int)vpi_get(vpiIsCoverSequence, object),
+                disable != NULL ? text(vpiName, disable) : "none");
+            if (clock != NULL) {
+                dump(clock, 2, 0);
+            }
+        }
         if (expression != NULL) {
             dump(expression, 1, 1);
         }
     } else {
         dump(named, 1, 1);
+    }
+}
+
+static void assertion(const char* path)
+{
+    assertion_with(path, 0);
+}
+
+// A typespec: its type, name (a typedef's), ranges and element typespec.
+static void typespec(vpiHandle object, int depth)
+{
+    vpiHandle iterator;
+    vpiHandle range;
+    vpiHandle element;
+    vpi_printf("#c %stypespec %s name=%s\n", indent(depth),
+        type_name((PLI_INT32)vpi_get(vpiType, object)), text(vpiName, object));
+    iterator = vpi_iterate(vpiRange, object);
+    while (iterator != NULL && (range = vpi_scan(iterator)) != NULL) {
+        s_vpi_value left;
+        s_vpi_value right;
+        vpiHandle const left_expr = vpi_handle(vpiLeftRange, range);
+        vpiHandle const right_expr = vpi_handle(vpiRightRange, range);
+        memset(&left, 0, sizeof left);
+        memset(&right, 0, sizeof right);
+        left.format = vpiIntVal;
+        right.format = vpiIntVal;
+        if (left_expr != NULL && right_expr != NULL) {
+            vpi_get_value(left_expr, &left);
+            vpi_get_value(right_expr, &right);
+            vpi_printf("#c %s  range [%d:%d]\n", indent(depth),
+                (int)left.value.integer, (int)right.value.integer);
+        }
+    }
+    element = vpi_handle(vpiElemTypespec, object);
+    if (element != NULL) {
+        typespec(element, depth + 1);
+    }
+}
+
+// The typespecs of a declaration's formals and local variables.
+static void typespecs(const char* path)
+{
+    vpiHandle const declaration = vpi_handle_by_name((PLI_BYTE8*)path, NULL);
+    PLI_INT32 const iterations[] = { vpiSeqFormalDecl, vpiVariables };
+    int round;
+    if (declaration == NULL) {
+        vpi_printf("#c %s none\n", path);
+        return;
+    }
+    for (round = 0; round < 2; ++round) {
+        vpiHandle const iterator = vpi_iterate(iterations[round], declaration);
+        vpiHandle object;
+        while (iterator != NULL && (object = vpi_scan(iterator)) != NULL) {
+            vpiHandle const type = vpi_handle(vpiTypespec, object);
+            vpi_printf("#c typed %s\n", text(vpiFullName, object));
+            if (type != NULL) {
+                typespec(type, 1);
+            } else {
+                vpi_printf("#c   no typespec\n");
+            }
+        }
     }
 }
 
@@ -221,9 +310,39 @@ static PLI_INT32 start(p_cb_data data)
     declaration = vpi_handle_by_name("top.p_imp", NULL);
     vpi_printf("#c by name %s\n",
         declaration != NULL ? text(vpiFullName, declaration) : "none");
+    declaration = vpi_handle_by_name("top.u_chk$cp", NULL);
+    vpi_printf("#c checker declaration by name %s\n",
+        declaration != NULL ? text(vpiFullName, declaration) : "none");
+    // A checker's assertion belongs to the instantiating module under its
+    // checker instance's path, and names the declaration it instantiates
+    // by its source name (17.2, 37.49, 37.53).
+    {
+        vpiHandle const checked = vpi_handle_by_name("top.u_chk.ca", NULL);
+        vpiHandle assertions = vpi_iterate(vpiAssertion, top);
+        vpiHandle item;
+        vpi_printf("#c checker assertion by name %s\n",
+            checked != NULL ? text(vpiFullName, checked) : "none");
+        while (assertions != NULL && (item = vpi_scan(assertions)) != NULL) {
+            vpiHandle const used = vpi_handle(vpiProperty, item);
+            vpiHandle const named = used != NULL
+                    && vpi_get(vpiType, used) == vpiPropertyInst
+                ? vpi_handle(vpiPropertyDecl, used)
+                : NULL;
+            vpi_printf("#c assertion %s name %s", text(vpiFullName, item),
+                text(vpiName, item));
+            if (named != NULL) {
+                vpi_printf(" uses %s (%s)", text(vpiName, named),
+                    text(vpiFullName, named));
+            }
+            vpi_printf("\n");
+        }
+    }
     assertion("top.a1");
     assertion("top.a2");
     assertion("top.a3");
+    assertion("top.a4");
+    assertion_with("top.a5", 1);
+    typespecs("top.s_ty");
     return 0;
 }
 

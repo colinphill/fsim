@@ -2,8 +2,17 @@
 
 #include "verilog_parser_internal.hpp"
 #include "verilog_parser_assertion_support.hpp"
+#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/token.hpp"
 
 #include <unordered_set>
+#include <algorithm>
+#include <cstddef>
+#include <iterator>
+#include <span>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace fsim::frontend {
 std::size_t VerilogParser::structure_assertion_locals(

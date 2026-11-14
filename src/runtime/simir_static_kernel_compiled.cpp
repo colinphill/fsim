@@ -13,6 +13,7 @@
 // simir_static_kernel_*.cpp units.
 #include "simir_static_kernel_compiled_internal.hpp"
 
+#include "fsim/runtime/simir_interpreter.hpp"
 #include "fsim/runtime/sva_storage.hpp"
 
 #include <algorithm>
@@ -22,7 +23,6 @@
 #include <iostream>
 #include <limits>
 #include <map>
-#include <queue>
 #include <set>
 #include <typeinfo>
 #include <cstring>
@@ -204,6 +204,8 @@ void Interpreter::Impl::StaticKernel::compile_members()
             }
             if (specialized) {
                 ++specialized_members_;
+                specialized_size_.resize(members_.size(), 0U);
+                specialized_size_[index] = original_size;
                 member.body_identity = nullptr;
             }
             if (recorded_specializations_) {
@@ -724,10 +726,17 @@ std::optional<SvaNativePlan> sva_native_plan(const SvaOperation& operation,
     // Each node is one instance in an attempt; the lists of started
     // instances (always, eventually, until, implication consequents that are
     // not sequences) are not part of it.
+    // A recursive property (IEEE 1800-2023 16.12.17) reaches a node again
+    // from inside it: the node is checked once, and the automaton steps its
+    // instances through a dispatch on the record's node (no fixed tree).
+    std::vector<bool> on_path(plan.properties.size());
     const auto tree_ok = [&](const auto& self, const std::uint32_t node) -> bool {
         if (node >= plan.properties.size()) {
             reason = "plan";
             return false;
+        }
+        if (on_path[node]) {
+            return true;
         }
         const auto& property = plan.properties[node];
         std::size_t children = 0U;
@@ -780,11 +789,13 @@ std::optional<SvaNativePlan> sva_native_plan(const SvaOperation& operation,
             reason = "plan";
             return false;
         }
+        on_path[node] = true;
         for (const auto child : property.children) {
             if (!self(self, child)) {
                 return false;
             }
         }
+        on_path[node] = false;
         return true;
     };
     switch (root.kind) {
@@ -954,6 +965,7 @@ std::optional<SvaNativePlan> sva_native_plan(const SvaOperation& operation,
         compiled.kind = property.kind;
         compiled.overlapped = property.overlapped;
         compiled.synchronous = property.synchronous;
+        compiled.strong = property.strong;
         // A multiclocked property's clock (16.13.3); 0 for a singly clocked
         // plan.
         if (property.clock != 0U && property.clock >= plan.clock_guards.size()) {
@@ -1305,6 +1317,59 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
         }
         throw reject("operation");
     };
+    // A resolution program's input register is set by the update commit
+    // (run_resolver), never by the program: the values of its drivers, each
+    // as wide as the signal, side by side (IEEE 1076-2019 4.6, 14.7.3.2).
+    // A program resolves a fixed number of drivers (the declared drivers, or
+    // a guarded signal's variant for k connected ones); the program that
+    // takes the count at run time keeps an input of no static width.
+    if (member.resolver) {
+        if (!resolver_inputs_) {
+            auto& inputs = resolver_inputs_.emplace();
+            for (const auto& [signal, resolver] : impl_.vhdl_resolvers) {
+                const auto element = static_cast<std::uint32_t>(
+                    impl_.get_signal(signal).initial_value.width());
+                if (!resolver.drivers.empty()) {
+                    inputs.emplace(resolver.process,
+                        std::pair { resolver.input,
+                            element
+                                * static_cast<std::uint32_t>(
+                                    resolver.drivers.size()) });
+                } else if (resolver.systemverilog_nettype) {
+                    // A nettype's function over no drivers takes an empty
+                    // array (IEEE 1800-2023 6.7.3); its input keeps one
+                    // unused element.
+                    inputs.emplace(resolver.process,
+                        std::pair { resolver.input, element });
+                }
+                if (resolver.driving_resolver
+                    && !resolver.driving_drivers.empty()) {
+                    inputs.emplace(resolver.driving_resolver->process,
+                        std::pair { resolver.driving_resolver->input,
+                            element
+                                * static_cast<std::uint32_t>(
+                                    resolver.driving_drivers.size()) });
+                }
+                const auto* dynamic = resolver.dynamic_variant();
+                for (std::size_t count = 1U; count < resolver.variants.size();
+                     ++count) {
+                    const auto& variant = resolver.variants[count];
+                    if (&variant != dynamic
+                        && variant.process
+                            != std::numeric_limits<ProcessId>::max()) {
+                        inputs.emplace(variant.process,
+                            std::pair { variant.input,
+                                element * static_cast<std::uint32_t>(count) });
+                    }
+                }
+            }
+        }
+        if (const auto found = resolver_inputs_->find(member.process);
+            found != resolver_inputs_->end()
+            && found->second.first < register_count) {
+            width[found->second.first] = found->second.second;
+        }
+    }
     bool changed = true;
     std::uint32_t defining = 0U;
     // A register's width only moves from unknown to a width to polymorphic,
@@ -2025,10 +2090,12 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
     // slot's shape for generated code: imm_b its source count and, from bit
     // 32, the member's source; aux its width.
     // The source count of a resolved slot as generated code takes it, with
-    // net_nine_bit for a slot of nine states (detail::NetShape).
+    // net_nine_bit for a slot of nine states and net_user_bit for one a
+    // resolution function of the design's own resolves (detail::NetShape).
     const auto net_source_count = [&](const std::uint32_t slot) {
         return std::uint64_t { slots_[slot].net_processes.size() }
-            | (slots_[slot].nine() ? std::uint64_t { net_nine_bit } : 0U);
+            | (slots_[slot].nine() ? std::uint64_t { net_nine_bit } : 0U)
+            | (slots_[slot].user ? std::uint64_t { net_user_bit } : 0U);
     };
     const auto net_store = [&](KInst& inst, const std::uint32_t slot) {
         if (slots_[slot].resolved) {
@@ -2695,7 +2762,8 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                     // Debugger plan: a statement, call, wait, assertion or
                     // entry point returns to the thread runner like a
                     // suspension, which raises the execution-point hook
-                    // there and may stop the run. Block markers and every
+                    // there and may stop the run (a block exit only tells
+                    // the foreign observers). Block entry markers and every
                     // point of a normal plan compile to nothing.
                     if (debug_points_ && debug_point_executable(op.kind)) {
                         inst.op = KOp::suspend;
@@ -3699,11 +3767,16 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                     || std::is_same_v<T, SignalLastValue>
                     || std::is_same_v<T, SignalLastEvent>
                     || std::is_same_v<T, SignalLastActive>) {
-                    // 'EVENT, 'ACTIVE, 'LAST_VALUE, 'LAST_EVENT and
-                    // 'LAST_ACTIVE of a host signal (IEEE 1076-2019 16.2.4)
-                    // read the host's history through the kernel's operation
-                    // step.
-                    generic = true;
+                    // 'EVENT, 'ACTIVE, 'LAST_EVENT and 'LAST_ACTIVE of a
+                    // kernel signal's history (IEEE 1076-2019 16.2.4) are an
+                    // inline load of its record (KOp::sva_sampled_load, aux
+                    // 16), and its 'LAST_VALUE a read of its hidden
+                    // last-value signal (build_histories rewrote it); those
+                    // of a host signal read the host's history through the
+                    // kernel's operation step.
+                    generic = generic
+                        || std::is_same_v<T, SignalLastValue>
+                        || history_index(op.signal, op.selection) == no_slot;
                 } else if constexpr (std::is_same_v<T, FormatDisplay>) {
                     if (op.source >= register_count || width[op.source] == 0U
                         || width[op.source] == polymorphic) {
@@ -4102,6 +4175,23 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                     inst.op = KOp::load_host;
                     inst.x = op.signal;
                 }
+            } else if constexpr (std::is_same_v<T, SignalEvent>
+                || std::is_same_v<T, SignalActive>
+                || std::is_same_v<T, SignalLastEvent>
+                || std::is_same_v<T, SignalLastActive>) {
+                // The history of a kernel signal (IEEE 1076-2019 16.2.4): an
+                // inline load of its record (the classification above left
+                // the other forms to the operation step).
+                inst.op = KOp::sva_sampled_load;
+                sva_table_used_ = true;
+                inst.d = narrow(op.destination);
+                inst.aux = 16U;
+                inst.sub = std::is_same_v<T, SignalEvent> ? 0U
+                    : std::is_same_v<T, SignalActive>     ? 1U
+                    : std::is_same_v<T, SignalLastEvent>  ? 2U
+                                                          : 3U;
+                inst.width = inst.sub < 2U ? 1U : 64U;
+                inst.x = 2U + 8U * history_index(op.signal, op.selection);
             } else if constexpr (std::is_same_v<T, Binary>) {
                 if (w(op.lhs) != w(op.rhs)) {
                     throw reject("binary_widths");
@@ -4926,6 +5016,109 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
         body.return_targets.erase(std::unique(body.return_targets.begin(),
                                       body.return_targets.end()),
             body.return_targets.end());
+    }
+    if (vhdl) {
+        // The instructions that store a variable (a debug local of the
+        // program the debug interface names it by, debug_local_target):
+        // they report the store while a hook names one of the member's
+        // variables (IEEE 1076-2019 22.5.2, 21.3.2.2).
+        const auto* const original = debug_program(member.process);
+        const auto program = original != nullptr
+            ? ProcessProgramView { *original }
+            : impl_.processes.program_view(member.process);
+        std::vector<std::uint8_t> variable(register_count, 0U);
+        bool any = false;
+        for (const auto& local : program.debug_locals()) {
+            if (local.register_id < register_count) {
+                variable[local.register_id] = 1U;
+                any = true;
+            }
+        }
+        if (any) {
+            std::vector<WrittenRegister> written;
+            body.variable_stores.assign(body.code.size(), no_variable_store);
+            const auto operations = member.operations().size();
+            for (std::uint32_t at = 0U; at < body.code.size(); ++at) {
+                const auto pc = begin + at;
+                if (pc >= operations || body.code[at].op == KOp::nop) {
+                    continue;
+                }
+                operation_written_registers(member.operations()[pc], written);
+                for (const auto& write : written) {
+                    if (write.reg < register_count && variable[write.reg] != 0U) {
+                        body.variable_stores[at] = write.reg;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    // The instructions that begin a statement: the program's debug points
+    // (every statement has one; a kernel without the debug plan runs them as
+    // no-ops). While an observer watches a signal the writes of the
+    // statements before reach the host there (CompiledBody::statement_starts),
+    // as at a debug point of a debugger plan (debug_point). Only a statement
+    // that may follow a store needs it: one whose code-order predecessor
+    // stores a signal or calls, or that control flow enters by a jump (the
+    // jump's statement may have stored). A body without a store has none.
+    if (!vhdl) {
+        const auto& operations = member.operations();
+        const auto size = static_cast<std::uint32_t>(std::min<std::size_t>(
+            body.code.size(),
+            operations.size() > begin ? operations.size() - begin : 0U));
+        std::vector<std::uint8_t> stores(size, 0U);
+        std::vector<std::uint8_t> entered(size, 0U);
+        const auto enter = [&](const InstructionIndex target) {
+            if (target >= begin && target - begin < size) {
+                entered[target - begin] = 1U;
+            }
+        };
+        bool any_store = false;
+        for (std::uint32_t at = 0U; at < size; ++at) {
+            visit_operation([&](const auto& op) {
+                using T = std::decay_t<decltype(op)>;
+                if constexpr (std::is_same_v<T, Branch>) {
+                    enter(op.when_true);
+                    enter(op.when_false);
+                } else if constexpr (std::is_same_v<T, Jump>) {
+                    enter(op.target);
+                } else if constexpr (std::is_same_v<T, Call>) {
+                    enter(op.target);
+                    enter(op.return_target);
+                    stores[at] = 1U;
+                } else if constexpr (std::is_same_v<T, Fork>) {
+                    for (const auto branch : op.branches) {
+                        enter(branch);
+                    }
+                } else if constexpr (requires { op.signal; }) {
+                    if constexpr (std::is_same_v<
+                                      std::decay_t<decltype(op.signal)>, SignalId>
+                        && !std::is_same_v<T, ReadSignal>) {
+                        stores[at] = 1U;
+                    }
+                }
+            }, operations[begin + at]);
+            any_store = any_store || stores[at] != 0U;
+        }
+        if (any_store) {
+            std::vector<std::uint8_t> starts(body.code.size(), 0U);
+            bool any = false;
+            bool after_store = false;
+            for (std::uint32_t at = 0U; at < size; ++at) {
+                if (member.statement_start(begin + at)) {
+                    if (after_store || entered[at] != 0U) {
+                        starts[at] = 1U;
+                        any = true;
+                    }
+                    after_store = false;
+                }
+                after_store = after_store || stores[at] != 0U
+                    || entered[at] != 0U;
+            }
+            if (any) {
+                body.statement_starts = std::move(starts);
+            }
+        }
     }
     // Storage of the chunked wide registers, after every other register
     // and the 'U' shadows: chunks, then a Logic9 register's 'U' masks.

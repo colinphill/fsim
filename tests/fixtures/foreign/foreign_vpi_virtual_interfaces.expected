@@ -1,4 +1,10 @@
-#c vi type=vpiVirtualInterfaceVar name=vi modport=0 expr=- actual=top.s1
+#c call stmt frame=vpiFrame
+#c call.lhs type=vpiVirtualInterfaceVar name=bus modport=0 expr=- actual=-
+#c call.lhs typespec type=vpiInterfaceTypespec defname=SBus modport=0 parent=-
+#c call.rhs type=vpiVirtualInterfaceVar name=s modport=0 expr=- actual=top.s2
+#c call.rhs typespec type=vpiInterfaceTypespec defname=SBus modport=0 parent=-
+#c call end lhs actual=top.s2 rhs actual=top.s2
+#c vi type=vpiVirtualInterfaceVar name=vi modport=0 expr=top.s1 actual=top.s1
 #c vi typespec type=vpiInterfaceTypespec defname=SBus modport=0 parent=-
 #c vn type=vpiVirtualInterfaceVar name=vn modport=0 expr=- actual=top.s2
 #c vn typespec type=vpiInterfaceTypespec defname=SBus modport=0 parent=-
@@ -21,3 +27,8 @@
 #c Xactor virtual pbus
 #c t virtual bus
 #c t virtual pbus
+#c new stmt=vpiAssignment
+#c new.lhs type=vpiVirtualInterfaceVar name=bus modport=0 expr=- actual=-
+#c new.lhs typespec type=vpiInterfaceTypespec defname=SBus modport=0 parent=-
+#c new.rhs type=vpiVirtualInterfaceVar name=s modport=0 expr=- actual=-
+#c new.rhs typespec type=vpiInterfaceTypespec defname=SBus modport=0 parent=-

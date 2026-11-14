@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+sns assoc same-step n=1 a1=10 e5=0
+sns assoc next-step n=2 a1=11 a5=50 e5=1
+sns assoc mid n=3 a2=21 e7=0
+sns assoc last n=4 a7=70

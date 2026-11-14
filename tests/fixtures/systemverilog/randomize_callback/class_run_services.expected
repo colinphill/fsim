@@ -1,0 +1,14 @@
+sampled 9 xxxx 00000000000000000000000000001010
+plusargs 1 0
+value 1 12
+value 1 widget
+value 0 12
+random 7 1 1
+result=1
+monitor watch=0
+time 6 6 5.500000
+open 1
+result=1
+event 6
+file line 6
+file tail

@@ -1904,21 +1904,24 @@ void Lowerer::load_hir_vhdl_protected_caches(
             if (declaration->initializer) {
                 const auto path = lower_hir_string_expression(
                     *declaration->initializer);
-                const auto kind = declaration->file_open_kind
-                    ? specialized_hir_unit_->find_expression(
-                          *declaration->file_open_kind)
-                    : std::nullopt;
-                auto kind_name = kind && kind->vhdl != nullptr
-                    ? std::string_view { kind->vhdl->text }
-                    : std::string_view { "read_mode" };
-                if (const auto dot = kind_name.find_last_of('.');
-                    dot != std::string_view::npos) {
-                    kind_name.remove_prefix(dot + 1U);
+                // The open kind is a static value of FILE_OPEN_KIND (IEEE
+                // 1076-2019 6.4.2.5): its position, whatever expression
+                // yields it (READ_MODE, WRITE_MODE, APPEND_MODE and
+                // READ_WRITE_MODE are positions 0 to 3).
+                const auto kind_position = declaration->file_open_kind
+                    ? hir_constant_integer(*declaration->file_open_kind)
+                    : std::optional<std::int64_t> { 0 };
+                if (!kind_position) {
+                    report("FSIM-ELAB-VHFILE-004",
+                        "a VHDL file open kind must be a static value of "
+                        "FILE_OPEN_KIND",
+                        hir_source_span(declaration->source));
+                    return;
                 }
-                const auto mode_text = kind_name == "write_mode" ? "w"
-                    : kind_name == "append_mode"                ? "a"
-                    : kind_name == "read_write_mode"            ? "r+"
-                                                                 : "r";
+                const auto mode_text = *kind_position == 1 ? "w"
+                    : *kind_position == 2                  ? "a"
+                    : *kind_position == 3                  ? "r+"
+                                                           : "r";
                 if (path) {
                     const auto mode = allocate_string_register();
                     process_.operations.emplace_back(

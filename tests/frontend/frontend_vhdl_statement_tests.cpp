@@ -1,17 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "fsim/frontend/frontend.hpp"
 
+#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/diagnostic.hpp"
+#include "fsim/frontend/parser.hpp"
+#include "fsim/frontend/token.hpp"
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <cstdint>
 
 namespace fsim::tests::frontend {
 
@@ -68,7 +72,9 @@ void test_vhdl_revision_statement_profiles()
             std::string { name } + ".vhd",
             "architecture rtl of " + std::string { name } + " is\n"
                 + std::string { declarations } + "\nbegin\n"
-                + std::string { statements } + "\nend architecture;\n",
+                + std::string { statements }
+                + (standard == VhdlStandard::Vhdl1987 ? "\nend;\n"
+                                                      : "\nend architecture;\n"),
             Language::Vhdl2008,
             standard);
     };
@@ -147,25 +153,25 @@ end architecture;)",
         "vhdl87_direct_entity",
         R"(architecture rtl of vhdl87_direct_entity is begin
   u : entity work.child;
-end architecture;)",
+end;)",
         VhdlStandard::Vhdl1987, "direct entity instantiation");
     expect_revision_error(
         "vhdl87_direct_configuration",
         R"(architecture rtl of vhdl87_direct_configuration is begin
   u : configuration work.selected_configuration;
-end architecture;)",
+end;)",
         VhdlStandard::Vhdl1987, "direct configuration instantiation");
     expect_revision_error(
         "vhdl87_postponed",
         R"(architecture rtl of vhdl87_postponed is begin
   postponed process begin wait; end postponed process;
-end architecture;)",
+end;)",
         VhdlStandard::Vhdl1987, "postponed concurrent statements");
     expect_revision_error(
         "vhdl87_report",
         R"(architecture rtl of vhdl87_report is begin
   process begin report "message"; wait; end process;
-end architecture;)",
+end;)",
         VhdlStandard::Vhdl1987, "report statements");
     expect_revision_error(
         "vhdl2002_context_declaration",
@@ -303,21 +309,21 @@ end architecture;)",
         "vhdl87_file_open_kind",
         R"(architecture rtl of vhdl87_file_open_kind is begin
   process variable mode : file_open_kind; begin wait; end process;
-end architecture;)",
+end;)",
         VhdlStandard::Vhdl1987, "file_open_kind");
     expect_revision_error(
         "vhdl87_ascending",
         R"(architecture rtl of vhdl87_ascending is
   signal data : bit_vector(1 downto 0);
   signal result : boolean;
-begin result <= data'ascending; end architecture;)",
+begin result <= data'ascending; end;)",
         VhdlStandard::Vhdl1987, "ascending");
     expect_revision_error(
         "vhdl87_driving",
         R"(architecture rtl of vhdl87_driving is
   signal data : bit;
   signal result : boolean;
-begin result <= data'driving; end architecture;)",
+begin result <= data'driving; end;)",
         VhdlStandard::Vhdl1987, "driving");
     expect_revision_error(
         "vhdl2002_boolean_vector",

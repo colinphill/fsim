@@ -1,10 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/file_binary.hpp"
 #include "fsim/runtime/file_scanning.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 #include "simir_events.hpp"
 #include "simir_internal.hpp"
+#include "fsim/runtime/file_operations.hpp"
+#include "fsim/runtime/output_format.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_container_value.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include "fsim/runtime/systemverilog_scalar.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -13,6 +22,18 @@
 #include <iostream>
 #include <limits>
 #include <system_error>
+#include <cstddef>
+#include <cstdint>
+#include <exception>
+#include <functional>
+#include <iosfwd>
+#include <memory>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 namespace fsim::runtime::simir {
 
@@ -1222,7 +1243,13 @@ void Interpreter::Impl::run_file(
               operation.time_unit_femtoseconds, time_format,
               operation.scalar_kind)
         : std::nullopt;
-    if (integral_time && !integral_tick) {
+    if (operation.format == OutputFormat::time && !integral_tick
+        && has_unknown_bits(value)) {
+        text = make_unknown_time_output(operation.prefix, operation.suffix, value,
+            time_format,
+            operation.minimum_width == 0 && !operation.suppress_leading_zero,
+            operation.minimum_width, operation.left_justify, operation.zero_pad);
+    } else if (integral_time && !integral_tick) {
         text = make_formatted_output(
             operation.prefix,
             operation.suffix,

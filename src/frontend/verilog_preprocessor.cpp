@@ -7,7 +7,6 @@
 
 #include <algorithm>
 #include <cctype>
-#include <charconv>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -18,6 +17,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <memory>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -255,6 +255,14 @@ namespace {
                 Token { TokenKind::EndOfFile, { }, std::move(eof_span), { } });
             for (auto& token : output_) {
                 token.span.expansion_stack = token.expansion_stack;
+                // The outermost macro of the stack names the origin.
+                for (const auto& note : token.expansion_stack) {
+                    if (const auto found = macro_origins_.find(note);
+                        found != macro_origins_.end()) {
+                        token.span.macro_origin = found->second;
+                        break;
+                    }
+                }
             }
             return {
                 LexResult { std::move(output_), std::move(diagnostics_) },
@@ -895,7 +903,8 @@ namespace {
                 "line",
                 "pragma",
                 "unconnected_drive",
-                "nounconnected_drive"
+                "nounconnected_drive",
+                "default_decay_time"
             };
             return std::find(
                        std::begin(directives),
@@ -1101,7 +1110,8 @@ namespace {
                 || name == "resetall" || name == "celldefine"
                 || name == "endcelldefine" || name == "begin_keywords"
                 || name == "end_keywords" || name == "unconnected_drive"
-                || name == "nounconnected_drive") {
+                || name == "nounconnected_drive"
+                || name == "default_decay_time") {
                 ++state_changes_;
                 output_.push_back(tokens[begin]);
                 output_.push_back(tokens[begin + 1]);
@@ -2305,6 +2315,13 @@ namespace {
                 "macro `" + macro.name + "' defined at "
                 + location_text(macro.definition) + ", expanded at "
                 + location_text(invocation_span));
+            // The description is the key of the expansion's definition (an
+            // expansion site is unique); tokens carry the description.
+            macro_origins_.try_emplace(
+                expansion_stack.back(),
+                std::make_shared<const MacroOrigin>(MacroOrigin {
+                    macro.name, physical_source(macro.definition),
+                    macro.definition.begin }));
             expanding_.insert(macro.name);
             const auto replacement_tokens = select_replacement_conditionals(
                 macro, invocation_span, expansion_stack, arguments);
@@ -2411,6 +2428,8 @@ namespace {
         std::vector<std::filesystem::path> include_directories_;
         std::unordered_map<std::string, Macro> macros_;
         std::unordered_set<std::string> expanding_;
+        std::unordered_map<std::string, std::shared_ptr<const MacroOrigin>>
+            macro_origins_;
         std::vector<Conditional> conditionals_;
         std::vector<std::filesystem::path> include_stack_;
         std::optional<SourceSpan> include_invocation_;

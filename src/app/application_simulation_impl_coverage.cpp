@@ -1,7 +1,39 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_simulation_internal.hpp"
+#include "fsim/runtime/vpi_control.hpp"
 
 #include "fsim/support/identity128.hpp"
+#include "../runtime/simir_process_program.hpp"
+#include "fsim/app/application.hpp"
+#include "fsim/artifact/coverage_database.hpp"
+#include "fsim/artifact/coverage_database_codec.hpp"
+#include "fsim/artifact/coverage_database_merge.hpp"
+#include "fsim/artifact/coverage_database_model.hpp"
+#include "fsim/runtime/code_coverage.hpp"
+#include "fsim/runtime/vpi_abi.h"
+#include "fsim/runtime/vpi_coverage.hpp"
+#include "fsim/support/path.hpp"
+#include "fsim/support/sha256.hpp"
+#include "fsim/runtime/simir.hpp"
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <filesystem>
+#include <functional>
+#include <limits>
+#include <memory>
+#include <optional>
+#include <set>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <tuple>
+#include <utility>
+#include <vector>
 
 namespace fsim::app {
 namespace {
@@ -718,8 +750,7 @@ Simulation::Impl::standard_vpi_coverage_statistics(
         }
         return result;
     }
-    const auto keys = vpi_assertion_coverage_keys.find(handle);
-    if (keys == vpi_assertion_coverage_keys.end()) {
+    if (!vpi_assertion_coverage_targets.contains(handle)) {
         return std::nullopt;
     }
     if (!vpi_assertions) {
@@ -774,7 +805,7 @@ Simulation::Impl::standard_vpi_coverage_statistics(
         }
         if (request.type == Type::Assertion) {
             if (!vpi_assertions
-                || !vpi_assertion_coverage_keys.contains(*request.object)) {
+                || !vpi_assertion_coverage_targets.contains(*request.object)) {
                 return status(Status::no_coverage);
             }
             if (request.control == Control::Check) {
@@ -918,15 +949,13 @@ void Simulation::Impl::configure_standard_vpi_coverage()
         }
     }
 
-    for (const auto& [key, object] : vpi_assertion_handles) {
-        vpi_assertion_coverage_keys[object].push_back(key);
+    for (const auto& [object, occurrence] : vpi_assertion_occurrences) {
+        vpi_assertion_coverage_targets.insert(object);
     }
     const std::array assertion {
         runtime::SystemVerilogVpiCoverageType::Assertion
     };
-    for (auto& [object, keys] : vpi_assertion_coverage_keys) {
-        std::ranges::sort(keys);
-        keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+    for (const auto object : vpi_assertion_coverage_targets) {
         const auto published = vpi_coverage->publish_target(
             object, assertion);
         if (published != runtime::SystemVerilogVpiCoverageError::None) {

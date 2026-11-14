@@ -3,7 +3,6 @@
 // 33.7): vpiLibrary, vpiCell and vpiConfig of the instances a configuration
 // controls. Lines starting with "#c " form the checked trace.
 #include "fsim/runtime/vpi_abi.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 
 #include <stdio.h>

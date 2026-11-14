@@ -2,9 +2,105 @@
 #include "verilog_parser_internal.hpp"
 
 #include <algorithm>
+#include <functional>
+#include <string>
+#include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace fsim::frontend {
+
+namespace {
+
+// The root identifier of an assignment target: the first component of a
+// hierarchical name and the base of every select (IEEE 1800-2023 23.6).
+std::string_view assignment_target_root(const Expression& value)
+{
+  if (value.kind == ExpressionKind::Identifier) {
+    return std::string_view { value.text }.substr(
+        0U, value.text.find_first_of(".["));
+  }
+  if ((value.kind == ExpressionKind::Index
+          || value.kind == ExpressionKind::Slice)
+      && !value.operands.empty()) {
+    return assignment_target_root(value.operands.front());
+  }
+  return { };
+}
+
+// A nonblocking assignment cannot write an automatic variable (IEEE 1800-2023
+// 6.21, 10.4.2). The variable a target names is the innermost declaration of
+// its root identifier visible at the statement (6.21, 23.9): the block scopes
+// nest outward to the function's formals and locals; a name none of them
+// declares is outside the function, and a variable outside, or declared
+// `static`, is not automatic (13.4.4). Each declaration is automatic by its
+// own lifetime keyword, else by the function's.
+class AutomaticNonblockingCheck {
+public:
+  using Report = std::function<void(const std::string&)>;
+
+  AutomaticNonblockingCheck(const FunctionDeclaration& function, Report report)
+      : function_ { function }, report_ { std::move(report) }
+  {
+  }
+
+  void run()
+  {
+    Scope scope;
+    const auto separator = function_.name.rfind("::");
+    scope[separator == std::string::npos
+              ? function_.name
+              : function_.name.substr(separator + 2U)]
+        = function_.automatic;
+    for (const auto& argument : function_.arguments) {
+      scope[argument.name] = function_.automatic;
+    }
+    for (const auto& variable : function_.variables) {
+      scope[variable.name] = automatic(variable);
+    }
+    visit(function_.statements, scope);
+  }
+
+private:
+  using Scope = std::unordered_map<std::string, bool>;
+
+  [[nodiscard]] bool automatic(const VariableDeclaration& declaration) const
+  {
+    if (declaration.systemverilog_static) {
+      return false;
+    }
+    return declaration.systemverilog_automatic || function_.automatic;
+  }
+
+  void visit(const std::vector<Statement>& statements, const Scope& outer)
+  {
+    for (const auto& statement : statements) {
+      Scope scope = outer;
+      for (const auto& declaration : statement.declarations) {
+        scope[declaration.name] = automatic(declaration);
+      }
+      if (statement.kind == StatementKind::Assignment
+          && statement.assignment_kind == AssignmentKind::NonBlocking) {
+        const auto root = std::string { assignment_target_root(statement.target) };
+        if (const auto found = scope.find(root);
+            found != scope.end() && found->second) {
+          report_("automatic variable '" + root
+              + "' cannot be written by a nonblocking assignment");
+        }
+      }
+      visit(statement.statements, scope);
+      visit(statement.else_statements, scope);
+      for (const auto& alternative : statement.case_alternatives) {
+        visit(alternative.statements, scope);
+      }
+    }
+  }
+
+  const FunctionDeclaration& function_;
+  Report report_;
+};
+
+} // namespace
 
 FunctionDeclaration VerilogParser::parse_function(
     const Token& start,
@@ -98,7 +194,7 @@ FunctionDeclaration VerilogParser::parse_function(
               : parse_parameter_type();
       // A function without a return type returns a 1-bit logic value
       // (IEEE 1800-2017 13.4), not a parameter's implicit integer.
-      if (function.return_type.spelling == "implicit"
+      if (function.return_type.implicit_type
           && !function.return_type.packed_range
           && !function.return_type.packed_range_expression) {
         function.return_type.spelling = "logic";
@@ -242,9 +338,28 @@ FunctionDeclaration VerilogParser::parse_function(
   Statement body;
   body.kind = StatementKind::Block;
   DesignUnit local_declarations;
+  const auto outer_package_imports = active_package_imports_;
+  std::size_t declarations_before_import { };
+  std::size_t aliases_before_import { };
   while (!at_end() && !keyword("endfunction")) {
     const auto before = position();
     if (parse_local_type_parameter(local_declarations)) {
+    } else if (keyword("import")
+               && (current(1).kind == TokenKind::Identifier)
+               && current(2).kind == TokenKind::Scope) {
+      // A package import is a data declaration, so a function or task body
+      // may hold it (IEEE 1800-2023 A.2.1.3, 26.3).
+      const auto import_start = advance();
+      if (body.systemverilog_imports.empty()) {
+        declarations_before_import = body.declarations.size();
+        aliases_before_import = local_declarations.type_aliases.size();
+      }
+      auto& imports = body.systemverilog_imports.mutable_storage();
+      const auto first_new_import = imports.size();
+      parse_import_clause(imports, import_start);
+      active_package_imports_.insert(active_package_imports_.end(),
+          imports.begin() + static_cast<std::ptrdiff_t>(first_new_import),
+          imports.end());
     } else if (match_keyword("typedef")) {
       const auto alias_count = local_declarations.type_aliases.size();
       parse_typedef(local_declarations, previous());
@@ -285,6 +400,7 @@ FunctionDeclaration VerilogParser::parse_function(
               || at(TokenKind::Semicolon, 1)
               || at(TokenKind::Assign, 1))) {
         type = Type{ValueDomain::Integer, "implicit", std::nullopt, true};
+        type.implicit_type = true;
       } else {
         type = parse_parameter_type();
       }
@@ -351,6 +467,32 @@ FunctionDeclaration VerilogParser::parse_function(
     }
   }
 
+  active_package_imports_ = outer_package_imports;
+  if (!body.systemverilog_imports.empty()) {
+    // The imports hold from their place to the end of the body (26.3): the
+    // statements follow in a block that carries them.
+    Statement imported;
+    imported.kind = StatementKind::Block;
+    imported.systemverilog_imports = std::move(body.systemverilog_imports);
+    imported.statements = std::move(body.statements);
+    // Declarations after the import see the imported names, so they are
+    // the block's.
+    auto& variables = body.declarations;
+    for (auto at = declarations_before_import; at < variables.size(); ++at) {
+      imported.declarations.push_back(std::move(variables[at]));
+    }
+    variables.erase(variables.begin()
+        + static_cast<std::ptrdiff_t>(declarations_before_import),
+        variables.end());
+    auto& aliases = local_declarations.type_aliases;
+    for (auto at = aliases_before_import; at < aliases.size(); ++at) {
+      imported.type_aliases.push_back(std::move(aliases[at]));
+    }
+    aliases.erase(aliases.begin()
+        + static_cast<std::ptrdiff_t>(aliases_before_import), aliases.end());
+    body.statements.clear();
+    body.statements.push_back(std::move(imported));
+  }
   function.type_aliases = std::move(local_declarations.type_aliases);
   function.variables = std::move(body.declarations);
   function.statements = std::move(body.statements);
@@ -369,7 +511,7 @@ FunctionDeclaration VerilogParser::parse_function(
         && (variable.type.spelling == "reg"
             || variable.type.spelling == "logic");
     if (argument == function.arguments.end()
-        || (argument->type.spelling != "implicit" && !same_range)
+        || (!argument->type.implicit_type && !same_range)
         || variable.initializer) {
       return false;
     }
@@ -380,7 +522,7 @@ FunctionDeclaration VerilogParser::parse_function(
   // completes is a one-bit logic (IEEE 1364-2005 10.3.1, IEEE 1800-2017
   // 13.3).
   for (auto& argument : function.arguments) {
-    if (argument.type.spelling == "implicit") {
+    if (argument.type.implicit_type) {
       argument.type = default_verilog_type();
       argument.type.spelling = "logic";
     }
@@ -432,6 +574,11 @@ FunctionDeclaration VerilogParser::parse_function(
     error(start, "FSIM-SV-SEM-422",
         "a Verilog function must declare at least one input");
   }
+  // A void function and a constructor obey the rule of every function.
+  AutomaticNonblockingCheck { function,
+      [&](const std::string& message) {
+        error(start, "FSIM-SV-SEM-397", message);
+      } }.run();
   if (!constructor && !qualified_constructor
       && function.return_type.spelling != "void") {
     validate_function_body(function, start);
@@ -557,14 +704,16 @@ void VerilogParser::validate_function_body(
                   "a const ref function formal is read-only");
             }
             }
-            if (statement.assignment_kind
-                    != AssignmentKind::Blocking
-                || statement.procedural_assignment_control
-                    != ProceduralAssignmentControl::None) {
+            // A function has no time-controlled statement (IEEE 1800-2023
+            // 13.4.4), an intra-assignment delay or event control included;
+            // a nonblocking assignment is not one (10.4.2), and its target
+            // may not be an automatic variable (6.21).
+            if (statement.procedural_assignment_control
+                != ProceduralAssignmentControl::None) {
               error(
                   start,
                   "FSIM-SV-SEM-063",
-                  "function assignments must be blocking and time-free");
+                  "function assignments must be time-free");
             }
           }
           const bool forbidden = statement.kind == StatementKind::Delay
@@ -902,9 +1051,28 @@ TaskDeclaration VerilogParser::parse_task(
   Statement body;
   body.kind = StatementKind::Block;
   DesignUnit local_declarations;
+  const auto outer_package_imports = active_package_imports_;
+  std::size_t declarations_before_import { };
+  std::size_t aliases_before_import { };
   while (!at_end() && !keyword("endtask")) {
     const auto before = position();
     if (parse_local_type_parameter(local_declarations)) {
+    } else if (keyword("import")
+               && (current(1).kind == TokenKind::Identifier)
+               && current(2).kind == TokenKind::Scope) {
+      // A package import is a data declaration, so a function or task body
+      // may hold it (IEEE 1800-2023 A.2.1.3, 26.3).
+      const auto import_start = advance();
+      if (body.systemverilog_imports.empty()) {
+        declarations_before_import = body.declarations.size();
+        aliases_before_import = local_declarations.type_aliases.size();
+      }
+      auto& imports = body.systemverilog_imports.mutable_storage();
+      const auto first_new_import = imports.size();
+      parse_import_clause(imports, import_start);
+      active_package_imports_.insert(active_package_imports_.end(),
+          imports.begin() + static_cast<std::ptrdiff_t>(first_new_import),
+          imports.end());
     } else if (match_keyword("typedef")) {
       const auto alias_count = local_declarations.type_aliases.size();
       parse_typedef(local_declarations, previous());
@@ -946,6 +1114,7 @@ TaskDeclaration VerilogParser::parse_task(
               || at(TokenKind::Semicolon, 1)
               || at(TokenKind::Assign, 1))) {
         type = Type{ValueDomain::Integer, "implicit", std::nullopt, true};
+        type.implicit_type = true;
       } else {
         explicit_argument_type = !at(TokenKind::LeftBracket)
             && !keyword("signed") && !keyword("unsigned");
@@ -1027,6 +1196,32 @@ TaskDeclaration VerilogParser::parse_task(
     }
   }
 
+  active_package_imports_ = outer_package_imports;
+  if (!body.systemverilog_imports.empty()) {
+    // The imports hold from their place to the end of the body (26.3): the
+    // statements follow in a block that carries them.
+    Statement imported;
+    imported.kind = StatementKind::Block;
+    imported.systemverilog_imports = std::move(body.systemverilog_imports);
+    imported.statements = std::move(body.statements);
+    // Declarations after the import see the imported names, so they are
+    // the block's.
+    auto& variables = body.declarations;
+    for (auto at = declarations_before_import; at < variables.size(); ++at) {
+      imported.declarations.push_back(std::move(variables[at]));
+    }
+    variables.erase(variables.begin()
+        + static_cast<std::ptrdiff_t>(declarations_before_import),
+        variables.end());
+    auto& aliases = local_declarations.type_aliases;
+    for (auto at = aliases_before_import; at < aliases.size(); ++at) {
+      imported.type_aliases.push_back(std::move(aliases[at]));
+    }
+    aliases.erase(aliases.begin()
+        + static_cast<std::ptrdiff_t>(aliases_before_import), aliases.end());
+    body.statements.clear();
+    body.statements.push_back(std::move(imported));
+  }
   task.type_aliases = std::move(local_declarations.type_aliases);
   task.variables = std::move(body.declarations);
   // A body declaration of a classic argument's name gives that argument
@@ -1049,7 +1244,7 @@ TaskDeclaration VerilogParser::parse_task(
   // completes is a one-bit logic (IEEE 1364-2005 10.2.1, IEEE 1800-2017
   // 13.3).
   for (auto& argument : task.arguments) {
-    if (argument.type.spelling == "implicit") {
+    if (argument.type.implicit_type) {
       argument.type = default_verilog_type();
       argument.type.spelling = "logic";
     }

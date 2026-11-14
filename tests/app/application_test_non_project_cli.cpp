@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <algorithm>
+#include "fsim/app/built_project.hpp"
+#include "fsim/semantic/vhdl_hir.hpp"
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -12,6 +14,8 @@
 #include <system_error>
 #include <utility>
 #include <vector>
+#include <filesystem>
+#include <optional>
 
 #include "../../src/app/application_hierarchy_path_codec.hpp"
 #include "../../src/elaboration/elaborated_design_process_access.hpp"
@@ -32,6 +36,25 @@
 #include "fsim/support/sha256.hpp"
 #include "fsim/systemc/incremental.hpp"
 #include "fsim/systemc/scv.hpp"
+#include "fsim/app/application.hpp"
+#include "fsim/app/sdf_annotation_scope.hpp"
+#include "fsim/app/sdf_artifact_identity.hpp"
+#include "fsim/app/sdf_cell_resolution.hpp"
+#include "fsim/app/sdf_endpoint_resolution.hpp"
+#include "fsim/app/sdf_mapping_validation.hpp"
+#include "fsim/app/sdf_portable_archive.hpp"
+#include "fsim/app/sdf_schema.hpp"
+#include "fsim/app/trace_archive.hpp"
+#include "fsim/cli/driver.hpp"
+#include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/frontend/sdf.hpp"
+#include "fsim/library/artifact.hpp"
+#include "fsim/project/project.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/trace_model.hpp"
+#include "fsim/semantic/hierarchy_path.hpp"
+#include "fsim/semantic/model.hpp"
 
 #if defined(__has_feature)
 #if __has_feature(address_sanitizer)

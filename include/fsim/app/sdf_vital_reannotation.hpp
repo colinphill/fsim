@@ -2,6 +2,7 @@
 #pragma once
 
 #include "fsim/app/sdf_vital_timing_checks.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 
 #include <cstddef>
 #include <cstdint>

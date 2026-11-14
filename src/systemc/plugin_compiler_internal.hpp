@@ -3,32 +3,15 @@
 #include "fsim/systemc/plugin_compiler.hpp"
 
 #include "fsim/compiler/object_cache.hpp"
-#include "fsim/support/environment.hpp"
-#include "fsim/support/sha256.hpp"
-#include "fsim/systemc/incremental.hpp"
-#include "fsim/systemc_abi.h"
-#include "fsim/version.hpp"
 
-#include <algorithm>
-#include <array>
 #include <atomic>
-#include <chrono>
 #include <cctype>
 #include <cerrno>
 #include <cstring>
 #include <cstdlib>
-#include <fstream>
-#include <limits>
 #include <mutex>
 #include <optional>
-#include <set>
-#include <span>
-#include <sstream>
 #include <system_error>
-#include <thread>
-#include <unordered_map>
-#include <unordered_set>
-#include <utility>
 
 #if defined(_WIN32)
 #  if !defined(NOMINMAX)

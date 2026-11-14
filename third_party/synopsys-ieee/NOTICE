@@ -1,0 +1,13 @@
+Synopsys std_logic_arith, std_logic_unsigned, std_logic_signed,
+std_logic_misc, and std_logic_textio packages
+
+Copyright (c) 1990, 1991, 1992 by Synopsys, Inc.  All rights reserved.
+
+This source file may be used and distributed without restriction provided that
+this copyright statement is not removed from the file and that any derivative
+work contains this copyright notice.
+
+The files in this directory are distributed byte-for-byte as retrieved from
+https://github.com/ghdl/ghdl (libraries/synopsys, commit
+9cc54bbc189d28d42aec14e046aec7590ae6bad8) with their copyright statements
+intact.

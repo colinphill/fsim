@@ -4,6 +4,16 @@
 #include "fsim/runtime/fst_value_encoder.hpp"
 #include "fsim/runtime/fst_writer.hpp"
 #include "fsim/runtime/vcd_writer.hpp"
+#include "application_trace_observation.hpp"
+#include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/runtime/logic.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/trace_model.hpp"
+#include "fsim/systemc/kernel_backend_binding_inventory.hpp"
+#include "fsim/systemc/kernel_backend_inventory.hpp"
+#include "fsim/systemc/kernel_backend_protocol.hpp"
+#include "fsim/systemc/kernel_backend_value_codec.hpp"
 
 #include <algorithm>
 #include <deque>
@@ -13,6 +23,15 @@
 #include <stdexcept>
 #include <string_view>
 #include <utility>
+#include <cstddef>
+#include <cstdint>
+#include <exception>
+#include <memory>
+#include <optional>
+#include <ostream>
+#include <span>
+#include <string>
+#include <vector>
 
 namespace fsim::app::application_detail {
 namespace {

@@ -1,0 +1,5 @@
+#c activation 2: force depth=100 (depth=20)
+#c activation 3: force depth=200, release (depth=10)
+#c total=337 at 500000 fs
+#c total=353 at 1500000 fs
+#c total=353 at 2500000 fs

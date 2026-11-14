@@ -227,7 +227,8 @@ std::optional<SourceFileId> Model::find_source_file(
 }
 
 ExpansionId Model::intern_expansion(
-    const std::span<const std::string> outermost_to_innermost) {
+    const std::span<const std::string> outermost_to_innermost,
+    const MacroDefinition* const outermost_macro) {
     std::optional<ExpansionId> parent;
     for (const auto& description : outermost_to_innermost) {
         ExpansionKey key{parent, description};
@@ -240,6 +241,10 @@ ExpansionId Model::intern_expansion(
         expansions_.push_back({id, parent, description});
         expansion_by_key_.emplace(std::move(key), id);
         parent = id;
+    }
+    if (parent && outermost_macro != nullptr
+        && !expansions_[parent->value()].outermost_macro) {
+        expansions_[parent->value()].outermost_macro = *outermost_macro;
     }
     return parent.value_or(ExpansionId{});
 }

@@ -3,6 +3,7 @@
 #pragma once
 
 #include "simir_internal.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 #include "simir_signal_attributes.hpp"
 
 namespace fsim::runtime::simir {

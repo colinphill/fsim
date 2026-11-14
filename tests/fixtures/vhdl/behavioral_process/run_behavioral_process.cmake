@@ -32,6 +32,8 @@
 # a sensitivity list) also needs verified_member_runs > 0 and the member
 # injection (FSIM_KERNEL_VERIFY_INJECT=member).
 #
+include("${CMAKE_CURRENT_LIST_DIR}/../../../cmake/FsimTestWorkspace.cmake")
+
 if(NOT DEFINED FSIM_EXECUTABLE OR NOT EXISTS "${FSIM_EXECUTABLE}")
   message(FATAL_ERROR "FSIM_EXECUTABLE must name the built fsim command")
 endif()
@@ -45,7 +47,7 @@ endforeach()
 
 string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef workspace_id)
 set(case_dir "${CMAKE_CURRENT_BINARY_DIR}/fsim-vhdl-behavioral-process-${workspace_id}")
-file(MAKE_DIRECTORY "${case_dir}")
+fsim_test_workspace("${case_dir}")
 
 function(run_fsim_step STEP_NAME)
   execute_process(
@@ -246,3 +248,6 @@ check_sv_fixture(threads)
 check_sv_fixture(classes)
 check_sv_fixture(replay_effects +replay_count=7 +replay_name=fsim)
 check_sv_fixture(mirror_reads)
+
+# Passed: remove this run's workspaces (a failure above keeps them).
+fsim_test_workspace_cleanup()

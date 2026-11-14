@@ -4,7 +4,6 @@
 #include "fsim/runtime/packed_value.hpp"
 #include "fsim/runtime/vhpi_type.hpp"
 
-#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <mutex>

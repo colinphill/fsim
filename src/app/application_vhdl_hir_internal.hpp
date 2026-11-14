@@ -1,14 +1,25 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include "application_internal.hpp"
-#include "fsim/support/vhdl_identifier.hpp"
 
+#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/source.hpp"
+#include "fsim/frontend/token.hpp"
+#include "fsim/semantic/model.hpp"
+#include "fsim/semantic/vhdl_hir.hpp"
 #include <functional>
 #include <map>
 #include <string_view>
 #include <tuple>
 #include <vector>
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <span>
+#include <string>
+#include <unordered_map>
+#include <utility>
 
 namespace fsim::app::application_detail {
 namespace vh = semantic::vhdl;

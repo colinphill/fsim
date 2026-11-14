@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include "fsim/systemc/kernel_backend_protocol.hpp"
 
-#include <compare>
+#include "fsim/diagnostic/diagnostic.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <optional>

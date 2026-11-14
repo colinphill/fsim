@@ -65,6 +65,17 @@ collect_driver_regions(
                   OperationType, WriteProjectedWaveformDynamicSlice>) {
               whole(value.signal);
           } else if constexpr (
+              std::is_same_v<OperationType, EventArrayElement>) {
+              // A trigger through a run-time index drives each element it
+              // may select (IEEE 1800-2023 15.5.1).
+              if (value.operation == EventArrayOperation::trigger
+                  || value.operation
+                      == EventArrayOperation::trigger_nonblocking) {
+                  for (const auto signal : value.elements) {
+                      whole(signal);
+                  }
+              }
+          } else if constexpr (
               std::is_same_v<OperationType, VitalTimingCheck>) {
               if (value.trigger_signal)
                   whole(*value.trigger_signal);

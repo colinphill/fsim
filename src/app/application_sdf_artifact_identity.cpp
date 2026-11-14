@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <ranges>
 #include <string_view>
-#include <type_traits>
 #include <utility>
 
 namespace fsim::app {

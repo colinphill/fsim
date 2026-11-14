@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <iterator>
-#include <ranges>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -200,6 +199,8 @@ void VerilogParser::instantiate_checkers(DesignUnit& unit)
         for (const auto& source : checker->checker_declarations) {
             auto declaration = source;
             declaration.name = declaration_names.at(source.name);
+            declaration.checker_instance = instance.name;
+            declaration.checker_name = source.name;
             std::unordered_set<std::string> shadowed;
             for (const auto& formal : declaration.formals) {
                 shadowed.insert(formal.name);
@@ -259,10 +260,11 @@ void VerilogParser::instantiate_checkers(DesignUnit& unit)
             assertion.failure_action_tokens = substitute_tokens(
                 assertion.failure_action_tokens, actuals, declaration_names,
                 { });
-            assertion.label = instance.name + "."
-                + (assertion.label.empty()
-                        ? "$assertion" + std::to_string(index)
-                        : assertion.label);
+            assertion.checker_instance = instance.name;
+            assertion.checker_name = assertion.label.empty()
+                ? "$assertion" + std::to_string(index)
+                : assertion.label;
+            assertion.label = instance.name + "." + assertion.checker_name;
             if (assertion.inline_sequence) {
                 assertion.inline_sequence->expression_tokens
                     = substitute_tokens(

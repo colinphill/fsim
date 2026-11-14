@@ -2,6 +2,27 @@
 #include "verilog_parser_internal.hpp"
 #include "fsim/support/index_distance.hpp"
 #include "fsim/frontend/systemverilog_standard_package.hpp"
+#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/diagnostic.hpp"
+#include "fsim/frontend/parser.hpp"
+#include "fsim/frontend/source.hpp"
+#include "fsim/frontend/systemverilog_scalars.hpp"
+#include "fsim/frontend/token.hpp"
+#include "parser_support.hpp"
+#include <algorithm>
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <iterator>
+#include <limits>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace fsim::frontend {
 namespace {
@@ -1612,6 +1633,15 @@ Type VerilogParser::parse_virtual_interface_type(
 void VerilogParser::parse_virtual_interface_declaration(
     DesignUnit& unit,
     const Token& start) {
+  parse_virtual_interface_declaration(
+      unit.variables, unit.signals, unit.ports, start);
+}
+
+void VerilogParser::parse_virtual_interface_declaration(
+    std::vector<VariableDeclaration>& variables,
+    const std::vector<SignalDeclaration>& signals,
+    const std::vector<SignalDeclaration>& ports,
+    const Token& start) {
   const auto common_type =
       parse_virtual_interface_type(start);
   for (;;) {
@@ -1632,17 +1662,17 @@ void VerilogParser::parse_virtual_interface_declaration(
       implicit_net_context_ = saved_context;
     }
     const bool duplicate = std::ranges::any_of(
-        unit.variables,
+        variables,
         [&](const VariableDeclaration& variable) {
           return variable.name == name.text;
         })
         || std::ranges::any_of(
-            unit.signals,
+            signals,
             [&](const SignalDeclaration& signal) {
               return signal.name == name.text;
             })
         || std::ranges::any_of(
-            unit.ports,
+            ports,
             [&](const SignalDeclaration& port) {
               return port.name == name.text;
             });
@@ -1653,7 +1683,7 @@ void VerilogParser::parse_virtual_interface_declaration(
           "duplicate virtual-interface variable '"
               + name.text + "'");
     } else {
-      unit.variables.push_back(VariableDeclaration{
+      variables.push_back(VariableDeclaration{
           name.text,
           std::move(variable_type),
           std::move(initializer),
@@ -2156,6 +2186,38 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
             && (unit.kind == UnitKind::VerilogModule
                 || unit.kind == UnitKind::SystemVerilogProgram
                 || unit.kind == UnitKind::SystemVerilogInterface)) {
+          container_initializer = *initializer;
+        } else if (initializer && declaration_type.systemverilog_container
+            && !package_variable && !systemverilog_const
+            && (unit.kind == UnitKind::VerilogModule
+                || unit.kind == UnitKind::SystemVerilogProgram
+                || unit.kind == UnitKind::SystemVerilogInterface)
+            && initializer->kind == ExpressionKind::Aggregate
+            && [&] {
+                 // A pattern that reads a variable declared before it is
+                 // evaluated when the variable declaration assignments run,
+                 // in source order, before any procedure (IEEE 1800-2023
+                 // 6.8, 10.5); a constant one is applied at elaboration.
+                 const auto reads_variable = [&](const auto& self,
+                     const Expression& expression) -> bool {
+                   if (expression.kind == ExpressionKind::Identifier
+                       && (std::ranges::any_of(unit.variables,
+                               [&](const VariableDeclaration& variable) {
+                                 return variable.name == expression.text;
+                               })
+                           || std::ranges::any_of(unit.signals,
+                               [&](const SignalDeclaration& signal) {
+                                 return signal.name == expression.text;
+                               }))) {
+                     return true;
+                   }
+                   return std::ranges::any_of(expression.operands,
+                       [&](const Expression& operand) {
+                         return self(self, operand);
+                       });
+                 };
+                 return reads_variable(reads_variable, *initializer);
+               }()) {
           container_initializer = *initializer;
         } else if (initializer && declaration_type.systemverilog_container
             && !package_variable && !systemverilog_const
@@ -2809,7 +2871,9 @@ GenerateRegion VerilogParser::generate_gate_array(const Token& instance_start,
   };
   const auto emit_gate = [&](const std::size_t arm) {
     emit_tokens(header.first, header.second);
-    emit("(");
+    // The gate carries the array's name, so that its drivers are found by
+    // the name of the element (IEEE 1800-2023 28.3.6).
+    emit(instance_name + " (");
     for (std::size_t index = 0; index < terminals.size(); ++index) {
       if (index != 0U) emit(",");
       const auto [begin, end] = terminal_tokens[index];
@@ -2891,9 +2955,33 @@ GenerateRegion VerilogParser::generate_gate_array(const Token& instance_start,
   index_ = 0;
   synthetic_token_stream_ = true;
   auto region = parse_iterative_generate(instance_start);
+  region.gate_array = true;
   tokens_ = std::move(saved_tokens);
   index_ = saved_index;
   synthetic_token_stream_ = saved_synthetic_stream;
+  // The declared range, parsed from the bounds as written.
+  const auto parse_bound = [&](const std::size_t which) {
+    std::vector<Token> bound(tokens_.begin()
+            + static_cast<std::ptrdiff_t>(bounds[which * 2U]),
+        tokens_.begin() + static_cast<std::ptrdiff_t>(bounds[which * 2U + 1U]));
+    Token end;
+    end.kind = TokenKind::EndOfFile;
+    end.span = instance_start.span;
+    bound.push_back(std::move(end));
+    auto outer_tokens = std::move(tokens_);
+    const auto outer_index = index_;
+    const auto outer_synthetic = synthetic_token_stream_;
+    tokens_ = std::move(bound);
+    index_ = 0;
+    synthetic_token_stream_ = true;
+    auto parsed = parse_expression();
+    tokens_ = std::move(outer_tokens);
+    index_ = outer_index;
+    synthetic_token_stream_ = outer_synthetic;
+    return parsed;
+  };
+  region.gate_array_left = parse_bound(0U);
+  region.gate_array_right = parse_bound(1U);
   return region;
 }
 

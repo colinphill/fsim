@@ -1,14 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_test_support.hpp"
 #include "application_workflow_test_support.hpp"
-#include "governed_process_limits.hpp"
 
 #include "fsim/app/artifact_phase.hpp"
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/artifact/design.hpp"
 #include "fsim/artifact/object.hpp"
 #include "fsim/support/path.hpp"
-#include "fsim/version.hpp"
 
 #include <array>
 #include <cassert>
@@ -17,7 +15,6 @@
 #include <iterator>
 #include <sstream>
 #include <string>
-#include <tuple>
 #include <utility>
 #include <vector>
 

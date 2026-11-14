@@ -5,11 +5,28 @@
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/systemc/accellera.hpp"
 #include "fsim/systemc/scv.hpp"
+#include "fsim/compiler/object_cache.hpp"
+#include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/project/project.hpp"
+#include "fsim/systemc/plugin_compiler.hpp"
+#include "fsim/systemc_abi.h"
+#include "fsim/version.hpp"
 
-#include <algorithm>
 #include <cstring>
 #include <iterator>
-#include <mutex>
+#include <atomic>
+#include <chrono>
+#include <cstddef>
+#include <filesystem>
+#include <ios>
+#include <optional>
+#include <span>
+#include <sstream>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <utility>
+#include <vector>
 
 namespace fsim::systemc {
 using namespace plugin_detail;

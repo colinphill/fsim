@@ -5,7 +5,6 @@
 // cbValueChange on a word only when that key's value changes.
 // Lines starting with "#c " form the checked trace.
 #include "fsim/runtime/vpi_abi.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 
 #include <stdio.h>

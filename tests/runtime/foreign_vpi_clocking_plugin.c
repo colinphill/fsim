@@ -187,6 +187,21 @@ static void net(char* path)
     }
 }
 
+// The clocking blocks of a generate scope (37.48, 27.6).
+static void generated(const char* path)
+{
+    vpiHandle scope = vpi_handle_by_name((PLI_BYTE8*)path, NULL);
+    vpiHandle iterator = scope != NULL ? vpi_iterate(vpiClockingBlock, scope) : NULL;
+    vpiHandle object;
+    int count = 0;
+    while (iterator != NULL && (object = vpi_scan(iterator)) != NULL) {
+        clocking(object);
+        vpi_printf("#c parent %s\n", name_of(vpi_handle(vpiParent, object)));
+        ++count;
+    }
+    vpi_printf("#c %s clocking blocks=%d\n", path, count);
+}
+
 static PLI_INT32 check(p_cb_data data)
 {
     vpiHandle top = vpi_handle_by_name("top", NULL);
@@ -220,6 +235,10 @@ static PLI_INT32 check(p_cb_data data)
     net("top.ica");
     net("top.icq");
     net("top.icd");
+    generated("top.g");
+    generated("top.gl[1]");
+    vpi_printf("#c by name %s\n",
+        name_of(vpi_handle_by_name("top.gl[0].lcb", NULL)));
     return 0;
 }
 

@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/vhpi_special.hpp"
 
-#include <algorithm>
 #include <atomic>
-#include <limits>
 #include <utility>
 
 namespace fsim::runtime {

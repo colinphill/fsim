@@ -2,6 +2,7 @@
 #include "application_trace_control.hpp"
 #include "application_trace_observation.hpp"
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
 #include "fsim/app/trace_api.hpp"
 #include "fsim/runtime/fst_reader.hpp"
 #include "fsim/runtime/fst_value_encoder.hpp"

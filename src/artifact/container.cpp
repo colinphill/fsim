@@ -8,7 +8,6 @@
 
 #include <array>
 #include <atomic>
-#include <chrono>
 #include <memory>
 #include <streambuf>
 #include <utility>

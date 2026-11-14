@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+supos g1 g is Z
+supos g2 h is not 1
+supos g3 pos of Z is 4
+supos g4 table lookup
+supos g5 vector elements
+supos g6 val and succ
+supos g7 case Z
+supos leaf 'Z''H' true true 7 ZHL '1'
+supos leaf '-''L' false false 6 -LL '0'

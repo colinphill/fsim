@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+wide user 0 s=103 w='0' gr=6
+wide user 1 s=115 w='1' gr=20
+wide user 2 s=115 w='1' gr=50
+wide user 3 s=115 w='1' gr=30
+wide user 4 s=103 w='0' gr=30

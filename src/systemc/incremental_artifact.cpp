@@ -10,22 +10,28 @@
 #include "fsim/support/sha256.hpp"
 #include "fsim/systemc_abi.h"
 #include "fsim/version.hpp"
+#include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/systemc/scv.hpp"
 
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <bit>
 #include <chrono>
 #include <cctype>
-#include <fstream>
 #include <limits>
 #include <mutex>
-#include <sstream>
 #include <span>
 #include <stdexcept>
 #include <system_error>
 #include <unordered_set>
 #include <vector>
+#include <cstddef>
+#include <cstdint>
+#include <filesystem>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
 
 #if defined(_WIN32)
 #  include <process.h>

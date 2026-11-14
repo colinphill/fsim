@@ -17,6 +17,7 @@
 // NOTE: it should be an identifier, not memory).
 #include "fsim/runtime/packed_value.hpp"
 #include "fsim/runtime/run_state_sections.hpp"
+#include "fsim/runtime/simir_container_value.hpp"
 
 #include <cstdint>
 #include <map>
@@ -53,6 +54,11 @@ struct ForeignCallResult {
     std::uint64_t real_bits { };
     runtime::PackedLogic4 bits;
     bool is_signed { };
+    /// A string result (its text), and the array a function returning a
+    /// dynamic array, queue or associative array returned (version 3).
+    bool string_value { };
+    std::string text;
+    std::optional<runtime::simir::ContainerValue> container;
 };
 
 /// What one interface contributes to the file.

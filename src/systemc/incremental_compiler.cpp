@@ -11,19 +11,34 @@
 #include "fsim/support/sha256.hpp"
 #include "fsim/systemc_abi.h"
 #include "fsim/version.hpp"
+#include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/project/project.hpp"
+#include "fsim/systemc/hierarchy.hpp"
+#include "fsim/systemc/plugin_compiler.hpp"
+#include "fsim/systemc/scv.hpp"
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <fstream>
 #include <iomanip>
-#include <map>
 #include <mutex>
-#include <set>
 #include <sstream>
 #include <system_error>
 #include <unordered_map>
 #include <unordered_set>
+#include <cstddef>
+#include <cstdint>
+#include <filesystem>
+#include <ios>
+#include <iterator>
+#include <memory>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 namespace fsim::systemc {
 

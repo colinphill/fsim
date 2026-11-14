@@ -2,10 +2,10 @@
 #pragma once
 
 #include "fsim/runtime/packed_value.hpp"
-#include "fsim/runtime/vpi_bridge.h"
 #include "fsim/semantic/model.hpp"
 #include "fsim/semantic/systemverilog_hir.hpp"
 #include "sv_vpi_user.h"
+#include "fsim/runtime/vpi_abi.h"
 
 #include <cstdint>
 #include <deque>
@@ -18,6 +18,8 @@
 #include <tuple>
 #include <unordered_map>
 #include <vector>
+#include <cstddef>
+#include <vpi_user.h>
 
 namespace fsim::app::application_detail {
 
@@ -29,6 +31,10 @@ struct VpiHirScope {
     fsim_vpi_handle_v1 handle { };
     std::uint32_t unit { };
     std::vector<std::pair<Step, std::string>> steps;
+    // Per step, the generate region the elaborator selected for a generate
+    // step (it tells the branches of an if that share one scope name apart,
+    // IEEE 1800-2023 27.5); invalid for any other step or when unknown.
+    std::vector<semantic::DeclarationId> regions;
 };
 
 /// A constant expression's value (IEEE 1800-2023 37.81 vpiConstant).
@@ -54,6 +60,14 @@ public:
         std::function<fsim_vpi_handle_v1(fsim_vpi_handle_v1,
             const std::string&)>
             resolve;
+        // The object a declaration is, for a name the link step resolved to
+        // it (a package-qualified name, IEEE 1800-2023 26.3); 0 when the
+        // declaration is no published object. May be empty.
+        std::function<fsim_vpi_handle_v1(semantic::DeclarationId)> declared;
+        // The object a use of `object` in an expression is: a ref obj for
+        // the variable of a ref port (IEEE 1800-2023 37.15 detail 2), else
+        // the object itself. May be empty.
+        std::function<fsim_vpi_handle_v1(fsim_vpi_handle_v1)> reference;
         // A named block's or a callable's scope object under a scope.
         std::function<fsim_vpi_handle_v1(fsim_vpi_handle_v1,
             const std::string&)>
@@ -66,6 +80,37 @@ public:
         // The bits of a net or variable object, or of a select of one; 0
         // when unknown (IEEE 1800-2023 37.47 cont assign bit).
         std::function<std::size_t(fsim_vpi_handle_v1)> bit_width;
+        // The body expression of the let declaration a call or name seen
+        // from a scope expands, when it is a let expression (IEEE 1800-2023
+        // 11.12, 37.57). May be empty.
+        std::function<std::optional<semantic::ExpressionId>(
+            fsim_vpi_handle_v1, semantic::ExpressionId)>
+            let_body;
+        // The task or function object a user call seen from a scope invokes
+        // (a call expression, or a task call statement when the flag is
+        // set), as the elaborator bound it (IEEE 1800-2023 37.42
+        // vpiFunction, 37.38 vpiTask); 0 when there is none. May be empty.
+        std::function<fsim_vpi_handle_v1(fsim_vpi_handle_v1, bool,
+            std::uint32_t)>
+            callee;
+        // The class method declaration a scope object is; none for any
+        // other scope. May be empty.
+        std::function<std::optional<semantic::DeclarationId>(
+            fsim_vpi_handle_v1)>
+            method;
+        // The automatic variable of a declaration of the class method
+        // `scope` in the frame of the call of that method the current
+        // thread runs (37.43 vpiAutomatics); 0 outside such a frame. May be
+        // empty.
+        std::function<fsim_vpi_handle_v1(
+            fsim_vpi_handle_v1, semantic::DeclarationId)>
+            frame_local;
+        // A property named through the implicit `this` in the body of
+        // class method `scope`, by its member identity (8.11): the
+        // property of the object the current thread's call of the method
+        // runs on, else the class's property; 0 when unknown. May be empty.
+        std::function<fsim_vpi_handle_v1(fsim_vpi_handle_v1, const std::string&)>
+            member;
     };
 
     VpiStatementModel(const semantic::sv::Hir& hir,
@@ -76,6 +121,11 @@ public:
     /// scope, or the statements of a named block, task or function.
     [[nodiscard]] std::optional<std::vector<fsim_vpi_handle_v1>> iterate_scope(
         const VpiHirScope& scope, PLI_INT32 type);
+    /// vpi_iterate(vpiAliasStmt, scope): the alias statements of an instance
+    /// or generate scope, one per aliased terminal but the last (IEEE
+    /// 1800-2023 37.76).
+    [[nodiscard]] std::vector<fsim_vpi_handle_v1> alias_statements(
+        const VpiHirScope& scope);
     /// A force, release, procedural assign or deassign statement of a
     /// scope's processes and callables, with its callback reason (IEEE
     /// 1800-2023 38.36.1).
@@ -109,6 +159,25 @@ public:
     [[nodiscard]] StatementPoint statement_at(const VpiHirScope& scope,
         std::uint32_t process, std::string_view file, std::uint32_t line,
         std::uint32_t column);
+    /// The body of class method declaration `method` (its vpiStmt, IEEE
+    /// 1800-2023 37.31, 37.41), whose statements have `scope` (the method
+    /// object) as their scope; 0 for an empty body.
+    [[nodiscard]] fsim_vpi_handle_v1 method_body(
+        semantic::DeclarationId method, fsim_vpi_handle_v1 scope);
+    /// The formals (vpiIODecl) of class method declaration `method`, whose
+    /// scope is `scope` (the method object) (IEEE 1800-2023 37.41).
+    [[nodiscard]] std::vector<fsim_vpi_handle_v1> method_formals(
+        semantic::DeclarationId method, fsim_vpi_handle_v1 scope);
+    /// The variable that holds the value of class method declaration
+    /// `method` (vpiReturn, 37.41 details 1-3); 0 for a task, a void
+    /// function and a constructor, which returns no value (8.7).
+    [[nodiscard]] fsim_vpi_handle_v1 method_return(
+        semantic::DeclarationId method, fsim_vpi_handle_v1 scope);
+    /// The statement of class method `method`'s body that begins at the
+    /// source position, as statement_at finds one in a process.
+    [[nodiscard]] StatementPoint method_statement_at(
+        semantic::DeclarationId method, fsim_vpi_handle_v1 scope,
+        std::string_view file, std::uint32_t line, std::uint32_t column);
     /// The source file and line of a named block scope (vpiFile and
     /// vpiLineNo, IEEE 1800-2023 37.3); none for other scopes.
     struct BlockSource {
@@ -154,6 +223,11 @@ public:
     /// name.
     [[nodiscard]] std::optional<bool> local_automatic(
         const VpiHirScope& scope, const std::string& name);
+    /// The HIR declaration a reference node's name resolved to when the
+    /// design was linked (the declaration its expression selects); none for
+    /// any other node and for a name that resolved to none.
+    [[nodiscard]] std::optional<std::uint32_t> referenced_declaration(
+        std::uint64_t serial) const;
     /// vpi_handle(vpiStmt | vpiReturn, scope) of a task, function or named
     /// block (IEEE 1800-2023 37.41, 37.42).
     [[nodiscard]] std::optional<fsim_vpi_handle_v1> scope_relation(
@@ -198,11 +272,49 @@ public:
         std::string callable;
         std::string formal;
         fsim_vpi_handle_v1 scope { };
+        /// A class-handle type (37.41): the identity of its class (the
+        /// specialization's, else the declaration's), whose typespec is the
+        /// class model's.
+        std::string class_name;
+        /// A container type: the kind of array (0 none, 1 fixed-size
+        /// unpacked, 2 dynamic array, 3 queue, 4 associative array), its
+        /// dimensions when fixed-size, and its element type (and, for an
+        /// associative array, the index type's word; empty for `[*]`).
+        int array_kind { };
+        std::vector<std::pair<std::int64_t, std::int64_t>> dimensions;
+        std::vector<DeclaredType> element;
+        std::string index_word;
+        /// A virtual interface type (25.9): the interface's name, and the
+        /// modport's when the type names one; the typespec is an interface
+        /// typespec (37.30).
+        std::string interface_name;
+        std::string modport_name;
     };
     /// The return type of a function scope.
     [[nodiscard]] std::optional<DeclaredType> scope_return_type(
         const VpiHirScope& scope);
+    /// The expression a variable of the scope is declared with, as a handle
+    /// (the object a name denotes); 0 without an initializer.
+    [[nodiscard]] fsim_vpi_handle_v1 declaration_initializer(
+        const VpiHirScope& scope, const std::string& name);
     /// The type of a formal argument or a return variable node.
+    /// The callable a ref obj node is a formal of, and the formal's position.
+    struct RefFormal {
+        std::string callable;
+        std::size_t position { };
+        fsim_vpi_handle_v1 scope { };
+    };
+    [[nodiscard]] std::optional<RefFormal> ref_formal(std::uint64_t serial) const;
+    /// The actual passed for formal `position` by the call that begins at
+    /// file:line:column, a call expression or a task call statement, seen
+    /// from `scope`; 0 when none is found (IEEE 1800-2023 37.15 detail 3).
+    [[nodiscard]] fsim_vpi_handle_v1 call_actual_at(std::string_view file,
+        std::uint32_t line, std::uint32_t column, std::size_t position,
+        fsim_vpi_handle_v1 scope);
+    /// The declared type of a variable declaration, as a typespec is built
+    /// from it (37.41); none for an unknown declaration.
+    [[nodiscard]] std::optional<DeclaredType> declaration_type(
+        semantic::DeclarationId declaration) const;
     [[nodiscard]] std::optional<DeclaredType> declared_type(
         std::uint64_t serial) const;
 
@@ -301,6 +413,22 @@ public:
         const std::vector<semantic::sv::Delay>& delays,
         fsim_vpi_handle_v1 scope, fsim_vpi_handle_v1 parent);
 
+    /// `vpiProperty` of an inline `cover sequence` (IEEE 1800-2023 37.50):
+    /// a property spec with the assertion's clocking event, disable
+    /// condition and sequence expression; 0 when it has no tree.
+    [[nodiscard]] fsim_vpi_handle_v1 cover_sequence_spec(
+        const semantic::sv::Unit& unit,
+        const semantic::sv::ConcurrentAssertion& assertion,
+        fsim_vpi_handle_v1 scope, fsim_vpi_handle_v1 parent);
+    /// The let declarations of an instance or generate scope, in source
+    /// order (IEEE 1800-2023 37.12 vpiLetDecl, 37.57).
+    [[nodiscard]] std::vector<fsim_vpi_handle_v1> let_declarations(
+        const VpiHirScope& scope);
+    /// The body of the let declaration a let expression names, with its
+    /// formals bound to the expression's arguments: the expression whose
+    /// value the let expression has (11.12, 37.57); 0 for any other node.
+    [[nodiscard]] fsim_vpi_handle_v1 let_value_expression(std::uint64_t serial);
+
     /// The property declarations (`vpiPropertyDecl`) or sequence
     /// declarations (`vpiSequenceDecl`) of an instance or generate scope, in
     /// source order (IEEE 1800-2023 37.51, 37.53).
@@ -347,8 +475,24 @@ public:
         std::uint64_t serial, PLI_INT32 type);
     [[nodiscard]] std::optional<std::vector<fsim_vpi_handle_v1>> iterate(
         std::uint64_t serial, PLI_INT32 type);
+    /// vpi_iterate(vpiMatchItem, sequence expr) (IEEE 1800-2023 37.54): the
+    /// assignment and subroutine call statements of a sequence operand
+    /// written `(s, item, ...)`, in order; none for any other handle.
+    [[nodiscard]] std::optional<std::vector<fsim_vpi_handle_v1>> match_items(
+        fsim_vpi_handle_v1 handle);
     [[nodiscard]] std::optional<VpiStatementValue> value(
         std::uint64_t serial) const;
+    /// A cast operation's casting type as written (`int`, `signed`, `8`;
+    /// IEEE 1800-2023 6.24.1), or the constant size expression of a size
+    /// cast written with one (`(W+1)'(x)`) as `size`; none for another node.
+    struct CastTarget {
+        std::string type;
+        fsim_vpi_handle_v1 size { };
+    };
+    /// The HIR expression of a cast operation node; none for another node.
+    [[nodiscard]] std::optional<semantic::ExpressionId> cast_expression(
+        std::uint64_t serial) const;
+    [[nodiscard]] std::optional<CastTarget> cast_target(std::uint64_t serial);
 
     /// The delay of a continuous assignment or one of its bits (IEEE
     /// 1800-2023 37.47): the rise, fall and turn-off values written, in
@@ -394,12 +538,21 @@ private:
         // The implicit unnamed block of a statement list that is not one
         // statement: a process, callable, branch or case item body.
         body,
-        // A skipped loop variable of a foreach statement: a vpiNullOp
-        // operation at position `aux` (IEEE 1800-2023 37.51 detail 2).
-        foreach_null,
+        // A vpiNullOp operation at position `aux` of statement `id`: a
+        // skipped loop variable of a foreach statement (IEEE 1800-2023 37.51
+        // detail 2) or an empty argument of a system task call (37.42
+        // detail 8).
+        null_operation,
         // A for loop's initialization and increment as assignments.
         loop_init,
         loop_step,
+        // A variable named where no scope object holds it: one a for
+        // statement declares in its initialization (IEEE 1800-2023 12.7.1),
+        // `aux` the for statement and the parent the for statement's node,
+        // the variable's scope (37.12 detail 2); or a formal or local of a
+        // class method (8.6), `aux` the method and the parent the method
+        // object. `id` is the declaration.
+        local_variable,
         // A display task's format string argument.
         format,
         // A formal argument of a task or function (vpiIODecl), and the
@@ -407,6 +560,9 @@ private:
         // `id` is the declaration, `aux` the callable.
         io_decl,
         return_variable,
+        // The ref obj of a `ref` formal (IEEE 1800-2023 37.15 detail 1): `id`
+        // is the declaration, `aux` the callable, as for io_decl.
+        ref_formal,
         // A formal and the result variable of a DPI import, which has no
         // HIR declaration: `id` is the owning unit, `aux` packs the import's
         // index (high half) and the formal's index (low half, 0xffff for
@@ -443,6 +599,20 @@ private:
         // 37.53 vpiVariables): `id` indexes `assertion_entries_`, `aux` the
         // local variable.
         assertion_variable,
+        // One alias of a net alias statement `alias a = b = c;` (IEEE
+        // 1800-2023 10.12, 37.76): `id` indexes `alias_entries_`; every
+        // alias but the last terminal has the last as its right-hand side.
+        alias_stmt,
+        // A let declaration (`id` indexes `let_entries_`), one of its
+        // formals (`aux` the port), and a let expression (`id` the call or
+        // name, `aux` the let frame it is seen in) (IEEE 1800-2023 37.57).
+        let_decl,
+        let_formal,
+        let_expr,
+        // The inline constraint of a `randomize() with {...}` call (IEEE
+        // 1800-2023 18.7, 37.42 detail 1): `id` is the call expression; its
+        // constraint items are the block's expressions.
+        inline_constraint,
     };
 
     struct Node {
@@ -470,6 +640,10 @@ private:
             assertion_declarations { };
         // The named block a block step reached.
         const semantic::sv::Statement* block { };
+        // The net alias statements of the unit or generate block.
+        const std::vector<semantic::sv::Alias>* aliases { };
+        // The let declarations of the unit or generate block.
+        const std::vector<semantic::sv::LetDeclaration>* lets { };
     };
 
     /// The DPI import a dpi_io_decl or dpi_return_variable node is of.
@@ -489,6 +663,14 @@ private:
         semantic::ExpressionId expression, fsim_vpi_handle_v1 scope,
         fsim_vpi_handle_v1 parent);
     [[nodiscard]] std::optional<Container> locate(const VpiHirScope& scope);
+    // The statement of `statements` (or of a statement nested in them) that
+    // begins at the source position, with `within` its scope and `parent`
+    // the parent of the list's statements; whether it is a later pass of a
+    // loop (statement_at).
+    [[nodiscard]] StatementPoint find_statement(
+        const std::vector<semantic::StatementId>& statements,
+        fsim_vpi_handle_v1 within, fsim_vpi_handle_v1 parent,
+        std::string_view file, std::uint32_t line, std::uint32_t column);
     // The handle of a statement list: none, its one statement, or the
     // implicit block holding several; `owner` is a body code.
     [[nodiscard]] fsim_vpi_handle_v1 sequence(
@@ -599,12 +781,81 @@ private:
         const semantic::sv::Unit* unit { };
     };
     std::vector<AssertionEntry> assertion_entries_;
+    /// The net alias statement and terminal position of each alias_stmt node.
+    struct AliasEntry {
+        const semantic::sv::Alias* alias { };
+        std::uint32_t terminal { };
+    };
+    std::vector<AliasEntry> alias_entries_;
     std::map<std::tuple<const void*, const void*>, std::uint32_t>
         assertion_entry_index_;
     [[nodiscard]] std::uint32_t assertion_entry(
         const semantic::sv::AssertionDeclaration& declaration,
         const semantic::sv::AssertionTree* tree,
         const semantic::sv::Unit& unit);
+    // The match items of the sequence operands handed out so far, by the
+    // operand's handle, with the scope they are seen from (37.54).
+    struct MatchItems {
+        std::vector<semantic::StatementId> items;
+        fsim_vpi_handle_v1 scope { };
+    };
+    std::map<fsim_vpi_handle_v1, MatchItems> match_items_;
+    // The strength of each boolean leaf under strong() or weak(), by its
+    // expression (37.52 detail 3).
+    std::map<std::uint32_t, bool> operand_strength_;
+    // The node of each handle the model gave out.
+    std::unordered_map<fsim_vpi_handle_v1, std::uint64_t> serial_of_;
+    // Let declarations (IEEE 1800-2023 11.12, 37.57). A let frame is the
+    // context a let body is seen in: a let expression, whose formals stand
+    // for its arguments, or the declaration itself, whose formals are ref
+    // objs of the formal decls. The expression and reference nodes of a
+    // body carry their frame in `aux` (0: no let), so each let expression
+    // has its own; `frame_` is the frame of the node whose relations are
+    // being made.
+    // The declarations standing for inline cover sequences, by assertion.
+    std::deque<semantic::sv::AssertionDeclaration> cover_sequences_;
+    std::map<const semantic::sv::ConcurrentAssertion*, std::size_t>
+        cover_sequence_of_;
+    std::vector<const semantic::sv::LetDeclaration*> let_entries_;
+    std::map<const semantic::sv::LetDeclaration*, std::uint32_t> let_entry_of_;
+    std::map<std::uint32_t, const semantic::sv::LetDeclaration*> let_by_body_;
+    bool let_bodies_indexed_ { };
+    struct LetFrame {
+        const semantic::sv::LetDeclaration* declaration { };
+        // The let expression; none for the declaration's own frame.
+        std::optional<semantic::ExpressionId> use;
+        std::uint32_t outer { };
+        fsim_vpi_handle_v1 scope { };
+    };
+    std::vector<LetFrame> let_frames_ { LetFrame { } };
+    std::map<std::tuple<const semantic::sv::LetDeclaration*, std::uint32_t,
+                 std::uint32_t, fsim_vpi_handle_v1>,
+        std::uint32_t>
+        let_frame_of_;
+    std::uint32_t frame_ { };
+    [[nodiscard]] std::uint32_t let_entry(
+        const semantic::sv::LetDeclaration& declaration);
+    // The task or function object a call expression invokes, as the
+    // elaborator bound it; 0 when there is none.
+    [[nodiscard]] fsim_vpi_handle_v1 call_callee(
+        std::uint32_t expression, fsim_vpi_handle_v1 scope) const;
+    // vpiDecompile of an expression (37.59 detail 2); `precedence`, when
+    // given, receives the binding strength of its outermost operator.
+    [[nodiscard]] std::optional<std::string> decompile(
+        semantic::ExpressionId id, int* precedence) const;
+    [[nodiscard]] const semantic::sv::LetDeclaration* let_of_body(
+        semantic::ExpressionId body);
+    [[nodiscard]] const semantic::sv::LetDeclaration* let_of_use(
+        const Node& entry);
+    [[nodiscard]] std::uint32_t let_frame(
+        const semantic::sv::LetDeclaration& declaration,
+        std::optional<semantic::ExpressionId> use, std::uint32_t outer,
+        fsim_vpi_handle_v1 scope);
+    // The argument of a let expression for the declaration's formal
+    // `port`: the actual bound to it, else its default (37.57 detail 1).
+    [[nodiscard]] std::optional<semantic::ExpressionId> let_argument(
+        const semantic::sv::LetDeclaration& declaration,
+        semantic::ExpressionId use, std::size_t port) const;
     /// The handle of an operand of a tree node: the node, or its expression.
     [[nodiscard]] fsim_vpi_handle_v1 assertion_operand(
         std::uint32_t entry, const semantic::sv::AssertionTreeOperand& operand,
@@ -626,5 +877,9 @@ struct VpiDpiResult {
 };
 [[nodiscard]] VpiDpiResult vpi_dpi_result(
     const semantic::sv::DpiDeclaration& declaration);
+
+/// The vpiType of a variable declared with `type` (IEEE 1800-2023 37.17).
+[[nodiscard]] PLI_INT32 vpi_hir_variable_type(
+    const semantic::sv::TypeReference& type);
 
 } // namespace fsim::app::application_detail

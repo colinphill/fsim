@@ -1,0 +1,18 @@
+add=5,35
+a: base v=7 twice=14
+b: derived v=21 twice=42
+t t=35
+answer=135
+scale=12 type=base_item/derived_item
+registry=111
+cfg v=21
+
+--- UVM Report Summary ---
+
+** Report counts by severity
+UVM_INFO :    0
+UVM_WARNING :    0
+UVM_ERROR :    0
+UVM_FATAL :    0
+** Report counts by id
+

@@ -5,7 +5,6 @@
 
 #include <algorithm>
 #include <limits>
-#include <sstream>
 #include <stdexcept>
 #include <utility>
 

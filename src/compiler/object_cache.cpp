@@ -6,7 +6,6 @@
 #include "fsim/support/payload_checksum.hpp"
 #include "fsim/support/sqlite_database.hpp"
 
-#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>

@@ -30,11 +30,11 @@
 #include "simir_static_kernel_state.hpp"
 
 #include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 
 #include <algorithm>
 #include <functional>
 #include <iostream>
-#include <memory>
 #include <utility>
 #include <vector>
 

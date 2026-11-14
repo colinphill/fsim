@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include "lowerer_internal.hpp"
 
 #include <optional>
 #include <string_view>

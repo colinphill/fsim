@@ -1,8 +1,30 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
-#include "application_vhdl_hir_internal.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
+#include "application_compiled_source.hpp"
+#include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/parser.hpp"
+#include "fsim/frontend/source.hpp"
+#include "fsim/frontend/token.hpp"
+#include "fsim/library/artifact.hpp"
+#include "fsim/semantic/compiled_design.hpp"
+#include "fsim/semantic/model.hpp"
+#include "fsim/semantic/vhdl_hir.hpp"
+#include <algorithm>
+#include <array>
+#include <cctype>
+#include <cstddef>
+#include <map>
+#include <optional>
+#include <set>
+#include <span>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 
 namespace fsim::app::application_detail {

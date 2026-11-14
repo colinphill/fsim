@@ -3,6 +3,7 @@
 
 #include "simir_internal.hpp"
 #include "simir_container_ops.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 
 #include <algorithm>
 

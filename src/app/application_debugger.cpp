@@ -2,9 +2,48 @@
 #include "application_internal.hpp"
 #include "application_simulation_internal.hpp"
 #include "application_trace_control.hpp"
-#include "application_workspace.hpp"
-#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
+#include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/app/trace_api.hpp"
+#include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/project/project.hpp"
+#include "fsim/runtime/class_heap.hpp"
+#include "fsim/runtime/class_static.hpp"
+#include "fsim/runtime/logic.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_container_value.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include "fsim/runtime/systemverilog_chandle.hpp"
+#include "fsim/runtime/systemverilog_scalar.hpp"
+#include "fsim/runtime/uvm_activity.hpp"
+#include "fsim/runtime/uvm_phase.hpp"
+#include "fsim/semantic/design_ir.hpp"
+#include "fsim/semantic/hierarchy_path.hpp"
+#include "fsim/semantic/model.hpp"
+#include "fsim/systemc/incremental.hpp"
+#include <algorithm>
+#include <atomic>
+#include <charconv>
+#include <cstddef>
+#include <cstdint>
+#include <exception>
+#include <filesystem>
+#include <functional>
+#include <limits>
+#include <memory>
+#include <optional>
+#include <ostream>
+#include <set>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <utility>
+#include <vector>
 
 namespace fsim::app {
 
@@ -768,8 +807,22 @@ void DebuggerSession::execute(const std::vector<std::string>& command)  {
         const auto& object = simulation_.class_heap().object(handle);
         if (command.size() == 3) {
           output_ << command[2] << " = "
-                  << format_class_property(
-                         simulation_.read_class_property(handle, command[2]))
+                  << format_class_property([&]() -> const auto& {
+                       // A simple name is looked up through the object's
+                       // class chain (8.14); `owner::name` names one exactly.
+                       if (command[2].find("::") != std::string_view::npos) {
+                         return simulation_.read_class_property(
+                             handle, command[2]);
+                       }
+                       const auto* found = simulation_.class_heap().member(
+                           handle, command[2]);
+                       if (found == nullptr) {
+                         throw std::out_of_range{
+                             "SystemVerilog class property '"
+                             + std::string{command[2]} + "' does not exist"};
+                       }
+                       return *found;
+                     }())
                   << '\n';
         } else {
           output_ << "declared " << object.declared_type
@@ -1311,6 +1364,8 @@ DebuggerFrameInfo DebuggerSession::frame(const std::size_t index) const
   case runtime::simir::ExecutionPointKind::object_created:
   case runtime::simir::ExecutionPointKind::assertion_pass:
   case runtime::simir::ExecutionPointKind::assertion_fail:
+  case runtime::simir::ExecutionPointKind::block_exit:
+  case runtime::simir::ExecutionPointKind::call_value:
     result.point_kind = "probe";
     break;
   }
@@ -1320,7 +1375,8 @@ DebuggerFrameInfo DebuggerSession::frame(const std::size_t index) const
     const auto& local = program.debug_locals[local_index];
     // A function's result register (lowerer_hir_callable.cpp) is read by
     // the foreign interfaces only.
-    if (local.name.find(".@result@") != std::string::npos) {
+    if (local.name.find(".@result@") != std::string::npos
+        || local.name.find(".@receiver@") != std::string::npos) {
       continue;
     }
     std::string value;
@@ -1950,7 +2006,8 @@ void DebuggerSession::show_locals()  {
     for (std::size_t index = 0; index < process.debug_locals.size();
          ++index) {
       const auto& local = process.debug_locals[index];
-      if (local.name.find(".@result@") != std::string::npos) {
+      if (local.name.find(".@result@") != std::string::npos
+          || local.name.find(".@receiver@") != std::string::npos) {
         continue;
       }
       output_ << local.name << " = ";

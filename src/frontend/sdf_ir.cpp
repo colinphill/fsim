@@ -2,7 +2,6 @@
 #include "fsim/frontend/sdf.hpp"
 #include "string_case.hpp"
 
-#include <algorithm>
 #include <cstdint>
 #include <limits>
 #include <memory>

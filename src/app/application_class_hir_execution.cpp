@@ -5,7 +5,6 @@
 #include "fsim/semantic/systemverilog_type_state.hpp"
 #include "fsim/support/index_distance.hpp"
 #include "fsim/support/stack_growth.hpp"
-#include "fsim/support/uvm_identity.hpp"
 #include "../elaboration/hir_output_conversion.hpp"
 
 #include "fsim/frontend/output_format.hpp"
@@ -14,7 +13,6 @@
 
 #include <algorithm>
 #include <array>
-#include <bit>
 #include <cctype>
 #include <charconv>
 #include <cstdlib>
@@ -2852,34 +2850,95 @@ SystemVerilogClassHirExecution::method_named(
 }
 
 const semantic::sv::SpecializedClassMethod*
-SystemVerilogClassHirExecution::static_method(
-    const std::string_view canonical_identity) const
+SystemVerilogClassHirExecution::uvm_component_method(
+    const runtime::SystemVerilogClassHandle handle,
+    const support::UvmRole library_method) const
 {
-    const semantic::sv::SpecializedClassMethod* selected { };
-    for (const auto& specialization : specializations_) {
-        const auto found = std::ranges::find(
-            specialization.methods, canonical_identity,
-            &semantic::sv::SpecializedClassMethod::canonical_identity);
-        if (found == specialization.methods.end())
-            continue;
-        if (selected != nullptr
-            && (selected->declaration != found->declaration
-                || selected->owner_identity != found->owner_identity
-                || selected->callable_identity != found->callable_identity
-                || selected->formals != found->formals
-                || selected->local_declarations != found->local_declarations
-                || selected->statements != found->statements
-                || selected->kind != found->kind
-                || selected->static_method != found->static_method
-                || selected->pure != found->pure
-                || selected->defined != found->defined)) {
-            return nullptr;
+    const auto& object = heap_.object(handle);
+    // The library's uvm_component the object derives from.
+    const semantic::sv::ClassSpecialization* library { };
+    std::set<std::string_view> followed;
+    for (auto current = specialization(object.specialization_identity);
+         current != nullptr
+         && followed.insert(current->specialization_identity).second;
+         current = current->base
+             ? specialization(current->base->specialization_identity)
+             : nullptr) {
+        if (current->uvm_role == support::UvmRole::component) {
+            library = current;
+            break;
         }
-        selected = &*found;
     }
-    return selected != nullptr && selected->static_method && !selected->pure
-        ? selected
-        : nullptr;
+    if (library == nullptr)
+        return nullptr;
+    const auto declared = std::ranges::find(library->methods, library_method,
+        &semantic::sv::SpecializedClassMethod::uvm_role);
+    if (declared == library->methods.end() || !declared->virtual_slot)
+        return nullptr;
+    followed.clear();
+    for (auto current = specialization(object.specialization_identity);
+         current != nullptr
+         && followed.insert(current->specialization_identity).second;
+         current = current->base
+             ? specialization(current->base->specialization_identity)
+             : nullptr) {
+        const auto found = std::ranges::find_if(current->methods,
+            [&](const semantic::sv::SpecializedClassMethod& candidate) {
+                return candidate.virtual_slot == declared->virtual_slot
+                    && !candidate.pure;
+            });
+        if (found != current->methods.end())
+            return method(handle, found->canonical_identity, true);
+    }
+    return nullptr;
+}
+
+SystemVerilogClassHirExecution::StaticCall
+SystemVerilogClassHirExecution::static_call(
+    const semantic::sv::Expression* const selection,
+    const std::string_view canonical_identity,
+    const runtime::SystemVerilogClassHandle handle) const
+{
+    // The class declaring the method, the same in every specialization.
+    std::string_view owner;
+    for (const auto& specialization : specializations_) {
+        const auto found = std::ranges::find(specialization.methods,
+            canonical_identity,
+            &semantic::sv::SpecializedClassMethod::canonical_identity);
+        if (found != specialization.methods.end()) {
+            owner = found->owner_identity;
+            break;
+        }
+    }
+    StaticCall result;
+    if (owner.empty())
+        return result;
+    // `C#(4)::f()` runs in C#(4); an unqualified call in the running
+    // class's specialization; a call naming no parameter values outside
+    // the declaring class in the one the bare class name denotes (IEEE
+    // 1800-2023 8.25.1).
+    if (selection != nullptr && !selection->class_owner.empty()) {
+        result.specialization
+            = static_member_specialization(*selection, owner, handle);
+    } else {
+        result.specialization = ancestor_specialization(
+            running_specialization(handle), owner);
+        if (result.specialization.empty()) {
+            const auto found = std::ranges::find_if(specializations_,
+                [&](const semantic::sv::ClassSpecialization& candidate) {
+                    return candidate.default_specialization
+                        && candidate.declaration_identity == owner;
+                });
+            if (found != specializations_.end())
+                result.specialization = found->specialization_identity;
+        }
+    }
+    const auto* method = result.specialization.empty()
+        ? nullptr
+        : specialization_method(result.specialization, canonical_identity);
+    if (method != nullptr && method->static_method && !method->pure)
+        result.method = method;
+    return result;
 }
 
 std::optional<std::string>
@@ -3282,6 +3341,7 @@ SystemVerilogClassHirExecution::invoke_package_function(
         invocation_names.emplace_back("@result-string");
     }
     std::vector<std::size_t> bound_actual_formals;
+    const CallSite site { *this, call.source };
     const auto result = invoke_function_impl(method, 0U, actuals,
         string_actuals, invocation_names, { }, actual_references,
         &bound_actual_formals);
@@ -6684,6 +6744,7 @@ SystemVerilogClassHirExecution::evaluate_packed(
         }
         const PendingFrameGuard pending_guard { pending_call_frames_,
             typed_frame };
+        const CallSite site { *this, value->source };
         auto result = invoke_function_(receiver_handle, identity,
             actuals, string_actuals, names, directions, virtual_dispatch,
             ActualReferences { });
@@ -6944,7 +7005,8 @@ SystemVerilogClassHirExecution::evaluate_packed(
     if (value->kind == ExpressionKind::class_static_method_call
         || value->text.starts_with(static_method_prefix)) {
         const auto identity = marker_payload(*value, static_method_prefix);
-        const auto* selected_method = static_method(identity);
+        const auto call = static_call(value, identity, handle);
+        const auto* selected_method = call.method;
         auto names = value->argument_names;
         if (names.empty())
             names.resize(value->operands.size());
@@ -6994,16 +7056,12 @@ SystemVerilogClassHirExecution::evaluate_packed(
             string_actuals.emplace_back();
         }
         // Each specialization has static methods of its own (IEEE 1800-2023
-        // 8.25.1): `C#(4)::f()` runs in C#(4), an unqualified call in the
-        // running class's specialization.
-        const auto target = static_member_specialization(*value,
-            selected_method != nullptr
-                ? std::string_view { selected_method->owner_identity }
-                : std::string_view { },
-            handle);
+        // 8.25.1).
+        const CallSite site { *this, value->source };
         const auto result = invoke_static_function_(
             identity, actuals,
-            string_actuals, names, { }, ActualReferences { }, target);
+            string_actuals, names, { }, ActualReferences { },
+            call.specialization);
         return selected_method != nullptr && selected_method->return_type
             ? apply_context(result, selected_method->return_type->signed_value,
                   true)
@@ -7143,7 +7201,8 @@ SystemVerilogClassHirExecution::evaluate_packed(
                           base_method_prefix)
                     ? base_method_prefix : method_prefix);
             if (static_method_call) {
-                const auto* selected = static_method(identity);
+                const auto* selected
+                    = static_call(selected_expression, identity, handle).method;
                 if (selected != nullptr && selected->return_type)
                     return selected->return_type;
             } else {
@@ -8877,6 +8936,18 @@ SystemVerilogClassHirExecution::execute(
             && item->task.spelling.starts_with(base_prefix)) {
             continue;
         }
+        // The statement the running frame executes (IEEE 1800-2023 37.43
+        // detail 4, cbStmt 38.36.1.1): every statement but a block, as
+        // generated code reports them; an assertion reports itself.
+        if (execution_probe_ && item->kind != semantic::sv::StatementKind::block
+            && item->kind != semantic::sv::StatementKind::assertion) {
+            if (const auto* const frame = active_frame(current_frame_);
+                frame != nullptr && frame->reported) {
+                execution_probe_(report_process_,
+                    runtime::simir::ExecutionPointKind::statement,
+                    item->source);
+            }
+        }
         if (item->kind == semantic::sv::StatementKind::assignment) {
             if (!item->target || !item->value)
                 throw std::invalid_argument { "class HIR assignment is incomplete" };
@@ -9507,7 +9578,8 @@ SystemVerilogClassHirExecution::execute(
                 *item->value, handle, environment, return_context_width);
             if (!value) {
                 throw std::invalid_argument {
-                    "class HIR return expression is not executable"
+                    "class HIR return expression of '" + active_hierarchy_
+                    + "' is not executable"
                 };
             }
             return { true, *value, false, false, std::nullopt };
@@ -9707,8 +9779,15 @@ SystemVerilogClassHirExecution::execute(
                     = std::string_view { spelling }.substr(static_task
                             ? static_task_prefix.size()
                             : task_prefix.size());
+                // `C#(4)::t();` keeps its selection as the statement's
+                // value (IEEE 1800-2023 8.25.1).
+                const auto static_target = static_task
+                    ? static_call(item->value ? expression(*item->value)
+                                              : nullptr,
+                          method_identity, handle)
+                    : StaticCall { };
                 const auto* selected_method = static_task
-                    ? static_method(method_identity)
+                    ? static_target.method
                     : method(receiver->low_word().aval, method_identity,
                           virtual_dispatch);
                 std::vector<runtime::PackedLogic4> actuals;
@@ -9853,29 +9932,16 @@ SystemVerilogClassHirExecution::execute(
                 }
                 const PendingFrameGuard pending_guard { pending_call_frames_,
                     typed_frame };
+                const CallSite site { *this, item->source };
                 if (static_task) {
                     if (!invoke_static_function_) {
                         throw std::invalid_argument {
                             "class HIR static method dispatch is unavailable"
                         };
                     }
-                    const auto owner_identity = selected_method != nullptr
-                        ? std::string_view { selected_method->owner_identity }
-                        : std::string_view { };
-                    // `C#(4)::t();` runs in the specialization it selects,
-                    // which the statement keeps as its value; otherwise in
-                    // the running class's (IEEE 1800-2023 8.25.1).
-                    const auto* selection = item->value
-                        ? expression(*item->value)
-                        : nullptr;
                     (void)invoke_static_function_(method_identity, actuals,
                         string_actuals, names, directions, actual_references,
-                        selection != nullptr && !selection->class_owner.empty()
-                            ? static_member_specialization(
-                                  *selection, owner_identity, handle)
-                            : ancestor_specialization(
-                                  running_specialization(handle),
-                                  owner_identity));
+                        static_target.specialization);
                 } else {
                     (void)invoke_function_(receiver->low_word().aval,
                         method_identity,
@@ -10456,8 +10522,8 @@ bool SystemVerilogClassHirExecution::is_string_expression(
     };
     if (value->kind == ExpressionKind::class_static_method_call
         || value->text.starts_with(static_method_prefix)) {
-        const auto* selected = static_method(
-            marker_payload(*value, static_method_prefix));
+        const auto* selected = static_call(value,
+            marker_payload(*value, static_method_prefix), handle).method;
         return selected != nullptr && selected->return_type
             && is_string(*selected->return_type);
     }
@@ -10782,6 +10848,7 @@ SystemVerilogClassHirExecution::evaluate_string_call(
     const semantic::sv::SpecializedClassMethod* selected_method { };
     std::string_view canonical_identity;
     runtime::SystemVerilogClassHandle receiver_handle = handle;
+    StaticCall static_target;
     bool static_dispatch { };
     bool virtual_dispatch { true };
     std::size_t first_actual { };
@@ -10789,7 +10856,8 @@ SystemVerilogClassHirExecution::evaluate_string_call(
         || value->text.starts_with(static_method_prefix)) {
         static_dispatch = true;
         canonical_identity = marker_payload(*value, static_method_prefix);
-        selected_method = static_method(canonical_identity);
+        static_target = static_call(value, canonical_identity, handle);
+        selected_method = static_target.method;
     } else if ((value->kind
                     == semantic::sv::ExpressionKind::class_method_call
                 || value->text.starts_with(method_prefix)
@@ -10916,13 +10984,13 @@ SystemVerilogClassHirExecution::evaluate_string_call(
             std::move(typed_actuals), false });
     }
     const PendingFrameGuard pending_guard { pending_call_frames_, typed_frame };
+    const CallSite site { *this, value->source };
     if (static_dispatch) {
         if (!invoke_static_function_)
             return std::nullopt;
         (void)invoke_static_function_(canonical_identity, actuals,
             string_actuals, invocation_names, {}, actual_references,
-            static_member_specialization(*value,
-                selected_method->owner_identity, handle));
+            static_target.specialization);
     } else {
         if (!invoke_function_)
             return std::nullopt;
@@ -10966,6 +11034,169 @@ SystemVerilogClassHirExecution::evaluate_string_call(
     return result;
 }
 
+SystemVerilogClassHirExecution::FrameScope::FrameScope(
+    SystemVerilogClassHirExecution& owner,
+    const semantic::sv::SpecializedClassMethod& method,
+    PackedEnvironment& packed, StringEnvironment& strings,
+    StringBindingEnvironment& bindings, const bool constructor)
+    : owner_ { owner }
+    , serial_ { ++owner.frame_serial_ }
+    , previous_ { owner.current_frame_ }
+{
+    // The call this frame's caller, a reported frame of the executor,
+    // makes: its call point precedes the frame (37.43 detail 6).
+    const auto site = std::exchange(owner.call_site_, std::nullopt);
+    if (const auto* const caller = owner.active_frame(previous_);
+        !constructor && site && caller != nullptr && caller->reported
+        && owner.execution_probe_) {
+        owner.execution_probe_(owner.report_process_,
+            runtime::simir::ExecutionPointKind::call, *site);
+    }
+    auto& frame = owner.active_frames_[serial_];
+    frame = ActiveFrame { &method, &packed, &strings, &bindings, false };
+    owner.current_frame_ = serial_;
+    if (owner.frame_probe_) {
+        frame.reported = owner.frame_probe_(owner.report_process_,
+            runtime::simir::ExecutionPointKind::frame_start, method.source,
+            serial_, method.name, method.declaration);
+    }
+}
+
+void SystemVerilogClassHirExecution::FrameScope::finish()
+{
+    // A frame the probe reported ends where its method returns (IEEE
+    // 1800-2023 38.36.1 cbEndOfFrame); an error that unwinds the call ends
+    // the run instead.
+    const auto* const frame = owner_.active_frame(serial_);
+    if (frame != nullptr && frame->reported && owner_.frame_probe_) {
+        (void)owner_.frame_probe_(owner_.report_process_,
+            runtime::simir::ExecutionPointKind::frame_end,
+            frame->method->source, serial_, frame->method->name,
+            frame->method->declaration);
+    }
+    owner_.active_frames_.erase(serial_);
+    owner_.current_frame_ = previous_;
+}
+
+SystemVerilogClassHirExecution::FrameScope::~FrameScope()
+{
+    owner_.active_frames_.erase(serial_);
+    if (owner_.current_frame_ == serial_) {
+        owner_.current_frame_ = previous_;
+    }
+}
+
+bool SystemVerilogClassHirExecution::frame_declares(
+    const ActiveFrame& frame, const semantic::DeclarationId variable) const
+{
+    const auto& method = *frame.method;
+    if (std::ranges::find(method.formals, variable) == method.formals.end()
+        && std::ranges::find(method.local_declarations, variable)
+            == method.local_declarations.end()) {
+        return false;
+    }
+    // A static local lives on after the frame (IEEE 1800-2023 6.21).
+    const auto* const declared = declaration(variable);
+    return declared != nullptr
+        && declared->lifetime != semantic::sv::Lifetime::static_lifetime;
+}
+
+std::vector<SystemVerilogClassHirExecution::FrameVariable>
+SystemVerilogClassHirExecution::frame_variables(const std::uint64_t frame) const
+{
+    std::vector<FrameVariable> variables;
+    const auto* const active = active_frame(frame);
+    if (active == nullptr) {
+        return variables;
+    }
+    const auto add = [&](const semantic::DeclarationId id) {
+        if (!frame_declares(*active, id)
+            || std::ranges::find(variables, id, &FrameVariable::declaration)
+                != variables.end()) {
+            return;
+        }
+        const auto* const declared = declaration(id);
+        // A variable the frame holds now: a string by its declaration, a
+        // packed value by its name in the frame's environment.
+        if (active->bindings->contains(id.value())) {
+            variables.push_back({ id, declared->name, true });
+        } else if (active->packed->contains(declared->name)) {
+            variables.push_back({ id, declared->name, false });
+        }
+    };
+    for (const auto id : active->method->formals) {
+        add(id);
+    }
+    for (const auto id : active->method->local_declarations) {
+        add(id);
+    }
+    return variables;
+}
+
+std::optional<runtime::PackedLogic4>
+SystemVerilogClassHirExecution::read_frame_packed(
+    const std::uint64_t frame, const semantic::DeclarationId variable) const
+{
+    const auto* const active = active_frame(frame);
+    if (active == nullptr || !frame_declares(*active, variable)) {
+        return std::nullopt;
+    }
+    const auto found = active->packed->find(declaration(variable)->name);
+    return found == active->packed->end()
+        ? std::nullopt
+        : std::optional { found->second };
+}
+
+std::optional<std::string> SystemVerilogClassHirExecution::read_frame_string(
+    const std::uint64_t frame, const semantic::DeclarationId variable) const
+{
+    const auto* const active = active_frame(frame);
+    if (active == nullptr || !frame_declares(*active, variable)) {
+        return std::nullopt;
+    }
+    const auto found = active->bindings->find(variable.value());
+    return found == active->bindings->end()
+        ? std::nullopt
+        : std::optional { found->second };
+}
+
+bool SystemVerilogClassHirExecution::write_frame_packed(
+    const std::uint64_t frame, const semantic::DeclarationId variable,
+    const runtime::PackedLogic4& value)
+{
+    const auto* const active = active_frame(frame);
+    if (active == nullptr || !frame_declares(*active, variable)) {
+        return false;
+    }
+    const auto found = active->packed->find(declaration(variable)->name);
+    if (found == active->packed->end()) {
+        return false;
+    }
+    // The variable keeps its declared width.
+    found->second = resize_packed(value, found->second.width());
+    return true;
+}
+
+bool SystemVerilogClassHirExecution::write_frame_string(
+    const std::uint64_t frame, const semantic::DeclarationId variable,
+    const std::string_view value)
+{
+    const auto* const active = active_frame(frame);
+    if (active == nullptr || !frame_declares(*active, variable)) {
+        return false;
+    }
+    const auto found = active->bindings->find(variable.value());
+    if (found == active->bindings->end()) {
+        return false;
+    }
+    found->second = std::string { value };
+    if (const auto named = active->strings->find(declaration(variable)->name);
+        named != active->strings->end()) {
+        named->second = found->second;
+    }
+    return true;
+}
+
 runtime::PackedLogic4 SystemVerilogClassHirExecution::invoke_function(
     const semantic::sv::SpecializedClassMethod& method,
     const runtime::SystemVerilogClassHandle handle,
@@ -10977,6 +11208,8 @@ runtime::PackedLogic4 SystemVerilogClassHirExecution::invoke_function(
     const std::optional<runtime::simir::ProcessId> report_process,
     const std::string_view specialization)
 {
+    ++invocations_;
+    ++invocation_sites_[method.canonical_identity];
     const ExecutionContextGuard context_guard { report_process_,
         report_process, active_hierarchy_, method.canonical_identity };
     // A static method runs in its class's specialization: its static
@@ -11055,7 +11288,8 @@ runtime::PackedLogic4 SystemVerilogClassHirExecution::invoke_function_body(
 
     if (method.kind != semantic::sv::ClassMethodKind::function) {
         throw std::invalid_argument {
-            "HIR instance function invocation selected an incompatible method"
+            "HIR instance function invocation selected an incompatible method '"
+            + method.canonical_identity + "'"
         };
     }
     if (string_actuals.size() != actuals.size()
@@ -11184,12 +11418,15 @@ runtime::PackedLogic4 SystemVerilogClassHirExecution::invoke_function_body(
         string_bindings.insert_or_assign(method.declaration.value(),
             std::string { });
     }
+    FrameScope frame { *this, method, environment, strings,
+        string_bindings };
     auto result = execute(
         method.statements, handle, environment, strings, false,
         method.return_type
             ? std::optional<std::size_t> {
                   width(*method.return_type, 32U) }
             : std::nullopt);
+    frame.finish();
     for (const auto local_id : method.local_declarations) {
         const auto* local = declaration(local_id);
         if (local != nullptr
@@ -11268,6 +11505,8 @@ void SystemVerilogClassHirExecution::invoke_task(
     const runtime::SystemVerilogClassHandle handle,
     std::vector<runtime::PackedLogic4>& actuals)
 {
+    ++invocations_;
+    ++invocation_sites_[method.canonical_identity];
     if (method.kind != semantic::sv::ClassMethodKind::task
         || method.static_method || method.formals.size() != actuals.size()) {
         throw std::invalid_argument {
@@ -11294,8 +11533,11 @@ void SystemVerilogClassHirExecution::invoke_task(
         &environment };
     initialize_strings(method, handle, actual_formals, string_actuals,
         strings, string_bindings);
+    FrameScope frame { *this, method, environment, strings,
+        string_bindings };
     const auto result = execute(
         method.statements, handle, environment, strings, false);
+    frame.finish();
     if (result.returned)
         throw std::invalid_argument { "SystemVerilog HIR class task returned" };
     ++statistics_.hir_tasks;
@@ -11340,6 +11582,13 @@ void SystemVerilogClassHirExecution::invoke_constructor_impl(
             string_bindings);
     } else if (!actuals.empty()) {
         throw std::invalid_argument { "implicit HIR constructor has actuals" };
+    }
+    // The constructor's frame holds its call of the base constructor (IEEE
+    // 1800-2023 8.15) and its body; an implicit constructor has none.
+    std::optional<FrameScope> frame;
+    if (constructor != selected.methods.end()) {
+        frame.emplace(*this, *constructor, environment, strings,
+            string_bindings, true);
     }
     std::vector<runtime::PackedLogic4> base_actuals;
     std::vector<std::string> base_strings;
@@ -11425,8 +11674,7 @@ void SystemVerilogClassHirExecution::invoke_constructor_impl(
     // user-derived constructor returns.
     if (selected.base
         && (base == nullptr
-            || !support::is_uvm_library_identity(
-                base->declaration_identity))) {
+            || !support::uvm_library(base->uvm_role))) {
         if (base == nullptr)
             throw std::invalid_argument { "base HIR class specialization is unavailable" };
         invoke_constructor_impl(
@@ -11466,6 +11714,7 @@ void SystemVerilogClassHirExecution::invoke_constructor_impl(
     if (constructor != selected.methods.end()) {
         const auto result = execute(
             constructor->statements, handle, environment, strings, true);
+        frame->finish();
         if (result.returned)
             throw std::invalid_argument { "SystemVerilog HIR constructor returned a value" };
     }
@@ -11486,6 +11735,9 @@ bool SystemVerilogClassHirExecution::invoke_constructor(
     }
     if (selected == nullptr)
         return false;
+    ++invocations_;
+    ++invocation_sites_[std::string { specialization_identity } + "::new via "
+        + census_scope_];
     const ExecutionContextGuard context_guard { report_process_,
         report_process, active_hierarchy_,
         std::string { specialization_identity } + "::new" };
@@ -11497,7 +11749,9 @@ bool SystemVerilogClassHirExecution::invoke_constructor(
 SystemVerilogClassExecutionStatistics
 SystemVerilogClassHirExecution::statistics() const noexcept
 {
-    return statistics_;
+    auto result = statistics_;
+    result.invocations = invocations_;
+    return result;
 }
 
 } // namespace fsim::app::application_detail

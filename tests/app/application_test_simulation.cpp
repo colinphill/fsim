@@ -1,33 +1,32 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_test_support.hpp"
-#include "../../src/app/application_internal.hpp"
-#include "../../src/app/application_simulation_internal.hpp"
-#include "../../src/runtime/simir_internal.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/app/application.hpp"
+#include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/project/project.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include "fsim/runtime/simir_operations_extended.hpp"
+#include "path_test_support.hpp"
 
-#include "fsim/semantic/compiled_design_normalization.hpp"
-#include "fsim/runtime/simir_region_graph.hpp"
-#include "fsim/systemc/hierarchy.hpp"
 
 #include <algorithm>
-#include <array>
 #include <cassert>
 #include <csignal>
-#include <exception>
 #include <fstream>
 #include <iostream>
 #include <initializer_list>
-#include <iterator>
-#include <limits>
 #include <optional>
 #include <sstream>
-#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <tuple>
 #include <utility>
 #include <vector>
+#include <cstddef>
+#include <cstdint>
 
 namespace fsim::test {
 

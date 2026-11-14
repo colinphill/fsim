@@ -2,6 +2,9 @@
 #include "../support/container_test_support.hpp"
 #include "change_mismatch_report.hpp"
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/semantic/design_ir.hpp"
 #include "fsim/app/artifact_phase.hpp"
 #include "fsim/app/design_artifact.hpp"
 
@@ -21,7 +24,6 @@
 #include <tuple>
 #include <type_traits>
 #include <utility>
-#include <variant>
 #include <vector>
 
 namespace {
@@ -718,6 +720,8 @@ endmodule
     struct BoundaryCapture {
         fsim::runtime::RunResult result;
         std::array<std::string, 9> values;
+        // Each net's value changes at time 0 (value and delta).
+        std::array<std::vector<Change>, 9> time_zero;
         std::size_t compiled_processes { };
     };
     const auto execute = [&](const fsim::app::SimulationEngine engine) {
@@ -753,6 +757,18 @@ endmodule
         };
         BoundaryCapture capture;
         capture.compiled_processes = simulation.compiled_process_count();
+        simulation.set_signal_change_hook(
+            [&](const fsim::runtime::simir::SignalId signal,
+                const fsim::runtime::PackedLogic4& value,
+                const fsim::runtime::SimulationTick time,
+                const std::uint64_t delta) {
+                for (std::size_t index = 0; index < signals.size(); ++index) {
+                    if (signals[index] == signal && time == 0U) {
+                        capture.time_zero[index].push_back(
+                            { value.to_msb_string(), time, delta });
+                    }
+                }
+            });
         capture.result = simulation.run();
         for (std::size_t index = 0; index < signals.size(); ++index) {
             capture.values[index] =
@@ -763,6 +779,7 @@ endmodule
 
     const auto reference = execute(fsim::app::SimulationEngine::interpreter);
     const auto compiled = execute(fsim::app::SimulationEngine::compiled);
+    const auto debugging = execute(fsim::app::SimulationEngine::debug);
     const std::string z62(62, 'Z');
     const std::array<std::string, 9> expected {
         "1", "0" + z62 + "1", "10" + z62 + "1",
@@ -777,6 +794,48 @@ endmodule
     assert(compiled.values == reference.values);
     assert(reference.compiled_processes == 0);
     assert(compiled.compiled_processes == 0);
+    // Time zero (IEEE 1800-2023 4.9.1, 11.4.11): every continuous assignment
+    // is evaluated with the enables still x (an x condition merges 1 or 0
+    // with z to x, and z with z to x), so each driven net goes to x; the
+    // initial block's enables of 0 make every driver z again, so the net
+    // returns to z. Each net changes exactly twice: its Active update events
+    // are performed in the order the assignments executed, so a driver's
+    // second update never lands before the other driver's first (no x, z,
+    // x, z). The undriven nets keep z. All engines give the same deltas.
+    const std::array<std::vector<std::string>, 9> expected_time_zero {
+        std::vector<std::string> { "X", "Z" },
+        std::vector<std::string> { std::string(64, 'X'), std::string(64, 'Z') },
+        std::vector<std::string> { std::string(65, 'X'), std::string(65, 'Z') },
+        std::vector<std::string> { "X", "Z" },
+        std::vector<std::string> { std::string(64, 'X'), std::string(64, 'Z') },
+        std::vector<std::string> { std::string(65, 'X'), std::string(65, 'Z') },
+        std::vector<std::string> { },
+        std::vector<std::string> { },
+        std::vector<std::string> { },
+    };
+    for (std::size_t index = 0; index < expected_time_zero.size(); ++index) {
+        for (const auto* capture : { &reference, &compiled, &debugging }) {
+            std::vector<std::string> values;
+            for (const auto& change : capture->time_zero[index]) {
+                values.push_back(change.value);
+            }
+            if (values != expected_time_zero[index]) {
+                std::cerr << "resolved_net_boundaries net " << index << " ("
+                          << (capture == &reference ? "interpreter"
+                                     : capture == &compiled ? "compiled"
+                                                            : "debug")
+                          << ") time-zero changes:";
+                for (const auto& value : values) {
+                    std::cerr << ' ' << value;
+                }
+                std::cerr << '\n';
+            }
+            assert(values == expected_time_zero[index]);
+        }
+        assert(compiled.time_zero[index] == reference.time_zero[index]);
+        assert(debugging.time_zero[index] == reference.time_zero[index]);
+    }
+    assert(debugging.values == reference.values);
 }
 
 ConditionalSwitchForceCapture verify_forced_conditional_switch(

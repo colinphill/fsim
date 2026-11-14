@@ -4,10 +4,8 @@
 // time queue, and vpi_iterate(vpiCallback, time queue) for the timed
 // callbacks due in it. Lines starting with "#c " form the checked trace.
 #include "fsim/runtime/vpi_abi.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 
-#include <stdio.h>
 #include <string.h>
 
 static unsigned now_of(void)

@@ -1,0 +1,62 @@
+#c top vi tv type=vpiVirtualInterfaceVar actual=top.s16 defname=SBus expr=null
+#c top vi v1 type=vpiVirtualInterfaceVar actual=top.s16 defname=SBus expr=top.s1
+#c top vi v16 type=vpiVirtualInterfaceVar actual=top.s16 defname=SBus expr=top.s16
+#c top vi v2 type=vpiVirtualInterfaceVar actual=top.s16 defname=SBus expr=null
+#c top vi vn type=vpiVirtualInterfaceVar actual=top.s1 defname=SBus expr=null
+#c top vi da[0] type=vpiVirtualInterfaceVar actual=null defname=SBus expr=null
+#c top vi da[1] type=vpiVirtualInterfaceVar actual=top.s1 defname=SBus expr=null
+#c top vi qa[0] type=vpiVirtualInterfaceVar actual=top.s16 defname=SBus expr=null
+#c top vi qa[1] type=vpiVirtualInterfaceVar actual=top.s1 defname=SBus expr=null
+#c top vi fa[0] type=vpiVirtualInterfaceVar actual=top.s16 defname=SBus expr=null
+#c top vi fa[1] type=vpiVirtualInterfaceVar actual=null defname=SBus expr=null
+#c top var h type=vpiClassVar actual=null defname=none expr=null
+#c top var tv type=vpiVirtualInterfaceVar actual=top.s16 defname=SBus expr=null
+#c top var v1 type=vpiVirtualInterfaceVar actual=top.s16 defname=SBus expr=top.s1
+#c top var v16 type=vpiVirtualInterfaceVar actual=top.s16 defname=SBus expr=top.s16
+#c top var v2 type=vpiVirtualInterfaceVar actual=top.s16 defname=SBus expr=null
+#c top var vn type=vpiVirtualInterfaceVar actual=top.s1 defname=SBus expr=null
+#c top var da type=vpiRegArray actual=null defname=none expr=null
+#c top var qa type=vpiRegArray actual=null defname=none expr=null
+#c top var fa type=vpiRegArray actual=null defname=none expr=null
+#c top.gen[0] vi gv type=vpiVirtualInterfaceVar actual=top.s1 defname=SBus expr=null
+#c top.gen[0] vi ga[0] type=vpiVirtualInterfaceVar actual=null defname=SBus expr=null
+#c top.gen[0] vi ga[1] type=vpiVirtualInterfaceVar actual=top.s1 defname=SBus expr=null
+#c top.gen[0] vi gd[0] type=vpiVirtualInterfaceVar actual=top.s16 defname=SBus expr=null
+#c top.gen[0] var gv type=vpiVirtualInterfaceVar actual=top.s1 defname=SBus expr=null
+#c top.gen[0] var ga type=vpiRegArray actual=null defname=none expr=null
+#c top.gen[0] var gd type=vpiRegArray actual=null defname=none expr=null
+#c top.gen[1] vi gv type=vpiVirtualInterfaceVar actual=top.s16 defname=SBus expr=null
+#c top.gen[1] vi ga[0] type=vpiVirtualInterfaceVar actual=null defname=SBus expr=null
+#c top.gen[1] vi ga[1] type=vpiVirtualInterfaceVar actual=top.s1 defname=SBus expr=null
+#c top.gen[1] vi gd[0] type=vpiVirtualInterfaceVar actual=top.s16 defname=SBus expr=null
+#c top.gen[1] var gv type=vpiVirtualInterfaceVar actual=top.s16 defname=SBus expr=null
+#c top.gen[1] var ga type=vpiRegArray actual=null defname=none expr=null
+#c top.gen[1] var gd type=vpiRegArray actual=null defname=none expr=null
+#c pkg vi pv type=vpiVirtualInterfaceVar actual=top.s16 defname=SBus expr=null
+#c pkg var pv type=vpiVirtualInterfaceVar actual=top.s16 defname=SBus expr=null
+#c top typedef typespec type=vpiInterfaceTypespec name=SB16 defname=SBus assigns=1 W=16
+#c top.gen[0] typedef typespec type=vpiInterfaceTypespec name=SB4 defname=SBus assigns=1 W=4
+#c pkg typedef typespec type=vpiInterfaceTypespec name=SB32 defname=SBus assigns=1 W=32
+#c top.v1 typespec type=vpiInterfaceTypespec name=none defname=SBus assigns=1 W=8
+#c top.v16 typespec type=vpiInterfaceTypespec name=none defname=SBus assigns=1 W=16
+#c top.tv typespec type=vpiInterfaceTypespec name=SB16 defname=SBus assigns=1 W=16
+#c Holder var one type=vpiVirtualInterfaceVar
+#c Holder var fixed type=vpiRegArray
+#c Holder var dyn type=vpiRegArray
+#c Holder var que type=vpiRegArray
+#c Holder vi one type=vpiVirtualInterfaceVar modport=0 actual=null defname=SBus
+#c top.h var one type=vpiVirtualInterfaceVar
+#c top.h var fixed type=vpiRegArray
+#c top.h var dyn type=vpiRegArray
+#c top.h var que type=vpiRegArray
+#c top.h vi one type=vpiVirtualInterfaceVar modport=0 actual=top.s1 defname=SBus
+#c top.h vi fixed[0] type=vpiVirtualInterfaceVar modport=0 actual=null defname=SBus
+#c top.h vi fixed[1] type=vpiVirtualInterfaceVar modport=0 actual=top.s16 defname=SBus
+#c top.h vi dyn[0] type=vpiVirtualInterfaceVar modport=0 actual=top.s1 defname=SBus
+#c top.h vi dyn[1] type=vpiVirtualInterfaceVar modport=0 actual=null defname=SBus
+#c top.h vi que[0] type=vpiVirtualInterfaceVar modport=0 actual=top.s16 defname=SBus
+#c assign lhs=vpiVirtualInterfaceVar:pkg::pv actual=top.s16 rhs=vpiInterface:top.s16 actual=null
+#c assign lhs=vpiVirtualInterfaceVar:top.vn actual=top.s1 rhs=vpiInterface:top.s1 actual=null
+#c assign lhs=vpiVirtualInterfaceVar:top.v1 actual=top.s16 rhs=vpiInterface:top.s16 actual=null
+#c assign lhs=vpiVirtualInterfaceVar:top.v2 actual=top.s16 rhs=vpiVirtualInterfaceVar:top.v1 actual=top.s16
+#c assign lhs=vpiVirtualInterfaceVar:top.tv actual=top.s16 rhs=vpiInterface:top.s16 actual=null

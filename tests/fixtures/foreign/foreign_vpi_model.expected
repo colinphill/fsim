@@ -144,6 +144,7 @@
 #c typedefs top.g[1] found=1
 #c typedef pkg_p pk_int_t type=vpiIntTypespec
 #c typedef pkg_p pk_pair_t type=vpiLogicTypespec
+#c typedef pkg_p pk_sq_t type=vpiStructTypespec
 #c typedefs pkg_p found=1
 #c typedef $unit rec_t type=vpiStructTypespec
 #c typedef $unit colors type=vpiEnumTypespec
@@ -170,6 +171,6 @@
 #c else block type=vpiNamedBegin full=top.ge_else.eb parent=ge_else
 #c else absent if=1
 #c shared else block type=vpiNamedBegin s2=1 s1=0
+#c shared else block stmt=vpiAssignment lhs=s2
 #c sv type=vpiStringVar
-#c sv watch=1
-#c sv changed value=b
+#c sv watch=0

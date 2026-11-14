@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_test_support.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/semantic/systemverilog_class_specialization.hpp"
+#include "fsim/runtime/simir.hpp"
 #include "application_test_uvm_virtual.hpp"
 #include "fsim/app/artifact_phase.hpp"
+#include "fsim/app/artifact_schema.hpp"
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/artifact/object.hpp"
 #include "fsim/library/artifact.hpp"
@@ -1440,6 +1444,9 @@ void ApplicationTestFixture::test_class_simulation_integration()
     sources.standard = "2023";
     sources.library = "work";
     sources.files.push_back(class_source);
+    // The fixture's uvm_pkg stands in for a governed UVM 1.2 library
+    // (--uvm-release), whose declarations carry their library roles.
+    sources.uvm_release = fsim::project::SystemVerilogUvmRelease::uvm_1_2;
     config.source_sets.push_back(std::move(sources));
 
     using EngineSnapshot = std::tuple<std::uint64_t, std::uint64_t, std::uint64_t,
@@ -1656,6 +1663,65 @@ void ApplicationTestFixture::test_class_simulation_integration()
             }
             assert(stale_debug_rejected);
         }
+        {
+            // A run phase that waits runs in a thread of its own: the phase
+            // call returns, and the thread goes on with the simulation's
+            // time (IEEE 1800.2-2020 9.8, IEEE 1800-2023 9.3.2).
+            const auto wait_component = std::ranges::find_if(
+                built->compiled_systemverilog_class_specializations,
+                [](const auto& specialization) {
+                    return specialization.declaration_identity.ends_with(
+                        "::UvmWaitComponent");
+                });
+            assert(wait_component
+                != built->compiled_systemverilog_class_specializations.end());
+            const auto waited_property
+                = wait_component->declaration_identity + "::waited";
+            const auto wait_specialization
+                = wait_component->specialization_identity;
+            fsim::diagnostic::Engine wait_diagnostics;
+            auto wait_project = fsim::app::build_project(config, wait_diagnostics);
+            assert(wait_project && !wait_diagnostics.has_error());
+            fsim::app::Simulation wait_simulation(
+                std::move(*wait_project), config.run.max_deltas, engine);
+            const auto wait_root = wait_simulation.create_uvm_root("wait");
+            const auto waiter = wait_simulation.allocate_uvm_component(
+                wait_specialization, "waiter", 0, wait_root,
+                uvm_component_identity);
+            const auto wait_schedule
+                = *wait_simulation.uvm_phases().standard_schedule();
+            const auto waited = [&] {
+                return wait_simulation.read_class_property(waiter, waited_property)
+                    .packed.low_word().aval;
+            };
+            const auto wait_result = wait_simulation.execute_uvm_task_phase(
+                wait_schedule.phase(fsim::runtime::SystemVerilogUvmPhaseKind::Run));
+            for (const auto& failure : wait_result.failures)
+                std::cerr << "wait phase: " << failure.diagnostic_code << ": "
+                          << failure.message << '\n';
+            assert(wait_result.success());
+            const auto pre_reset_result = wait_simulation.execute_uvm_task_phase(
+                wait_schedule.phase(
+                    fsim::runtime::SystemVerilogUvmPhaseKind::PreReset));
+            assert(pre_reset_result.success());
+            assert(waited() == 0U);
+            (void)wait_simulation.run(4);
+            assert(waited() == 0U);
+            (void)wait_simulation.run(6);
+            assert(waited() == 1U);
+            (void)wait_simulation.run(8);
+            assert(waited() == 2U);
+            assert(wait_simulation.class_execution_statistics().hir_tasks == 0U);
+            // The phase-driven compiled run enters the host class executor
+            // never: the component's constructor chain, the phase methods and
+            // the design's own clone() and factory create run as generated
+            // code.
+            if (engine == fsim::app::SimulationEngine::compiled) {
+                assert(wait_simulation.class_execution_statistics()
+                           .invocations
+                    == 0U);
+            }
+        }
         const auto virtual_slot = derived_method->virtual_slot;
         fsim::app::Simulation simulation(std::move(*built), config.run.max_deltas,
             engine);
@@ -1717,6 +1783,8 @@ void ApplicationTestFixture::test_class_simulation_integration()
         api_agent_role_descriptor.component = api_component_top;
         api_agent_role_descriptor.kind = fsim::runtime::SystemVerilogUvmSequenceRoleKind::Agent;
         api_agent_role_descriptor.default_agent_mode = fsim::runtime::SystemVerilogUvmAgentMode::Passive;
+        api_agent_role_descriptor.active_config_field = "is_active";
+        api_agent_role_descriptor.active_config_type = "uvm_pkg::uvm_active_passive_enum";
         api_agent_role_descriptor.function_dispatch =
             [&](const auto, const auto, const auto) { ++api_agent_role_callbacks; };
         const auto api_agent_role = api_sequences.register_role(std::move(api_agent_role_descriptor));
@@ -1742,6 +1810,8 @@ void ApplicationTestFixture::test_class_simulation_integration()
         api_passive_agent_role_descriptor.component = api_component_isolated;
         api_passive_agent_role_descriptor.kind = fsim::runtime::SystemVerilogUvmSequenceRoleKind::Agent;
         api_passive_agent_role_descriptor.default_agent_mode = fsim::runtime::SystemVerilogUvmAgentMode::Active;
+        api_passive_agent_role_descriptor.active_config_field = "is_active";
+        api_passive_agent_role_descriptor.active_config_type = "uvm_pkg::uvm_active_passive_enum";
         api_passive_agent_role_descriptor.function_dispatch =
             [&](const auto, const auto, const auto) {
                 ++api_passive_agent_role_callbacks;
@@ -2683,9 +2753,16 @@ void ApplicationTestFixture::test_class_simulation_integration()
         }
         const auto result = simulation.run();
         const auto class_execution = simulation.class_execution_statistics();
-        assert(class_execution.hir_constructors != 0U);
-        assert(class_execution.hir_functions != 0U);
-        assert(class_execution.hir_tasks != 0U);
+        // The constructor chains of the design's objects run as generated
+        // code: the host class executor is never entered, on the compiled
+        // engine and by the same chains on the others.
+        assert(class_execution.hir_constructors == 0U);
+        if (engine == fsim::app::SimulationEngine::compiled) {
+            assert(simulation.class_execution_statistics().invocations == 0U);
+        }
+        // The phase callbacks of the API-driven components run as generated
+        // code in the design's UVM dispatch process, on every engine.
+        assert(class_execution.hir_tasks == 0U);
         assert(source_uvm_prints == 1 && source_uvm_records == 1);
         const auto source_uvm_ready = simulation.find_signal("class_top.source_uvm_constructed");
         const auto source_uvm_object = simulation.find_signal("class_top.source_uvm_object");
@@ -2978,7 +3055,7 @@ void ApplicationTestFixture::test_class_simulation_integration()
                 == 1);
         }
         assert(completion_called);
-        assert(simulation.read_class_property(handle, "value")
+        assert(simulation.read_class_property(handle, derived_identity + "::value")
                    .packed.low_word()
                    .aval
             == 4);
@@ -3086,6 +3163,21 @@ void ApplicationTestFixture::test_class_simulation_integration()
             source_object_state.random_object_seed, source_random_sample,
             simulation.class_heap().live_objects(),
             api_virtual_probe.trace_signature() ^ trace_values.size());
+        // Host calls after the end of simulation construct their objects as
+        // generated code in a final activation at the end time (IEEE
+        // 1800-2023 9.2.3), never in the host class executor.
+        {
+            const auto late_object = simulation.uvm_registry().create_object_by_type(
+                item_wrapper, "after_finish_object");
+            assert(simulation.uvm_objects().name(late_object) == "after_finish_object"
+                && simulation.uvm_objects().type_name(late_object) == "UvmItem");
+            const auto late_clone = simulation.uvm_objects().clone(late_object);
+            assert(late_clone != late_object
+                && simulation.uvm_objects().compare(late_object, late_clone));
+            if (engine == fsim::app::SimulationEngine::compiled) {
+                assert(simulation.class_execution_statistics().invocations == 0U);
+            }
+        }
         std::cerr << "application classes: engine " << static_cast<unsigned>(engine)
                   << " complete\n";
     }
@@ -3161,7 +3253,9 @@ void ApplicationTestFixture::test_class_simulation_integration()
         const auto compiled_classes = std::ranges::count(
             metadata.units, std::string { "class" },
             &fsim::library::UnitIndexEntry::kind);
-        assert(compiled_classes == 18);
+        // The fixture's uvm_pkg declares uvm_phase (IEEE 1800.2-2020 9.8),
+        // the type of the phase methods' argument, and UvmWaitComponent: 20.
+        assert(compiled_classes == 20);
         assert(std::ranges::all_of(
             metadata.units, [](const auto& entry) {
                 return entry.kind != "class"
@@ -3227,7 +3321,7 @@ void ApplicationTestFixture::test_class_simulation_integration()
     auto standalone = fsim::app::load_design_artifact(relocated_design, standalone_diagnostics);
     assert(standalone);
     assert(
-        standalone->compiled_systemverilog_class_specializations.size() == 18);
+        standalone->compiled_systemverilog_class_specializations.size() == 20);
     assert_compiled_class_inventory(*standalone);
     assert(std::ranges::any_of(
         standalone->compiled_systemverilog_class_specializations,
@@ -3240,7 +3334,7 @@ void ApplicationTestFixture::test_class_simulation_integration()
                         && property.type.executable_width == 137;
                 });
         }));
-    assert(standalone->systemverilog_hir.classes().size() == 18);
+    assert(standalone->systemverilog_hir.classes().size() == 20);
     const auto standalone_contract = std::ranges::find_if(
         standalone->compiled_systemverilog_class_specializations,
         [](const auto& specialization) {
@@ -3334,8 +3428,8 @@ void ApplicationTestFixture::test_class_simulation_integration()
         && !standalone_transfer->statements.empty());
     const auto standalone_handle = standalone_simulation.allocate_class(
         standalone_derived->specialization_identity);
-    assert(standalone_simulation.read_class_property(standalone_handle, "value")
-               .packed.to_msb_string()
+    assert(standalone_simulation.class_heap().member(standalone_handle, "value")
+               ->packed.to_msb_string()
         == "XXXXXXXX");
     const auto standalone_base = std::ranges::find_if(
         standalone_simulation.class_specializations(),
@@ -3376,7 +3470,7 @@ void ApplicationTestFixture::test_class_simulation_integration()
     fsim::diagnostic::Engine mapped_diagnostics;
     auto mapped = fsim::app::build_project(mapped_config, mapped_diagnostics);
     assert(mapped);
-    assert(mapped->compiled_systemverilog_class_specializations.size() == 18);
+    assert(mapped->compiled_systemverilog_class_specializations.size() == 20);
     assert_compiled_class_inventory(*mapped);
     assert(std::ranges::any_of(
         mapped->compiled_systemverilog_class_specializations,

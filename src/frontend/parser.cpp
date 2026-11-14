@@ -7,7 +7,6 @@
 #include <fstream>
 #include <iterator>
 #include <string>
-#include <system_error>
 #include <utility>
 
 namespace fsim::frontend {

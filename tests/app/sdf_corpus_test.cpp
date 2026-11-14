@@ -9,7 +9,6 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
-#include <ranges>
 #include <stdexcept>
 #include <string>
 #include <string_view>

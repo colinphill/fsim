@@ -5,6 +5,7 @@
 #include "application_vpi_foreign.hpp"
 
 #include "../runtime/run_state_archive.hpp"
+#include "../runtime/run_state_value_codecs.hpp"
 
 #include <exception>
 #include <type_traits>
@@ -64,8 +65,9 @@ namespace {
 }
 #endif
 
-// Both sections are at version 2: the common part gained the call results
-// (ForeignRunState::call_results, empty for VHPI), and "foreign.vpi" is
+// Both sections are at version 3: the common part gained the call results
+// (ForeignRunState::call_results, empty for VHPI; version 3 adds string and
+// container results), and "foreign.vpi" is
 // followed by the delay edits of the VPI service
 // (VpiForeignService::io_delay_edits).
 template <typename Service>
@@ -212,8 +214,8 @@ void register_foreign_run_state_sections(
     runtime::RunStateSectionRegistry& registry, VpiForeignService* const vpi,
     VhpiForeignService* const vhpi)
 {
-    add_section(registry, "foreign.vpi", vpi, 2U);
-    add_section(registry, "foreign.vhpi", vhpi, 2U);
+    add_section(registry, "foreign.vpi", vpi, 3U);
+    add_section(registry, "foreign.vhpi", vhpi, 3U);
 }
 
 } // namespace fsim::app::application_detail

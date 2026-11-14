@@ -22,7 +22,6 @@
 #include <charconv>
 #include <cctype>
 #include <cstdint>
-#include <cstdio>
 #include <cstdlib>
 #include <functional>
 #include <iomanip>
@@ -1975,6 +1974,94 @@ public:
         return unit_;
     }
 
+    // Whether a type mark written at `scope` denotes INTEGER, NATURAL or
+    // POSITIVE of STD.STANDARD there (IEEE 1076-2019 12.3, 12.4, 16.3), not
+    // a source declaration of the same name.
+    [[nodiscard]] bool vhdl_integer_type_mark(
+        std::string_view mark, const ScopeId scope) const
+    {
+        constexpr std::string_view qualified_prefix {
+            vhdl::qualified_expression_prefix
+        };
+        if (mark.starts_with(qualified_prefix)) {
+            mark.remove_prefix(qualified_prefix.size());
+        }
+        using Provided = vhdl::ProvidedType;
+        const auto provided = CompiledDesignResolver { unit_ }
+                                  .resolve_vhdl_provided_type(mark, scope);
+        return provided == Provided::integer
+            || provided == Provided::natural
+            || provided == Provided::positive;
+    }
+
+    // Whether a type mark denotes STD.STANDARD.REAL / one of the logic or
+    // numeric array types of IEEE.STD_LOGIC_1164, NUMERIC_STD and NUMERIC_BIT
+    // where it is written (12.3, 12.4): a type of the same simple name that a
+    // design declares is another type, and a conversion to it is not theirs.
+    // The subtype a qualified expression or external name names (9.3.5, 8.7):
+    // the type or subtype declaration analysis resolved its type mark to
+    // (6.3, 12.3, 12.4), which keeps its own constraint; a mark that denotes
+    // a compiler-provided type keeps its written name.
+    [[nodiscard]] std::optional<vhdl::SubtypeIndication> vhdl_marked_subtype(
+        const vhdl::Expression& expression) const
+    {
+        if (!expression.qualified_type_mark) {
+            return std::nullopt;
+        }
+        const auto& mark = *expression.qualified_type_mark;
+        vhdl::SubtypeIndication subtype;
+        subtype.type_mark.spelling = mark.spelling;
+        if (mark.selected) {
+            if (const auto declaration = unit_.find_declaration(*mark.selected);
+                declaration && declaration->vhdl != nullptr
+                && declaration->vhdl->declared_type) {
+                subtype.type_mark.target = *declaration->vhdl->declared_type;
+            }
+        }
+        return subtype;
+    }
+
+    [[nodiscard]] static std::string_view vhdl_unqualified_mark(
+        std::string_view mark)
+    {
+        constexpr std::string_view qualified_prefix {
+            vhdl::qualified_expression_prefix
+        };
+        if (mark.starts_with(qualified_prefix)) {
+            mark.remove_prefix(qualified_prefix.size());
+        }
+        return mark;
+    }
+
+    [[nodiscard]] bool vhdl_real_type_mark(
+        const std::string_view mark, const ScopeId scope) const
+    {
+        return CompiledDesignResolver { unit_ }
+                   .resolve_vhdl_provided_type(
+                       vhdl_unqualified_mark(mark), scope)
+            == vhdl::ProvidedType::real;
+    }
+
+    [[nodiscard]] bool vhdl_logic_array_type_mark(
+        const std::string_view mark, const ScopeId scope) const
+    {
+        using Provided = vhdl::ProvidedType;
+        switch (CompiledDesignResolver { unit_ }
+                    .resolve_vhdl_provided_type(
+                        vhdl_unqualified_mark(mark), scope)) {
+        case Provided::std_logic_vector:
+        case Provided::std_ulogic_vector:
+        case Provided::numeric_std_signed:
+        case Provided::numeric_std_unsigned:
+        case Provided::numeric_bit_signed:
+        case Provided::std_logic_arith_unsigned:
+        case Provided::std_logic_arith_signed:
+        case Provided::numeric_bit_unsigned:
+            return true;
+        default: return false;
+        }
+    }
+
     explicit HirIntegralEvaluator(const SpecializedHirUnit& unit,
         std::vector<SpecializedHirConstantEffect>* effects = nullptr,
         const std::string_view effect_code = "FSIM-ELAB-SVCONST-002",
@@ -2331,8 +2418,174 @@ public:
                 && !view->vhdl->text.starts_with('\'')
                 && names_function()) {
                 if (const auto value = evaluate_vhdl_value(expression);
-                    value && value->kind == VhdlConstantValue::Kind::integer) {
-                    result = value->integer;
+                    value && vhdl_scalar_integral(*value, expression)) {
+                    result = vhdl_scalar_integral(*value, expression);
+                }
+            }
+            // A scalar subprogram of IEEE.STD_LOGIC_1164 (16.7) has no
+            // retained declaration: its mapping is evaluated directly.
+            if (!result) {
+                if (const auto provided
+                    = vhdl_provided_logic_call(*view->vhdl)) {
+                    if (const auto value = evaluate_vhdl_value(expression)) {
+                        if (provided->result == ProvidedLogicResult::boolean) {
+                            result = vhdl_integer(*value);
+                        } else if (provided->result
+                            == ProvidedLogicResult::std_ulogic) {
+                            result = vhdl_std_ulogic_position(*value);
+                        } else if (value->kind
+                                == VhdlConstantValue::Kind::packed
+                            && value->packed.bits.size() == 1U) {
+                            result = value->packed.bits.front() == '1' ? 1 : 0;
+                        }
+                    }
+                }
+            }
+            // IS_X of a vector (16.7) is a BOOLEAN.
+            if (!result) {
+                if (const auto provided
+                    = vhdl_provided_logic_vector_call(*view->vhdl);
+                    provided
+                    && provided->result == ProvidedLogicVector::boolean) {
+                    if (const auto value = evaluate_vhdl_value(expression)) {
+                        result = vhdl_integer(*value);
+                    }
+                }
+            }
+            // An element of a constant array whose value is a string or
+            // bit-string literal, or any other value the typed evaluator
+            // holds as bits (IEEE 1076-2019 9.4.2, 8.4): STD_ULOGIC
+            // elements are positions, BIT elements their bit.
+            // Only a constant whose index range its own declaration gives
+            // (an index constraint, or a literal or aggregate initializer)
+            // reads its element here: a generic's value is its actual (a
+            // block's generic map, 6.5.6.2), and an unconstrained constant
+            // takes the bounds of the value its function returns (5.3.2.2).
+            const auto declared_bounds = [&] {
+                const auto prefix = unit_.find_expression(
+                    view->vhdl->operands.front());
+                // A vector function of IEEE.STD_LOGIC_1164 returns the
+                // bounds its result variable declares (16.7), which the
+                // evaluator gives its value (`to_x01(v)(1)`).
+                if (prefix && prefix->vhdl != nullptr
+                    && prefix->vhdl->kind == vhdl::ExpressionKind::call
+                    && vhdl_provided_logic_vector_call(*prefix->vhdl)) {
+                    return true;
+                }
+                // A function call's value carries the bounds of the value
+                // its function returns (`to_x01(w)` and `to_x01(w)(1)`,
+                // 9.3.4), which the typed evaluator computes.
+                if (prefix && prefix->vhdl != nullptr
+                    && (prefix->vhdl->kind == vhdl::ExpressionKind::call
+                        || prefix->vhdl->kind == vhdl::ExpressionKind::name)
+                    && prefix->vhdl->referenced_name) {
+                    const auto& callee = *prefix->vhdl->referenced_name;
+                    const auto function = [&](const DeclarationId id) {
+                        const auto declaration = unit_.find_declaration(id);
+                        return declaration && declaration->vhdl != nullptr
+                            && declaration->vhdl->callable
+                            && declaration->vhdl->callable->function;
+                    };
+                    if ((callee.selected && function(*callee.selected))
+                        || (!callee.selected && !callee.overloads.empty()
+                            && std::ranges::all_of(
+                                callee.overloads, function))) {
+                        return true;
+                    }
+                    // A function of a governed standard package has no
+                    // retained declaration (TO_X01 of STD_LOGIC_1164).
+                    if (!callee.selected && callee.overloads.empty()
+                        && CompiledDesignResolver { unit_ }
+                               .vhdl_standard_package_member_visible(
+                                   callee, prefix->vhdl->scope)) {
+                        return true;
+                    }
+                }
+                if (!prefix || prefix->vhdl == nullptr
+                    || prefix->vhdl->kind != vhdl::ExpressionKind::name
+                    || !prefix->vhdl->referenced_name
+                    || !prefix->vhdl->referenced_name->selected) {
+                    return false;
+                }
+                const auto declaration = unit_.find_declaration(
+                    *prefix->vhdl->referenced_name->selected);
+                if (!declaration || declaration->vhdl == nullptr) {
+                    return false;
+                }
+                // Inside a function being evaluated, a parameter, local
+                // object or alias holds the value its frame gives, with that
+                // value's bounds (the actual's, 4.2.2.2; `sv(i)` of
+                // TO_X01's alias).
+                using Form = vhdl::DeclarationForm;
+                if (!call_frames_.empty()) {
+                    const auto& frame = call_frames_.back();
+                    const auto id = *prefix->vhdl->referenced_name->selected;
+                    if (frame.vhdl_values.contains(id)
+                        || frame.values.contains(id)) {
+                        return true;
+                    }
+                    const auto callable
+                        = unit_.find_declaration(frame.callable);
+                    if (declaration->vhdl->form == Form::alias && callable
+                        && callable->vhdl != nullptr
+                        && callable->vhdl->nested_scope
+                        && declaration->vhdl->scope
+                            == *callable->vhdl->nested_scope) {
+                        return true;
+                    }
+                }
+                if (declaration->vhdl->form != Form::constant) {
+                    return false;
+                }
+                const auto& source = *declaration->vhdl;
+                if (source.subtype && !source.subtype->constraints.empty()) {
+                    return true;
+                }
+                const auto initial = source.initializer
+                    ? unit_.find_expression(*source.initializer)
+                    : std::nullopt;
+                // A vector function of IEEE.STD_LOGIC_1164 returns the
+                // bounds its result variable declares (16.7), which the
+                // evaluator gives its value.
+                return initial && initial->vhdl != nullptr
+                    && (initial->vhdl->kind
+                            == vhdl::ExpressionKind::string_literal
+                        || initial->vhdl->kind
+                            == vhdl::ExpressionKind::aggregate
+                        || vhdl_provided_logic_vector_call(*initial->vhdl));
+            };
+            if (!result && view->vhdl->operands.size() == 2U
+                && (view->vhdl->kind == vhdl::ExpressionKind::index
+                    || (view->vhdl->kind == vhdl::ExpressionKind::call
+                        && !view->vhdl->text.starts_with('@')
+                        && !view->vhdl->text.starts_with('\'')))
+                && declared_bounds()) {
+                if (const auto value = evaluate_vhdl_value(expression)) {
+                    result = vhdl_scalar_integral(*value, expression);
+                    if (!result
+                        && value->kind == VhdlConstantValue::Kind::packed
+                        && value->packed.bits.size() == 1U) {
+                        const auto element
+                            = vhdl_expression_subtype(expression);
+                        const auto array = vhdl_expression_subtype(
+                            view->vhdl->operands.front());
+                        if ((element
+                                && vhdl_subtype_intrinsic(
+                                       *element, view->vhdl->scope)
+                                    == support::VhdlIntrinsicEnumeration::bit)
+                            || (array
+                                && (array->provided_type
+                                        == vhdl::ProvidedType::bit_vector
+                                    || CompiledDesignResolver { unit_ }
+                                            .effective_vhdl_subtype(
+                                                *array, view->vhdl->scope)
+                                            .value_or(*array)
+                                            .provided_type
+                                        == vhdl::ProvidedType::bit_vector))) {
+                            result
+                                = value->packed.bits.front() == '1' ? 1 : 0;
+                        }
+                    }
                 }
             }
         }
@@ -2431,7 +2684,52 @@ public:
         if (const auto literal = vhdl_intrinsic_literal(expression)) {
             return literal->second;
         }
-        return evaluate_vhdl_attribute_position(expression);
+        if (const auto attribute
+            = evaluate_vhdl_attribute_position(expression)) {
+            return attribute;
+        }
+        // This fold holds a STD_ULOGIC value as its position (16.7).
+        return std_ulogic_expression(expression) ? evaluate(expression)
+                                                 : std::nullopt;
+    }
+
+    // A folded value as the callers outside this evaluator take it: the
+    // bits of a STD_ULOGIC '0' or '1', and no fold of the other seven
+    // STD_ULOGIC values, whose lowering keeps them (16.7). Positions stay
+    // inside the evaluator and evaluate_vhdl_position.
+    [[nodiscard]] std::optional<std::int64_t> runtime_integral(
+        const std::optional<std::int64_t> value, const ExpressionId expression)
+    {
+        // A STD_ULOGIC-valued attribute (`T'SUCC(x)`, `T'VAL(n)`) is held
+        // as a position too.
+        if (!value || *value < 0 || *value > 8
+            || unit_.language() != Language::vhdl
+            || (!std_ulogic_expression(expression)
+                && !evaluate_vhdl_attribute_position(expression))) {
+            return value;
+        }
+        return *value == 2 ? std::optional<std::int64_t> { 0 }
+            : *value == 3  ? std::optional<std::int64_t> { 1 }
+                           : std::nullopt;
+    }
+
+    [[nodiscard]] std::optional<std::int64_t> runtime_declaration_integral(
+        const std::optional<std::int64_t> value,
+        const DeclarationId declaration)
+    {
+        if (!value || *value < 0 || *value > 8
+            || unit_.language() != Language::vhdl) {
+            return value;
+        }
+        const auto view = unit_.find_declaration(declaration);
+        if (!view || view->vhdl == nullptr || !view->vhdl->subtype
+            || vhdl_subtype_intrinsic(*view->vhdl->subtype, view->vhdl->scope)
+                != support::VhdlIntrinsicEnumeration::std_ulogic) {
+            return value;
+        }
+        return *value == 2 ? std::optional<std::int64_t> { 0 }
+            : *value == 3  ? std::optional<std::int64_t> { 1 }
+                           : std::nullopt;
     }
 
     [[nodiscard]] std::optional<SpecializedHirVhdlConstantValue>
@@ -2730,27 +3028,16 @@ private:
         return std::nullopt;
     }
 
+    // A character literal the context typed as CHARACTER (9.3.2, 12.5):
+    // its position (16.3), even when it looks like a BIT ('0').
     [[nodiscard]] std::optional<std::int64_t> vhdl_character_initializer(
-        const vhdl::Declaration& declaration,
         const ExpressionId initializer) const
     {
-        if (!declaration.subtype) {
-            return std::nullopt;
-        }
-        auto mark = std::string_view { declaration.subtype->type_mark.spelling };
-        if (const auto separator = mark.find_last_of(".:");
-            separator != std::string_view::npos) {
-            mark.remove_prefix(separator + 1U);
-        }
-        const auto expression = unit_.find_expression(initializer);
-        if (!support::equal_ignoring_ascii_case(mark, "character")
-            || !expression || expression->vhdl == nullptr
-            || expression->vhdl->kind != vhdl::ExpressionKind::logic_literal
-            || expression->vhdl->text.size() != 3U
-            || expression->vhdl->text.front() != '\'') {
-            return std::nullopt;
-        }
-        return static_cast<unsigned char>(expression->vhdl->text[1]);
+        const auto literal = vhdl_intrinsic_literal(initializer);
+        return literal
+                && literal->first == support::VhdlIntrinsicEnumeration::character
+            ? std::optional { literal->second }
+            : std::nullopt;
     }
 
     [[nodiscard]] static VhdlConstantValue vhdl_integer_value(
@@ -2811,7 +3098,42 @@ private:
         const ExpressionId expression)
     {
         const auto value = evaluate_vhdl_value(expression);
-        return value ? vhdl_integer(*value) : std::nullopt;
+        if (!value) {
+            return std::nullopt;
+        }
+        // A STD_ULOGIC value is its position (16.7): an index of an array
+        // indexed by STD_ULOGIC, or a bound.
+        if (value->kind == VhdlConstantValue::Kind::packed
+            && value->packed.bits.size() == 1U
+            && vhdl_std_ulogic_expression(expression)) {
+            return vhdl_std_ulogic_position(*value);
+        }
+        return vhdl_integer(*value);
+    }
+
+    // A condition: a STD_ULOGIC condition is the implicit `??` of it, true
+    // for '1' and 'H' only (IEEE 1076-2019 9.2.9, 16.7), never its position.
+    [[nodiscard]] std::optional<std::int64_t> vhdl_condition_expression(
+        const ExpressionId expression)
+    {
+        const auto value = evaluate_vhdl_value(expression);
+        if (!value) {
+            return std::nullopt;
+        }
+        const auto single_bit = value->kind == VhdlConstantValue::Kind::packed
+            && value->packed.bits.size() == 1U;
+        // A frame keeps a STD_ULOGIC object's value as its position.
+        if ((single_bit || value->kind == VhdlConstantValue::Kind::integer)
+            && vhdl_std_ulogic_expression(expression)) {
+            const auto position = single_bit
+                ? vhdl_std_ulogic_position(*value)
+                : std::optional { value->integer };
+            if (!position) {
+                return std::nullopt;
+            }
+            return *position == 3 || *position == 7 ? 1 : 0;
+        }
+        return vhdl_integer(*value);
     }
 
     [[nodiscard]] std::optional<std::pair<std::int64_t, std::int64_t>>
@@ -3478,12 +3800,12 @@ private:
     [[nodiscard]] static bool vhdl_integer_array_element_subtype(
         const vhdl::SubtypeIndication& subtype)
     {
-        const auto integer = support::equal_ignoring_ascii_case(
-            subtype.type_mark.spelling, "integer");
-        const auto natural = support::equal_ignoring_ascii_case(
-            subtype.type_mark.spelling, "natural");
-        const auto positive = support::equal_ignoring_ascii_case(
-            subtype.type_mark.spelling, "positive");
+        const auto integer
+            = subtype.provided_type == vhdl::ProvidedType::integer;
+        const auto natural
+            = subtype.provided_type == vhdl::ProvidedType::natural;
+        const auto positive
+            = subtype.provided_type == vhdl::ProvidedType::positive;
         return subtype.domain == vhdl::ValueDomain::integer
             && (integer || natural || positive)
             && !subtype.type_mark.target.valid()
@@ -4604,6 +4926,63 @@ private:
             || type_class == InferredVhdlTypeClass::physical;
     }
 
+    // The value of a constant whose initializer is a string literal and
+    // whose subtype is a vector of BIT or STD_ULOGIC, or none for any other
+    // constant. `folded` is the generic evaluation of the literal, which
+    // numbers an unconstrained subtype from the right.
+    [[nodiscard]] std::optional<VhdlConstantValue>
+    vhdl_string_literal_initializer(const vhdl::Declaration& declaration,
+        const ExpressionId initializer,
+        const std::optional<VhdlConstantValue>& folded) const
+    {
+        const auto literal = unit_.find_expression(initializer);
+        if (!literal || literal->vhdl == nullptr
+            || literal->vhdl->kind != vhdl::ExpressionKind::string_literal
+            || !literal->vhdl->decoded_string
+            || literal->vhdl->decoded_string->empty()
+            || !declaration.subtype) {
+            return std::nullopt;
+        }
+        const auto effective = CompiledDesignResolver { unit_ }
+                                   .effective_vhdl_subtype(
+                                       *declaration.subtype, declaration.scope);
+        if (!effective) {
+            return std::nullopt;
+        }
+        const bool logic_vector = effective->builtin_type
+                == vhdl::BuiltinTypeIdentity::
+                    ieee_std_logic_1164_std_logic_vector
+            || effective->builtin_type
+                == vhdl::BuiltinTypeIdentity::
+                    ieee_std_logic_1164_std_ulogic_vector;
+        const bool bit_vector
+            = declaration.subtype->provided_type
+                == vhdl::ProvidedType::bit_vector
+            || effective->provided_type == vhdl::ProvidedType::bit_vector;
+        if (!logic_vector && !bit_vector) {
+            return std::nullopt;
+        }
+        const auto& bits = *literal->vhdl->decoded_string;
+        constexpr std::string_view logic_characters { "UX01ZWLH-" };
+        if (!std::ranges::all_of(bits, [&](const char bit) {
+                return logic_vector ? logic_characters.find(bit)
+                        != std::string_view::npos
+                                    : bit == '0' || bit == '1';
+            })) {
+            return std::nullopt;
+        }
+        if (!effective->constraints.empty()) {
+            // The generic evaluation numbers the literal; the constraint
+            // then gives it its range.
+            return folded ? std::nullopt
+                          : std::optional { vhdl_packed_value(bits,
+                                static_cast<std::int64_t>(bits.size()) - 1,
+                                0) };
+        }
+        return vhdl_packed_value(
+            bits, 0, static_cast<std::int64_t>(bits.size()) - 1);
+    }
+
     [[nodiscard]] std::optional<VhdlConstantValue>
     evaluate_vhdl_declaration(const DeclarationId declaration)
     {
@@ -4749,8 +5128,8 @@ private:
                 const auto initializer = *view->vhdl->initializer;
                 // A character literal initializing a CHARACTER constant is its
                 // STD.STANDARD position even when it looks like a BIT ('0').
-                const auto character_code = vhdl_character_initializer(
-                    *view->vhdl, initializer);
+                const auto character_code
+                    = vhdl_character_initializer(initializer);
                 if (character_code) {
                     result = vhdl_integer_value(*character_code);
                 } else {
@@ -4809,6 +5188,17 @@ private:
                         profile.binding_present |= binding_ != nullptr;
                     } else {
                         result = evaluate_vhdl_value(initializer);
+                    }
+                    // A string literal initializing a vector of BIT or of
+                    // STD_ULOGIC may use all nine characters, and one given
+                    // no index constraint takes its range from the index
+                    // subtype NATURAL: 0 to its length - 1 (IEEE 1076-2019
+                    // 9.3.2, 5.3.2.2, 16.7).
+                    if (view->vhdl->subtype) {
+                        if (auto typed = vhdl_string_literal_initializer(
+                                *view->vhdl, initializer, result)) {
+                            result = std::move(typed);
+                        }
                     }
                     // An OTHERS aggregate takes its shape from the constant's
                     // subtype (IEEE 1076-2008 9.3.3.3).
@@ -5711,12 +6101,38 @@ private:
                 && vhdl_generate_iterator_visible(value.text, value.scope)) {
                 return true;
             }
+            // 'LEFT, 'RIGHT, 'LOW and 'HIGH yield a value of a scalar type
+            // (a bound of the prefix's index subtype, or of the scalar
+            // type itself), and 'LENGTH and 'POS a universal integer (IEEE
+            // 1076-2019 16.2.2, 16.2.3).
+            if (value.kind == vhdl::ExpressionKind::call
+                && !value.operands.empty()
+                && (vhdl::is_scalar_bound_attribute(value.text)
+                    || value.text == "'length" || value.text == "'pos")) {
+                return true;
+            }
             const auto actual = actual_subtype(expression.operands[index]);
             if (!actual) {
                 return false;
             }
             const auto root = base_type(*actual, expression.scope);
             const auto type = root ? unit_.find_type(*root) : std::nullopt;
+            if (!root) {
+                // A scalar type of STD.STANDARD (INTEGER, NATURAL, REAL,
+                // TIME, ...) has no retained definition; the resolver's
+                // identity names it (16.3).
+                const auto effective
+                    = resolver.effective_vhdl_subtype(*actual, expression.scope);
+                if (!effective || effective->type_mark.target.valid()
+                    || effective->type_mark.spelling.empty()) {
+                    return false;
+                }
+                const auto identity = resolver.resolve_vhdl_type_identity(
+                    effective->type_mark.spelling, expression.scope);
+                return !identity.type
+                    && identity.standard_scalar_type
+                    != CompiledVhdlStandardScalarIdentity::none;
+            }
             return type && type->vhdl != nullptr
                 && (type->vhdl->form == vhdl::TypeForm::scalar
                     || type->vhdl->form == vhdl::TypeForm::enumeration
@@ -5793,6 +6209,32 @@ private:
                 : std::nullopt;
         }
         if (source.kind == Kind::logic_literal) {
+            // A character literal is a value of the type its context gives
+            // it (IEEE 1076-2019 9.3.2, 12.5): of a user enumeration type its
+            // position there. BIT's '0' and '1' are this fold's bits, and so
+            // are STD_ULOGIC's, which the attribute folds map to positions.
+            // A CHARACTER literal is no BIT: '0' and '1' of CHARACTER are
+            // left to the CHARACTER folds, as every other CHARACTER literal
+            // is (16.3).
+            if (const auto literal = vhdl_intrinsic_literal(expression_id);
+                literal
+                && literal->first
+                    == support::VhdlIntrinsicEnumeration::character) {
+                return std::nullopt;
+            }
+            // A STD_ULOGIC literal is its character, any of the nine (16.7).
+            if (const auto literal = vhdl_intrinsic_literal(expression_id);
+                literal
+                && literal->first
+                    == support::VhdlIntrinsicEnumeration::std_ulogic) {
+                return vhdl_std_ulogic_record(literal->second);
+            }
+            if (source.resolved_type && source.resolved_type->valid()) {
+                if (const auto ordinal = vhdl_user_character_ordinal(
+                        *source.resolved_type, source.text)) {
+                    return vhdl_integer_value(*ordinal);
+                }
+            }
             const auto token = normalized_token(source.text);
             if (token.size() == 3U && token.front() == '\''
                 && token.back() == '\''
@@ -5985,7 +6427,12 @@ private:
             // evaluator rather than trying to resolve the designator as a
             // callable name.
             if (source.text.starts_with("'")) {
-                const auto attribute = evaluate_vhdl_attribute(source);
+                bool std_ulogic_value { };
+                const auto attribute
+                    = evaluate_vhdl_attribute(source, &std_ulogic_value);
+                if (attribute && std_ulogic_value) {
+                    return vhdl_std_ulogic_record(*attribute);
+                }
                 return attribute
                     ? std::optional { vhdl_integer_value(*attribute) }
                     : std::nullopt;
@@ -5994,7 +6441,7 @@ private:
         }
         if (source.kind == Kind::conditional
             && source.operands.size() == 3U) {
-            const auto condition = vhdl_integer_expression(
+            const auto condition = vhdl_condition_expression(
                 source.operands.front());
             return condition
                 ? evaluate_vhdl_value(source.operands[*condition != 0
@@ -6339,6 +6786,23 @@ private:
         if (!expression || expression->vhdl == nullptr) {
             return std::nullopt;
         }
+        // The result of a vector function of IEEE.STD_LOGIC_1164 (16.7) is
+        // a STD_ULOGIC_VECTOR, or a BIT_VECTOR for TO_BITVECTOR.
+        if (const auto provided
+            = vhdl_provided_logic_vector_call(*expression->vhdl);
+            provided && provided->result != ProvidedLogicVector::boolean) {
+            vhdl::SubtypeIndication result;
+            result.unconstrained = true;
+            const bool bits
+                = provided->result == ProvidedLogicVector::bit_vector;
+            result.builtin_type = bits
+                ? vhdl::BuiltinTypeIdentity::std_standard_bit_vector
+                : vhdl::BuiltinTypeIdentity::ieee_std_logic_1164_std_ulogic_vector;
+            result.provided_type = bits
+                ? vhdl::ProvidedType::bit_vector
+                : vhdl::ProvidedType::std_ulogic_vector;
+            return result;
+        }
         if (expression->vhdl->kind == vhdl::ExpressionKind::slice) {
             const auto& slice = *expression->vhdl;
             if (slice.operands.size() != 3U
@@ -6394,11 +6858,7 @@ private:
             return std::nullopt;
         }
         const auto& name = *expression->vhdl->referenced_name;
-        const auto selected = name.selected
-                ? name.selected
-                : name.overloads.size() == 1U
-                ? std::optional { name.overloads.front() }
-                : std::nullopt;
+        const auto selected = name.selected;
         if (!selected) {
             return std::nullopt;
         }
@@ -6918,11 +7378,7 @@ private:
             return std::nullopt;
         }
         if (source.kind == Kind::name && source.referenced_name) {
-            const auto selected = source.referenced_name->selected
-                ? source.referenced_name->selected
-                : source.referenced_name->overloads.size() == 1U
-                ? std::optional { source.referenced_name->overloads.front() }
-                : std::nullopt;
+            const auto selected = source.referenced_name->selected;
             const auto declaration = selected
                 ? unit_.find_declaration(*selected)
                 : std::nullopt;
@@ -6946,7 +7402,8 @@ private:
             name.erase(0U, separator + 1U);
         }
         // REAL(x) converts an integer or real value (9.3.6).
-        if (name == "real" && source.operands.size() == 1U) {
+        if (name == "real" && source.operands.size() == 1U
+            && vhdl_real_type_mark(source.text, source.scope)) {
             if (const auto real = support::with_stack([&] { return vhdl_real_expression(
                     source.operands.front(), depth + 1U); })) {
                 return real;
@@ -7211,16 +7668,15 @@ private:
                 expression.operands.front());
             if (operand && operand->vhdl != nullptr
                 && operand->vhdl->kind == vhdl::ExpressionKind::aggregate) {
-                vhdl::SubtypeIndication qualified_type;
-                qualified_type.type_mark.spelling
-                    = expression.text.substr(qualified_prefix.size());
-                if (const auto effective
-                    = CompiledDesignResolver { unit_ }
-                          .effective_vhdl_subtype(
-                              qualified_type, expression.scope)) {
-                    if (auto value = evaluate_vhdl_aggregate(
-                            expression.operands.front(), *effective)) {
-                        return value;
+                if (const auto qualified_type = vhdl_marked_subtype(expression)) {
+                    if (const auto effective
+                        = CompiledDesignResolver { unit_ }
+                              .effective_vhdl_subtype(
+                                  *qualified_type, expression.scope)) {
+                        if (auto value = evaluate_vhdl_aggregate(
+                                expression.operands.front(), *effective)) {
+                            return value;
+                        }
                     }
                 }
             }
@@ -7241,8 +7697,8 @@ private:
         }
         // INTEGER(x) of a REAL value rounds to the nearest integer
         // (IEEE 1076-2008 9.3.6).
-        if ((name == "integer" || name == "natural" || name == "positive")
-            && expression.operands.size() == 1U) {
+        if (expression.operands.size() == 1U
+            && vhdl_integer_type_mark(expression.text, expression.scope)) {
             if (const auto real = vhdl_real_expression(
                     expression.operands.front())) {
                 const auto rounded = std::round(*real);
@@ -7454,9 +7910,10 @@ private:
                     std::move(bits), *width - 1, 0);
             }
         }
-        if (name == "signed" || name == "unsigned"
-            || name == "stdlogicvector"
-            || name == "stdulogicvector") {
+        if ((name == "signed" || name == "unsigned"
+                || name == "stdlogicvector"
+                || name == "stdulogicvector")
+            && vhdl_logic_array_type_mark(expression.text, expression.scope)) {
             if (expression.operands.size() != 1U) {
                 return std::nullopt;
             }
@@ -7466,6 +7923,15 @@ private:
                     && value->kind == VhdlConstantValue::Kind::packed
                 ? value
                 : std::nullopt;
+        }
+        if (const auto provided = vhdl_provided_logic_call(expression)) {
+            return evaluate_vhdl_provided_logic(expression, *provided);
+        }
+        if (const auto provided = vhdl_provided_logic_vector_call(expression)) {
+            if (auto value
+                = evaluate_vhdl_provided_logic_vector(expression, *provided)) {
+                return value;
+            }
         }
         if (std::ranges::any_of(expression.argument_names,
                 [](const std::string& argument) {
@@ -8165,7 +8631,7 @@ private:
             if (!statement.condition) {
                 return fail();
             }
-            const auto condition = vhdl_integer_expression(
+            const auto condition = vhdl_condition_expression(
                 *statement.condition);
             if (!condition) {
                 return fail();
@@ -8391,7 +8857,7 @@ private:
         const auto& type = *view->systemverilog->type;
         // An implicitly typed parameter takes the type of its final value
         // (IEEE 1800-2017 6.20.2); its identity is already that value.
-        if (type.target.spelling == "implicit" && !type.packed_range) {
+        if (type.implicit && !type.packed_range) {
             return value;
         }
         auto width = type.executable_width;
@@ -8844,6 +9310,12 @@ private:
     }
 
 public:
+    // Whether a VHDL expression is a value of STD_ULOGIC (16.7).
+    [[nodiscard]] bool std_ulogic_expression(const ExpressionId id) const
+    {
+        return vhdl_std_ulogic_expression(id);
+    }
+
     [[nodiscard]] std::optional<std::int64_t> evaluate_declaration(
         const DeclarationId declaration)
     {
@@ -8931,8 +9403,8 @@ public:
                 }
             }
             if (!result && constant && view->vhdl->initializer) {
-                result = vhdl_character_initializer(
-                    *view->vhdl, *view->vhdl->initializer);
+                result
+                    = vhdl_character_initializer(*view->vhdl->initializer);
                 if (!result) {
                     result = evaluate(*view->vhdl->initializer);
                 }
@@ -9192,8 +9664,7 @@ private:
                 || declaration->systemverilog->form
                     == sv::DeclarationForm::local_parameter)
             && (!declaration->systemverilog->type
-                || (declaration->systemverilog->type->target.spelling
-                        == "implicit"
+                || (declaration->systemverilog->type->implicit
                     && !declaration->systemverilog->type->packed_range))) {
             return std::nullopt;
         }
@@ -11885,6 +12356,19 @@ private:
         return *actuals_supply_no_callable_;
     }
 
+    // A condition of this fold's integral evaluation: a STD_ULOGIC value is
+    // its position here, and the condition is its implicit `??`, true for
+    // '1' and 'H' only (IEEE 1076-2019 9.2.9, 16.7).
+    [[nodiscard]] std::optional<std::int64_t> vhdl_untyped_condition(
+        const ExpressionId expression)
+    {
+        const auto value = evaluate(expression);
+        if (!value || !vhdl_std_ulogic_expression(expression)) {
+            return value;
+        }
+        return *value == 3 || *value == 7 ? 1 : 0;
+    }
+
     [[nodiscard]] StatementFlow execute_vhdl_statement(
         const StatementId statement_id)
     {
@@ -11909,7 +12393,7 @@ private:
             if (!statement.condition) {
                 return StatementFlow::failed;
             }
-            const auto condition = evaluate(*statement.condition);
+            const auto condition = vhdl_untyped_condition(*statement.condition);
             if (!condition) {
                 return StatementFlow::failed;
             }
@@ -12090,7 +12574,7 @@ private:
                 return StatementFlow::failed;
             }
             while (consume_constant_work_unit()) {
-                const auto condition = evaluate(*statement.condition);
+                const auto condition = vhdl_untyped_condition(*statement.condition);
                 if (!condition) {
                     return StatementFlow::failed;
                 }
@@ -12385,12 +12869,11 @@ private:
             scope);
     }
 
-    // `position_result`: a value of an enumeration type is its position, as
-    // the argument of T'POS takes it, not this fold's encoding of it.
-    // `std_ulogic_value`, when given, says whether the result is a value of
-    // STD_ULOGIC, the one type where the two differ.
+    // A value of an enumeration type is its position (16.2.2), STD_ULOGIC's
+    // included. `std_ulogic_value`, when given, says whether the result is a
+    // value of STD_ULOGIC, whose value records hold its character instead.
     [[nodiscard]] std::optional<std::int64_t> evaluate_vhdl_attribute(
-        const vhdl::Expression& expression, const bool position_result = false,
+        const vhdl::Expression& expression,
         bool* const std_ulogic_value = nullptr)
     {
         if (expression.kind != vhdl::ExpressionKind::call
@@ -12400,7 +12883,9 @@ private:
         const bool supported
             = semantic::vhdl::is_scalar_bound_attribute(expression.text)
             || expression.text == "'length" || expression.text == "'ascending"
-            || expression.text == "'pos" || expression.text == "'val";
+            || expression.text == "'pos" || expression.text == "'val"
+            || expression.text == "'succ" || expression.text == "'pred"
+            || expression.text == "'leftof" || expression.text == "'rightof";
         if (!supported) {
             return std::nullopt;
         }
@@ -12673,14 +13158,27 @@ private:
             return intrinsic == support::VhdlIntrinsicEnumeration::std_ulogic;
         };
         // A CHARACTER literal bound is its position, its character code
-        // (IEEE 1076-2008 16.3).
-        const bool character_typed
-            = (definition != nullptr
-                  && support::equal_ignoring_ascii_case(
-                      definition->base.type_mark.spelling, "character"))
-            || (subtype != nullptr
-                && support::equal_ignoring_ascii_case(
-                    subtype->type_mark.spelling, "character"));
+        // (IEEE 1076-2008 16.3): of a subtype whose mark denotes CHARACTER
+        // where it is written (12.3).
+        const auto denotes_character = [&](const auto& mark,
+                                           const ScopeId scope) {
+            return !mark.target.valid() && !mark.spelling.empty()
+                && CompiledDesignResolver { unit_ }
+                        .resolve_vhdl_intrinsic_enumeration(
+                            mark.spelling, scope)
+                == support::VhdlIntrinsicEnumeration::character;
+        };
+        const bool character_typed = [&] {
+            if (definition != nullptr) {
+                const auto owner
+                    = unit_.find_declaration(definition->declaration);
+                return denotes_character(definition->base.type_mark,
+                    owner && owner->vhdl != nullptr ? owner->vhdl->scope
+                                                    : expression.scope);
+            }
+            return subtype != nullptr
+                && denotes_character(subtype->type_mark, expression.scope);
+        }();
         const auto bound = [&](const ExpressionId id)
             -> std::optional<std::int64_t> {
             if (const auto literal = vhdl_intrinsic_literal(id)) {
@@ -12691,7 +13189,7 @@ private:
                 return position;
             }
             if (const auto value = evaluate(id)) {
-                return std_ulogic() ? vhdl_std_ulogic_position(*value) : value;
+                return value;
             }
             const auto literal = unit_.find_expression(id);
             if (character_typed && literal && literal->vhdl != nullptr
@@ -12794,6 +13292,28 @@ private:
                 if (const auto length = vhdl_value_shape_length(
                         *declaration->vhdl->initializer, 0U)) {
                     return length;
+                }
+            }
+            // An unconstrained constant has the bounds of its value (IEEE
+            // 1076-2008 5.3.2.2): a packed value holds its two bounds, a
+            // null one the bounds its producer declares.
+            if (!range && index == 0U
+                && (expression.text == "'left" || expression.text == "'right")
+                && (definition == nullptr || definition->array_dimensions.empty()
+                    || definition->array_dimensions.front().unconstrained)
+                && declaration && declaration->vhdl != nullptr
+                && declaration->vhdl->form == vhdl::DeclarationForm::constant
+                && declaration->vhdl->initializer) {
+                if (const auto value
+                    = evaluate_vhdl_value(*declaration->vhdl->initializer);
+                    value && value->kind == VhdlConstantValue::Kind::packed
+                    && (value->packed.bits.empty()
+                        || vhdl_range_width(value->packed.left_bound,
+                               value->packed.right_bound)
+                            == value->packed.bits.size())) {
+                    return expression.text == "'left"
+                        ? value->packed.left_bound
+                        : value->packed.right_bound;
                 }
             }
             // An unconstrained generic constant has the bounds of the
@@ -12967,35 +13487,67 @@ private:
             }
         }
         if (!range) {
-            auto predefined_name = declaration
-                    && declaration->vhdl != nullptr
-                ? std::string_view { declaration->vhdl->name }
-                : prefix->vhdl->referenced_name
-                ? std::string_view {
-                      prefix->vhdl->referenced_name->canonical.empty()
-                          ? prefix->vhdl->referenced_name->spelling
-                          : prefix->vhdl->referenced_name->canonical }
-                : std::string_view { prefix->vhdl->text };
-            if (const auto separator = predefined_name.find_last_of(".:");
-                separator != std::string_view::npos) {
-                predefined_name.remove_prefix(separator + 1U);
+            // The type the compiler provides that the prefix's mark, or the
+            // base type mark its subtype chain ends at, denotes where it is
+            // written (12.3, 13.2): a type or subtype of STD.STANDARD
+            // (16.3), or STD_ULOGIC of IEEE.STD_LOGIC_1164 (16.7), by the
+            // resolver's identity.
+            std::string_view mark;
+            ScopeId mark_scope = expression.scope;
+            if (definition != nullptr) {
+                // A subtype's own range that did not fold (`subtype s is
+                // integer range n + f(n) downto 0`) is not its base type's.
+                if ((definition->form == vhdl::TypeForm::subtype
+                        || definition->form == vhdl::TypeForm::alias)
+                    && !definition->base.type_mark.target.valid()
+                    && std::ranges::none_of(definition->base.constraints,
+                        [](const vhdl::RangeConstraint& candidate) {
+                            return candidate.kind
+                                != vhdl::RangeKind::array_index;
+                        })) {
+                    mark = definition->base.type_mark.spelling;
+                    const auto owner
+                        = unit_.find_declaration(definition->declaration);
+                    if (owner && owner->vhdl != nullptr) {
+                        mark_scope = owner->vhdl->scope;
+                    }
+                }
+            } else if (subtype != nullptr) {
+                // A subtype's own range that did not fold is not its base
+                // type's.
+                if (!subtype->type_mark.target.valid()
+                    && std::ranges::none_of(subtype->constraints,
+                        [](const vhdl::RangeConstraint& candidate) {
+                            return candidate.kind != vhdl::RangeKind::array_index;
+                        })) {
+                    mark = subtype->type_mark.spelling;
+                }
+            } else if (!declaration || declaration->vhdl == nullptr) {
+                mark = prefix->vhdl->text;
+                mark_scope = prefix->vhdl->scope;
             }
-            const bool integer = support::equal_ignoring_ascii_case(
-                predefined_name, "integer");
-            const bool natural = support::equal_ignoring_ascii_case(
-                predefined_name, "natural");
-            const bool positive = support::equal_ignoring_ascii_case(
-                predefined_name, "positive");
-            if (integer || natural || positive) {
+            const CompiledDesignResolver resolver { unit_ };
+            const auto identity = mark.empty()
+                ? CompiledVhdlTypeIdentityResolution { }
+                : resolver.resolve_vhdl_type_identity(mark, mark_scope);
+            using Scalar = CompiledVhdlStandardScalarIdentity;
+            using ScalarSubtype = CompiledVhdlStandardScalarSubtype;
+            const auto scalar = identity.type ? Scalar::none
+                                              : identity.standard_scalar_type;
+            if (scalar == Scalar::integer) {
                 // INTEGER is 64 bits for every unit of a design that has a
                 // VHDL-2019 unit (IEEE 1076-2019 5.2.3.1).
                 const bool vhdl_2019 = unit_.design().vhdl_wide_integer();
-                const auto first = integer
-                    ? vhdl_2019
-                        ? std::numeric_limits<std::int64_t>::min()
-                        : static_cast<std::int64_t>(
-                              std::numeric_limits<std::int32_t>::min())
-                    : natural ? 0 : 1;
+                const auto first
+                    = identity.standard_scalar_subtype == ScalarSubtype::natural
+                    ? 0
+                    : identity.standard_scalar_subtype
+                        == ScalarSubtype::positive
+                    ? 1
+                    : vhdl_2019
+                    ? std::numeric_limits<std::int64_t>::min()
+                    : static_cast<std::int64_t>(
+                          std::numeric_limits<std::int32_t>::min());
                 const auto last = vhdl_2019
                     ? std::numeric_limits<std::int64_t>::max()
                     : static_cast<std::int64_t>(
@@ -13013,15 +13565,13 @@ private:
             }
             // TIME spans the 64-bit femtosecond count and DELAY_LENGTH is its
             // nonnegative subtype (IEEE 1076-2008 16.3).
-            if (!range
-                && (support::equal_ignoring_ascii_case(predefined_name, "time")
-                    || support::equal_ignoring_ascii_case(
-                        predefined_name, "delay_length"))) {
+            if (!range && scalar == Scalar::time) {
                 range = vhdl::RangeConstraint {
                     vhdl::RangeKind::integer,
-                    support::equal_ignoring_ascii_case(predefined_name, "time")
-                        ? std::numeric_limits<std::int64_t>::min()
-                        : 0,
+                    identity.standard_scalar_subtype
+                            == ScalarSubtype::delay_length
+                        ? 0
+                        : std::numeric_limits<std::int64_t>::min(),
                     std::numeric_limits<std::int64_t>::max(),
                     std::nullopt,
                     std::nullopt,
@@ -13030,50 +13580,33 @@ private:
                     prefix->vhdl->source,
                 };
             }
-            // Predefined enumeration types without a HIR definition
+            // The predefined enumeration types without a HIR definition
             // (IEEE 1076-2008 16.3; IEEE 1164 STD_ULOGIC).
             std::optional<std::int64_t> last_ordinal;
-            if (support::equal_ignoring_ascii_case(predefined_name, "boolean")
-                || support::equal_ignoring_ascii_case(predefined_name, "bit")) {
-                last_ordinal = 1;
-            } else if (support::equal_ignoring_ascii_case(
-                           predefined_name, "character")) {
-                last_ordinal = 255;
-            } else if (support::equal_ignoring_ascii_case(
-                           predefined_name, "severity_level")) {
-                last_ordinal = 3;
-            } else if (support::equal_ignoring_ascii_case(
-                           predefined_name, "std_ulogic")
-                || support::equal_ignoring_ascii_case(
-                    predefined_name, "std_logic")) {
-                last_ordinal = 8;
+            if (!intrinsic && !mark.empty()) {
+                intrinsic = scalar == Scalar::boolean
+                    ? std::optional { support::VhdlIntrinsicEnumeration::boolean }
+                    : scalar == Scalar::bit
+                    ? std::optional { support::VhdlIntrinsicEnumeration::bit }
+                    : scalar == Scalar::character
+                    ? std::optional {
+                          support::VhdlIntrinsicEnumeration::character }
+                    : resolver.resolve_vhdl_intrinsic_enumeration(
+                          mark, mark_scope);
             }
-            // BOOLEAN, BIT, CHARACTER or STD_ULOGIC whose declaration the
-            // compiler provides: what the prefix's type mark, or the base
-            // type mark its subtype chain ends at, denotes where it is
-            // written (16.3, 16.7).
-            if (!intrinsic) {
-                const CompiledDesignResolver resolver { unit_ };
-                if (definition != nullptr) {
-                    if ((definition->form == vhdl::TypeForm::subtype
-                            || definition->form == vhdl::TypeForm::alias)
-                        && !definition->base.type_mark.target.valid()) {
-                        const auto owner
-                            = unit_.find_declaration(definition->declaration);
-                        intrinsic = resolver.resolve_vhdl_intrinsic_enumeration(
-                            definition->base.type_mark.spelling,
-                            owner && owner->vhdl != nullptr
-                                ? owner->vhdl->scope
-                                : expression.scope);
-                    }
-                } else if (subtype != nullptr) {
-                    if (!subtype->type_mark.target.valid()) {
-                        intrinsic = resolver.resolve_vhdl_intrinsic_enumeration(
-                            subtype->type_mark.spelling, expression.scope);
-                    }
-                } else if (!declaration || declaration->vhdl == nullptr) {
-                    intrinsic = resolver.resolve_vhdl_intrinsic_enumeration(
-                        prefix->vhdl->text, prefix->vhdl->scope);
+            if (intrinsic) {
+                last_ordinal
+                    = support::vhdl_intrinsic_enumeration_last(*intrinsic);
+            } else if (scalar == Scalar::severity_level
+                || scalar == Scalar::file_open_kind
+                || scalar == Scalar::file_open_status
+                || scalar == Scalar::range_direction) {
+                if (const auto* enumeration
+                    = support::find_vhdl_standard_enumeration(
+                        vhdl_standard_scalar_declaration_name(scalar))) {
+                    last_ordinal = static_cast<std::int64_t>(
+                                       enumeration->literals.size())
+                        - 1;
                 }
             }
             if (!range && last_ordinal) {
@@ -13100,9 +13633,7 @@ private:
             if (std_ulogic_value != nullptr) {
                 *std_ulogic_value = std_ulogic();
             }
-            return std_ulogic() && !position_result
-                ? vhdl_std_ulogic_value(position)
-                : std::optional { position };
+            return std::optional { position };
         };
         if (expression.text == "'pos" || expression.text == "'val") {
             if (expression.operands.size() != 2U) {
@@ -13122,15 +13653,41 @@ private:
             }
             if (!position) {
                 position = evaluate(expression.operands[1]);
-                if (position && expression.text == "'pos" && std_ulogic()) {
-                    position = vhdl_std_ulogic_position(*position);
-                }
             }
             if (!position || *position < std::min(left, right)
                 || *position > std::max(left, right)) {
                 return std::nullopt;
             }
             return expression.text == "'val" ? value_at(*position) : position;
+        }
+        // T'SUCC, T'PRED, T'LEFTOF and T'RIGHTOF of a discrete type: the
+        // value at the next or previous position (16.2.2); LEFTOF and
+        // RIGHTOF follow the direction of T's range.
+        if (expression.text == "'succ" || expression.text == "'pred"
+            || expression.text == "'leftof" || expression.text == "'rightof") {
+            if (expression.operands.size() != 2U) {
+                return std::nullopt;
+            }
+            auto position = evaluate_vhdl_attribute_position(
+                expression.operands[1]);
+            if (!position) {
+                position = evaluate(expression.operands[1]);
+            }
+            if (!position || *position < std::min(left, right)
+                || *position > std::max(left, right)) {
+                return std::nullopt;
+            }
+            const bool ascending = left <= right;
+            const bool next = expression.text == "'succ"
+                || (expression.text == "'rightof" && ascending)
+                || (expression.text == "'leftof" && !ascending);
+            const auto result = next ? checked_add(*position, 1)
+                                     : checked_subtract(*position, 1);
+            if (!result || *result < std::min(left, right)
+                || *result > std::max(left, right)) {
+                return std::nullopt;
+            }
+            return value_at(*result);
         }
         if (expression.text == "'left") {
             return value_at(left);
@@ -13331,11 +13888,6 @@ private:
             if ((expression.kind == Kind::call
                     || expression.kind == Kind::index)
                 && !expression.operands.empty()) {
-                auto name = normalized_token(expression.text);
-                if (const auto separator = name.find_last_of(".:");
-                    separator != std::string::npos) {
-                    name.erase(0U, separator + 1U);
-                }
                 const auto operand = expression.kind == Kind::index
                     ? (expression.operands.size() == 2U
                             ? std::optional { expression.operands[1] }
@@ -13343,16 +13895,16 @@ private:
                     : (expression.operands.size() == 1U
                             ? std::optional { expression.operands[0] }
                             : std::nullopt);
+                auto mark = std::string_view { expression.text };
                 if (expression.kind == Kind::index) {
                     const auto designator = unit_.find_expression(
                         expression.operands.front());
-                    name = designator && designator->vhdl != nullptr
-                        ? normalized_token(designator->vhdl->text)
-                        : std::string { };
+                    mark = designator && designator->vhdl != nullptr
+                        ? std::string_view { designator->vhdl->text }
+                        : std::string_view { };
                 }
-                if (operand
-                    && (name == "integer" || name == "natural"
-                        || name == "positive")) {
+                if (operand && !mark.empty()
+                    && vhdl_integer_type_mark(mark, expression.scope)) {
                     if (const auto real = vhdl_real_expression(*operand)) {
                         const auto rounded = std::round(*real);
                         if (std::isfinite(rounded)
@@ -13517,6 +14069,21 @@ private:
                         return ordinal;
                     }
                 }
+                // A CHARACTER or STD_ULOGIC literal is its position in its
+                // type (16.3, 16.7): this fold's value of every enumeration
+                // value, '0' of STD_ULOGIC included.
+                if (expression.kind == Kind::logic_literal) {
+                    if (const auto intrinsic
+                        = vhdl_intrinsic_literal(expression.id);
+                        intrinsic
+                        && (intrinsic->first
+                                == support::VhdlIntrinsicEnumeration::character
+                            || intrinsic->first
+                                == support::VhdlIntrinsicEnumeration::
+                                    std_ulogic)) {
+                        return intrinsic->second;
+                    }
+                }
             }
             if (literal || systemverilog
                 || expression.kind != Kind::logic_literal) {
@@ -13618,10 +14185,11 @@ private:
                 if (named_declaration(
                         detail::ResolutionMemo::NamedDeclaration::function,
                         expression.id, function_declaration)) {
-                    if (const auto value = evaluate_vhdl_value(expression.id);
-                        value
-                        && value->kind == VhdlConstantValue::Kind::integer) {
-                        return value->integer;
+                    if (const auto value = evaluate_vhdl_value(expression.id)) {
+                        if (const auto integral
+                            = vhdl_scalar_integral(*value, expression.id)) {
+                            return integral;
+                        }
                     }
                 }
                 if (const auto hierarchy = hierarchy_identities_.find(
@@ -14142,12 +14710,8 @@ private:
                     conversion_name.remove_prefix(separator + 1U);
                 }
                 const bool predefined_scalar_conversion
-                    = support::equal_ignoring_ascii_case(
-                          conversion_name, "integer")
-                    || support::equal_ignoring_ascii_case(
-                        conversion_name, "natural")
-                    || support::equal_ignoring_ascii_case(
-                        conversion_name, "positive");
+                    = vhdl_integer_type_mark(
+                        expression.text, expression.scope);
                 if (expression.operands.size() == 1U
                     && (conversion
                         || predefined_scalar_conversion
@@ -14516,13 +15080,12 @@ private:
             if (expression.kind == Kind::call
                 && expression.text.starts_with(qualified_prefix)
                 && expression.operands.size() == 1U) {
-                vhdl::SubtypeIndication qualified_type;
-                qualified_type.type_mark.spelling
-                    = expression.text.substr(qualified_prefix.size());
-                const auto effective_type
-                    = CompiledDesignResolver { unit_ }
+                const auto qualified_type = vhdl_marked_subtype(expression);
+                const auto effective_type = qualified_type
+                    ? CompiledDesignResolver { unit_ }
                           .effective_vhdl_subtype(
-                              qualified_type, expression.scope);
+                              *qualified_type, expression.scope)
+                    : std::nullopt;
                 if (effective_type
                     && vhdl_is_predefined_standard_string(
                         unit_, *effective_type, expression.scope)
@@ -14612,6 +15175,25 @@ private:
 
     /// Parses `declaration`'s actual into actuals_, string_actuals_,
     /// actual_vhdl_packed_values_ and actual_declarations_ once.
+    // The character of a one-element composite actual identity
+    // (`vhdlcomposite-v1;...;value=Z`), none for any other identity.
+    [[nodiscard]] static std::optional<char> std_ulogic_composite_identity(
+        const std::string_view identity)
+    {
+        constexpr std::string_view prefix { "vhdlcomposite-v1;" };
+        constexpr std::string_view marker { ";value=" };
+        const auto at = identity.rfind(marker);
+        if (!identity.starts_with(prefix) || at == std::string_view::npos
+            || identity.size() != at + marker.size() + 1U) {
+            return std::nullopt;
+        }
+        const auto state = identity.back();
+        constexpr std::string_view states { "UX01ZWLH-" };
+        return states.find(state) != std::string_view::npos
+            ? std::optional { state }
+            : std::nullopt;
+    }
+
     void ensure_actual(const DeclarationId declaration)
     {
         if (!resolved_actuals_.insert(declaration).second) {
@@ -14623,9 +15205,55 @@ private:
         if (actual == actuals.end()) {
             return;
         }
-        actuals_.emplace(actual->declaration,
-            coerce_systemverilog_value(actual->declaration,
-                parse_integral_identity(actual->identity)));
+        auto value = coerce_systemverilog_value(actual->declaration,
+            parse_integral_identity(actual->identity));
+        // An actual's identity holds a STD_ULOGIC '0' or '1' as its bit,
+        // and any of the nine values as its one-element packed value; this
+        // fold holds the position (16.7).
+        if (unit_.language() == Language::vhdl
+            && ((value && (*value == 0 || *value == 1))
+                || (!value && actual->actual_expression)
+                || (!value && actual->vhdl_packed_value
+                    && actual->vhdl_packed_value->bits.size() == 1U))) {
+            const auto formal = unit_.find_declaration(actual->declaration);
+            if (formal && formal->vhdl != nullptr && formal->vhdl->subtype
+                && vhdl_subtype_intrinsic(
+                       *formal->vhdl->subtype, formal->vhdl->scope)
+                    == support::VhdlIntrinsicEnumeration::std_ulogic) {
+                const auto literal = !value && actual->actual_expression
+                    ? vhdl_intrinsic_literal(*actual->actual_expression)
+                    : std::nullopt;
+                if (value) {
+                    *value += 2;
+                } else if (literal
+                    && literal->first
+                        == support::VhdlIntrinsicEnumeration::std_ulogic) {
+                    // A literal actual, or the formal's default (6.5.6.2).
+                    value = literal->second;
+                } else if (const auto encoded
+                    = std_ulogic_composite_identity(actual->identity)) {
+                    // An actual the enclosing region evaluated (an attribute,
+                    // a function or another generic) is recorded by the
+                    // character it has (14.4.2.1, 16.7).
+                    value = support::vhdl_intrinsic_enumeration_position(
+                        support::VhdlIntrinsicEnumeration::std_ulogic,
+                        std::string { '\'', *encoded, '\'' });
+                } else if (actual->vhdl_packed_value
+                    && actual->vhdl_packed_value->bits.size() == 1U) {
+                    // STD_ULOGIC's literals are upper case or '-'.
+                    const auto bit = actual->vhdl_packed_value->bits.front();
+                    const char spelled[] { '\'',
+                        bit >= 'a' && bit <= 'z'
+                            ? static_cast<char>(bit - 'a' + 'A')
+                            : bit,
+                        '\'' };
+                    value = support::vhdl_intrinsic_enumeration_position(
+                        support::VhdlIntrinsicEnumeration::std_ulogic,
+                        std::string_view { spelled, 3U });
+                }
+            }
+        }
+        actuals_.emplace(actual->declaration, value);
         string_actuals_.emplace(actual->declaration,
             parse_systemverilog_string_identity(actual->identity));
         if (actual->vhdl_packed_value) {
@@ -14670,7 +15298,7 @@ private:
         }
         bool std_ulogic_value { };
         const auto position = evaluate_vhdl_attribute(
-            *attribute->vhdl, true, &std_ulogic_value);
+            *attribute->vhdl, &std_ulogic_value);
         active_expressions_.erase(active_key);
         return std_ulogic_value ? position : std::nullopt;
     }
@@ -14733,22 +15361,602 @@ private:
         return std::nullopt;
     }
 
-    // This fold encodes a STD_ULOGIC value '0' or '1' as 0 or 1 (a BIT
-    // value); its position in STD_ULOGIC is 2 or 3 (16.7).
-    [[nodiscard]] static std::optional<std::int64_t> vhdl_std_ulogic_position(
-        const std::int64_t value) noexcept
+    // The value record of the STD_ULOGIC value at a position (16.7): its
+    // character, as packed vectors of STD_ULOGIC hold their elements.
+    [[nodiscard]] static std::optional<VhdlConstantValue>
+    vhdl_std_ulogic_record(const std::int64_t position)
     {
-        return value == 0 || value == 1 ? std::optional { value + 2 }
-                                        : std::nullopt;
+        constexpr std::string_view characters { "UX01ZWLH-" };
+        if (position < 0
+            || static_cast<std::size_t>(position) >= characters.size()) {
+            return std::nullopt;
+        }
+        return vhdl_packed_value(
+            std::string(1U,
+                characters[static_cast<std::size_t>(position)]),
+            0, 0);
     }
 
-    // The fold's encoding of the STD_ULOGIC value at a position: none for a
-    // value other than '0' and '1'.
-    [[nodiscard]] static std::optional<std::int64_t> vhdl_std_ulogic_value(
-        const std::int64_t position) noexcept
+    // The position of a STD_ULOGIC value held as a value record's character.
+    [[nodiscard]] static std::optional<std::int64_t> vhdl_std_ulogic_position(
+        const VhdlConstantValue& value)
     {
-        return position == 2 || position == 3 ? std::optional { position - 2 }
-                                              : std::nullopt;
+        if (value.kind == VhdlConstantValue::Kind::integer) {
+            return value.integer;
+        }
+        if (value.kind != VhdlConstantValue::Kind::packed
+            || value.packed.bits.size() != 1U) {
+            return std::nullopt;
+        }
+        return support::vhdl_intrinsic_enumeration_position(
+            support::VhdlIntrinsicEnumeration::std_ulogic,
+            std::string { '\'', value.packed.bits.front(), '\'' });
+    }
+
+    // The intrinsic enumeration type (16.3, 16.7) a subtype indication
+    // denotes, through the subtypes it names, where `scope` sees it.
+    [[nodiscard]] std::optional<support::VhdlIntrinsicEnumeration>
+    vhdl_subtype_intrinsic(const vhdl::SubtypeIndication& subtype,
+        ScopeId scope) const
+    {
+        using Intrinsic = support::VhdlIntrinsicEnumeration;
+        using Provided = vhdl::ProvidedType;
+        // The resolution pass stamped the provided type a mark denotes.
+        const auto stamped = [](const Provided provided)
+            -> std::optional<Intrinsic> {
+            switch (provided) {
+            case Provided::std_ulogic:
+            case Provided::std_logic:
+                return Intrinsic::std_ulogic;
+            case Provided::bit:
+                return Intrinsic::bit;
+            case Provided::boolean:
+                return Intrinsic::boolean;
+            case Provided::character:
+                return Intrinsic::character;
+            default:
+                return std::nullopt;
+            }
+        };
+        const vhdl::SubtypeIndication* current = &subtype;
+        std::set<TypeId> visited;
+        while (true) {
+            if (const auto intrinsic = stamped(current->provided_type)) {
+                return intrinsic;
+            }
+            if (!current->type_mark.target.valid()
+                || !visited.insert(current->type_mark.target).second) {
+                break;
+            }
+            const auto type = unit_.find_type(current->type_mark.target);
+            if (!type || type->vhdl == nullptr) {
+                return std::nullopt;
+            }
+            const auto& definition = *type->vhdl;
+            if (definition.form == vhdl::TypeForm::enumeration) {
+                return vhdl_intrinsic_enumeration_type(definition);
+            }
+            if (definition.form != vhdl::TypeForm::subtype
+                && definition.form != vhdl::TypeForm::alias) {
+                return std::nullopt;
+            }
+            if (const auto owner
+                = unit_.find_declaration(definition.declaration);
+                owner && owner->vhdl != nullptr) {
+                scope = owner->vhdl->scope;
+            }
+            current = &definition.base;
+        }
+        if (current->type_mark.target.valid()
+            || current->type_mark.spelling.empty() || !scope.valid()) {
+            return std::nullopt;
+        }
+        return CompiledDesignResolver { unit_ }
+            .resolve_vhdl_intrinsic_enumeration(
+                current->type_mark.spelling, scope);
+    }
+
+    // Whether an expression is a value of STD_ULOGIC (16.7): a literal its
+    // context typed so, an object, an element of an array of STD_ULOGIC, or
+    // a function result whose subtype denotes it.
+    [[nodiscard]] bool vhdl_std_ulogic_expression(const ExpressionId id) const
+    {
+        using Intrinsic = support::VhdlIntrinsicEnumeration;
+        if (const auto literal = vhdl_intrinsic_literal(id)) {
+            return literal->first == Intrinsic::std_ulogic;
+        }
+        const auto expression = unit_.find_expression(id);
+        if (!expression || expression->vhdl == nullptr) {
+            return false;
+        }
+        const auto& source = *expression->vhdl;
+        if (const auto provided = vhdl_provided_logic_call(source)) {
+            return provided->result == ProvidedLogicResult::std_ulogic;
+        }
+        if (source.kind == vhdl::ExpressionKind::index
+            && source.operands.size() == 2U) {
+            if (const auto base = vhdl_expression_subtype(
+                    source.operands.front())) {
+                const auto effective = CompiledDesignResolver { unit_ }
+                                           .effective_vhdl_subtype(
+                                               *base, source.scope)
+                                           .value_or(*base);
+                if (effective.builtin_type
+                        == vhdl::BuiltinTypeIdentity::
+                            ieee_std_logic_1164_std_logic_vector
+                    || effective.builtin_type
+                        == vhdl::BuiltinTypeIdentity::
+                            ieee_std_logic_1164_std_ulogic_vector) {
+                    return true;
+                }
+            }
+        }
+        if (source.referenced_name) {
+            const auto& name = *source.referenced_name;
+            const auto selected = name.selected;
+            const auto declaration = selected
+                ? unit_.find_declaration(*selected)
+                : std::nullopt;
+            if (declaration && declaration->vhdl != nullptr
+                && declaration->vhdl->callable
+                && declaration->vhdl->callable->function) {
+                const auto& result = declaration->vhdl->callable->return_type;
+                return result
+                    && vhdl_subtype_intrinsic(
+                           *result, declaration->vhdl->scope)
+                    == Intrinsic::std_ulogic;
+            }
+            // An object or alias names its declared subtype (6.4.2, 6.6).
+            if (declaration && declaration->vhdl != nullptr
+                && declaration->vhdl->subtype && source.operands.empty()
+                && source.kind == vhdl::ExpressionKind::name) {
+                return vhdl_subtype_intrinsic(*declaration->vhdl->subtype,
+                           declaration->vhdl->scope)
+                    == Intrinsic::std_ulogic;
+            }
+        }
+        const auto subtype = vhdl_expression_subtype(id);
+        return subtype
+            && vhdl_subtype_intrinsic(*subtype, source.scope)
+            == Intrinsic::std_ulogic;
+    }
+
+    /// A call of a scalar subprogram of the compiler-provided
+    /// IEEE.STD_LOGIC_1164 (IEEE 1076-2019 16.7): the package keeps no
+    /// declaration or body of it, so elaboration evaluates its mapping.
+    enum class ProvidedLogicResult : std::uint8_t {
+        std_ulogic,
+        bit,
+        boolean,
+    };
+
+    struct ProvidedLogicCall {
+        std::string_view function;
+        ProvidedLogicResult result;
+    };
+
+    // Whether an expression is a scalar STD_ULOGIC or BIT value, so that a
+    // one-element vector does not select the scalar overload (12.5).
+    [[nodiscard]] bool vhdl_scalar_logic_operand(const ExpressionId id) const
+    {
+        using Intrinsic = support::VhdlIntrinsicEnumeration;
+        if (const auto literal = vhdl_intrinsic_literal(id)) {
+            return literal->first == Intrinsic::std_ulogic
+                || literal->first == Intrinsic::bit;
+        }
+        if (vhdl_std_ulogic_expression(id)) {
+            return true;
+        }
+        const auto expression = unit_.find_expression(id);
+        const auto subtype = vhdl_expression_subtype(id);
+        return expression && expression->vhdl != nullptr && subtype
+            && vhdl_subtype_intrinsic(*subtype, expression->vhdl->scope)
+            == Intrinsic::bit;
+    }
+
+    [[nodiscard]] std::optional<ProvidedLogicCall> vhdl_provided_logic_call(
+        const vhdl::Expression& call) const
+    {
+        using Result = ProvidedLogicResult;
+        struct Entry {
+            std::string_view name;
+            Result result;
+            std::size_t operands;
+        };
+        static constexpr std::array<Entry, 7U> table {{
+            { "to_x01", Result::std_ulogic, 1U },
+            { "to_x01z", Result::std_ulogic, 1U },
+            { "to_ux01", Result::std_ulogic, 1U },
+            { "to_01", Result::std_ulogic, 2U },
+            { "to_bit", Result::bit, 2U },
+            { "to_stdulogic", Result::std_ulogic, 1U },
+            { "is_x", Result::boolean, 1U },
+        }};
+        if (call.kind != vhdl::ExpressionKind::call || call.operands.empty()
+            || call.text.starts_with('\'') || call.text.starts_with('@')
+            || call.text.starts_with(vhdl::qualified_expression_prefix)
+            || std::ranges::any_of(call.argument_names,
+                [](const std::string& argument) {
+                    return !argument.empty();
+                })) {
+            return std::nullopt;
+        }
+        auto simple = std::string_view { call.text };
+        if (const auto dot = simple.find_last_of('.');
+            dot != std::string_view::npos) {
+            simple.remove_prefix(dot + 1U);
+        }
+        const auto entry = std::ranges::find_if(table, [&](const Entry& e) {
+            return support::equal_ignoring_ascii_case(simple, e.name);
+        });
+        if (entry == table.end() || call.operands.size() > entry->operands
+            || !CompiledDesignResolver { unit_ }
+                    .vhdl_denotes_provided_package_member(call.text, "ieee",
+                        "std_logic_1164", entry->name, call.scope)
+            || !vhdl_scalar_logic_operand(call.operands.front())) {
+            return std::nullopt;
+        }
+        return ProvidedLogicCall { entry->name, entry->result };
+    }
+
+    /// A call of a vector subprogram of the compiler-provided
+    /// IEEE.STD_LOGIC_1164 (16.7, 16.8): TO_X01, TO_X01Z, TO_UX01, TO_01,
+    /// TO_BITVECTOR, TO_STDLOGICVECTOR, TO_STDULOGICVECTOR and IS_X of a
+    /// STD_(U)LOGIC_VECTOR or BIT_VECTOR. The result is a vector of the
+    /// element type `result`, or BOOLEAN for IS_X.
+    enum class ProvidedLogicVector : std::uint8_t {
+        none,
+        bit_vector,
+        ulogic_vector,
+        boolean,
+    };
+
+    struct ProvidedLogicVectorCall {
+        std::string_view function;
+        ProvidedLogicVector result;
+    };
+
+    // The characters of a string-valued operand of those functions that the
+    // generic evaluator does not hold as bits: a string literal, possibly
+    // under a qualified expression, or a constant initialized by one (IEEE
+    // 1076-2019 9.3.2, 9.3.5, 4.3). It includes the null string.
+    [[nodiscard]] std::optional<std::string> vhdl_logic_vector_string(
+        const ExpressionId id,
+        std::set<DeclarationId> visited = { }) const
+    {
+        const auto expression = unit_.find_expression(id);
+        if (!expression || expression->vhdl == nullptr) {
+            return std::nullopt;
+        }
+        const auto& source = *expression->vhdl;
+        if (source.kind == vhdl::ExpressionKind::string_literal
+            && source.decoded_string) {
+            return *source.decoded_string;
+        }
+        if (source.kind == vhdl::ExpressionKind::call
+            && source.text.starts_with(vhdl::qualified_expression_prefix)
+            && source.operands.size() == 1U) {
+            return vhdl_logic_vector_string(
+                source.operands.front(), std::move(visited));
+        }
+        if (source.kind == vhdl::ExpressionKind::name
+            && source.referenced_name) {
+            const auto& name = *source.referenced_name;
+            const auto declaration = name.selected
+                ? unit_.find_declaration(*name.selected)
+                : std::nullopt;
+            // A constant whose initializer leads back to itself (malformed
+            // input) has no string.
+            if (declaration && declaration->vhdl != nullptr
+                && declaration->vhdl->form == vhdl::DeclarationForm::constant
+                && declaration->vhdl->initializer
+                && visited.insert(*name.selected).second) {
+                return vhdl_logic_vector_string(
+                    *declaration->vhdl->initializer, std::move(visited));
+            }
+        }
+        return std::nullopt;
+    }
+
+    // The vector type of a value that the provided functions above take:
+    // BIT_VECTOR, or STD_ULOGIC_VECTOR (which STD_LOGIC_VECTOR subtypes).
+    [[nodiscard]] ProvidedLogicVector vhdl_logic_vector_kind(
+        const ExpressionId id) const
+    {
+        const auto expression = unit_.find_expression(id);
+        if (!expression || expression->vhdl == nullptr) {
+            return ProvidedLogicVector::none;
+        }
+        if (const auto nested
+            = vhdl_provided_logic_vector_call(*expression->vhdl)) {
+            return nested->result;
+        }
+        // T'(...): the operand has the type T names (9.3.5), which analysis
+        // resolved.
+        if (expression->vhdl->kind == vhdl::ExpressionKind::call
+            && expression->vhdl->text.starts_with(
+                vhdl::qualified_expression_prefix)
+            && expression->vhdl->operands.size() == 1U) {
+            const auto marked = vhdl_marked_subtype(*expression->vhdl);
+            if (!marked) {
+                return ProvidedLogicVector::none;
+            }
+            const auto effective = CompiledDesignResolver { unit_ }
+                                       .effective_vhdl_subtype(
+                                           *marked, expression->vhdl->scope)
+                                       .value_or(*marked);
+            switch (effective.builtin_type) {
+            case vhdl::BuiltinTypeIdentity::
+                ieee_std_logic_1164_std_logic_vector:
+            case vhdl::BuiltinTypeIdentity::
+                ieee_std_logic_1164_std_ulogic_vector:
+                return ProvidedLogicVector::ulogic_vector;
+            case vhdl::BuiltinTypeIdentity::std_standard_bit_vector:
+                return ProvidedLogicVector::bit_vector;
+            default: return ProvidedLogicVector::none;
+            }
+        }
+        // An unqualified string literal has no type of its own: its context
+        // alone gives one (9.3.2), so it is no operand here; analysis marks
+        // one that fits several overloads as ambiguous (12.5).
+        if (expression->vhdl->kind == vhdl::ExpressionKind::string_literal) {
+            return ProvidedLogicVector::none;
+        }
+        const auto subtype = vhdl_expression_subtype(id);
+        if (!subtype) {
+            return ProvidedLogicVector::none;
+        }
+        const auto effective = CompiledDesignResolver { unit_ }
+                                   .effective_vhdl_subtype(
+                                       *subtype, expression->vhdl->scope)
+                                   .value_or(*subtype);
+        switch (effective.builtin_type) {
+        case vhdl::BuiltinTypeIdentity::ieee_std_logic_1164_std_logic_vector:
+        case vhdl::BuiltinTypeIdentity::ieee_std_logic_1164_std_ulogic_vector:
+            return ProvidedLogicVector::ulogic_vector;
+        case vhdl::BuiltinTypeIdentity::std_standard_bit_vector:
+            return ProvidedLogicVector::bit_vector;
+        default: return ProvidedLogicVector::none;
+        }
+    }
+
+    [[nodiscard]] std::optional<ProvidedLogicVectorCall>
+    vhdl_provided_logic_vector_call(const vhdl::Expression& call) const
+    {
+        using Result = ProvidedLogicVector;
+        struct Entry {
+            std::string_view name;
+            Result result;
+            std::size_t operands;
+            // Whether a BIT_VECTOR operand has an overload.
+            bool bit_operand;
+        };
+        static constexpr std::array<Entry, 8U> table {{
+            { "to_x01", Result::ulogic_vector, 1U, true },
+            { "to_x01z", Result::ulogic_vector, 1U, true },
+            { "to_ux01", Result::ulogic_vector, 1U, true },
+            { "to_01", Result::ulogic_vector, 2U, true },
+            { "to_bitvector", Result::bit_vector, 2U, false },
+            { "to_stdlogicvector", Result::ulogic_vector, 1U, true },
+            { "to_stdulogicvector", Result::ulogic_vector, 1U, true },
+            { "is_x", Result::boolean, 1U, false },
+        }};
+        if (call.kind != vhdl::ExpressionKind::call || call.operands.empty()
+            || call.text.starts_with('\'') || call.text.starts_with('@')
+            || call.text.starts_with(vhdl::qualified_expression_prefix)
+            || std::ranges::any_of(call.argument_names,
+                [](const std::string& argument) {
+                    return !argument.empty();
+                })) {
+            return std::nullopt;
+        }
+        auto simple = std::string_view { call.text };
+        if (const auto dot = simple.find_last_of('.');
+            dot != std::string_view::npos) {
+            simple.remove_prefix(dot + 1U);
+        }
+        const auto entry = std::ranges::find_if(table, [&](const Entry& e) {
+            return support::equal_ignoring_ascii_case(simple, e.name);
+        });
+        if (entry == table.end() || call.operands.size() > entry->operands
+            || !CompiledDesignResolver { unit_ }
+                    .vhdl_denotes_provided_package_member(call.text, "ieee",
+                        "std_logic_1164", entry->name, call.scope)) {
+            return std::nullopt;
+        }
+        const auto operand = vhdl_logic_vector_kind(call.operands.front());
+        if (operand == Result::none
+            || (operand == Result::bit_vector && !entry->bit_operand)) {
+            return std::nullopt;
+        }
+        return ProvidedLogicVectorCall { entry->name, entry->result };
+    }
+
+    // The value of such a call: the element mapping of the package body
+    // (16.7, 16.8) applied position by position, with the bounds its result
+    // variable declares.
+    [[nodiscard]] std::optional<VhdlConstantValue>
+    evaluate_vhdl_provided_logic_vector(
+        const vhdl::Expression& call, const ProvidedLogicVectorCall& function)
+    {
+        constexpr std::string_view states { "UX01ZWLH-" };
+        auto operand = evaluate_vhdl_value(call.operands.front());
+        if (!operand || operand->kind != VhdlConstantValue::Kind::packed) {
+            // A string the generic evaluator holds no bits for: logic
+            // characters, or the null string.
+            const auto text = vhdl_logic_vector_string(call.operands.front());
+            if (!text) {
+                return std::nullopt;
+            }
+            operand = vhdl_packed_value(*text, 0,
+                static_cast<std::int64_t>(text->size()) - 1);
+        }
+        if (!std::ranges::all_of(operand->packed.bits, [&](const char c) {
+                return states.find(c) != std::string_view::npos;
+            })) {
+            return std::nullopt;
+        }
+        const auto& bits = operand->packed.bits;
+        const auto name = function.function;
+        if (name == "is_x") {
+            // IS_X: true when any element is 'U', 'X', 'Z', 'W' or '-'; a
+            // null vector has none.
+            return vhdl_integer_value(std::ranges::any_of(bits,
+                                          [](const char c) {
+                                              return c == 'U' || c == 'X'
+                                                  || c == 'Z' || c == 'W'
+                                                  || c == '-';
+                                          })
+                    ? 1
+                    : 0);
+        }
+        // A null operand gives a null result with the bounds the result
+        // variable declares: (1 to 0) for TO_X01, TO_X01Z and TO_UX01, and
+        // (-1 downto 0) for the others.
+        const auto length = static_cast<std::int64_t>(bits.size());
+        const auto strong = [](const char c) {
+            return c == '0' || c == '1' || c == 'L' || c == 'H';
+        };
+        const auto level = [](const char c) {
+            return c == '0' || c == 'L' ? '0' : '1';
+        };
+        std::string result(bits.size(), '0');
+        if (name == "to_x01" || name == "to_x01z" || name == "to_ux01") {
+            // The result variable is (1 to s'length).
+            for (std::size_t index { }; index < bits.size(); ++index) {
+                result[index] = vhdl_logic_mapped(name, bits[index]);
+            }
+            return vhdl_packed_value(std::move(result), 1, length);
+        }
+        // The remaining results are (s'length-1 downto 0).
+        if (name == "to_stdlogicvector" || name == "to_stdulogicvector") {
+            result = bits;
+        } else {
+            char xmap = '0';
+            if (call.operands.size() == 2U) {
+                const auto mapping = vhdl_logic_state(call.operands.back());
+                if (!mapping) {
+                    return std::nullopt;
+                }
+                xmap = *mapping;
+            }
+            if (name == "to_bitvector") {
+                // TO_BITVECTOR(s, xmap): an element that is not strong
+                // becomes the BIT xmap.
+                if (xmap != '0' && xmap != '1') {
+                    return std::nullopt;
+                }
+                for (std::size_t index { }; index < bits.size(); ++index) {
+                    result[index] = strong(bits[index])
+                        ? level(bits[index])
+                        : xmap;
+                }
+            } else {
+                // TO_01(s, xmap): one element that is not strong replaces
+                // every element by xmap.
+                const bool bad = !std::ranges::all_of(bits, strong);
+                for (std::size_t index { }; index < bits.size(); ++index) {
+                    result[index] = bad ? xmap : level(bits[index]);
+                }
+            }
+        }
+        return vhdl_packed_value(std::move(result), length - 1, 0);
+    }
+
+    // The character a scalar STD_ULOGIC or BIT operand holds: a packed
+    // character, or the position of a STD_ULOGIC generic (16.7) or the
+    // value of a BIT one.
+    [[nodiscard]] std::optional<char> vhdl_logic_state(const ExpressionId id)
+    {
+        constexpr std::string_view states { "UX01ZWLH-" };
+        const auto value = evaluate_vhdl_value(id);
+        if (!value) {
+            return std::nullopt;
+        }
+        std::optional<char> state;
+        if (value->kind == VhdlConstantValue::Kind::integer) {
+            const bool logic = vhdl_std_ulogic_expression(id);
+            if (value->integer >= 0 && value->integer < (logic ? 9 : 2)) {
+                state = logic
+                    ? states[static_cast<std::size_t>(value->integer)]
+                    : static_cast<char>('0' + value->integer);
+            }
+        } else if (value->kind == VhdlConstantValue::Kind::packed
+            && value->packed.bits.size() == 1U) {
+            state = value->packed.bits.front();
+        }
+        return state && states.find(*state) != std::string_view::npos
+            ? state
+            : std::nullopt;
+    }
+
+    // The mapping of IEEE.STD_LOGIC_1164 (16.7) that a function applies to
+    // one element: TO_X01, TO_X01Z and TO_UX01 keep the states their name
+    // lists and map the others to 'X', 'L' and 'H' to '0' and '1'.
+    [[nodiscard]] static char vhdl_logic_mapped(
+        const std::string_view name, const char state)
+    {
+        if ((name == "to_x01z" && state == 'Z')
+            || (name == "to_ux01" && state == 'U')) {
+            return state;
+        }
+        return state == '0' || state == 'L' ? '0'
+            : state == '1' || state == 'H' ? '1'
+                                           : 'X';
+    }
+
+    // The value of such a call: the 9-value mapping of IEEE.STD_LOGIC_1164
+    // (16.7) applied to the scalar operand.
+    [[nodiscard]] std::optional<VhdlConstantValue>
+    evaluate_vhdl_provided_logic(
+        const vhdl::Expression& call, const ProvidedLogicCall& function)
+    {
+        const auto operand_state = vhdl_logic_state(call.operands.front());
+        if (!operand_state) {
+            return std::nullopt;
+        }
+        const char state = *operand_state;
+        char xmap = '0';
+        if (call.operands.size() == 2U) {
+            // TO_01 maps an element that is not a '0', '1', 'L' or 'H' to
+            // its second actual, any STD_ULOGIC value; TO_BIT's is a BIT.
+            const auto mapping = vhdl_logic_state(call.operands.back());
+            if (!mapping) {
+                return std::nullopt;
+            }
+            xmap = *mapping;
+        }
+        const auto name = function.function;
+        const bool low = state == '0' || state == 'L';
+        const bool high = state == '1' || state == 'H';
+        const auto packed = [](const char value) {
+            return vhdl_packed_value(std::string(1U, value), 0, 0);
+        };
+        if (name == "is_x") {
+            return vhdl_integer_value(low || high ? 0 : 1);
+        }
+        if (name == "to_stdulogic") {
+            return packed(state);
+        }
+        if (name == "to_01" || name == "to_bit") {
+            return packed(low ? '0' : high ? '1' : xmap);
+        }
+        return packed(vhdl_logic_mapped(name, state));
+    }
+
+    // This fold's integral value of a scalar value record: an integer, or
+    // the position of a STD_ULOGIC value (16.7).
+    [[nodiscard]] std::optional<std::int64_t> vhdl_scalar_integral(
+        const VhdlConstantValue& value, const ExpressionId expression) const
+    {
+        if (value.kind == VhdlConstantValue::Kind::integer) {
+            return value.integer;
+        }
+        return value.kind == VhdlConstantValue::Kind::packed
+                && value.packed.bits.size() == 1U
+                && vhdl_std_ulogic_expression(expression)
+            ? vhdl_std_ulogic_position(value)
+            : std::nullopt;
     }
 
     [[nodiscard]] std::optional<std::int64_t> vhdl_user_character_ordinal(
@@ -14773,8 +15981,7 @@ private:
                 // keep their encodings.
                 if ((spelled(0U, "'0'") && spelled(1U, "'1'"))
                     || (spelled(0U, "'U'") && spelled(1U, "'X'")
-                        && spelled(2U, "'0'") && spelled(3U, "'1'"))
-                    || literals.size() > 64U) {
+                        && spelled(2U, "'0'") && spelled(3U, "'1'"))) {
                     return std::nullopt;
                 }
                 const auto found = std::ranges::find_if(literals,
@@ -16753,6 +17960,27 @@ std::optional<InferredVhdlTypeActual> vhdl_type_mark_actual(
     std::optional<DeclarationId> declaration = reference.selected;
     std::optional<std::string> structural_identity;
     std::optional<vhdl::SubtypeIndication> subtype;
+    // The mark denotes the type visible where the actual is written (IEEE
+    // 1076-2019 12.3, 12.4), a provided type such as FIXED_PKG's SFIXED
+    // included, whatever other declarations share its name.
+    std::optional<CompiledDesignResolver> resolver;
+    if (expression.scope.valid()
+        && expression.scope.value() < design.semantics.scopes().size()) {
+        resolver.emplace(design,
+            design.semantics.scopes()[expression.scope.value()].unit,
+            parent != nullptr && &parent->design() == &design ? parent
+                                                               : nullptr);
+    }
+    if (!declaration && resolver) {
+        if (const auto type
+            = resolver->resolve_vhdl_named_type(type_name, expression.scope)) {
+            if (const auto record = design.find_type(*type);
+                record && record->vhdl != nullptr
+                && record->vhdl->declaration.valid()) {
+                declaration = record->vhdl->declaration;
+            }
+        }
+    }
     if (!declaration) {
         auto scope = std::optional<ScopeId> { expression.scope };
         while (scope && !declaration) {
@@ -16833,6 +18061,13 @@ std::optional<InferredVhdlTypeActual> vhdl_type_mark_actual(
         subtype->type_mark.spelling = std::string { type_name };
         subtype->type_mark.source = expression.source;
     }
+    if (subtype && resolver
+        && subtype->provided_type == vhdl::ProvidedType::none) {
+        subtype->provided_type = subtype->type_mark.target.valid()
+            ? resolver->vhdl_provided_type_of(subtype->type_mark.target)
+            : resolver->resolve_vhdl_provided_type(
+                  type_name, expression.scope);
+    }
 
     std::string identity;
     if (structural_identity) {
@@ -16888,10 +18123,7 @@ std::optional<InferredVhdlTypeActual> infer_vhdl_type_actual(
             return std::nullopt;
         }
         const auto& reference = *prefix->vhdl->referenced_name;
-        auto selected = reference.selected;
-        if (!selected && reference.overloads.size() == 1U) {
-            selected = reference.overloads.front();
-        }
+        const auto selected = reference.selected;
         const auto object = selected ? design.find_declaration(*selected)
                                      : std::nullopt;
         if (!object || object->vhdl == nullptr || !object->vhdl->subtype
@@ -18362,6 +19594,18 @@ SpecializedHirAssociationResult resolve_specialized_hir_associations_impl(
             }
             if (actual.vhdl_type != nullptr) {
                 binding.vhdl_type = *actual.vhdl_type;
+                // The mark denotes the type visible where the generic map
+                // is written (IEEE 1076-2019 12.3, 12.4).
+                if (instance.vhdl != nullptr && instance.vhdl->scope.valid()
+                    && instance.vhdl->scope.value()
+                        < design.semantics.scopes().size()) {
+                    const auto scope = instance.vhdl->scope;
+                    const CompiledDesignResolver resolver { design,
+                        design.semantics.scopes()[scope.value()].unit,
+                        parent };
+                    resolver.complete_vhdl_type_actual(
+                        *binding.vhdl_type, scope);
+                }
             } else if (inferred_vhdl_type) {
                 binding.vhdl_type = std::move(*inferred_vhdl_type);
             }
@@ -18895,7 +20139,8 @@ SpecializedHirUnit::evaluate_integral_expression(
         *this, nullptr, "FSIM-ELAB-SVCONST-002", "constant evaluation",
         nullptr, initializer_memo_context_
     };
-    auto value = evaluator.evaluate(expression);
+    auto value = evaluator.runtime_integral(
+        evaluator.evaluate(expression), expression);
     bool consulted { };
     if (!value) {
         value = shared_constant_integral(*this, expression, &consulted);
@@ -18920,7 +20165,8 @@ SpecializedHirUnit::evaluate_integral_expression(
         *this, nullptr, "FSIM-ELAB-SVCONST-002", "constant evaluation",
         &binding, initializer_memo_context_
     };
-    return evaluator.evaluate(expression);
+    return evaluator.runtime_integral(
+        evaluator.evaluate(expression), expression);
 }
 
 std::optional<std::int64_t> SpecializedHirUnit::evaluate_vhdl_position(
@@ -18949,6 +20195,19 @@ SpecializedHirUnit::evaluate_vhdl_constant_expression(
         nullptr, initializer_memo_context_
     };
     return evaluator.evaluate_vhdl_constant(expression);
+}
+
+bool SpecializedHirUnit::vhdl_std_ulogic_expression(
+    const ExpressionId expression) const
+{
+    if (language() != Language::vhdl) {
+        return false;
+    }
+    HirIntegralEvaluator evaluator {
+        *this, nullptr, "FSIM-ELAB-SVCONST-002", "constant evaluation",
+        nullptr, initializer_memo_context_
+    };
+    return evaluator.std_ulogic_expression(expression);
 }
 
 std::optional<SpecializedHirVhdlRecordValue>
@@ -19335,7 +20594,8 @@ SpecializedHirUnit::evaluate_integral_expression_with_effects(
     HirIntegralEvaluator evaluator { *this, &result.effects,
         "FSIM-ELAB-SVCONST-002", "constant evaluation", nullptr,
         initializer_memo_context_ };
-    result.value = evaluator.evaluate(expression);
+    result.value = evaluator.runtime_integral(
+        evaluator.evaluate(expression), expression);
     return result;
 }
 
@@ -19361,7 +20621,8 @@ SpecializedHirUnit::evaluate_integral_declaration(
         *this, nullptr, "FSIM-ELAB-SVCONST-002", "constant evaluation",
         nullptr, initializer_memo_context_
     };
-    return evaluator.evaluate_declaration(declaration);
+    return evaluator.runtime_declaration_integral(
+        evaluator.evaluate_declaration(declaration), declaration);
 }
 
 std::optional<std::vector<std::string>>

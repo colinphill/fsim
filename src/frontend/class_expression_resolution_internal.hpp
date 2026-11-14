@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include "class_expression_resolution.hpp"
 
+#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/diagnostic.hpp"
+#include "fsim/frontend/source.hpp"
+#include "fsim/frontend/systemverilog_scalars.hpp"
 #include <functional>
 #include <map>
 #include <memory>
@@ -11,6 +15,8 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <cstddef>
+#include <utility>
 
 namespace fsim::frontend::class_resolution_detail {
 
@@ -107,6 +113,9 @@ struct Scope {
   // Interface ports of the enclosing unit, which name interface
   // instances rather than data objects.
   std::set<std::string, std::less<>> interface_ports{};
+  // Names that package imports of enclosing procedural blocks make
+  // visible (IEEE 1800-2023 26.3).
+  std::set<std::string, std::less<>> imported_names{};
   // Type aliases declared in enclosing procedural blocks, by name
   // (IEEE 1800-2017 6.18).
   std::map<std::string, const Type*, std::less<>> aliases{};
@@ -223,6 +232,11 @@ class Resolver final {
       std::string_view identity) const;
   [[nodiscard]] Type resolve_alias_type(
       Type type, std::string lexical_identity) const;
+  // The class typedef a package import makes visible by its simple name
+  // (IEEE 1800-2023 26.3, 6.18); null when no import, or more than one,
+  // supplies it.
+  [[nodiscard]] const Type* imported_class_alias(
+      std::string_view name, const Scope& scope) const;
   // The member of a packed structure type selected by name, following a
   // typedef visible from the compilation unit.
   [[nodiscard]] std::optional<Type> packed_member_type(
@@ -283,6 +297,14 @@ class Resolver final {
   // of `receiver`: the receiver's own actuals, a derived class's
   // `extends owner #(...)` actuals, or the parameter default
   // (IEEE 1800-2017 8.25, 8.13).
+  // The type parameter of the enclosing class that `name` denotes where it
+  // is used, by the innermost declaration of the name (IEEE 1800-2023 6.18,
+  // 8.25, 26.3): procedural typedefs and block imports hide the class's
+  // members, and a class typedef hides nothing of its own class's
+  // parameters (the names cannot both be declared there). Null when the
+  // name denotes something else.
+  [[nodiscard]] const ParameterDeclaration* class_type_parameter_binding(
+      std::string_view name, const Scope& scope) const;
   [[nodiscard]] std::optional<Type> class_type_parameter_actual(
       const std::string& named, const SystemVerilogClassDeclaration& owner,
       const Type& receiver, const Scope& scope) const;
@@ -311,9 +333,12 @@ class Resolver final {
   [[nodiscard]] static std::string selected_uvm_intrinsic(
       const ClassSelection& selection,
       std::string_view method);
-  // A method of the UVM library: a `uvm_pkg` that declares uvm_object.
-  // A user package of that name is ordinary code.
-  [[nodiscard]] bool uvm_library_method(std::string_view identity) const;
+  // The class type a UVM registry selection (`uvm_component_registry#(T)`)
+  // creates, with its own parameter actuals: the specialization the type
+  // expression denotes (IEEE 1800-2023 8.25, 6.22.1). Null when the
+  // selection is not a registry of a class.
+  [[nodiscard]] static std::shared_ptr<const Type> selected_uvm_registry_type(
+      const ClassSelection& selection);
   [[nodiscard]] std::vector<const SystemVerilogClassDeclaration*>
   resolve_class_name(std::string_view spelling, const Scope& scope) const;
   // `receiver` is the handle type the lookup starts from: a base named by a

@@ -3,15 +3,15 @@
 #include "application_compiled_source.hpp"
 
 #include "fsim/frontend/class_resolution.hpp"
+#include "fsim/frontend/class_specialization_selection.hpp"
 #include "fsim/frontend/parser.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
-#include "fsim/support/uvm_identity.hpp"
 
 #include <algorithm>
+#include <array>
 #include <functional>
 #include <limits>
 #include <map>
-#include <ranges>
 #include <set>
 #include <string_view>
 
@@ -46,6 +46,11 @@ struct ClassTypeView {
     const sv::TypeReference* compiled { };
     std::string identity;
 };
+
+/// The selection a class scope through a specialization makes (IEEE 1800-2023
+/// 8.25.1): the frontend's own owner record of a source expression, built by
+/// the frontend from a compiled HIR description.
+using ClassOwnerSelection = decltype(frontend::Expression::systemverilog_class_owner);
 
 struct SourceScope {
     const frontend::DesignUnit* unit { };
@@ -124,6 +129,16 @@ public:
             SourceScope scope;
             scope.library = effective_library(declaration.library);
             scope.imports = &declaration.compilation_unit_imports;
+            // The typedefs of the compilation unit the class is declared in
+            // (IEEE 1800-2023 3.12.1, 6.18).
+            for (const auto& unit : parsed.units) {
+                if (unit.language != frontend::Language::SystemVerilog2017
+                    || unit.compilation_unit_identity
+                        != declaration.compilation_unit_identity)
+                    continue;
+                for (const auto& alias : unit.type_aliases)
+                    scope.aliases.insert_or_assign(alias.name, &alias.type);
+            }
             prepare_class(declaration, scope);
         }
         return !diagnostics_.has_error();
@@ -284,6 +299,258 @@ private:
         return found.empty() ? nullptr : found.front();
     }
 
+    // A class of the imported library with the actuals of its specialization,
+    // read from compiled HIR by identity: a typedef of a specialization
+    // (`typedef C#(8) T`) selects C#(8) as `C#(8)` does (IEEE 1800-2023 6.18,
+    // 8.25). The frontend builds the selection type from this description.
+    // None when an actual is not a class type or a literal. The recursion
+    // follows the finite actual tree of one compiled type reference.
+    std::optional<frontend::SystemVerilogClassSelection> library_class_specialization(
+        const sv::TypeReference& type, const SourceScope& scope,
+        const frontend::SourceSpan& source)
+    {
+        const auto view = compiled_type(type);
+        if (view.identity.empty() || view.compiled == nullptr)
+            return std::nullopt;
+        const auto* owner = named_class(view.identity, scope, source);
+        if (owner == nullptr)
+            return std::nullopt;
+        frontend::SystemVerilogClassSelection result;
+        result.name = owner->name;
+        result.declaration_identity = owner->canonical_identity;
+        const auto& actuals = view.compiled->interface_parameter_actuals;
+        for (std::size_t index { }; index < actuals.size(); ++index) {
+            const auto& actual = actuals[index];
+            frontend::SystemVerilogClassSelection::Actual converted;
+            converted.formal = actual.formal;
+            const sv::Expression* value = nullptr;
+            if (actual.expression) {
+                if (const auto found = imported_.find_expression(*actual.expression))
+                    value = found->systemverilog;
+            }
+            // A class named as the actual of a type parameter (`C#(2, item)`)
+            // is that class type (8.25), named in the scope of the typedef.
+            const auto formal = actual.formal
+                ? std::ranges::find(owner->parameters, *actual.formal,
+                      &sv::ClassParameter::name)
+                : index < owner->parameters.size()
+                ? owner->parameters.begin() + static_cast<std::ptrdiff_t>(index)
+                : owner->parameters.end();
+            if (actual.kind == sv::ActualKind::expression && value != nullptr
+                && value->kind == sv::ExpressionKind::name
+                && formal != owner->parameters.end() && formal->type_parameter) {
+                const auto package_end = view.identity.rfind("::");
+                const auto* named = package_end == std::string::npos ? nullptr
+                    : named_class(view.identity.substr(0, package_end + 2U) + value->text,
+                          scope, source);
+                if (named == nullptr || !named->parameters.empty())
+                    return std::nullopt;
+                auto nested = std::make_shared<frontend::SystemVerilogClassSelection>();
+                nested->name = named->name;
+                nested->declaration_identity = named->canonical_identity;
+                converted.type = std::move(nested);
+            } else if (actual.kind == sv::ActualKind::type && actual.type) {
+                auto nested = library_class_specialization(*actual.type, scope, source);
+                if (!nested)
+                    return std::nullopt;
+                converted.type = std::make_shared<frontend::SystemVerilogClassSelection>(
+                    std::move(*nested));
+            } else if (actual.kind == sv::ActualKind::expression && value != nullptr
+                && (value->kind == sv::ExpressionKind::integer_literal
+                    || value->kind == sv::ExpressionKind::logic_literal
+                    || value->kind == sv::ExpressionKind::boolean_literal
+                    || value->kind == sv::ExpressionKind::string_literal)) {
+                converted.literal_kind = value->kind == sv::ExpressionKind::integer_literal
+                    ? frontend::ExpressionKind::IntegerLiteral
+                    : value->kind == sv::ExpressionKind::logic_literal
+                    ? frontend::ExpressionKind::LogicLiteral
+                    : value->kind == sv::ExpressionKind::boolean_literal
+                    ? frontend::ExpressionKind::BooleanLiteral
+                    : frontend::ExpressionKind::StringLiteral;
+                converted.literal_text = value->text;
+                converted.decoded_string = value->decoded_string;
+            } else {
+                return std::nullopt;
+            }
+            result.actuals.push_back(std::move(converted));
+        }
+        return result;
+    }
+
+    // Whether `canonical` is the library's object or component registry.
+    bool library_registry(const std::string_view canonical) const
+    {
+        const auto role = class_role(canonical);
+        return role == support::UvmRole::object_registry
+            || role == support::UvmRole::component_registry;
+    }
+
+    // `R#(C)::get()`, or `T::get()` with T a typedef of R#(C), R the
+    // library's registry: the registry's one object, the type wrapper of C
+    // (IEEE 1800.2-2020 8.2.4.2.1). The call names R and keeps the registry
+    // specialization, whose type parameter selects C.
+    bool registry_get(frontend::Expression& input, const sv::ClassDeclaration& owner,
+        const std::string_view member, ClassOwnerSelection selection)
+    {
+        if (!input.operands.empty() || !library_registry(owner.canonical_identity)
+            || method_role(owner.canonical_identity, member) != support::UvmRole::registry_get
+            || !selection)
+            return false;
+        input.text = "@sv-static-method:@uvm-registry-get:" + owner.canonical_identity;
+        input.systemverilog_class_owner = std::move(selection);
+        input.call_result_width = 64U;
+        input.call_result_signed = false;
+        input.call_result_domain = frontend::ValueDomain::Bit2;
+        return true;
+    }
+
+    // The registry class a member typedef `alias_name` of the class
+    // denotes, when it is the library's object or component registry (IEEE
+    // 1800.2-2020 8.2.4); empty otherwise.
+    std::string declared_registry(const sv::ClassDeclaration* compiled,
+        const frontend::SystemVerilogClassDeclaration* local,
+        const std::string_view alias_name,
+        const SourceScope& scope, const frontend::SourceSpan& source)
+    {
+        if (local != nullptr) {
+            for (const auto& alias : local->type_aliases) {
+                if (alias.name == alias_name
+                    && library_registry(alias.type.systemverilog_class_declaration))
+                    return alias.type.systemverilog_class_declaration;
+            }
+            return { };
+        }
+        if (compiled == nullptr)
+            return { };
+        for (const auto id : compiled->type_aliases) {
+            const auto view = imported_.find_declaration(id);
+            const auto* declaration = view ? view->systemverilog : nullptr;
+            if (declaration == nullptr || declaration->name != alias_name
+                || !declaration->declared_type)
+                continue;
+            const auto definition = imported_.find_type(*declaration->declared_type);
+            if (!definition || definition->systemverilog == nullptr)
+                continue;
+            const auto specialization = library_class_specialization(
+                definition->systemverilog->base, scope, source);
+            if (specialization && library_registry(specialization->declaration_identity))
+                return specialization->declaration_identity;
+        }
+        return { };
+    }
+
+    // The recorded role of the method `name` the class `identity` (or a
+    // class of its chain) declares.
+    support::UvmRole method_role(std::string_view identity,
+        std::string_view name) const
+    {
+        auto role = support::UvmRole::none;
+        class_chain(std::string { identity }, [&](const auto& owner) {
+            for (const auto& item : owner.methods) {
+                if (item.name == name) {
+                    role = item.uvm_role;
+                    return false;
+                }
+            }
+            return true;
+        });
+        return role;
+    }
+
+    struct RegistryCall {
+        std::string canonical;
+        ClassOwnerSelection owner;
+        // The registry class and the role of the method the call names.
+        std::string registry;
+        support::UvmRole role { };
+    };
+
+    // `X::T::m` with X a class, a specialization `C#(3)` or a typedef of
+    // either, T a member typedef of X denoting the library's registry and m
+    // the registry's create or get method (`X::type_id::create`,
+    // `X::type_id::get`, IEEE 1800-2023 6.18, 8.23, 8.25; IEEE 1800.2-2020
+    // 8.2.4.2).
+    std::optional<RegistryCall> registry_call(std::string_view text,
+        const ClassOwnerSelection& selection,
+        const SourceScope& scope, const frontend::SourceSpan& source)
+    {
+        const auto member_separator = text.rfind("::");
+        if (member_separator == std::string_view::npos || member_separator == 0U)
+            return std::nullopt;
+        const auto member = text.substr(member_separator + 2U);
+        const auto alias_separator = text.rfind("::", member_separator - 1U);
+        if (alias_separator == std::string_view::npos)
+            return std::nullopt;
+        const auto alias_name = text.substr(alias_separator + 2U,
+            member_separator - alias_separator - 2U);
+        const auto class_name = text.substr(0, alias_separator);
+        const auto hash = class_name.find('#');
+        const auto name = std::string { class_name.substr(0, hash) };
+        RegistryCall result;
+        const sv::ClassDeclaration* compiled { };
+        const frontend::SystemVerilogClassDeclaration* local { };
+        if ((compiled = named_class(name, scope, source)) != nullptr) {
+            result.canonical = compiled->canonical_identity;
+        } else if ((local = source_class(name, scope)) != nullptr) {
+            result.canonical = local->canonical_identity;
+        } else if (hash == std::string_view::npos) {
+            ClassOwnerSelection typedef_selection;
+            if (const auto alias = scope.aliases.find(name);
+                alias != scope.aliases.end()
+                && !alias->second->systemverilog_class_declaration.empty()) {
+                result.canonical = alias->second->systemverilog_class_declaration;
+                // The alias's type is carried without a copy; the parsed
+                // design that owns it outlives the call.
+                result.owner = ClassOwnerSelection { std::shared_ptr<void> { }, alias->second };
+                compiled = named_class(result.canonical, scope, source);
+                if (compiled == nullptr)
+                    local = source_class(result.canonical, scope);
+            } else if ((compiled = typedef_class(name, scope, source, &typedef_selection))
+                       != nullptr) {
+                result.canonical = compiled->canonical_identity;
+                result.owner = std::move(typedef_selection);
+            }
+        }
+        if (result.canonical.empty())
+            return std::nullopt;
+        result.registry = declared_registry(compiled, local, alias_name, scope, source);
+        result.role = result.registry.empty() ? support::UvmRole::none
+                                              : method_role(result.registry, member);
+        if (result.role != support::UvmRole::registry_create
+            && result.role != support::UvmRole::registry_get)
+            return std::nullopt;
+        if (!result.owner && hash != std::string_view::npos && selection)
+            result.owner = frontend::systemverilog_class_scope_owner(
+                *selection, result.canonical);
+        return result;
+    }
+
+    // The class a typedef visible in `scope` names (IEEE 1800-2023 6.18),
+    // with the selection a class scope through it makes: `typedef C#(4) T;
+    // T::m()` selects C#(4) as `C#(4)::m()` does (8.23, 8.25.1).
+    const sv::ClassDeclaration* typedef_class(std::string_view spelling,
+        const SourceScope& scope, const frontend::SourceSpan& source,
+        ClassOwnerSelection* selection = nullptr)
+    {
+        if (spelling.find_first_of("#:") != std::string_view::npos)
+            return nullptr;
+        const auto* named = named_declaration(spelling, scope, source);
+        if (named == nullptr || !named->declared_type)
+            return nullptr;
+        const auto definition = imported_.find_type(*named->declared_type);
+        if (!definition || definition->systemverilog == nullptr)
+            return nullptr;
+        const auto specialization
+            = library_class_specialization(definition->systemverilog->base, scope, source);
+        if (!specialization)
+            return nullptr;
+        const auto* owner = named_class(specialization->declaration_identity, scope, source);
+        if (owner != nullptr && selection != nullptr)
+            *selection = frontend::systemverilog_class_specialization_owner(
+                *specialization, source);
+        return owner;
+    }
+
     const sv::Declaration* named_declaration(std::string_view spelling,
         const SourceScope& scope, const frontend::SourceSpan& source,
         const std::uint64_t source_order = 0U)
@@ -328,6 +595,46 @@ private:
                 unit_scope += "@" + scope.unit->compilation_unit_identity;
             if (const auto* selected = find(unit_scope + "::" + std::string { spelling }))
                 return selected;
+        }
+        // A class of a package of the source set an import makes visible
+        // (IEEE 1800-2023 26.3): block imports from the innermost scope
+        // outwards, then the design unit's or compilation unit's; an
+        // explicit import before the wildcard ones, and two wildcard
+        // candidates are none (the name is ambiguous).
+        const auto imported = [&](const auto& imports)
+            -> std::optional<const frontend::SystemVerilogClassDeclaration*> {
+            for (const auto& import : imports) {
+                if (import.name == spelling)
+                    return find(scope.library + "::" + import.package + "::"
+                        + std::string { spelling });
+            }
+            const frontend::SystemVerilogClassDeclaration* selected { };
+            for (const auto& import : imports) {
+                if (!import.name.empty())
+                    continue;
+                const auto* candidate = find(scope.library + "::" + import.package
+                    + "::" + std::string { spelling });
+                if (candidate == nullptr)
+                    continue;
+                if (selected != nullptr && selected != candidate)
+                    return nullptr;
+                selected = candidate;
+            }
+            return selected == nullptr
+                ? std::nullopt
+                : std::optional<const frontend::SystemVerilogClassDeclaration*> { selected };
+        };
+        for (auto imports = scope.block_imports.rbegin();
+             imports != scope.block_imports.rend(); ++imports) {
+            if (const auto selected = imported(**imports))
+                return *selected;
+        }
+        const auto* imports = scope.unit != nullptr
+            ? &scope.unit->systemverilog_imports
+            : scope.imports;
+        if (imports != nullptr) {
+            if (const auto selected = imported(*imports))
+                return *selected;
         }
         return nullptr;
     }
@@ -395,9 +702,18 @@ private:
                 type.systemverilog_class_declaration = compiled_type(*named->type).identity;
             if (named->declared_type) {
                 const auto definition = imported_.find_type(*named->declared_type);
-                if (definition && definition->systemverilog != nullptr)
+                if (definition && definition->systemverilog != nullptr) {
                     type.systemverilog_class_declaration
                         = compiled_type(definition->systemverilog->base).identity;
+                    // A typedef of a specialization names it (6.18, 8.25).
+                    if (type.systemverilog_class_parameter_actuals.empty()) {
+                        if (const auto selected = library_class_specialization(
+                                definition->systemverilog->base, scope, type.named_type_span))
+                            type.systemverilog_class_parameter_actuals
+                                = frontend::systemverilog_class_specialization_actuals(
+                                    *selected, type.named_type_span);
+                    }
+                }
             }
         }
         return { &type, nullptr, type.systemverilog_class_declaration };
@@ -577,6 +893,18 @@ private:
         }
     }
 
+    // The recorded role (support::UvmRole) of the class `identity` names,
+    // a class of this source or of the imported design.
+    support::UvmRole class_role(std::string_view identity) const
+    {
+        auto role = support::UvmRole::none;
+        class_chain(std::string { identity }, [&](const auto& owner) {
+            role = owner.uvm_role;
+            return false;
+        });
+        return role;
+    }
+
     const sv::ClassProperty* property(std::string_view identity,
         std::string_view name) const
     {
@@ -707,20 +1035,30 @@ private:
     std::string uvm_report_intrinsic(std::string_view name, const SourceScope& scope,
         const frontend::SourceSpan& source)
     {
-        if (name.starts_with("uvm_pkg::"))
-            name.remove_prefix(std::string_view { "uvm_pkg::" }.size());
-        if (name != "uvm_report_enabled" && name != "uvm_report_info"
-            && name != "uvm_report_warning" && name != "uvm_report_error"
-            && name != "uvm_report_fatal" && name != "uvm_get_report_object")
-            return { };
-        if (!scope.class_identity.empty() && method(scope.class_identity, name) != nullptr)
+        // A method of the enclosing class of that name is the one called.
+        if (name.find("::") == std::string_view::npos
+            && !scope.class_identity.empty()
+            && method(scope.class_identity, name) != nullptr)
             return { };
         const auto* declaration = named_declaration(name, scope, source);
         if (declaration == nullptr || !declaration->callable)
             return { };
-        if (name == "uvm_get_report_object")
+        switch (declaration->uvm_role) {
+        case support::UvmRole::report_enabled:
+            return "@uvm-report-enabled";
+        case support::UvmRole::report_info:
+            return "@uvm-report-info";
+        case support::UvmRole::report_warning:
+            return "@uvm-report-warning";
+        case support::UvmRole::report_error:
+            return "@uvm-report-error";
+        case support::UvmRole::report_fatal:
+            return "@uvm-report-fatal";
+        case support::UvmRole::get_report_object:
             return "@uvm-report-object";
-        return "@uvm-report-" + std::string { name.substr(std::string_view { "uvm_report_" }.size()) };
+        default:
+            return { };
+        }
     }
 
     // `uvm_root::get()` and the other getters of the library's singletons
@@ -728,34 +1066,52 @@ private:
     static std::string uvm_singleton_intrinsic(
         const sv::ClassDeclaration& owner, const std::string_view member)
     {
-        if (!support::is_uvm_library_identity(owner.canonical_identity))
+        const auto found = std::ranges::find(
+            owner.methods, member, &sv::ClassMethod::name);
+        if (found == owner.methods.end()
+            || found->uvm_role != support::UvmRole::singleton_get)
             return { };
-        if ((owner.name == "uvm_root" && member == "get")
-            || (owner.name == "uvm_cmdline_processor" && member == "get_inst")
-            || (owner.name == "uvm_test_done_objection" && member == "get")
-            || (owner.name == "uvm_resource_pool" && member == "get"))
-            return "@uvm-singleton:" + owner.canonical_identity;
-        return { };
+        return "@uvm-singleton:" + owner.canonical_identity;
     }
 
     std::string uvm_database_intrinsic(const sv::ClassDeclaration& owner,
-        const std::string_view member, const frontend::Type* selection,
+        std::string_view member, const frontend::Type* selection,
         const SourceScope& scope, const frontend::SourceSpan& source)
     {
         if (selection == nullptr
-            || selection->systemverilog_class_parameter_actuals.empty()
-            || !support::is_uvm_library_identity(owner.canonical_identity))
+            || selection->systemverilog_class_parameter_actuals.empty())
             return { };
         std::string_view family;
-        if (owner.name == "uvm_config_db"
-            && (member == "set" || member == "get" || member == "exists"))
+        if (owner.uvm_role == support::UvmRole::config_db)
             family = "config";
-        else if (owner.name == "uvm_resource_db"
-            && (member == "set" || member == "read_by_name"
-                || member == "write_by_name"))
+        else if (owner.uvm_role == support::UvmRole::resource_db)
             family = "resource";
         else
             return { };
+        // The database method by its recorded role; the service names it.
+        const auto found = std::ranges::find(
+            owner.methods, member, &sv::ClassMethod::name);
+        if (found == owner.methods.end())
+            return { };
+        switch (found->uvm_role) {
+        case support::UvmRole::database_set:
+            member = "set";
+            break;
+        case support::UvmRole::database_get:
+            member = "get";
+            break;
+        case support::UvmRole::database_exists:
+            member = "exists";
+            break;
+        case support::UvmRole::database_read_by_name:
+            member = "read_by_name";
+            break;
+        case support::UvmRole::database_write_by_name:
+            member = "write_by_name";
+            break;
+        default:
+            return { };
+        }
         const auto& actual = selection->systemverilog_class_parameter_actuals.front();
         const auto named = [&](const std::string& spelling) {
             if (const auto* compiled = named_class(spelling, scope, source))
@@ -905,11 +1261,28 @@ private:
             }
             const auto separator = input.text.rfind("::");
             if (separator != std::string::npos) {
-                if (const auto* owner = named_class(std::string_view { input.text }.substr(0, separator),
-                        scope, input.span)) {
+                // `C#(8)::p` is the static property of that specialization,
+                // and `typedef C#(8) T; T::p` the same one (IEEE 1800-2023
+                // 6.18, 8.23, 8.25.1).
+                const auto owner_name = std::string_view { input.text }.substr(0, separator);
+                const auto hash = owner_name.find('#');
+                ClassOwnerSelection owner_selection;
+                const auto* owner = named_class(owner_name.substr(0, hash), scope, input.span);
+                if (owner != nullptr && hash != std::string_view::npos) {
+                    if (!input.systemverilog_class_selection)
+                        return { };
+                    owner_selection = frontend::systemverilog_class_scope_owner(
+                        *input.systemverilog_class_selection, owner->canonical_identity);
+                } else if (owner == nullptr) {
+                    owner = typedef_class(owner_name, scope, input.span, &owner_selection);
+                }
+                if (owner != nullptr) {
                     const auto member = input.text.substr(separator + 2U);
-                    return bind_property(input, { },
+                    auto result = bind_property(input, { },
                         { nullptr, nullptr, owner->canonical_identity }, member, scope, true);
+                    if (result.compiled != nullptr && owner_selection)
+                        input.systemverilog_class_owner = std::move(owner_selection);
+                    return result;
                 }
             }
             if (!scope.class_identity.empty()) {
@@ -968,26 +1341,26 @@ private:
             return bind_property(input, std::move(receiver), operands.front(), member, scope, false);
         }
         const auto separator = input.text.rfind("::");
-        // `C::type_id::create(name, parent)` creates a C through the factory
-        // registry the UVM utility macros declare (IEEE 1800.2-2020 8.2.4).
-        if (constexpr std::string_view registry { "::type_id::create" };
-            input.text.ends_with(registry)) {
-            const auto class_name = std::string_view { input.text }.substr(
-                0, input.text.size() - registry.size());
-            const auto hash = class_name.find('#');
-            const auto name = std::string { class_name.substr(0, hash) };
-            std::string canonical;
-            if (const auto* compiled = named_class(name, scope, input.span))
-                canonical = compiled->canonical_identity;
-            else if (const auto* local = source_class(name, scope))
-                canonical = local->canonical_identity;
-            if (!canonical.empty()) {
-                input.text = "@sv-static-method:@uvm-registry-create:" + canonical;
-                input.call_result_width = 64U;
-                input.call_result_signed = false;
-                input.call_result_domain = frontend::ValueDomain::Bit2;
-                return { nullptr, nullptr, canonical };
-            }
+        // `X::type_id::create(name, parent)` creates an X through the factory
+        // registry the UVM utility macros declare (IEEE 1800.2-2020 8.2.4):
+        // X is a class, a specialization or a typedef of either, whose
+        // `type_id` typedef denotes a registry class of the verified UVM
+        // library. Any other `type_id` is an ordinary class member.
+        if (const auto registered = registry_call(
+                input.text, input.systemverilog_class_selection, scope, input.span)) {
+            // The registry's `get` answers its one registry object, the
+            // class's type wrapper (IEEE 1800.2-2020 8.2.4.2.1).
+            const bool get = registered->role == support::UvmRole::registry_get;
+            if (get && !input.operands.empty())
+                return { };
+            input.text = (get ? "@sv-static-method:@uvm-registry-get:"
+                              : "@sv-static-method:@uvm-registry-create:")
+                + registered->canonical;
+            input.systemverilog_class_owner = registered->owner;
+            input.call_result_width = 64U;
+            input.call_result_signed = false;
+            input.call_result_domain = frontend::ValueDomain::Bit2;
+            return { nullptr, nullptr, get ? registered->registry : registered->canonical };
         }
         if (separator != std::string::npos) {
             // `C#(...)::m(...)` selects a specialization of class C (8.25.1).
@@ -1018,6 +1391,11 @@ private:
                                                    : ClassTypeView { };
                     }
                 }
+                if (hash != std::string_view::npos && input.systemverilog_class_selection
+                    && registry_get(input, *owner, member,
+                        frontend::systemverilog_class_scope_owner(
+                            *input.systemverilog_class_selection, owner->canonical_identity)))
+                    return { nullptr, nullptr, owner->canonical_identity };
                 auto result = bind_method(input, { nullptr, nullptr, owner->canonical_identity },
                     member, scope, true);
                 if (hash != std::string_view::npos && input.systemverilog_class_selection) {
@@ -1025,6 +1403,33 @@ private:
                         *input.systemverilog_class_selection, owner->canonical_identity);
                 }
                 return result;
+            }
+            // `typedef C#(4) T; T::f()` selects C#(4) (8.23, 8.25.1).
+            if (ClassOwnerSelection aliased_selection;
+                const auto* aliased = typedef_class(
+                    owner_name, scope, input.span, &aliased_selection)) {
+                const auto member = input.text.substr(separator + 2U);
+                if (registry_get(input, *aliased, member, aliased_selection))
+                    return { nullptr, nullptr, aliased->canonical_identity };
+                auto result = bind_method(input, { nullptr, nullptr, aliased->canonical_identity },
+                    member, scope, true);
+                input.systemverilog_class_owner = std::move(aliased_selection);
+                return result;
+            }
+            // `type_id::get()` in a class whose typedef `type_id` names a
+            // registry specialization of the library (IEEE 1800.2-2020
+            // 8.2.4.2.1, B.2.1); the alias's type is carried without a copy,
+            // the parsed design that owns it outliving the call.
+            if (const auto alias = scope.aliases.find(owner_name);
+                alias != scope.aliases.end()
+                && library_registry(alias->second->systemverilog_class_declaration)) {
+                const auto member = input.text.substr(separator + 2U);
+                if (const auto* registry = named_class(
+                        alias->second->systemverilog_class_declaration, scope, input.span);
+                    registry != nullptr
+                    && registry_get(input, *registry, member,
+                        ClassOwnerSelection { std::shared_ptr<void> { }, alias->second }))
+                    return { nullptr, nullptr, registry->canonical_identity };
             }
         }
         if (!scope.class_identity.empty() && !input.text.starts_with('@')) {
@@ -1078,6 +1483,32 @@ private:
             const auto type = expression(receiver, scope);
             if (!type.identity.empty())
                 selected = method(type.identity, std::string_view { input.task_name }.substr(dot + 1U));
+        } else if (const auto registered = registry_call(input.task_name,
+                       input.systemverilog_task_class_selection, scope, input.span);
+                   registered && registered->role == support::UvmRole::registry_create) {
+            // `C#(3)::type_id::create(...);` discards the created handle
+            // and lowers as the expression form does, keeping the
+            // specialization the type expression denotes (IEEE 1800-2023
+            // 8.25, 6.22.1; IEEE 1800.2-2020 8.2.4.2).
+            frontend::Expression call { frontend::ExpressionKind::Call,
+                input.task_name, { }, input.span };
+            for (const auto& argument : input.task_arguments)
+                call.operands.push_back(argument);
+            for (const auto& name : input.task_argument_names)
+                call.call_argument_names.push_back(name);
+            call.systemverilog_source_order = input.systemverilog_source_order;
+            call.systemverilog_class_selection
+                = input.systemverilog_task_class_selection;
+            (void)expression(call, scope);
+            if (call.text.starts_with("@sv-static-method:@uvm-registry-create:")) {
+                input.kind = frontend::StatementKind::ContainerMethod;
+                input.value = std::move(call);
+                input.task_name.clear();
+                input.task_arguments.clear();
+                input.task_argument_names.clear();
+                input.systemverilog_task_class_selection.reset();
+                return;
+            }
         } else if (separator != std::string::npos) {
             // `C#(...)::m` selects a specialization of class C (8.25.1).
             auto owner_name = std::string_view { input.task_name }.substr(0, separator);
@@ -1098,7 +1529,7 @@ private:
                 // as the expression form of the call keeps it.
                 if (selected != nullptr && selected->static_method
                     && hash != std::string_view::npos
-                    && !support::is_uvm_library_identity(owner->canonical_identity)
+                    && !support::uvm_library(owner->uvm_role)
                     && input.systemverilog_task_class_selection) {
                     frontend::Expression selection { frontend::ExpressionKind::Call,
                         "@sv-static-call-selection", { }, input.span };
@@ -1107,6 +1538,20 @@ private:
                         *input.systemverilog_task_class_selection, owner->canonical_identity);
                     if (selection.systemverilog_class_owner)
                         input.value = std::move(selection);
+                }
+            } else if (ClassOwnerSelection aliased_selection;
+                       const auto* aliased = typedef_class(
+                           owner_name, scope, input.span, &aliased_selection)) {
+                selected = method(aliased->canonical_identity, member);
+                // `typedef C#(4) T; T::t();` runs the method in C#(4)
+                // (8.23, 8.25.1), as `C#(4)::t();` does above.
+                if (selected != nullptr && selected->static_method
+                    && !support::uvm_library(aliased->uvm_role)) {
+                    frontend::Expression selection { frontend::ExpressionKind::Call,
+                        "@sv-static-call-selection", { }, input.span };
+                    selection.systemverilog_source_order = input.systemverilog_source_order;
+                    selection.systemverilog_class_owner = std::move(aliased_selection);
+                    input.value = std::move(selection);
                 }
             }
         } else if (!scope.class_identity.empty()) {
@@ -1131,6 +1576,32 @@ private:
             return;
         if (static_access && !selected->static_method) {
             error("FSIM-SV-CLASS-013", "instance task requires a class receiver", input.span);
+            return;
+        }
+        // A static function called as a statement discards its result
+        // (IEEE 1800-2023 13.4.1) and runs as an expression statement, as
+        // the source-level resolver makes it for a class of the same source;
+        // the UVM library's native methods keep their task form.
+        if (static_access && selected->static_method
+            && selected->kind == sv::ClassMethodKind::function
+            && !support::uvm_library(selected->uvm_role)) {
+            frontend::Expression call { frontend::ExpressionKind::Call,
+                "@sv-static-method:" + selected->canonical_identity, { }, input.span };
+            for (auto& argument : input.task_arguments)
+                call.operands.push_back(std::move(argument));
+            for (auto& name : input.task_argument_names)
+                call.call_argument_names.push_back(std::move(name));
+            call.systemverilog_source_order = input.systemverilog_source_order;
+            // `C#(4)::f();` keeps the specialization it selects (8.25.1).
+            if (input.value.text == "@sv-static-call-selection")
+                call.systemverilog_class_owner = input.value.systemverilog_class_owner;
+            annotate(call, method_result(*selected));
+            input.kind = frontend::StatementKind::ContainerMethod;
+            input.value = std::move(call);
+            input.task_name.clear();
+            input.task_arguments.clear();
+            input.task_argument_names.clear();
+            input.systemverilog_task_class_selection.reset();
             return;
         }
         // `super.new(...)` calls the base class constructor (IEEE
@@ -1163,19 +1634,62 @@ private:
     void expand_uvm_run_test(frontend::Statement& input, const SourceScope& scope)
     {
         if (input.kind != frontend::StatementKind::TaskCall
-            || (input.task_name != "run_test" && input.task_name != "uvm_pkg::run_test")
             || input.task_arguments.size() > 1U)
             return;
         const auto* declaration = named_declaration(input.task_name, scope, input.span);
         if (declaration == nullptr || !declaration->callable
-            || declaration->callable->function)
+            || declaration->callable->function
+            || declaration->uvm_role != support::UvmRole::run_test)
             return;
+        // The library's uvm_phase and uvm_component and the component's
+        // phase methods, by their recorded roles, named as the package of
+        // run_test declares them.
+        const auto& hir = imported_.systemverilog_hir;
+        const auto unit = std::ranges::find(
+            hir.units(), declaration->scope, &sv::Unit::scope);
+        const auto role_class = [&](const support::UvmRole role)
+            -> const sv::ClassDeclaration* {
+            const auto found = std::ranges::find_if(hir.classes(),
+                [&](const sv::ClassDeclaration& item) {
+                    return !item.forward_declaration && item.uvm_role == role;
+                });
+            return found == hir.classes().end() ? nullptr : &*found;
+        };
+        const auto* phase = role_class(support::UvmRole::phase);
+        const auto* component = role_class(support::UvmRole::component);
+        if (unit == hir.units().end() || phase == nullptr || component == nullptr) {
+            error("FSIM-SV-CLASS-013", "UVM run_test could not be prepared: "
+                "the library declares no uvm_phase or uvm_component", input.span);
+            return;
+        }
+        frontend::UvmRunTestNames names;
+        names.phase_class = unit->name + "::" + phase->name;
+        names.component_class = unit->name + "::" + component->name;
+        constexpr std::array phase_roles {
+            support::UvmRole::build_phase, support::UvmRole::connect_phase,
+            support::UvmRole::end_of_elaboration_phase,
+            support::UvmRole::start_of_simulation_phase,
+            support::UvmRole::run_phase, support::UvmRole::extract_phase,
+            support::UvmRole::check_phase, support::UvmRole::report_phase,
+            support::UvmRole::final_phase,
+        };
+        for (std::size_t index = 0; index < phase_roles.size(); ++index) {
+            const auto method = std::ranges::find(component->methods,
+                phase_roles[index], &sv::ClassMethod::uvm_role);
+            if (method == component->methods.end()) {
+                error("FSIM-SV-CLASS-013", "UVM run_test could not be prepared: "
+                    "the library's uvm_component declares no phase method",
+                    input.span);
+                return;
+            }
+            names.phase_methods[index] = method->name;
+        }
         std::optional<frontend::Expression> name;
         if (!input.task_arguments.empty() && input.task_arguments.front().valid())
             name = std::move(input.task_arguments.front());
         std::string diagnostic;
         auto statement = frontend::uvm_run_test_statement(input.span, std::move(name),
-            scope.unit != nullptr ? scope.unit->standard_revision
+            names, scope.unit != nullptr ? scope.unit->standard_revision
                                   : frontend::StandardRevision::SystemVerilog2017,
             diagnostic);
         if (!statement) {
@@ -1220,6 +1734,10 @@ private:
             expression(argument, scope);
         for (auto& output : input.output_values)
             expression(output.value, scope);
+        // The source form of each display argument, which the frontend
+        // resolves as the same expression as its output value.
+        for (auto& argument : input.output_arguments)
+            expression(argument, scope);
         for (auto& sensitivity : input.sensitivities) {
             expression(sensitivity.expression, scope);
             if (sensitivity.guard)

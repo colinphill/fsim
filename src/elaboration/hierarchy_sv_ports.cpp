@@ -1691,19 +1691,12 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                 = design_.signal_info_[*actual_signal];
             const auto actual_native_resolution
                 = native_resolution(actual_info);
-            const auto registered_user_nettype
-                = systemverilog_resolution_kinds_.contains(
-                    actual_info.systemverilog_net_type);
-            const auto actual_explicit_resolution
-                = actual_info.systemverilog_net_type.empty()
-                || actual_native_resolution != ResolutionKind::none
-                || !registered_user_nettype
-                ? std::optional<ResolutionKind> { }
-                : explicit_resolution(*actual_signal);
+            // A net of a user-defined nettype: the port is one of its
+            // drivers (IEEE 1800-2023 23.3.3.7.1, 6.6.7).
             const auto supported_user_resolved_net
-                = actual_explicit_resolution
-                && *actual_explicit_resolution
-                    == ResolutionKind::sv_user_first;
+                = systemverilog_function_resolvers_.contains(*actual_signal)
+                || systemverilog_unresolved_nettype_nets_.contains(
+                    *actual_signal);
             // The unresolved uwire form remains single-driver checked by
             // validate_process_drivers(); it does not acquire a resolver.
             const auto single_driver_uwire

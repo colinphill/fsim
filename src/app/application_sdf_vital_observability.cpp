@@ -3,7 +3,6 @@
 #include "fsim/app/sdf_vital_observability.hpp"
 
 #include <algorithm>
-#include <ranges>
 #include <set>
 #include <tuple>
 #include <utility>

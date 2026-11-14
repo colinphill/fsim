@@ -456,6 +456,11 @@ enum class DebugPointKind : std::uint8_t {
     // and cbAssertionFailure on an immediate assertion). Probe runs only.
     assertion_pass,
     assertion_fail,
+    // After a system function with state returned ($random, $urandom,
+    // $urandom_range, the $dist_ functions): the process's call-result table
+    // names the register that holds the value (IEEE 1800-2023 38.15, 37.58).
+    // Probe runs only.
+    call_value,
 };
 
 struct DebugPoint {
@@ -466,6 +471,13 @@ struct DebugPoint {
     InternedString scope;
     // The callable a frame point belongs to; empty for other points.
     InternedString callee;
+    // The callable's HIR declaration (its index plus one; 0 for other
+    // points) and, for a task or function of another instance reached
+    // through an interface port or virtual interface, the receiver path
+    // the call names (IEEE 1800-2023 37.43, 38.36.1): a frame callback on
+    // a task or function names that callable of that instance.
+    std::uint32_t callee_declaration { };
+    InternedString callee_receiver;
 
     DebugPoint() = default;
     DebugPoint(

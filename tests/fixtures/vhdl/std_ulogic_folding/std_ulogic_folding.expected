@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: Apache-2.0
+r3fold g1 to_x01 H
+r3fold g2 to_x01 Z
+r3fold g3 to_01 L
+r3fold g4 is_x
+r3fold g5 ux01 x01z
+r3fold g6 to_bit H
+r3fold g7 to_x01 generic
+r3fold g8 string literal elements
+r3fold g9 bit_vector elements
+r3fold g10 constrained elements
+r3fold g11 case to_x01
+r3fold g12 to_x01 vector bounds 1 to length
+r3fold g13 to_x01z vector
+r3fold g14 to_ux01 vector
+r3fold g15 to_x01 bit_vector
+r3fold g16 to_01 vector bounds length-1 downto 0
+r3fold g17 to_01 bad element fills with xmap
+r3fold g18 to_bitvector strong
+r3fold g19 to_bitvector xmap
+r3fold g20 to_stdulogicvector
+r3fold g21 to_stdlogicvector
+r3fold g22 is_x vector
+r3fold g23 to_x01 qualified string literal
+r3fold g24 to_ux01 qualified string literal
+r3fold g25 is_x qualified string literal
+r3fold g26 to_01 qualified string literal
+r3fold g27 to_bitvector qualified string literal
+r3fold g28 null to_x01 bounds 1 to 0
+r3fold g29 null to_01 bounds -1 downto 0
+r3fold g30 is_x of a null vector
+r3fold g31 constant of a qualified literal
+r3fold leaf 'H' folds H
+r3fold leaf 'Z' folds Z
+r3fold leaf 'H' folds H
+r3fold leaf '1' folds 1
+r3fold leaf 'W' folds W
+r3fold leaf '1' folds 1
+r3fold leaf 'L' folds L
+r3fold leaf 'X' folds X
+r3fold run to_x01 bit '1'
+r3fold run to_01 bit '1'
+r3fold run to_x01z bit_vector 101
+r3fold run to_ux01 bit_vector 101
+r3fold run to_01 bit_vector 101
+r3fold run elements '1''Z''1''0'

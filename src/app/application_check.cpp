@@ -3,6 +3,7 @@
 #include "application_compiled_environment.hpp"
 #include "application_compiled_environment_sv.hpp"
 #include "application_compiled_environment_vhdl.hpp"
+#include "fsim/frontend/uvm_roles.hpp"
 #include "fsim/frontend/coverage_resolution.hpp"
 #include "fsim/frontend/class_resolution.hpp"
 #include "fsim/frontend/class_inheritance.hpp"
@@ -11,9 +12,45 @@
 #include "fsim/semantic/compiled_design_resolver.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
+#include "application_compiled_source.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/compiler/object_cache.hpp"
+#include "fsim/frontend/class_specialization.hpp"
+#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/diagnostic.hpp"
+#include "fsim/frontend/parser.hpp"
+#include "fsim/frontend/source.hpp"
+#include "fsim/frontend/token.hpp"
+#include "fsim/project/project.hpp"
+#include "fsim/semantic/model.hpp"
+#include "fsim/semantic/vhdl_hir.hpp"
+#include "fsim/support/sha256.hpp"
+#include "fsim/systemc/plugin_compiler.hpp"
 
 #include <unordered_map>
 #include <unordered_set>
+#include <algorithm>
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <exception>
+#include <filesystem>
+#include <future>
+#include <ios>
+#include <iterator>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <set>
+#include <span>
+#include <string>
+#include <string_view>
+#include <thread>
+#include <tuple>
+#include <utility>
+#include <vector>
 
 namespace fsim::app {
 using namespace application_detail;
@@ -68,18 +105,23 @@ std::string uvm_source_identity(
 
 bool validate_uvm_api_release(
     const project::SystemVerilogUvmRelease release,
-    const std::span<const frontend::SystemVerilogClassSpecialization> classes,
+    const frontend::ParsedDesign& parsed,
     diagnostic::Engine& diagnostics) {
   if (release == project::SystemVerilogUvmRelease::none) {
     return true;
   }
-  const auto has_class = [&](const std::string_view suffix) {
-    return std::ranges::any_of(classes, [&](const auto& specialization) {
-      return specialization.declaration_identity.ends_with(suffix);
+  // The library classes the release's API surface is told apart by, found
+  // by their recorded roles (support::UvmRole).
+  const auto has_class = [&](const support::UvmRole role) {
+    return std::ranges::any_of(parsed.units, [&](const auto& unit) {
+      return std::ranges::any_of(unit.systemverilog_classes,
+          [&](const auto& declaration) {
+            return declaration.uvm_role == role;
+          });
     });
   };
-  const bool has_uvm_object = has_class("::uvm_object");
-  const bool has_ieee_policy = has_class("::uvm_policy");
+  const bool has_uvm_object = has_class(support::UvmRole::object);
+  const bool has_ieee_policy = has_class(support::UvmRole::policy);
   const auto compatibility =
       project::systemverilog_uvm_compatibility(release);
   const bool matches = has_uvm_object
@@ -331,6 +373,9 @@ static std::optional<CompilationWorkspace> check_project_impl(
   std::map<std::string, std::size_t> combined_groups;
   std::size_t systemc_source_count = 0;
   std::size_t hdl_source_count = 0;
+  // The sources of the source sets compiled with a governed UVM release,
+  // whose package `uvm_pkg` is the library the native services serve.
+  std::set<std::size_t> governed_uvm_sources;
   for (const auto& source_set : config.source_sets) {
     const auto parsed_vhdl_compatibility =
         project::parse_vhdl_compatibility(source_set.vhdl_compatibility);
@@ -393,6 +438,9 @@ static std::optional<CompilationWorkspace> check_project_impl(
             source_set.defines.end());
         group.default_timescale = source_set.default_timescale;
         for (const auto& file : source_set.files) {
+            if (source_set.uvm_release
+                != project::SystemVerilogUvmRelease::none)
+                governed_uvm_sources.insert(hdl_source_count);
             group.inputs.push_back(
                 { file, language, vhdl_standard, standard_revision,
                     source_set.standard,
@@ -411,6 +459,9 @@ static std::optional<CompilationWorkspace> check_project_impl(
             group.include_directories = source_set.include_directories;
             group.defines = source_set.defines;
             group.default_timescale = source_set.default_timescale;
+            if (source_set.uvm_release
+                != project::SystemVerilogUvmRelease::none)
+                governed_uvm_sources.insert(hdl_source_count);
             group.inputs.push_back(
                 { file, language, vhdl_standard, standard_revision,
                     source_set.standard, source_set.library, hdl_source_count++ });
@@ -456,6 +507,13 @@ static std::optional<CompilationWorkspace> check_project_impl(
     return std::nullopt;
   }
 
+  // The files of compiled sequences and properties the groups parse again.
+  struct CompiledAssertionSources {
+    std::mutex mutex;
+    std::vector<semantic::SourceFile> files;
+  };
+  const auto compiled_assertion_sources
+      = std::make_shared<CompiledAssertionSources>();
   if (imported) {
     for (auto& group : groups) {
       if (group.language != frontend::Language::SystemVerilog2017
@@ -466,6 +524,23 @@ static std::optional<CompilationWorkspace> check_project_impl(
           [imported, library = group.inputs.front().library](
               const std::string_view package, const std::string_view member) {
             return compiled_package_member(*imported, library, package, member);
+          };
+      group.package_assertion_lookup =
+          [imported, library = group.inputs.front().library,
+              compiled_assertion_sources](const std::string_view package) {
+            std::vector<semantic::SourceFile> files;
+            auto result = compiled_package_assertions(
+                *imported, library, package, files);
+            const std::scoped_lock lock { compiled_assertion_sources->mutex };
+            for (auto& file : files) {
+              if (std::ranges::none_of(compiled_assertion_sources->files,
+                      [&](const semantic::SourceFile& known) {
+                        return known.physical_name == file.physical_name;
+                      })) {
+                compiled_assertion_sources->files.push_back(std::move(file));
+              }
+            }
+            return result;
           };
     }
   }
@@ -496,6 +571,11 @@ static std::optional<CompilationWorkspace> check_project_impl(
             fallback = std::move(group.package_member_lookup)](
             const std::string_view package, const std::string_view member) {
           return earlier->find(package, member, fallback);
+        };
+        group.package_assertion_lookup = [earlier,
+            fallback = std::move(group.package_assertion_lookup)](
+            const std::string_view package) {
+          return earlier->assertions(package, fallback);
         };
         try {
           parsed_inputs[index] = parse_group_snapshot(group);
@@ -922,6 +1002,12 @@ static std::optional<CompilationWorkspace> check_project_impl(
               span(ordered.unit.span));
       } else {
           record_source_owner(ordered.unit.span, ordered.source_order);
+          // The governed library package: its declarations get their roles
+          // once, by their declared names (support::UvmRole).
+          if (ordered.unit.kind == frontend::UnitKind::SystemVerilogPackage
+              && ordered.unit.name == "uvm_pkg"
+              && governed_uvm_sources.contains(ordered.source_order))
+              frontend::record_uvm_library_roles(ordered.unit);
           for (const auto& declaration : ordered.unit.systemverilog_classes) {
             record_class_source_owners(record_class_source_owners, declaration,
                 ordered.source_order);
@@ -1066,9 +1152,7 @@ static std::optional<CompilationWorkspace> check_project_impl(
   }
   checked.systemverilog_class_specializations =
       std::move(class_specializations.specializations);
-  if (!validate_uvm_api_release(
-          *uvm_release, checked.systemverilog_class_specializations,
-          diagnostics)) {
+  if (!validate_uvm_api_release(*uvm_release, checked.parsed, diagnostics)) {
     return std::nullopt;
   }
   if (diagnostics.has_error()) {
@@ -1078,7 +1162,8 @@ static std::optional<CompilationWorkspace> check_project_impl(
       checked.parsed,
       checked.hdl_sources,
       checked.systemc_sources,
-      checked.standard_sources);
+      checked.standard_sources,
+      compiled_assertion_sources->files);
   checked.vhdl_hir = build_vhdl_hir(checked.parsed, checked.semantics);
   checked.systemverilog_hir = build_systemverilog_hir(
       checked.parsed,

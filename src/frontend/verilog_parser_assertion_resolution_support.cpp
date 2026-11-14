@@ -6,7 +6,6 @@
 #include <charconv>
 
 #include <algorithm>
-#include <map>
 #include <unordered_set>
 
 namespace fsim::frontend {
@@ -83,6 +82,9 @@ void VerilogParser::resolve_assertion_declaration_references(DesignUnit& unit)
                         && tokens[position - 1U].kind == TokenKind::Dot
                         && position + 1U < tokens.size()
                         && tokens[position + 1U].kind == TokenKind::LeftParen)
+                    // The type of a cast (`int'(x)`, 6.24.1) is no object.
+                    || (position + 1U < tokens.size()
+                        && tokens[position + 1U].kind == TokenKind::Apostrophe)
                     || (!tokens[position].text.empty()
                         && tokens[position].text.front() == '$')) {
                     ++position;
@@ -163,7 +165,9 @@ namespace assertion_resolution_detail {
 
 std::optional<Expression> scalar_atom(const Token& token)
 {
-        if (token.kind == TokenKind::Identifier) {
+        // A system function name (`$realtime`) is a call (A.8.2), which the
+        // expression parser builds.
+        if (token.kind == TokenKind::Identifier && !token.text.starts_with('$')) {
             return Expression {
                 ExpressionKind::Identifier,
                 token.text,

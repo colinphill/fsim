@@ -1,5 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_test_support.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/parser.hpp"
+#include "fsim/frontend/token.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/semantic/vhdl_hir.hpp"
+#include <algorithm>
+#include <array>
+#include <cassert>
+#include <cstdint>
+#include <exception>
+#include <iostream>
+#include <string>
+#include <string_view>
 
 namespace fsim::tests::elaboration {
 
@@ -1076,13 +1090,13 @@ end architecture;
       fsim::frontend::VhdlStandard::Vhdl2002,
       fsim::frontend::VhdlStandard::Vhdl2008};
   constexpr std::string_view scalar_length_source = R"(
-entity Legacy_Scalar_Attribute is end entity;
+entity Legacy_Scalar_Attribute is end;
 architecture rtl of Legacy_Scalar_Attribute is
   subtype Count_T is integer range 0 to 3;
   signal Result : integer;
 begin
   Result <= Count_T'length;
-end architecture;
+end;
 )";
   for (const auto standard : older_standards) {
     const auto legacy = fsim::frontend::parse_text(

@@ -1,6 +1,26 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "verilog_parser_internal.hpp"
 #include "fsim/frontend/systemverilog_standard_package.hpp"
+#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/diagnostic.hpp"
+#include "fsim/frontend/parser.hpp"
+#include "fsim/frontend/source.hpp"
+#include "fsim/frontend/token.hpp"
+#include "parser_support.hpp"
+#include <algorithm>
+#include <cctype>
+#include <cstddef>
+#include <cstdint>
+#include <initializer_list>
+#include <iterator>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <tuple>
+#include <unordered_set>
+#include <utility>
+#include <vector>
 
 namespace fsim::frontend {
 
@@ -139,7 +159,8 @@ VerilogParser::VerilogParser(
     LexResult lexed,
     const StandardRevision standard_revision,
     std::string compatibility_profile,
-    SystemVerilogPackageMemberLookup package_member_lookup)
+    SystemVerilogPackageMemberLookup package_member_lookup,
+    SystemVerilogPackageAssertionLookup package_assertion_lookup)
     : ParserBase(std::move(lexed.tokens),
                  std::move(lexed.diagnostics)),
       language_(language_for_standard_revision(standard_revision)),
@@ -147,7 +168,8 @@ VerilogParser::VerilogParser(
       compatibility_profile_(std::move(compatibility_profile)),
       keyword_set_(compatibility_keyword_set(
           standard_revision, compatibility_profile_)),
-      package_member_lookup_(std::move(package_member_lookup)) {}
+      package_member_lookup_(std::move(package_member_lookup)),
+      package_assertion_lookup_(std::move(package_assertion_lookup)) {}
 
 std::uint64_t VerilogParser::systemverilog_source_order() const noexcept
 {
@@ -177,6 +199,11 @@ ParseResult VerilogParser::run() {
                });
         if (simple && !keyword_reserved(keyword_set_, name)) {
             token.text = std::string { name };
+        } else if (token.text.back() != ' ') {
+            // The terminating white space ends the name (5.6.1); the
+            // identifier keeps one space so a following `.` or `[` in a
+            // hierarchical name stays outside it (`top.\w.b .l2`).
+            token.text.push_back(' ');
         }
     }
     // `this.super` names the base class object as `super` does (IEEE
@@ -214,6 +241,30 @@ ParseResult VerilogParser::run() {
                 false, false, false);
             out_of_block_constraints_.emplace_back(
                 owner.text, std::move(definition));
+        } else if (language_ == Language::SystemVerilog2017
+            && at(TokenKind::Identifier)
+            && (current().text == "sequence" || current().text == "property")) {
+            // A sequence or property declared in the compilation unit
+            // (IEEE 1800-2023 3.12.1, 16.8, 16.12) is visible in the design
+            // elements that follow it, which take a copy as they do of a
+            // compilation-unit checker.
+            compilation_unit_has_design_item_ = true;
+            const auto declaration_start = advance();
+            auto declaration = parse_assertion_declaration(declaration_start,
+                declaration_start.text == "sequence"
+                    ? SystemVerilogAssertionDeclarationKind::Sequence
+                    : SystemVerilogAssertionDeclarationKind::Property);
+            if (std::ranges::any_of(compilation_unit_checkers_,
+                    [&](const auto& existing) {
+                        return !declaration.name.empty()
+                            && existing.name == declaration.name;
+                    })) {
+                error(declaration_start, "FSIM-SV-SEM-192",
+                    "duplicate compilation-unit assertion declaration '"
+                        + declaration.name + "'");
+            } else {
+                compilation_unit_checkers_.push_back(std::move(declaration));
+            }
         } else if (match_keyword("checker")) {
             compilation_unit_has_design_item_ = true;
             const auto checker_start = previous();
@@ -511,7 +562,8 @@ ParseResult VerilogParser::run() {
             parse_directive();
         } else if (keyword("parameter") || keyword("localparam")
             || keyword("typedef") || keyword("const")
-            || keyword("let") || is_declaration_start()) {
+            || keyword("let") || keyword("nettype")
+            || is_declaration_start()) {
             compilation_unit_has_design_item_ = true;
             parse_compilation_unit_declaration();
         } else if (at(TokenKind::Identifier)
@@ -731,6 +783,15 @@ void VerilogParser::parse_compilation_unit_declaration() {
         parse_let_declaration(unit, previous());
     } else if (match_keyword("event")) {
         parse_event_declaration(unit, previous());
+    } else if (match_keyword("nettype")) {
+        // A nettype is a compilation-unit item (IEEE 1800-2023 6.6.7,
+        // A.1.4 package_or_generate_item_declaration).
+        const auto aliases = unit.type_aliases.size();
+        parse_nettype(unit, previous());
+        for (auto index = aliases; index < unit.type_aliases.size(); ++index) {
+            package_members_.add_member(unit.name, unit.type_aliases[index].name,
+                SystemVerilogPackageMember::type);
+        }
     } else {
         parse_declaration(unit);
     }
@@ -1156,6 +1217,7 @@ void VerilogParser::reset_compiler_directives() {
   current_time_unit_.clear();
   current_time_precision_.clear();
   current_default_nettype_ = "wire";
+  current_default_decay_time_.clear();
   current_cell_define_ = false;
   current_unconnected_drive_ = VerilogUnconnectedDrive::None;
 }
@@ -1172,6 +1234,8 @@ void VerilogParser::parse_directive(const bool design_element) {
     parse_timescale(directive);
   } else if (directive.text == "default_nettype") {
     parse_default_nettype(tick, directive);
+  } else if (directive.text == "default_decay_time") {
+    parse_default_decay_time(tick, directive);
   } else if (directive.text == "resetall") {
     // IEEE 1800-2017 22.3: `resetall is illegal inside a design element.
     if (design_element) {
@@ -1220,6 +1284,7 @@ void VerilogParser::parse_directive(const bool design_element) {
   }
   const bool argument_directive =
       directive.text == "default_nettype"
+      || directive.text == "default_decay_time"
       || directive.text == "unconnected_drive"
       || directive.text == "begin_keywords";
   if (!argument_directive) {
@@ -1261,6 +1326,26 @@ void VerilogParser::parse_default_nettype(
   } else {
     current_default_nettype_ = net_type.text;
   }
+}
+
+// `default_decay_time integer_constant | real_constant | infinite (IEEE
+// 1800-2023 E.2): the charge decay time of the trireg nets that declare none.
+void VerilogParser::parse_default_decay_time(
+  const Token& tick,
+  const Token& directive) {
+  const bool value = on_directive_line(tick)
+      && (current().kind == TokenKind::Number
+          || (current().kind == TokenKind::Identifier
+              && current().text == "infinite"));
+  if (!value) {
+    error(
+        directive,
+        "FSIM-SV-PP-057",
+        "`default_decay_time requires an integer or real constant or "
+        "infinite");
+    return;
+  }
+  current_default_decay_time_ = advance().text;
 }
 
 void VerilogParser::parse_unconnected_drive(

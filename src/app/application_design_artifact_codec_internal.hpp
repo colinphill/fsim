@@ -17,8 +17,6 @@
 #include "../elaboration/elaborated_design_process_access.hpp"
 
 #include <cstdio>
-#include <typeinfo>
-#include <map>
 #include <boost/pfr/core.hpp>
 
 #include <algorithm>
@@ -35,7 +33,6 @@
 #include <new>
 #include <ostream>
 #include <ranges>
-#include <set>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -424,6 +421,8 @@ namespace codec_detail {
             return value >= semantic::sv::ConfigurationSelectionKind::use
                 && value
                     <= semantic::sv::ConfigurationSelectionKind::liblist;
+        } else if constexpr (std::same_as<T, support::UvmRole>) {
+            return support::valid_uvm_role(value);
         } else if constexpr (std::same_as<T, semantic::sv::ClassLifetime>) {
             return value >= semantic::sv::ClassLifetime::inherited
                 && value <= semantic::sv::ClassLifetime::automatic;
@@ -581,6 +580,10 @@ namespace codec_detail {
             return value >= runtime::simir::DynamicEventOperation::create
                 && value <= runtime::simir::DynamicEventOperation::triggered;
         } else if constexpr (
+            std::same_as<T, runtime::simir::EventArrayOperation>) {
+            return value >= runtime::simir::EventArrayOperation::wait
+                && value <= runtime::simir::EventArrayOperation::triggered;
+        } else if constexpr (
             std::same_as<T, runtime::simir::VhdlShapedOperation>) {
             return value >= runtime::simir::VhdlShapedOperation::create
                 && value <= runtime::simir::VhdlShapedOperation::slice;
@@ -735,6 +738,10 @@ namespace codec_detail {
             return value >= semantic::vhdl::BuiltinTypeIdentity::none
                 && value <= semantic::vhdl::BuiltinTypeIdentity::
                     std_standard_time_vector;
+        } else if constexpr (
+            std::same_as<T, semantic::vhdl::ProvidedType>) {
+            return value >= semantic::vhdl::ProvidedType::none
+                && value <= semantic::vhdl::ProvidedType::std_logic_arith_signed;
         } else if constexpr (
             std::same_as<T, semantic::vhdl::BuiltinOperatorIdentity>) {
             return value >= semantic::vhdl::BuiltinOperatorIdentity::none
@@ -897,7 +904,8 @@ namespace codec_detail {
         return std::tie(
             value.process, value.input, value.output, value.drivers,
             value.guarded_kind, value.variants, value.sources,
-            value.driving_mirror);
+            value.driving_mirror, value.null_value, value.driving_resolver,
+            value.driving_drivers, value.systemverilog_nettype);
     }
 
     template <typename T>
@@ -917,7 +925,8 @@ namespace codec_detail {
             value.language_standard, value.compatibility_profile,
             value.register_count, value.string_register_count,
             value.container_register_count, value.debug_locals,
-            value.call_results, value.frame_locals, value.debug_string_locals,
+            value.call_results, value.frame_locals, value.call_frames,
+            value.debug_string_locals,
             value.debug_container_locals,
             value.container_register_types, value.static_trigger_regions,
             value.register_value_kinds, value.expression_profiles,
@@ -1043,10 +1052,21 @@ namespace codec_detail {
     }
 
     template <typename T>
+        requires std::same_as<std::remove_cv_t<T>,
+            runtime::simir::EventArrayElement>
+    auto archive_fields(T& value)
+    {
+        return std::tie(value.operation, value.index, value.index_width,
+            value.index_signed, value.descending, value.left, value.elements,
+            value.destination, value.delay);
+    }
+
+    template <typename T>
         requires std::same_as<std::remove_cv_t<T>, runtime::simir::DebugPoint>
     auto archive_fields(T& value)
     {
-        return std::tie(value.kind, value.source, value.scope, value.callee);
+        return std::tie(value.kind, value.source, value.scope, value.callee,
+            value.callee_declaration, value.callee_receiver);
     }
 
     template <typename T>

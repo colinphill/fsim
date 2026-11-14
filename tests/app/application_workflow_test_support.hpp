@@ -2,7 +2,6 @@
 #pragma once
 
 #include "fsim/app/application.hpp"
-#include "fsim/app/design_artifact.hpp"
 #include "fsim/support/path.hpp"
 
 #include <algorithm>
@@ -11,7 +10,6 @@
 #include <filesystem>
 #include <iostream>
 #include <optional>
-#include <span>
 #include <string>
 #include <string_view>
 #include <utility>

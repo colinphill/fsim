@@ -8,7 +8,6 @@
 #include "fsim/runtime/vpi_abi.h"
 #include "fsim/runtime/veriuser.h"
 
-#include <stdio.h>
 
 static PLI_INT32 calltf_probe(PLI_INT32 data, PLI_INT32 reason)
 {

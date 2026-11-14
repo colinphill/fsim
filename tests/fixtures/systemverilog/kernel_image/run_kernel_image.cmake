@@ -6,7 +6,11 @@
 # and simulated with FSIM_KERNEL_IMAGE_REQUIRED=1, so the kernel must
 # restore that image; and under FSIM_VERIFY_ARTIFACT=1, where the kernel is
 # built afresh and its image must equal the stored one (FSIM-ART-0014
-# otherwise). Every transcript must equal the reference.
+# otherwise). Every transcript must equal the reference. The restored run
+# must also take every kernel template's native code from the image
+# (`static-kernel-codegen restored=N of=N` under FSIM_PROFILE_PHASES): a
+# body field that is part of a template's code key but not of the image
+# makes the restored keys differ, and the run compiles everything again.
 
 if(NOT DEFINED FSIM_EXECUTABLE OR NOT EXISTS "${FSIM_EXECUTABLE}")
   message(FATAL_ERROR "FSIM_EXECUTABLE must name the built fsim command")
@@ -48,6 +52,8 @@ endfunction()
 function(read_transcript STEP_NAME OUTPUT)
   file(READ "${case_dir}/${STEP_NAME}.stdout" text)
   string(REPLACE "\r\n" "\n" text "${text}")
+  # The phase profile (FSIM_PROFILE_PHASES) prints one timing line.
+  string(REGEX REPLACE "FSIM-PROFILE [^\n]*\n" "" text "${text}")
   set(${OUTPUT} "${text}" PARENT_SCOPE)
 endfunction()
 
@@ -97,8 +103,19 @@ foreach(case_name IN LISTS cases)
   run_fsim_step("${case_name}" elaborate_aot
     elaborate -q --top "${top}" --aot --aot-scope kernel --optimization O2)
   set(ENV{FSIM_KERNEL_IMAGE_REQUIRED} 1)
+  set(ENV{FSIM_PROFILE_PHASES} 1)
   run_fsim_step("${case_name}" simulate_restored simulate --engine v4)
+  unset(ENV{FSIM_PROFILE_PHASES})
   unset(ENV{FSIM_KERNEL_IMAGE_REQUIRED})
+  file(READ "${case_dir}/simulate_restored.stderr" restored_profile)
+  string(REGEX MATCH
+    "fsim-profile: static-kernel-codegen restored=([0-9]+) of=([0-9]+)"
+    restored "${restored_profile}")
+  if(NOT restored OR NOT CMAKE_MATCH_1 EQUAL CMAKE_MATCH_2)
+    message(FATAL_ERROR
+      "${case_name} simulate_restored did not restore every kernel template\n"
+      "${restored_profile}\nworkspace: ${case_dir}")
+  endif()
   set(ENV{FSIM_VERIFY_ARTIFACT} 1)
   run_fsim_step("${case_name}" simulate_verified simulate --engine v4)
   unset(ENV{FSIM_VERIFY_ARTIFACT})

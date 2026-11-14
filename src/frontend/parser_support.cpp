@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "parser_support.hpp"
 #include "string_case.hpp"
+#include "fsim/frontend/diagnostic.hpp"
+#include "fsim/frontend/token.hpp"
+#include "fsim/support/vhdl_identifier.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -8,6 +11,13 @@
 #include <limits>
 #include <system_error>
 #include <utility>
+#include <cstddef>
+#include <cstdint>
+#include <initializer_list>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
 
 namespace fsim::frontend::detail {
 

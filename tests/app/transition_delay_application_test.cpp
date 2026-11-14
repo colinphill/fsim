@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "change_mismatch_report.hpp"
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/runtime/simir.hpp"
 #include "fsim/app/artifact_phase.hpp"
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/artifact/object.hpp"

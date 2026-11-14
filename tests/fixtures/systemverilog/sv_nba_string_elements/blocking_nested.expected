@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+sns blk assoc-queue pattern 10 20 3
+sns blk assoc-queue struct 7 8
+sns blk queue-queue 4 5
+sns blk cont 0 2 6
+sns blk cont-pattern 3 10
+sns blk member 2 9 tag=1

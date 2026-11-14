@@ -2,9 +2,18 @@
 
 #include "verilog_parser_internal.hpp"
 #include "verilog_parser_assertion_support.hpp"
+#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/token.hpp"
 
-#include <charconv>
 #include <unordered_set>
+#include <algorithm>
+#include <cstddef>
+#include <iterator>
+#include <optional>
+#include <span>
+#include <string>
+#include <utility>
 
 namespace fsim::frontend {
 
@@ -54,6 +63,10 @@ void VerilogParser::structure_assertion_formals(
     }
     auto items = split_top_level(inner, TokenKind::Comma);
     std::unordered_set<std::string> names;
+    // The nearest preceding formal with an explicit type: a port item of
+    // only an identifier after a local one is a local variable formal of
+    // its direction and type (IEEE 1800-2023 16.8.2).
+    std::optional<SystemVerilogAssertionFormal> explicitly_typed;
     for (auto& item : items) {
         if (item.empty()) {
             error(
@@ -107,6 +120,14 @@ void VerilogParser::structure_assertion_formals(
         formal.type_tokens.assign(
             item.begin() + static_cast<std::ptrdiff_t>(type_start),
             item.begin() + static_cast<std::ptrdiff_t>(name_index));
+        if (formal.type_tokens.empty() && type_start == 0U && explicitly_typed
+            && explicitly_typed->local) {
+            formal.local = true;
+            formal.direction = explicitly_typed->direction;
+            formal.type_tokens = explicitly_typed->type_tokens;
+        } else if (!formal.type_tokens.empty()) {
+            explicitly_typed = formal;
+        }
         if (formal.type_tokens.empty()
             || formal.type_tokens.front().text == "untyped") {
             formal.kind = SystemVerilogAssertionFormalKind::Untyped;

@@ -13,14 +13,35 @@
 #include "../runtime/run_state_archive.hpp"
 #include "fsim/runtime/run_state_image.hpp"
 #include "fsim/runtime/run_state_sections.hpp"
-#include "../runtime/run_state_value_codecs.hpp"
 #include "fsim/runtime/scheduler_events.hpp"
 #include "../runtime/uvm_run_state.hpp"
 #include "fsim/support/native_filesystem.hpp"
+#include "fsim/app/application.hpp"
+#include "fsim/app/design_artifact.hpp"
+#include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include "fsim/runtime/vpi_value_control.hpp"
+#include "fsim/semantic/model.hpp"
+#include "fsim/semantic/systemverilog_class_specialization.hpp"
+#include "fsim/support/path.hpp"
 
 #include <algorithm>
 #include <charconv>
 #include <iterator>
+#include <cstddef>
+#include <cstdint>
+#include <filesystem>
+#include <ios>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <utility>
+#include <vector>
+#include "../runtime/run_state_value_codecs.hpp"
 
 namespace fsim::runtime {
 
@@ -189,6 +210,10 @@ std::string Simulation::Impl::uvm_unsaved_state() const
         return "a UVM report hook or catcher is a callback of the embedding "
                "program";
     }
+    FSIM_RS_IDLE("sim.impl", uvm_pending_constructions);
+    if (!uvm_pending_constructions.empty()) {
+        return "a UVM object's constructor chain is running";
+    }
     return { };
 }
 
@@ -252,6 +277,7 @@ void Simulation::Impl::uvm_run_state_io(runtime::RunStateArchive& archive)
     archive.io(uvm_phase_objects);
     archive.io(uvm_run_test);
     archive.io(uvm_tlm_owners);
+    archive.io(uvm_tlm_implementations);
     archive.io(uvm_analysis_connections);
     archive.io(uvm_sequence_sequencers);
     archive.io(uvm_sequencer_items);
@@ -268,6 +294,7 @@ void Simulation::Impl::reset_uvm_state()
     uvm_phase_objects.clear();
     uvm_run_test = { };
     uvm_tlm_owners.clear();
+    uvm_tlm_implementations.clear();
     uvm_analysis_connections.clear();
     uvm_sequence_sequencers.clear();
     uvm_sequencer_items.clear();

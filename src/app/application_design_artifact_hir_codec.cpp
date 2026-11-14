@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_design_artifact_codec_internal.hpp"
 
+#include "fsim/app/artifact_schema.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
 
 namespace fsim::app {
@@ -221,7 +222,7 @@ namespace codec_detail {
                                 "modport", "lifetime", "nested_scope",
                                 "callable", "children", "statements",
                                 "array_parameter", "array_local_parameter",
-                                "local_type_parameter",
+                                "local_type_parameter", "uvm_role",
                             };
                             const auto field_name
                                 = *invalid_field

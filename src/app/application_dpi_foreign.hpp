@@ -2,7 +2,6 @@
 #pragma once
 
 #include "fsim/runtime/packed_value.hpp"
-#include "fsim/runtime/simir.hpp"
 
 #include <cstdint>
 #include <functional>
@@ -13,6 +12,7 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+#include "fsim/runtime/simir.hpp"
 
 namespace fsim::diagnostic {
 class Engine;

@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "path_test_support.hpp"
+#include "fsim/support/path.hpp"
 
 #include <system_error>
+#include <filesystem>
+#include <string_view>
 
 namespace fsim::test {
 

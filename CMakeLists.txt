@@ -9,6 +9,12 @@ project(
   LANGUAGES C CXX
 )
 
+# fsim has no C++ modules; without this, every compile of a changed source is
+# preceded by a dependency scan of it.
+if(NOT DEFINED CMAKE_CXX_SCAN_FOR_MODULES)
+  set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+endif()
+
 if(NOT WIN32 AND NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
   message(
     FATAL_ERROR
@@ -71,11 +77,11 @@ set(
 set_property(CACHE FSIM_TCL_MODE PROPERTY STRINGS AUTO ON OFF)
 set(
   FSIM_UVM_SOURCE_MODE
-  "OFF"
+  "VENDORED"
   CACHE STRING
-  "External UVM sources: OFF, FETCH pinned Accellera archives, or ARCHIVE exact local archives"
+  "UVM sources: VENDORED (third_party/uvm-*), OFF, FETCH pinned Accellera archives, or ARCHIVE exact local archives"
 )
-set_property(CACHE FSIM_UVM_SOURCE_MODE PROPERTY STRINGS OFF FETCH ARCHIVE)
+set_property(CACHE FSIM_UVM_SOURCE_MODE PROPERTY STRINGS VENDORED OFF FETCH ARCHIVE)
 set(
   FSIM_UVM_WORK_ROOT
   "${CMAKE_BINARY_DIR}/_deps/fsim_uvm"
@@ -645,6 +651,7 @@ set(
   "${PROJECT_SOURCE_DIR}/src/frontend/class_expression_resolution_calls.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/class_resolution.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/class_inheritance.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/uvm_roles.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/class_specialization.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/coverage_cross_inventory.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/coverage_database_systemverilog.cpp"
@@ -976,6 +983,7 @@ endif()
       src/elaboration/hierarchy_sv_generate.cpp
       src/elaboration/hierarchy_sv_instance_worklist.cpp
       src/elaboration/hierarchy_sv_interface_ports.cpp
+      src/elaboration/hierarchy_sv_nettype.cpp
       src/elaboration/hierarchy_sv_parameters.cpp
       src/elaboration/hierarchy_sv_ports.cpp
       src/elaboration/hierarchy_sv_processes.cpp
@@ -984,6 +992,7 @@ endif()
       src/elaboration/hierarchy_systemc.cpp
       src/elaboration/hierarchy_udp.cpp
       src/elaboration/vhdl_hir_type_validation.cpp
+      src/elaboration/virtual_interface_definition.cpp
       src/elaboration/lowerer_driver_regions.cpp
       src/elaboration/lowerer_hir_capability.cpp
       src/elaboration/lowerer_hir_callable.cpp
@@ -1006,6 +1015,7 @@ endif()
       src/elaboration/lowerer_hir_vhdl_access.cpp
       src/elaboration/lowerer_hir_vhdl_fixed.cpp
       src/elaboration/lowerer_hir_vhdl_float.cpp
+      src/elaboration/lowerer_hir_sv_resolution.cpp
       src/elaboration/lowerer_hir_sva.cpp
       src/elaboration/lowerer_hir_vhdl_shaped.cpp
       src/elaboration/lowerer_hir_vhdl_shaped_record.cpp
@@ -1168,24 +1178,31 @@ target_compile_definitions(
   fsim_systemc
   PRIVATE
     FSIM_BUILD_CONFIGURATION="$<CONFIG>"
-    FSIM_SYSTEMC_HEADER_PATH="${PROJECT_SOURCE_DIR}/include"
     FSIM_SYSTEMC_INSTALLED_HEADER_PATH="${CMAKE_INSTALL_FULL_INCLUDEDIR}"
-    FSIM_SYSTEMC_UPSTREAM_HEADER_PATH="${FSIM_SYSTEMC_OFFICIAL_SOURCE_DIR}/src"
     FSIM_SYSTEMC_INSTALLED_UPSTREAM_HEADER_PATH="${CMAKE_INSTALL_FULL_INCLUDEDIR}"
-    FSIM_SCV_HEADER_PATH="${FSIM_SCV_BUILD_SOURCE_DIR}/src"
     FSIM_INSTALLED_SCV_HEADER_PATH="${CMAKE_INSTALL_FULL_INCLUDEDIR}"
     FSIM_SYSTEMC_DEFAULT_COMPILER="${CMAKE_CXX_COMPILER}"
     FSIM_SYSTEMC_DEFAULT_COMPILE_OPTIONS="${FSIM_SYSTEMC_DEFAULT_COMPILE_OPTIONS_ENCODED}"
     FSIM_SYSTEMC_DEFAULT_DEFINES="${FSIM_SYSTEMC_DEFAULT_DEFINES_ENCODED}"
-    FSIM_SYSTEMC_PLUGIN_EXPORT_LIBRARY_PATH="$<TARGET_FILE:fsim_systemc_plugin_exports>"
     FSIM_SYSTEMC_INSTALLED_PLUGIN_EXPORT_LIBRARY_PATH="${CMAKE_INSTALL_FULL_LIBDIR}/${CMAKE_STATIC_LIBRARY_PREFIX}fsim_systemc_plugin_exports${CMAKE_STATIC_LIBRARY_SUFFIX}"
-    FSIM_SYSTEMC_ACCELERA_LIBRARY_PATH="$<TARGET_LINKER_FILE:fsim_systemc_accellera_runtime>"
     FSIM_SYSTEMC_INSTALLED_ACCELERA_LIBRARY_PATH="${FSIM_SYSTEMC_INSTALLED_ACCELERA_LINK_LIBRARY}"
-    FSIM_SYSTEMC_OFFICIAL_LIBRARY_PATH="$<TARGET_LINKER_FILE:${FSIM_SYSTEMC_UPSTREAM_RUNTIME_TARGET}>"
     FSIM_SYSTEMC_INSTALLED_OFFICIAL_LIBRARY_PATH="${FSIM_SYSTEMC_INSTALLED_OFFICIAL_LINK_LIBRARY}"
-    FSIM_SCV_LIBRARY_PATH="$<TARGET_LINKER_FILE:scv>"
     FSIM_INSTALLED_SCV_LIBRARY_PATH="${CMAKE_INSTALL_FULL_LIBDIR}/$<TARGET_LINKER_FILE_NAME:scv>"
     FSIM_SYSTEMC_RUNTIME_IDENTITY="${FSIM_SYSTEMC_RUNTIME_IDENTITY}"
+)
+# Paths into this checkout and its build tree go only to the sources that
+# read them, so the other fsim_systemc sources compile the same in each
+# checkout and share the compiler cache.
+set_property(
+  SOURCE src/systemc/incremental_compiler.cpp src/systemc/plugin_compiler.cpp
+  APPEND PROPERTY COMPILE_DEFINITIONS
+    FSIM_SYSTEMC_HEADER_PATH="${PROJECT_SOURCE_DIR}/include"
+    FSIM_SYSTEMC_UPSTREAM_HEADER_PATH="${FSIM_SYSTEMC_OFFICIAL_SOURCE_DIR}/src"
+    FSIM_SCV_HEADER_PATH="${FSIM_SCV_BUILD_SOURCE_DIR}/src"
+    FSIM_SYSTEMC_PLUGIN_EXPORT_LIBRARY_PATH="$<TARGET_FILE:fsim_systemc_plugin_exports>"
+    FSIM_SYSTEMC_ACCELERA_LIBRARY_PATH="$<TARGET_LINKER_FILE:fsim_systemc_accellera_runtime>"
+    FSIM_SYSTEMC_OFFICIAL_LIBRARY_PATH="$<TARGET_LINKER_FILE:${FSIM_SYSTEMC_UPSTREAM_RUNTIME_TARGET}>"
+    FSIM_SCV_LIBRARY_PATH="$<TARGET_LINKER_FILE:scv>"
 )
 if(FSIM_WINDOWS_TOOLCHAIN_BUNDLE)
   # Installed plug-in builds default to the toolchain's compiler, which shares
@@ -1505,8 +1522,15 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
   target_compile_definitions(
     fsim_lowering
     PRIVATE
-      "FSIM_IEEE_LIBRARY_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}/third_party/ieee-1076-2019\""
       "FSIM_IEEE_LIBRARY_RELATIVE_TO_BINDIR=\"${FSIM_IEEE_LIBRARY_RELATIVE_TO_BINDIR}\""
+  )
+  # The checkout's path goes only to the source that reads it, so the other
+  # fsim_lowering sources compile the same in each checkout and share the
+  # compiler cache.
+  set_property(
+    SOURCE src/app/application_standard_library.cpp
+    APPEND PROPERTY COMPILE_DEFINITIONS
+      "FSIM_IEEE_LIBRARY_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}/third_party/ieee-1076-2019\""
   )
   target_link_libraries(
     fsim_lowering
@@ -1798,6 +1822,46 @@ install(
 install(
   DIRECTORY third_party/ieee-1076-2019/
   DESTINATION "${CMAKE_INSTALL_DATADIR}/fsim/vhdl/ieee-1076-2019"
+)
+install(
+  DIRECTORY third_party/ieee-derived/
+  DESTINATION "${CMAKE_INSTALL_DATADIR}/fsim/vhdl/ieee-derived"
+)
+install(
+  FILES scripts/vhdl_ieee_removals.tsv scripts/vhdl_ieee_rewrites.tsv
+  DESTINATION "${CMAKE_INSTALL_DATADIR}/fsim/vhdl/ieee-derived"
+)
+install(
+  DIRECTORY third_party/synopsys-ieee/
+  DESTINATION "${CMAKE_INSTALL_DATADIR}/fsim/vhdl/synopsys-ieee"
+)
+install(
+  FILES third_party/synopsys-ieee/NOTICE
+  DESTINATION "${CMAKE_INSTALL_DOCDIR}/third-party/synopsys-ieee"
+)
+install(
+  DIRECTORY third_party/uvm-1.2/kit/
+  DESTINATION "${CMAKE_INSTALL_DATADIR}/fsim/uvm/uvm-1.2"
+)
+install(
+  DIRECTORY third_party/uvm-2020.3.1/kit/
+  DESTINATION "${CMAKE_INSTALL_DATADIR}/fsim/uvm/uvm-2020.3.1"
+)
+install(
+  FILES
+    third_party/uvm-1.2/README.md
+    third_party/uvm-1.2/SHA256SUMS
+    third_party/uvm-1.2/kit/LICENSE.txt
+    third_party/uvm-1.2/kit/NOTICE.txt
+  DESTINATION "${CMAKE_INSTALL_DOCDIR}/third-party/uvm-1.2"
+)
+install(
+  FILES
+    third_party/uvm-2020.3.1/README.md
+    third_party/uvm-2020.3.1/SHA256SUMS
+    third_party/uvm-2020.3.1/kit/LICENSE.txt
+    third_party/uvm-2020.3.1/kit/NOTICE.txt
+  DESTINATION "${CMAKE_INSTALL_DOCDIR}/third-party/uvm-2020.3.1"
 )
 install(
   FILES

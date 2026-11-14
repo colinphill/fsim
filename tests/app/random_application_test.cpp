@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
-#include "application_workflow_test_support.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/runtime/simir.hpp"
 #include "../api/api_workspace_support.hpp"
-#include "../../src/app/application_internal.hpp"
 
 #include <array>
 #include <cassert>
@@ -12,11 +12,7 @@
 #include <fstream>
 #include <iostream>
 #include <limits>
-#include <memory>
 #include <optional>
-#include <ranges>
-#include <span>
-#include <sstream>
 #include <string>
 #include <string_view>
 #include <system_error>

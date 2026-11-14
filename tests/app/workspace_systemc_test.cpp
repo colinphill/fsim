@@ -3,9 +3,7 @@
 #include "../../src/app/application_workspace_systemc.hpp"
 
 #include "fsim/app/application.hpp"
-#include "fsim/app/artifact_phase.hpp"
 #include "fsim/app/design_artifact.hpp"
-#include "fsim/systemc/incremental.hpp"
 
 #include <algorithm>
 #include <cassert>

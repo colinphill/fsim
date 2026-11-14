@@ -4,6 +4,7 @@
 #include "application_vpi_operator_type.hpp"
 
 #include <algorithm>
+#include <iterator>
 #include <cctype>
 #include <utility>
 
@@ -59,32 +60,6 @@ struct SourcePlace {
     return found;
 }
 
-[[nodiscard]] std::string without_spaces(const std::string_view text)
-{
-    std::string out;
-    for (const auto character : text) {
-        if (std::isspace(static_cast<unsigned char>(character)) == 0) {
-            out.push_back(character);
-        }
-    }
-    return out;
-}
-
-// The leading word of a type's spelling: "logic [3:0]" gives "logic".
-[[nodiscard]] std::string leading_word(const std::string_view text)
-{
-    const auto begin = text.find_first_not_of(" \t");
-    if (begin == std::string_view::npos) {
-        return { };
-    }
-    auto end = begin;
-    while (end < text.size()
-        && (std::isalnum(static_cast<unsigned char>(text[end])) != 0
-            || text[end] == '_')) {
-        ++end;
-    }
-    return std::string { text.substr(begin, end - begin) };
-}
 
 // An internal marker call (`@inside-range`, `@dist-:=`, ...) is no
 // function call.
@@ -139,42 +114,133 @@ struct SourcePlace {
     }
 }
 
-// The unpacked dimensions an indexed name has: a declared unpacked array
-// dimension or a dynamic array, queue or associative array (7.4, 7.5, 7.8,
-// 7.9, 7.10), each of which an index selects an element of.
-[[nodiscard]] std::size_t unpacked_depth(const sv::ConstraintExpression& root)
+// The member a member select `a[i].m` names (7.2): the HIR keeps it as the
+// marker call `@sv-select:m` of its prefix; none for any other expression.
+[[nodiscard]] std::optional<std::string_view> selected_member(
+    const sv::ConstraintExpression& expression)
 {
-    if (root.kind != sv::ConstraintExpressionKind::name
-        || root.bindings.empty()) {
-        return 0U;
+    constexpr std::string_view prefix { "@sv-select:" };
+    if (expression.kind != sv::ConstraintExpressionKind::call
+        || expression.operands.size() != 1U
+        || !expression.text.starts_with(prefix)) {
+        return std::nullopt;
     }
-    const auto& type = root.bindings.front().type;
-    return type.unpacked_dimensions.size() + (type.container_form ? 1U : 0U);
+    return std::string_view { expression.text }.substr(prefix.size());
 }
 
-// The type of an index expression `a[i]` (37.19): an element of an unpacked
-// array is a var select, a bit of a packed value a bit select. The HIR keeps
-// the declared type of the indexed name, so the n-th index of `a[i][j]`
-// selects an element while n does not exceed the name's unpacked dimensions
-// and a bit afterwards. An indexed expression the HIR does not type (the
-// result of a call or of a member select) is read as a bit select.
-[[nodiscard]] PLI_INT32 index_type(const sv::ConstraintExpression& expression)
+} // namespace
+
+// The unpacked dimensions a type has, outermost first, each of which an
+// index selects an element of (a fixed-size dimension, or a dynamic array,
+// queue or associative array; 7.4, 7.5, 7.8, 7.9, 7.10), through the
+// element types of nested containers and typedefs of arrays (6.18).
+VpiClassModel::SelectShape VpiClassModel::select_shape(
+    const sv::TypeReference& type) const
 {
-    std::size_t level = 1U;
-    const auto* base = &expression.operands.front();
-    while (base->kind == sv::ConstraintExpressionKind::index
-        && !base->operands.empty()) {
-        ++level;
-        base = &base->operands.front();
+    auto unpacked = type.unpacked_dimensions.size();
+    if (type.container_form && unpacked == 0U) {
+        unpacked = 1U;
     }
-    return level <= unpacked_depth(*base) ? vpiVarSelect : vpiBitSelect;
+    if (!type.container_element_types.empty()) {
+        const auto inner = select_shape(type.container_element_types.front());
+        return { inner.element, unpacked + inner.unpacked };
+    }
+    if (unpacked == 0U && type.target.target.valid()) {
+        if (const auto* definition = hir_.find_type(type.target.target);
+            definition != nullptr && definition->form == sv::TypeForm::alias) {
+            return select_shape(definition->base);
+        }
+    }
+    return { &type, unpacked };
+}
+
+// The shape of a leaf an index or member select applies to: a property
+// (the declaration its binding names exactly), an element of one, or a
+// member of a structure (7.2, 7.4); none for anything else.
+std::optional<VpiClassModel::SelectShape> VpiClassModel::leaf_shape(
+    const sv::ConstraintExpression& expression) const
+{
+    using Kind = sv::ConstraintExpressionKind;
+    if (expression.kind == Kind::name) {
+        const auto binding = std::ranges::find(expression.bindings,
+            sv::ConstraintReferenceKind::property, &sv::ConstraintBinding::kind);
+        if (binding == expression.bindings.end()) {
+            return std::nullopt;
+        }
+        for (const auto& declaration : hir_.classes()) {
+            const auto property = std::ranges::find(declaration.properties,
+                binding->canonical_identity, &sv::ClassProperty::canonical_identity);
+            if (property != declaration.properties.end()) {
+                return select_shape(property->type);
+            }
+        }
+        return std::nullopt;
+    }
+    // The result of a method call has the declared return type of the
+    // method its binding names (13.4.1: a function may return an unpacked
+    // array through a typedef).
+    const auto method_binding = std::ranges::find(expression.bindings,
+        sv::ConstraintReferenceKind::method, &sv::ConstraintBinding::kind);
+    if (expression.kind == Kind::call && method_binding != expression.bindings.end()) {
+        const auto binding = method_binding;
+        for (const auto& declaration : hir_.classes()) {
+            const auto method = std::ranges::find(declaration.methods,
+                binding->canonical_identity, &sv::ClassMethod::canonical_identity);
+            if (method == declaration.methods.end()) {
+                continue;
+            }
+            const auto* const callable = hir_.find_declaration(method->declaration);
+            if (callable == nullptr || !callable->callable) {
+                return std::nullopt;
+            }
+            return select_shape(callable->callable->return_type);
+        }
+        return std::nullopt;
+    }
+    if (expression.kind == Kind::index && expression.operands.size() == 2U) {
+        const auto base = leaf_shape(expression.operands.front());
+        if (!base || base->unpacked == 0U) {
+            return std::nullopt;
+        }
+        return SelectShape { base->element, base->unpacked - 1U };
+    }
+    if (const auto member = selected_member(expression)) {
+        const auto base = leaf_shape(expression.operands.front());
+        if (!base || base->unpacked != 0U || base->element == nullptr
+            || !base->element->target.target.valid()) {
+            return std::nullopt;
+        }
+        const auto* definition = hir_.find_type(base->element->target.target);
+        while (definition != nullptr && definition->form == sv::TypeForm::alias
+            && definition->base.target.target.valid()) {
+            definition = hir_.find_type(definition->base.target.target);
+        }
+        if (definition == nullptr) {
+            return std::nullopt;
+        }
+        const auto found = std::ranges::find(
+            definition->members, *member, &sv::PackedMember::name);
+        if (found == definition->members.end()) {
+            return std::nullopt;
+        }
+        return select_shape(found->type);
+    }
+    return std::nullopt;
 }
 
 // The type of a leaf expression of a constraint (37.34, 37.38): the HIR
-// keeps the expression tree, not the VPI expression objects.
-[[nodiscard]] PLI_INT32 leaf_type(const sv::ConstraintExpression& expression)
+// keeps the expression tree, not the VPI expression objects. An index
+// selects an element (a var select) while its prefix has unpacked
+// dimensions left, and a bit of a packed value (a bit select) afterwards
+// or when the prefix has no declared type the model knows; the result of a
+// method call has the method's declared return type; a member select of a structure is a ref obj named as written
+// (owner 2026-11-12).
+PLI_INT32 VpiClassModel::leaf_type(const sv::ConstraintExpression& expression) const
 {
     using Kind = sv::ConstraintExpressionKind;
+    if (selected_member(expression)) {
+        return vpiRefObj;
+    }
     switch (expression.kind) {
     case Kind::integer_literal:
     case Kind::boolean_literal:
@@ -186,9 +252,13 @@ struct SourcePlace {
     case Kind::inside_range:
         return vpiRange;
     // A bit, element or part select (37.19).
-    case Kind::index:
-        return expression.operands.size() == 2U ? index_type(expression)
-                                                : vpiOperation;
+    case Kind::index: {
+        if (expression.operands.size() != 2U) {
+            return vpiOperation;
+        }
+        const auto base = leaf_shape(expression.operands.front());
+        return base && base->unpacked != 0U ? vpiVarSelect : vpiBitSelect;
+    }
     case Kind::slice:
         if (expression.operands.size() != 3U) {
             return vpiOperation;
@@ -205,6 +275,8 @@ struct SourcePlace {
         return vpiOperation;
     }
 }
+
+namespace {
 
 // vpiConstType of a literal leaf (37.59).
 [[nodiscard]] PLI_INT32 constant_type(const sv::ConstraintExpression& expression)
@@ -245,6 +317,9 @@ struct SourcePlace {
         return expression.text;
     }
     const auto& operands = expression.operands;
+    if (const auto member = selected_member(expression)) {
+        return decompile(operands.front()) + "." + std::string { *member };
+    }
     switch (expression.kind) {
     case Kind::unary:
         return expression.text + decompile(operands.front());
@@ -355,7 +430,6 @@ VpiClassModel::VpiClassModel(const sv::Hir& hir,
     const auto& classes = hir_.classes();
     for (std::size_t index = 0U; index < classes.size(); ++index) {
         identities_.emplace(sv::class_declaration_identity(classes[index]), index);
-        by_name_[classes[index].name].push_back(index);
     }
     for (std::size_t index = 0U; index < specializations_.size(); ++index) {
         const auto& specialization = specializations_[index];
@@ -377,6 +451,44 @@ std::optional<std::size_t> VpiClassModel::find_declaration(
     const auto found = identities_.find(identity);
     return found == identities_.end() ? std::nullopt
                                       : std::optional { found->second };
+}
+
+VpiClassModel::ParameterKey VpiClassModel::parameter_key_of(
+    const std::size_t declaration, const std::size_t specialization,
+    const std::size_t index) const
+{
+    const auto& parameter = class_at(declaration).parameters.at(index);
+    // The class of a generated scope or instance has its source
+    // specialization's parameters.
+    return ParameterKey { identity(declaration),
+        specialization == no_index
+            ? std::string { }
+            : std::string { sv::generated_specialization_source(
+                  specializations_[specialization].specialization_identity) },
+        parameter.name, parameter.type_parameter };
+}
+
+std::optional<VpiClassModel::ParameterKey> VpiClassModel::parameter_key(
+    const std::uint64_t serial) const
+{
+    if (!owns(serial)) {
+        return std::nullopt;
+    }
+    const auto& entry = entries_.at(serial);
+    if (entry.kind == Kind::body_parameter) {
+        return ParameterKey { identity(entry.declaration),
+            entry.specialization == no_index
+                ? std::string { }
+                : std::string { sv::generated_specialization_source(
+                      specializations_[entry.specialization]
+                          .specialization_identity) },
+            class_at(entry.declaration).properties.at(entry.member).name,
+            false };
+    }
+    if (entry.kind != Kind::parameter) {
+        return std::nullopt;
+    }
+    return parameter_key_of(entry.declaration, entry.specialization, entry.member);
 }
 
 std::string VpiClassModel::identity(const std::size_t index) const
@@ -413,10 +525,10 @@ std::optional<semantic::ExpressionId> VpiClassModel::lexical_actual(
     const std::size_t use, const std::size_t base, const std::size_t index) const
 {
     const auto& parameters = class_at(base).parameters;
-    const auto& relation = class_at(use).base;
-    if (relation) {
-        for (std::size_t at = 0U; at < relation->actuals.size(); ++at) {
-            const auto& actual = relation->actuals[at];
+    if (use < uses_.size()) {
+        const auto& actuals = *uses_[use];
+        for (std::size_t at = 0U; at < actuals.size(); ++at) {
+            const auto& actual = actuals[at];
             const bool match = actual.formal
                 ? *actual.formal == parameters.at(index).name
                 : at == index;
@@ -427,6 +539,41 @@ std::optional<semantic::ExpressionId> VpiClassModel::lexical_actual(
         }
     }
     return parameters.at(index).default_value;
+}
+
+std::size_t VpiClassModel::use_of(
+    const std::vector<sv::ActualAssociation>& actuals)
+{
+    const auto [found, added] = use_index_.try_emplace(&actuals, uses_.size());
+    if (added) {
+        uses_.push_back(&actuals);
+    }
+    return found->second + 1U;
+}
+
+fsim_vpi_handle_v1 VpiClassModel::item_typespec(
+    const std::string& owner, const std::string& name)
+{
+    const auto declaration = find_declaration(owner);
+    if (!declaration) {
+        return 0U;
+    }
+    const auto& source = class_at(*declaration);
+    for (const auto& property : source.properties) {
+        if (property.name != name
+            || property.owner_identity != source.canonical_identity) {
+            continue;
+        }
+        const auto base = property.type.class_identity.empty()
+            ? std::nullopt
+            : find_declaration(property.type.class_identity);
+        if (!base) {
+            return 0U;
+        }
+        return make(Kind::typespec, *base, no_index,
+            use_of(property.type.interface_parameter_actuals));
+    }
+    return 0U;
 }
 
 // The specialization a bare class name denotes (every parameter at its
@@ -512,158 +659,57 @@ std::int64_t VpiClassModel::class_type_of(const std::string_view name)
     return vpiUserDefinedClass;
 }
 
-fsim_vpi_handle_v1 VpiClassModel::typespec_for_name(
-    const std::string_view spelling)
+fsim_vpi_handle_v1 VpiClassModel::typespec_for_identity(
+    const std::string& identity)
 {
-    std::string text { spelling };
-    if (const auto exact = find_declaration(text)) {
+    if (const auto exact = find_declaration(identity)) {
         return typespec_of(*exact, default_specialization(*exact));
     }
-    if (const auto exact = specialization_index_.find(text);
+    if (const auto exact = specialization_index_.find(identity);
         exact != specialization_index_.end()) {
         if (const auto owner = find_declaration(
                 specializations_[exact->second].declaration_identity)) {
             return typespec_of(*owner, exact->second);
         }
     }
-    const auto parameters = text.find('#');
-    const bool parameterized = parameters != std::string::npos;
-    if (parameterized) {
-        text.resize(parameters);
-    }
-    text = without_spaces(text);
-    const auto separator = text.rfind("::");
-    const auto qualifier
-        = separator == std::string::npos ? std::string { } : text.substr(0U, separator);
-    const auto name
-        = separator == std::string::npos ? text : text.substr(separator + 2U);
-    const auto found = by_name_.find(name);
-    if (found == by_name_.end() || found->second.empty()) {
-        return 0U;
-    }
-    auto chosen = found->second.front();
-    if (!qualifier.empty()) {
-        for (const auto candidate : found->second) {
-            if (identity(candidate).find(qualifier) != std::string::npos) {
-                chosen = candidate;
-                break;
-            }
-        }
-    }
-    if (parameterized) {
-        // `Box#(4)`: the specialization named so, when there is one.
-        const auto at = spelling.rfind(name);
-        const auto wanted = without_spaces(
-            at == std::string_view::npos ? spelling : spelling.substr(at));
-        const auto owned = specialized_.find(identity(chosen));
-        if (owned != specialized_.end()) {
-            for (const auto index : owned->second) {
-                if (without_spaces(typespec_name(chosen, index)) == wanted) {
-                    return typespec_of(chosen, index);
-                }
-            }
-        }
-        return typespec_of(chosen, no_index);
-    }
-    return typespec_of(chosen, default_specialization(chosen));
+    return 0U;
 }
 
-PLI_INT32 VpiClassModel::typedef_type(const Entry& entry) const
+const sv::TypeReference* VpiClassModel::typedef_reference(
+    const Entry& entry) const
 {
     const auto& source = class_at(entry.declaration);
-    const auto* const alias = hir_.find_declaration(source.type_aliases.at(entry.member));
+    const auto* const alias
+        = hir_.find_declaration(source.type_aliases.at(entry.member));
     if (alias == nullptr) {
-        return vpiUndefined;
+        return nullptr;
     }
     const sv::TypeDefinition* record = alias->declared_type
         ? hir_.find_type(*alias->declared_type)
         : nullptr;
-    const sv::TypeReference* reference
-        = alias->type ? &*alias->type : (record ? &record->base : nullptr);
-    auto form = sv::TypeForm::unresolved;
-    if (record != nullptr) {
-        form = record->form;
-    } else if (reference != nullptr && reference->value_form) {
-        form = *reference->value_form;
-    }
-    if (form == sv::TypeForm::class_handle
-        || (reference != nullptr && !reference->class_identity.empty())) {
-        return vpiClassTypespec;
-    }
-    switch (form) {
-    case sv::TypeForm::enumeration:
-        return vpiEnumTypespec;
-    case sv::TypeForm::packed_structure:
-    case sv::TypeForm::unpacked_structure:
-        return vpiStructTypespec;
-    case sv::TypeForm::packed_union:
-    case sv::TypeForm::unpacked_union:
-    case sv::TypeForm::tagged_union:
-        return vpiUnionTypespec;
-    case sv::TypeForm::string:
-        return vpiStringTypespec;
-    case sv::TypeForm::dynamic_array:
-    case sv::TypeForm::queue:
-    case sv::TypeForm::associative_array:
-    case sv::TypeForm::static_array:
-        return vpiArrayTypespec;
-    case sv::TypeForm::packed_integral: {
-        const auto word = reference != nullptr
-            ? leading_word(reference->target.spelling)
-            : std::string { };
-        if (word == "int") {
-            return vpiIntTypespec;
-        }
-        if (word == "byte") {
-            return vpiByteTypespec;
-        }
-        if (word == "shortint") {
-            return vpiShortIntTypespec;
-        }
-        if (word == "longint") {
-            return vpiLongIntTypespec;
-        }
-        if (word == "integer") {
-            return vpiIntegerTypespec;
-        }
-        if (word == "time") {
-            return vpiTimeTypespec;
-        }
-        if (word == "bit") {
-            return vpiBitTypespec;
-        }
-        return vpiLogicTypespec;
-    }
-    default:
-        return vpiUndefined;
-    }
+    return alias->type ? &*alias->type : (record ? &record->base : nullptr);
+}
+
+// A class typedef entry is a typedef naming a class: the lexical class
+// typespec of the user-defined typedef (37.32 detail 1). The class's other
+// typedefs are the typespecs the elaborator recorded.
+PLI_INT32 VpiClassModel::typedef_type(const Entry& entry) const
+{
+    const auto* const reference = typedef_reference(entry);
+    return reference != nullptr && !reference->class_identity.empty()
+        ? vpiClassTypespec
+        : vpiUndefined;
 }
 
 // The class defn a typedef of a class names; 0 for any other typedef.
 fsim_vpi_handle_v1 VpiClassModel::typedef_class(const Entry& entry)
 {
-    const auto& source = class_at(entry.declaration);
-    const auto* const alias = hir_.find_declaration(source.type_aliases.at(entry.member));
-    if (alias == nullptr || typedef_type(entry) != vpiClassTypespec) {
+    const auto* const reference = typedef_reference(entry);
+    if (reference == nullptr || reference->class_identity.empty()) {
         return 0U;
     }
-    const sv::TypeDefinition* record = alias->declared_type
-        ? hir_.find_type(*alias->declared_type)
-        : nullptr;
-    const sv::TypeReference* reference
-        = alias->type ? &*alias->type : (record ? &record->base : nullptr);
-    if (reference == nullptr) {
-        return 0U;
-    }
-    const auto spelling = reference->class_identity.empty()
-        ? reference->target.spelling
-        : reference->class_identity;
-    const auto typespec = typespec_for_name(spelling);
-    if (typespec == 0U) {
-        return 0U;
-    }
-    const auto& found = entries_.at(typespec & ((std::uint64_t { 1 } << 48U) - 1U));
-    return defn_of(found.declaration);
+    const auto base = find_declaration(reference->class_identity);
+    return base ? defn_of(*base) : 0U;
 }
 
 PLI_INT32 VpiClassModel::type(const std::uint64_t serial) const
@@ -678,8 +724,18 @@ PLI_INT32 VpiClassModel::type(const std::uint64_t serial) const
         const auto& method = class_at(entry.declaration).methods.at(entry.member);
         return method.kind == sv::ClassMethodKind::task ? vpiTask : vpiFunction;
     }
+    // A type parameter is an object of its own kind (37.28).
     case Kind::parameter:
+        return class_at(entry.declaration).parameters.at(entry.member).type_parameter
+            ? vpiTypeParameter
+            : vpiParameter;
+    case Kind::body_parameter:
         return vpiParameter;
+    case Kind::variable:
+        return hooks_.variable_type
+            ? hooks_.variable_type(entry.member, identity(entry.declaration),
+                  specializations_[entry.specialization].specialization_identity)
+            : vpiUndefined;
     case Kind::param_assign:
         return vpiParamAssign;
     case Kind::class_typedef:
@@ -705,6 +761,90 @@ std::optional<std::pair<std::string, std::string>> VpiClassModel::typespec_class
             : specializations_[entry.specialization].specialization_identity };
 }
 
+semantic::DeclarationId VpiClassModel::method_body_declaration(
+    const semantic::DeclarationId declaration) const
+{
+    // An extern prototype's body is its out-of-block definition, the method
+    // of the same class with the same canonical identity (IEEE 1800-2023
+    // 8.24).
+    for (const auto& item : hir_.classes()) {
+        const auto prototype = std::ranges::find(
+            item.methods, declaration, &sv::ClassMethod::declaration);
+        if (prototype == item.methods.end()) {
+            continue;
+        }
+        if (!prototype->external) {
+            return declaration;
+        }
+        const auto definition = std::ranges::find_if(item.methods,
+            [&](const sv::ClassMethod& candidate) {
+                return candidate.out_of_block_definition
+                    && candidate.canonical_identity
+                        == prototype->canonical_identity;
+            });
+        return definition == item.methods.end() ? declaration
+                                                : definition->declaration;
+    }
+    return declaration;
+}
+
+std::optional<semantic::DeclarationId> VpiClassModel::method_body(
+    const std::uint64_t serial) const
+{
+    if (!owns(serial)) {
+        return std::nullopt;
+    }
+    const auto& entry = entries_.at(serial);
+    if (entry.kind != Kind::method) {
+        return std::nullopt;
+    }
+    return method_body_declaration(
+        class_at(entry.declaration).methods.at(entry.member).declaration);
+}
+
+std::optional<sv::ClassMethodKind> VpiClassModel::method_kind(
+    const std::uint64_t serial) const
+{
+    if (!owns(serial)) {
+        return std::nullopt;
+    }
+    const auto& entry = entries_.at(serial);
+    if (entry.kind != Kind::method) {
+        return std::nullopt;
+    }
+    return class_at(entry.declaration).methods.at(entry.member).kind;
+}
+
+fsim_vpi_handle_v1 VpiClassModel::method_object(
+    const semantic::DeclarationId declaration)
+{
+    const auto& classes = hir_.classes();
+    for (std::size_t index = 0U; index < classes.size(); ++index) {
+        const auto& methods = classes[index].methods;
+        const auto found = std::ranges::find(
+            methods, declaration, &sv::ClassMethod::declaration);
+        if (found == methods.end()) {
+            continue;
+        }
+        // An out-of-block definition is listed at its extern prototype.
+        auto listed = found;
+        if (found->out_of_block_definition) {
+            listed = std::ranges::find_if(methods,
+                [&](const sv::ClassMethod& candidate) {
+                    return !candidate.out_of_block_definition
+                        && candidate.canonical_identity
+                            == found->canonical_identity;
+                });
+            if (listed == methods.end()) {
+                return 0U;
+            }
+        }
+        return make(Kind::method, index, no_index,
+            static_cast<std::size_t>(std::distance(methods.begin(), listed)));
+    }
+    return 0U;
+}
+
 std::optional<std::pair<std::string, std::string>>
 VpiClassModel::constraint_identity(const std::uint64_t serial) const
 {
@@ -727,12 +867,41 @@ const sv::ConstraintExpression* VpiClassModel::leaf_expression(
     return item_type(node) == vpiConstant ? node.expression : nullptr;
 }
 
+std::optional<std::string> VpiClassModel::leaf_property(
+    const std::uint64_t serial) const
+{
+    if (!owns(serial)) {
+        return std::nullopt;
+    }
+    const auto& entry = entries_.at(serial);
+    if (entry.kind != Kind::constraint_item) {
+        return std::nullopt;
+    }
+    const auto& node = nodes_.at(entry.member);
+    if (node.expression == nullptr
+        || node.expression->kind != sv::ConstraintExpressionKind::name) {
+        return std::nullopt;
+    }
+    const auto binding = std::ranges::find(node.expression->bindings,
+        sv::ConstraintReferenceKind::property, &sv::ConstraintBinding::kind);
+    return binding == node.expression->bindings.end()
+        ? std::nullopt
+        : std::optional { binding->canonical_identity };
+}
+
 std::optional<std::int64_t> VpiClassModel::property(
     const std::uint64_t serial, const PLI_INT32 property) const
 {
     const auto& entry = entries_.at(serial);
     const auto& source = class_at(entry.declaration);
     switch (entry.kind) {
+    // An automatic property of a specialization (37.32 detail 5).
+    case Kind::variable:
+        return hooks_.variable_property
+            ? hooks_.variable_property(entry.member, identity(entry.declaration),
+                  specializations_[entry.specialization].specialization_identity,
+                  property)
+            : std::nullopt;
     case Kind::typespec:
         if (property == vpiClassType) {
             return vpiUserDefinedClass;
@@ -771,6 +940,12 @@ std::optional<std::int64_t> VpiClassModel::property(
         // detail 7).
         if (property == vpiLocalParam) {
             return 0;
+        }
+        return std::nullopt;
+    // A parameter of the class body is local (37.31 detail 7).
+    case Kind::body_parameter:
+        if (property == vpiLocalParam) {
+            return 1;
         }
         return std::nullopt;
     // A constraint (37.34): vpiAutomatic reflects the keyword of its
@@ -820,6 +995,15 @@ std::optional<std::string> VpiClassModel::string_property(
     const auto& entry = entries_.at(serial);
     const auto& source = class_at(entry.declaration);
     switch (entry.kind) {
+    // An automatic property of a specialization has its declared name and,
+    // like a non-static data member of an object, no full name (37.33
+    // detail 9): it is reached through the typespec, not a scope.
+    case Kind::variable:
+        if (property == vpiName) {
+            return hooks_.name ? std::optional { hooks_.name(entry.member) }
+                               : std::nullopt;
+        }
+        return std::nullopt;
     case Kind::typespec:
         if (property == vpiName) {
             return typespec_name(entry.declaration, entry.specialization);
@@ -845,6 +1029,16 @@ std::optional<std::string> VpiClassModel::string_property(
     }
     case Kind::parameter: {
         const auto& parameter = source.parameters.at(entry.member);
+        if (property == vpiName) {
+            return parameter.name;
+        }
+        if (property == vpiFullName) {
+            return defn_full_name(entry.declaration) + "." + parameter.name;
+        }
+        return std::nullopt;
+    }
+    case Kind::body_parameter: {
+        const auto& parameter = source.properties.at(entry.member);
         if (property == vpiName) {
             return parameter.name;
         }
@@ -885,6 +1079,9 @@ std::optional<std::string> VpiClassModel::string_property(
         if (property == vpiName) {
             const auto& expression = *nodes_.at(entry.member).expression;
             const auto kind = leaf_type(expression);
+            if (kind == vpiRefObj && selected_member(expression)) {
+                return decompile(expression);
+            }
             if (kind == vpiRefObj || kind == vpiFuncCall
                 || kind == vpiSysFuncCall) {
                 return expression.text;
@@ -903,6 +1100,23 @@ fsim_vpi_handle_v1 VpiClassModel::relation(
 {
     const auto entry = entries_.at(serial);
     switch (entry.kind) {
+    // An automatic property of a specialization: its parent and scope are
+    // the class typespec it was obtained from (37.33 detail 5 note), its
+    // typespec the one the
+    // specialization gives its declared type (37.32, 37.17).
+    case Kind::variable:
+        if (type == vpiParent || type == vpiScope) {
+            return typespec_of(entry.declaration, entry.specialization);
+        }
+        if (type == vpiTypespec) {
+            return hooks_.variable_typespec
+                ? hooks_.variable_typespec(entry.member,
+                      identity(entry.declaration),
+                      specializations_[entry.specialization]
+                          .specialization_identity)
+                : 0U;
+        }
+        return 0U;
     case Kind::typespec:
         if (type == vpiClassDefn) {
             return defn_of(entry.declaration);
@@ -941,7 +1155,7 @@ fsim_vpi_handle_v1 VpiClassModel::relation(
                 if (const auto owner
                     = find_declaration(source.base->declaration_identity)) {
                     return make(Kind::typespec, *owner, no_index,
-                        entry.declaration + 1U);
+                        use_of(source.base->actuals));
                 }
             }
             return 0U;
@@ -953,8 +1167,30 @@ fsim_vpi_handle_v1 VpiClassModel::relation(
         }
         return 0U;
     }
-    case Kind::method:
+    // A parameter's typespec is its declared type, a type parameter's the
+    // type it names (37.28), as the elaborator recorded them.
     case Kind::parameter:
+        if (type == vpiTypespec) {
+            const auto key = parameter_key_of(
+                entry.declaration, entry.specialization, entry.member);
+            return hooks_.parameter_typespec
+                ? hooks_.parameter_typespec(
+                      key.declaration, key.specialization, key.name)
+                : 0U;
+        }
+        return type == vpiParent || type == vpiScope ? defn_of(entry.declaration)
+                                                     : 0U;
+    case Kind::body_parameter:
+        if (type == vpiTypespec) {
+            const auto key = parameter_key(serial);
+            return key && hooks_.parameter_typespec
+                ? hooks_.parameter_typespec(
+                      key->declaration, key->specialization, key->name)
+                : 0U;
+        }
+        return type == vpiParent || type == vpiScope ? defn_of(entry.declaration)
+                                                     : 0U;
+    case Kind::method:
         return type == vpiParent || type == vpiScope ? defn_of(entry.declaration)
                                                      : 0U;
     case Kind::class_typedef:
@@ -974,6 +1210,19 @@ fsim_vpi_handle_v1 VpiClassModel::relation(
         if (type == vpiLhs) {
             return make(Kind::parameter, entry.declaration,
                 entry.specialization, parameter);
+        }
+        // The Rhs of a type parameter's assignment is the typespec of the
+        // type it is bound to (37.28).
+        if (type == vpiRhs && entry.specialization != no_index
+            && specializations_[entry.specialization]
+                   .parameters.at(parameter)
+                   .type_parameter) {
+            const auto key = parameter_key_of(
+                entry.declaration, entry.specialization, parameter);
+            return hooks_.parameter_typespec
+                ? hooks_.parameter_typespec(
+                      key.declaration, key.specialization, key.name)
+                : 0U;
         }
         if (type == vpiRhs && hooks_.expression) {
             if (entry.specialization != no_index) {
@@ -1022,15 +1271,16 @@ std::vector<fsim_vpi_handle_v1> VpiClassModel::members_of(
         }
         break;
     // The assignments of a class specialization (37.32 detail 3): one per
-    // value parameter, the object of its Rhs being any object with the
-    // right value, here the actual or default expression it was bound to;
-    // none for a lexical typespec, whose Rhs is the use's explicit actual,
-    // and none for a type parameter, whose Rhs would be a typespec.
+    // parameter, the object of a value parameter's Rhs being any object
+    // with the right value, here the actual or default expression it was
+    // bound to, and a type parameter's the typespec of its type; none for a
+    // lexical typespec, whose Rhs is the use's explicit actual.
     case vpiParamAssign:
         if (specialization != no_index) {
             const auto& actuals = specializations_[specialization].parameters;
             for (std::size_t index = 0U; index < actuals.size(); ++index) {
-                if (!actuals[index].type_parameter && actuals[index].expression
+                if ((actuals[index].type_parameter ? actuals[index].type.has_value()
+                                                   : actuals[index].expression.has_value())
                     && index < source.parameters.size()) {
                     objects.push_back(make(
                         Kind::param_assign, declaration, specialization, index));
@@ -1043,19 +1293,77 @@ std::vector<fsim_vpi_handle_v1> VpiClassModel::members_of(
             objects.push_back(
                 make(Kind::parameter, declaration, specialization, index));
         }
+        // A specialization's body parameters have the values they take in
+        // it (8.25), so they are objects of its own; the defn's are the
+        // registry's.
+        if (specialization != no_index) {
+            for (std::size_t index = 0U; index < source.properties.size();
+                 ++index) {
+                const auto& property = source.properties[index];
+                if (property.parameter
+                    && property.owner_identity == source.canonical_identity) {
+                    objects.push_back(make(Kind::body_parameter, declaration,
+                        specialization, index));
+                }
+            }
+            break;
+        }
         [[fallthrough]];
     case vpiVariables:
     case vpiNamedEvent:
     case vpiNamedEventArray: {
         auto declared = hooks_.members(identity(declaration), type);
-        objects.insert(objects.end(), declared.begin(), declared.end());
+        if (specialization == no_index) {
+            objects.insert(objects.end(), declared.begin(), declared.end());
+            break;
+        }
+        // A specialization's properties are its own (37.32 detail 5): a
+        // static one holds the specialization's value, an automatic one
+        // none (detail 6).
+        const auto& specialized
+            = specializations_[specialization].specialization_identity;
+        const auto typespec = typespec_of(declaration, specialization);
+        for (const auto property : declared) {
+            const auto member = hooks_.specialization_member
+                ? hooks_.specialization_member(
+                      property, identity(declaration), specialized, typespec)
+                : fsim_vpi_handle_v1 { };
+            objects.push_back(member != 0U
+                    ? member
+                    : make(Kind::variable, declaration, specialization,
+                          static_cast<std::size_t>(property)));
+        }
         break;
     }
+    // In declaration order: a typedef naming a class is a lexical class
+    // typespec in the defn (37.32 detail 1); every other typedef, and each
+    // of a specialization, is the typespec the elaborator recorded for it
+    // there (37.25).
     case vpiTypedef:
-        if (specialization == no_index) {
-            for (std::size_t index = 0U; index < source.type_aliases.size();
-                 ++index) {
-                objects.push_back(make(Kind::class_typedef, declaration, no_index, index));
+        for (std::size_t index = 0U; index < source.type_aliases.size();
+             ++index) {
+            const Entry alias { Kind::class_typedef, declaration, no_index,
+                index };
+            if (specialization == no_index
+                && typedef_type(alias) == vpiClassTypespec) {
+                objects.push_back(
+                    make(Kind::class_typedef, declaration, no_index, index));
+                continue;
+            }
+            const auto* const declared
+                = hir_.find_declaration(source.type_aliases[index]);
+            if (declared == nullptr || !hooks_.typedef_typespec) {
+                continue;
+            }
+            if (const auto handle = hooks_.typedef_typespec(
+                    identity(declaration),
+                    specialization == no_index
+                        ? std::string { }
+                        : specializations_[specialization]
+                              .specialization_identity,
+                    declared->name);
+                handle != 0U) {
+                objects.push_back(handle);
             }
         }
         break;
@@ -1078,6 +1386,29 @@ std::optional<std::vector<fsim_vpi_handle_v1>> VpiClassModel::iterate(
     const auto entry = entries_.at(serial);
     if (entry.kind == Kind::constraint || entry.kind == Kind::constraint_item) {
         return constraint_iterate(entry, type);
+    }
+    // A class typedef is a lexical class typespec (37.32 detail 1): its
+    // parameter assignments are the actuals the typedef wrote, else the
+    // defaults (detail 3); it supports no member relation (detail 2).
+    if (entry.kind == Kind::class_typedef) {
+        std::vector<fsim_vpi_handle_v1> assignments;
+        const auto* const reference = typedef_reference(entry);
+        const auto base = reference == nullptr
+                || reference->class_identity.empty()
+            ? std::nullopt
+            : find_declaration(reference->class_identity);
+        if (type == vpiParamAssign && base) {
+            const auto use = use_of(reference->interface_parameter_actuals);
+            const auto& parameters = class_at(*base).parameters;
+            for (std::size_t index = 0U; index < parameters.size(); ++index) {
+                if (!parameters[index].type_parameter
+                    && lexical_actual(use - 1U, *base, index)) {
+                    assignments.push_back(make(Kind::param_assign, *base,
+                        no_index, use * param_assign_stride + index));
+                }
+            }
+        }
+        return assignments;
     }
     // The arguments `extends B(args)` passes to the base constructor, in
     // source order (IEEE 1800-2023 8.17, 37.32 vpiArgument).

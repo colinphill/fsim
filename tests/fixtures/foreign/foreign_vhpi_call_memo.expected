@@ -1,0 +1,8 @@
+#c probe 1
+#c   first.q: a=3 b=4 t=34
+#c probe 2
+#c   second.q0: a=7 b=5 t=75
+#c probe 3
+#c   second.q1: a=8 b=6 t=86
+#c probe 4
+#c   second.q2: a=2 b=7 t=27

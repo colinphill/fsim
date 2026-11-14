@@ -58,6 +58,31 @@ static int count_of(PLI_INT32 type, vpiHandle owner)
     return count;
 }
 
+// A method's formals, the variable that holds a function's value and its
+// body (IEEE 1800-2023 37.31, 37.41): a constructor and a task have no
+// return variable.
+static void method_parts(const char* label, vpiHandle method)
+{
+    vpiHandle const formals = vpi_iterate(vpiIODecl, method);
+    vpiHandle const returned = vpi_handle(vpiReturn, method);
+    vpiHandle const body = vpi_handle(vpiStmt, method);
+    vpiHandle formal;
+    char line[240];
+    snprintf(line, sizeof line, "#c %s method-parts %s io=", label,
+        name_of(method));
+    while (formals != NULL && (formal = vpi_scan(formals)) != NULL) {
+        snprintf(line + strlen(line), sizeof line - strlen(line),
+            "[%s %s dir=%d size=%d scope=%s]", type_of(formal),
+            text(vpi_get_str(vpiFullName, formal)),
+            (int)vpi_get(vpiDirection, formal), (int)vpi_get(vpiSize, formal),
+            name_of(relation(vpiScope, formal)));
+    }
+    vpi_printf("%s return=%s %s size=%d stmt=%s\n", line, type_of(returned),
+        returned != NULL ? text(vpi_get_str(vpiFullName, returned)) : "-",
+        returned != NULL ? (int)vpi_get(vpiSize, returned) : 0,
+        type_of(body));
+}
+
 static void methods(const char* label, vpiHandle owner)
 {
     vpiHandle iterator = vpi_iterate(vpiMethods, owner);
@@ -70,6 +95,7 @@ static void methods(const char* label, vpiHandle owner)
             visibility_name((PLI_INT32)vpi_get(vpiVisibility, method)),
             (int)vpi_get(vpiAutomatic, method),
             name_of(relation(vpiScope, method)));
+        method_parts(label, method);
     }
 }
 
@@ -101,6 +127,38 @@ static void parameters(const char* label, vpiHandle owner)
     }
 }
 
+// The value and typespec of each parameter of a defn or class typespec, and
+// the parameter assignments of a class typespec (IEEE 1800-2023 37.28,
+// 37.32): a type parameter has no value; its typespec, and the Rhs of its
+// assignment, is the type it names.
+static void parameter_values(const char* label, vpiHandle owner)
+{
+    vpiHandle iterator = vpi_iterate(vpiParameter, owner);
+    vpiHandle item;
+    s_vpi_value value;
+    while (iterator != NULL && (item = vpi_scan(iterator)) != NULL) {
+        char name[64];
+        vpiHandle spec = vpi_handle(vpiTypespec, item);
+        snprintf(name, sizeof name, "%s", name_of(item));
+        memset(&value, 0, sizeof value);
+        value.format = vpiDecStrVal;
+        vpi_get_value(item, &value);
+        vpi_printf("#c %s parameter-value %s type=%s value=%s typespec=%s\n",
+            label, name, type_of(item),
+            value.format == vpiSuppressVal || value.value.str == NULL
+                ? "none" : value.value.str,
+            type_of(spec));
+    }
+    iterator = vpi_iterate(vpiParamAssign, owner);
+    while (iterator != NULL && (item = vpi_scan(iterator)) != NULL) {
+        char name[64];
+        vpiHandle rhs = vpi_handle(vpiRhs, item);
+        snprintf(name, sizeof name, "%s", name_of(vpi_handle(vpiLhs, item)));
+        vpi_printf("#c %s param-assign %s lhs-type=%s rhs=%s\n", label, name,
+            type_of(vpi_handle(vpiLhs, item)), type_of(rhs));
+    }
+}
+
 static void typedefs(const char* label, vpiHandle owner)
 {
     vpiHandle iterator = vpi_iterate(vpiTypedef, owner);
@@ -120,6 +178,11 @@ static void typespec(const char* label, vpiHandle spec)
         name_of(relation(vpiClassTypespec, relation(vpiExtends, spec))),
         count_of(vpiVariables, spec), count_of(vpiMethods, spec),
         count_of(vpiParameter, spec));
+    {
+        char spec_label[96];
+        snprintf(spec_label, sizeof spec_label, "%s %s", label, name_of(spec));
+        parameter_values(spec_label, spec);
+    }
 }
 
 static void defn(vpiHandle object)
@@ -152,6 +215,7 @@ static void defn(vpiHandle object)
     methods(label, object);
     variables(label, object);
     parameters(label, object);
+    parameter_values(label, object);
     typedefs(label, object);
     vpi_printf("#c %s constraints=%d\n", label,
         count_of(vpiConstraint, object));

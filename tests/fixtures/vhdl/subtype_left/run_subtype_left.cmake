@@ -7,6 +7,8 @@
 # subtype_left.expected, derived from IEEE 1076-2008 6.4.2.3, IEEE 1076-2019
 # 16.2.2 and 16.3, and the IEEE 1164 subtypes.
 
+include("${CMAKE_CURRENT_LIST_DIR}/../../../cmake/FsimTestWorkspace.cmake")
+
 if(NOT DEFINED FSIM_EXECUTABLE OR NOT EXISTS "${FSIM_EXECUTABLE}")
   message(FATAL_ERROR "FSIM_EXECUTABLE must name the built fsim command")
 endif()
@@ -20,7 +22,7 @@ endforeach()
 
 string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef workspace_id)
 set(case_dir "${CMAKE_CURRENT_BINARY_DIR}/fsim-subtype-left-${workspace_id}")
-file(MAKE_DIRECTORY "${case_dir}")
+fsim_test_workspace("${case_dir}")
 file(COPY_FILE "${FSIM_FIXTURE_DIR}/subtype_left.vhd" "${case_dir}/subtype_left.vhd")
 
 function(run_fsim_step STEP_NAME)
@@ -65,3 +67,6 @@ foreach(run IN ITEMS interpreter kernel verified scheduler)
       "workspace: ${case_dir}")
   endif()
 endforeach()
+
+# Passed: remove this run's workspaces (a failure above keeps them).
+fsim_test_workspace_cleanup()

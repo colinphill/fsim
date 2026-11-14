@@ -99,24 +99,28 @@ execute_process(
 if(NOT FSIM_STATUS EQUAL 0)
   message(FATAL_ERROR "cannot inspect generated test bounds: ${FSIM_ERROR}")
 endif()
-string(JSON FSIM_TEST_COUNT LENGTH "${FSIM_JSON}" tests)
+include("${FSIM_SOURCE_DIR}/cmake/CTestMetadata.cmake")
+fsim_ctest_test_objects("${FSIM_JSON}" FSIM_TEST_COUNT FSIM_TEST)
+if(FSIM_TEST_COUNT LESS 1)
+  message(FATAL_ERROR "generated CTest metadata contains no tests")
+endif()
 math(EXPR FSIM_LAST_TEST "${FSIM_TEST_COUNT} - 1")
 set(FSIM_BOUNDED_TESTS 0)
 foreach(FSIM_INDEX RANGE 0 ${FSIM_LAST_TEST})
-  string(JSON FSIM_TEST_NAME GET "${FSIM_JSON}" tests ${FSIM_INDEX} name)
-  string(JSON FSIM_PROPERTY_COUNT LENGTH
-    "${FSIM_JSON}" tests ${FSIM_INDEX} properties)
+  set(FSIM_TEST_OBJECT "${FSIM_TEST_${FSIM_INDEX}}")
+  string(JSON FSIM_TEST_NAME GET "${FSIM_TEST_OBJECT}" name)
+  string(JSON FSIM_PROPERTY_COUNT LENGTH "${FSIM_TEST_OBJECT}" properties)
   if(FSIM_PROPERTY_COUNT LESS 1)
     continue()
   endif()
   math(EXPR FSIM_LAST_PROPERTY "${FSIM_PROPERTY_COUNT} - 1")
   foreach(FSIM_PROPERTY_INDEX RANGE 0 ${FSIM_LAST_PROPERTY})
-    string(JSON FSIM_PROPERTY_NAME GET "${FSIM_JSON}" tests ${FSIM_INDEX}
+    string(JSON FSIM_PROPERTY_NAME GET "${FSIM_TEST_OBJECT}"
       properties ${FSIM_PROPERTY_INDEX} name)
     if(NOT FSIM_PROPERTY_NAME STREQUAL "TIMEOUT")
       continue()
     endif()
-    string(JSON FSIM_TIMEOUT GET "${FSIM_JSON}" tests ${FSIM_INDEX}
+    string(JSON FSIM_TIMEOUT GET "${FSIM_TEST_OBJECT}"
       properties ${FSIM_PROPERTY_INDEX} value)
     if(NOT FSIM_TIMEOUT MATCHES "^[0-9]+([.][0-9]+)?$"
        OR FSIM_TIMEOUT LESS_EQUAL 0 OR FSIM_TIMEOUT GREATER 7200)

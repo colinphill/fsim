@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
+#include "fsim/runtime/simir.hpp"
 
 #include "fsim/runtime/vcd_writer.hpp"
 
@@ -262,7 +264,7 @@ int main() {
   {
     std::ofstream output(source, std::ios::binary);
     output << R"(
-entity vhdl_integer_shift is
+library ieee; use ieee.std_logic_1164.all; entity vhdl_integer_shift is
 end entity;
 
 architecture rtl of vhdl_integer_shift is

@@ -41,7 +41,26 @@
 #c     name a
 #c     name b
 #c     const 1
+#c sequence s_ty full=top.s_ty type=vpiSequenceDecl
+#c formal top.s_ty.n type=vpiSeqFormalDecl dir=5 default=none
+#c formal top.s_ty.t type=vpiSeqFormalDecl dir=5 default=none
+#c formal top.s_ty.m type=vpiSeqFormalDecl dir=5 default=none
+#c variable top.s_ty.lv type=vpiReg name=lv parent=top.s_ty
+#c variable top.s_ty.q type=vpiIntVar name=q parent=top.s_ty
+#c expr
+#c   op vpiCycleDelayOp strong=0
+#c     name a
+#c     name b
+#c     const 1
 #c by name top.p_imp
+#c checker declaration by name none
+#c checker assertion by name top.u_chk.ca
+#c assertion top.a1 name a1 uses p_imp (top.p_imp)
+#c assertion top.a2 name a2 uses p_until (top.p_until)
+#c assertion top.a3 name a3
+#c assertion top.a4 name a4
+#c assertion top.a5 name a5
+#c assertion top.u_chk.ca name ca uses cp (top.u_chk.cp)
 #c top.a1 property type=vpiPropertyInst
 #c   inst vpiPropertyInst p_imp decl=top.p_imp
 #c     name a
@@ -57,3 +76,33 @@
 #c       name b
 #c       const 1
 #c       const 2
+#c top.a4 property type=vpiPropertySpec
+#c   op vpiCompAndOp strong=0
+#c     name a type=vpiRefObj strong=1
+#c     name b type=vpiRefObj strong=0
+#c top.a5 property type=vpiPropertySpec
+#c   cover sequence=1 disable=r
+#c     op vpiPosedgeOp
+#c       name clk
+#c   op vpiCycleDelayOp strong=0
+#c     name a
+#c     name b
+#c     const 1
+#c typed top.s_ty.n
+#c   typespec vpiIntTypespec name=none
+#c typed top.s_ty.t
+#c   typespec vpiLogicTypespec name=byte_t
+#c     range [7:0]
+#c     typespec vpiLogicTypespec name=none
+#c typed top.s_ty.m
+#c   typespec vpiLogicTypespec name=none
+#c     range [3:0]
+#c     typespec vpiLogicTypespec name=none
+#c typed top.s_ty.lv
+#c   typespec vpiLogicTypespec name=byte_t
+#c     range [7:0]
+#c     typespec vpiLogicTypespec name=none
+#c typed top.s_ty.q
+#c   typespec vpiArrayTypespec name=none
+#c     range [0:1]
+#c     typespec vpiIntTypespec name=none

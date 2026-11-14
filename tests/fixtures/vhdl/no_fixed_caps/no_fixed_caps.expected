@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+nocap top tilde
+nocap top Z
+nocap pos above 64
+nocap leaf Z
+nocap leaf tilde

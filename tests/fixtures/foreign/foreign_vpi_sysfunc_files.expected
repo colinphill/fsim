@@ -1,0 +1,4 @@
+#c top.u1 signed=1 size=32 value=same-as-target
+#c top.u2 signed=0 size=32 value=same-as-target
+#c top.u3 signed=1 size=32 value=same-as-target
+#c top.u4 signed=0 size=32 value=same-as-target

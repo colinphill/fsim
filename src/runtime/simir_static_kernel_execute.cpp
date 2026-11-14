@@ -3,21 +3,43 @@
 // KIR execution of the engine v4 static kernel: the interpreter tier,
 // deoptimization, the generic bridge and the slow instruction semantics.
 #include "simir_static_kernel_compiled_internal.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 #include "fsim/semantic/sva_plan.hpp"
 #include "fsim/support/index_distance.hpp"
+#include "fsim/runtime/logic.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_container_value.hpp"
+#include "fsim/runtime/simir_ids.hpp"
+#include "fsim/runtime/sva_storage.hpp"
+#include "simir_container_helpers.hpp"
+#include "simir_internal.hpp"
+#include "simir_kernel_word_ops.hpp"
+#include "simir_operation_kinds.hpp"
+#include "simir_static_kernel.hpp"
+#include "simir_static_kernel_ir.hpp"
+#include "simir_static_kernel_native.hpp"
+#include "simir_static_kernel_state.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cctype>
 #include <cstdlib>
 #include <cxxabi.h>
-#include <iostream>
 #include <limits>
 #include <map>
-#include <queue>
 #include <typeinfo>
-#include <unordered_map>
 #include <utility>
+#include <cstdint>
+#include <exception>
+#include <initializer_list>
+#include <memory>
+#include <optional>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <type_traits>
+#include <vector>
 
 namespace fsim::runtime::simir {
 
@@ -117,14 +139,25 @@ void Interpreter::Impl::StaticKernel::execute_body(
             registers[shadow_base + reg] = { value, weak_value };
         }
     };
+    // The instruction before this one, when it stored a VHDL variable a
+    // hook names (note_variable_store).
+    std::uint32_t stored_variable = no_variable_store;
     try {
     while (pc < size) {
+        if (stored_variable != no_variable_store) [[unlikely]] {
+            (void)note_variable_store(
+                static_cast<std::uint32_t>(current - members_.data()),
+                std::exchange(stored_variable, no_variable_store), registers);
+        }
         if (++steps > run_step_limit && !behavioral) {
             fail_at(pc, "static kernel member did not terminate");
         }
         const auto& inst = code[pc];
         const auto at = pc;
         executing = at;
+        if (variable_hooks_active_ && at < body.variable_stores.size()) [[unlikely]] {
+            stored_variable = body.variable_stores[at];
+        }
         ++pc;
         const auto mode = body.shadow_base != 0U ? body.u_mode[at]
                                                  : std::uint8_t { 0 };
@@ -1235,6 +1268,7 @@ void Interpreter::Impl::StaticKernel::plan_sva_table()
     sva_table_.now = &sva_now_;
     sva_table_.control_base = sva_control_base_.data();
     sva_table_.controls = impl_.assertion_controls.data();
+    sva_table_.history = history_words_.data();
     if (total == 0U) {
         // No directive; an inline sampled read in procedural code still
         // reads the sampled words and rings through the table.
@@ -1378,6 +1412,27 @@ void Interpreter::Impl::StaticKernel::execute_sva_sampled_load(
             ? impl_.assertion_controls[index]
             : semantic::sva::control_default;
         registers[inst.d] = { static_cast<std::uint64_t>(word) & m, 0U };
+        return;
+    }
+    if (inst.aux == 16U) {
+        // A history attribute of a kernel signal (IEEE 1076-2019 16.2.4):
+        // sub 0 'EVENT, 1 'ACTIVE, 2 'LAST_EVENT, 3 'LAST_ACTIVE.
+        const bool transaction = (inst.sub & 1U) != 0U;
+        const auto* const record = history_words_.data() + inst.x;
+        const auto now = static_cast<std::uint64_t>(kernel_now());
+        const bool has = (record[0] & (transaction ? 2U : 1U)) != 0U;
+        const auto stamp_time = record[transaction ? 3U : 1U];
+        std::uint64_t value { };
+        if (inst.sub < 2U) {
+            value = has && stamp_time == now
+                    && record[transaction ? 4U : 2U] == history_words_[0]
+                ? 1U : 0U;
+        } else {
+            value = has ? now - stamp_time
+                        : static_cast<std::uint64_t>(
+                              std::numeric_limits<std::int64_t>::max());
+        }
+        registers[inst.d] = { value & m, 0U };
         return;
     }
     if (inst.aux == 4U) {

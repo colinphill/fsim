@@ -2,8 +2,6 @@
 #include "fsim/runtime/uvm_objection.hpp"
 
 #include "run_state_archive.hpp"
-#include "run_state_value_codecs.hpp"
-#include "uvm_run_state.hpp"
 
 #include "fsim/runtime/scheduler_events.hpp"
 
@@ -12,6 +10,8 @@
 #include <limits>
 #include <set>
 #include <utility>
+#include "run_state_value_codecs.hpp"
+#include "uvm_run_state.hpp"
 
 namespace fsim::runtime {
 namespace {

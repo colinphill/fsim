@@ -1,8 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "verilog_parser_internal.hpp"
+#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/source.hpp"
+#include "fsim/frontend/systemverilog_scalars.hpp"
+#include "fsim/frontend/token.hpp"
 
 #include <utility>
 #include <bit>
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <unordered_set>
+#include <vector>
 
 namespace fsim::frontend {
 
@@ -710,7 +725,7 @@ void VerilogParser::parse_typedef(
                     TokenKind::Identifier, literal.name, literal.span, { } } });
         }
     } else if (keyword("shortreal") || keyword("real")
-        || keyword("realtime") || keyword("time")
+        || keyword("realtime") || keyword("time") || keyword("event")
         || keyword("chandle") || keyword("process") || keyword("string")
         || keyword("logic") || keyword("reg") || keyword("bit")
         || keyword("byte") || keyword("shortint") || keyword("int")

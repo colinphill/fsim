@@ -2,7 +2,6 @@
 #include "fsim/runtime/systemverilog_scalar.hpp"
 
 #include <array>
-#include <bit>
 #include <cfenv>
 #include <charconv>
 #include <cmath>

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "simir_events.hpp"
 #include "simir_internal.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 
 namespace fsim::runtime::simir {
 namespace {

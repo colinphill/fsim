@@ -29,7 +29,10 @@ foreach(FSIM_REQUIRED IN ITEMS FSIM_EXECUTABLE FSIM_SOURCES FSIM_TOP
   endif()
 endforeach()
 
-file(MAKE_DIRECTORY "${FSIM_WORK_DIR}")
+include("${CMAKE_CURRENT_LIST_DIR}/FsimTestWorkspace.cmake")
+# FSIM_WORK_DIR names the case; each run works in a new folder of its own,
+# removed when the case passes.
+fsim_test_case_workspace(FSIM_WORK_DIR "${FSIM_WORK_DIR}")
 if(NOT DEFINED FSIM_DELAY_MODE OR "${FSIM_DELAY_MODE}" STREQUAL "")
   set(FSIM_DELAY_MODE typ)
 endif()
@@ -92,6 +95,7 @@ if(FSIM_ELABORATE_STATUS EQUAL 1)
     message(FATAL_ERROR
       "fsim elaborate did not report \"${FSIM_ELABORATE_MESSAGE}\":\n${FSIM_STEP_OUTPUT}${FSIM_STEP_ERROR}")
   endif()
+  fsim_test_workspace_cleanup()
   return()
 endif()
 if(DEFINED FSIM_ELABORATE_WARNING AND NOT "${FSIM_ELABORATE_WARNING}" STREQUAL "")
@@ -120,6 +124,7 @@ if(DEFINED FSIM_DEBUG_COMMAND AND NOT "${FSIM_DEBUG_COMMAND}" STREQUAL "")
     message(FATAL_ERROR
       "fsim debug did not report \"${FSIM_SIMULATE_MESSAGE}\":\n${FSIM_DEBUG_OUTPUT}${FSIM_DEBUG_ERROR}")
   endif()
+  fsim_test_workspace_cleanup()
   return()
 endif()
 set(FSIM_SIMULATE_ARGUMENTS --engine "${FSIM_ENGINE}")
@@ -141,6 +146,7 @@ if(FSIM_SIMULATE_STATUS EQUAL 1)
     message(FATAL_ERROR
       "fsim simulate did not report \"${FSIM_SIMULATE_MESSAGE}\":\n${FSIM_STEP_OUTPUT}${FSIM_STEP_ERROR}")
   endif()
+  fsim_test_workspace_cleanup()
   return()
 endif()
 
@@ -161,3 +167,4 @@ if(NOT FSIM_TRACE STREQUAL FSIM_EXPECTED_TRACE)
   message(FATAL_ERROR
     "trace differs from ${FSIM_EXPECTED}\n--- actual\n${FSIM_TRACE}--- expected\n${FSIM_EXPECTED_TRACE}")
 endif()
+fsim_test_workspace_cleanup()

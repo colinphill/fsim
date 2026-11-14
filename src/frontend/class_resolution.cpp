@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/frontend/class_resolution.hpp"
+#include "fsim/frontend/class_specialization_selection.hpp"
 
 #include "class_expression_resolution.hpp"
 
 #include <algorithm>
-#include <functional>
 #include <map>
-#include <ranges>
 #include <set>
 #include <string>
 #include <string_view>
@@ -1147,7 +1146,10 @@ bool resolve_systemverilog_classes(
     const auto is_static = prototype->is_static;
     const auto is_virtual = prototype->is_virtual;
     const auto is_final = prototype->is_final;
+    // The library role recorded on the prototype (support::UvmRole).
+    const auto uvm_role = prototype->uvm_role;
     *prototype = definition;
+    prototype->uvm_role = uvm_role;
     prototype->name = method_name;
     prototype->canonical_identity = canonical;
     prototype->visibility = visibility;
@@ -1181,6 +1183,48 @@ std::shared_ptr<const Type> systemverilog_class_scope_owner(
   auto owner = selection;
   owner.systemverilog_class_declaration = std::move(declaration_identity);
   return std::make_shared<const Type>(std::move(owner));
+}
+
+static Type class_specialization_type(
+    const SystemVerilogClassSelection& specialization,
+    const SourceSpan& span) {
+  Type result;
+  result.spelling = specialization.name;
+  result.named_type = specialization.name;
+  result.named_type_span = span;
+  result.systemverilog_class_name = specialization.name;
+  result.systemverilog_class_declaration = specialization.declaration_identity;
+  result.systemverilog_class_parameter_actuals
+      = systemverilog_class_specialization_actuals(specialization, span);
+  return result;
+}
+
+std::vector<SystemVerilogClassTypeActual>
+systemverilog_class_specialization_actuals(
+    const SystemVerilogClassSelection& specialization,
+    const SourceSpan& span) {
+  std::vector<SystemVerilogClassTypeActual> actuals;
+  for (const auto& actual : specialization.actuals) {
+    SystemVerilogClassTypeActual converted;
+    converted.name = actual.formal;
+    converted.span = span;
+    if (actual.type) {
+      converted.type_actual = std::make_shared<Type>(
+          class_specialization_type(*actual.type, span));
+    } else {
+      converted.value = { actual.literal_kind, actual.literal_text, {}, span };
+      converted.value.decoded_string = actual.decoded_string;
+    }
+    actuals.push_back(std::move(converted));
+  }
+  return actuals;
+}
+
+std::shared_ptr<const Type> systemverilog_class_specialization_owner(
+    const SystemVerilogClassSelection& specialization,
+    const SourceSpan& span) {
+  return std::make_shared<const Type>(
+      class_specialization_type(specialization, span));
 }
 
 }  // namespace fsim::frontend

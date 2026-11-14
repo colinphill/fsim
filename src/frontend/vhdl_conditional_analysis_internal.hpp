@@ -6,8 +6,6 @@
 #include "fsim/frontend/source.hpp"
 #include "fsim/frontend/token.hpp"
 
-#include <string>
-#include <utility>
 #include <vector>
 
 namespace fsim::frontend {

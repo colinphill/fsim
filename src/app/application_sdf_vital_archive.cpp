@@ -1,12 +1,26 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fsim/app/sdf_vital_archive.hpp"
+#include "fsim/app/sdf_effective_archive.hpp"
+#include "fsim/app/sdf_foreign_interfaces.hpp"
+#include "fsim/app/sdf_reannotation.hpp"
+#include "fsim/app/sdf_value_policy.hpp"
+#include "fsim/app/sdf_vital_reannotation.hpp"
+#include "fsim/app/sdf_vital_scheduling.hpp"
+#include "fsim/app/sdf_vital_timing_checks.hpp"
+#include "fsim/frontend/diagnostic.hpp"
+#include "fsim/runtime/scheduler.hpp"
 
 #include <algorithm>
 #include <limits>
-#include <ranges>
 #include <string>
 #include <utility>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <span>
+#include <string_view>
+#include <vector>
 
 namespace fsim::app {
 namespace {

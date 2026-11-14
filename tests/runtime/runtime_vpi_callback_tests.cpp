@@ -974,6 +974,38 @@ void test_systemverilog_vpi_callback_lifecycle()
             && other_manager.remove_callback(value_change.value)
                 == SystemVerilogVpiCallbackError::CrossManager,
         "VPI lifecycle APIs reject object payloads, nonlifecycle dispatch, malformed handles, and cross-manager removal");
+
+    // IEEE 1800-2023 38.36 sets no bound on the callbacks a program may
+    // register: past the 1,048,576 live registrations the manager once
+    // refused, registration still succeeds and every one is delivered.
+    SystemVerilogVpiCallbackManager many_manager {
+        registry, scheduler, time_service, 50'000
+    };
+    constexpr std::size_t many_callbacks = 1'048'577;
+    std::size_t delivered_many = 0;
+    bool registered_many = true;
+    for (std::size_t index = 0; index < many_callbacks; ++index) {
+        const auto registration = many_manager.register_callback(
+            { SystemVerilogVpiCallbackKind::EndOfSimulation,
+                std::nullopt,
+                std::nullopt,
+                index,
+                [&delivered_many](const SystemVerilogVpiCallbackEvent&) {
+                    ++delivered_many;
+                } });
+        if (!registration) {
+            registered_many = false;
+            break;
+        }
+    }
+    const bool dispatched_many = registered_many
+        && many_manager.dispatch_lifecycle(
+               SystemVerilogVpiCallbackKind::EndOfSimulation)
+            == SystemVerilogVpiCallbackError::None;
+    (void)scheduler.run();
+    require_vpi_callback(
+        dispatched_many && delivered_many == many_callbacks,
+        "VPI callback registration has no fixed bound on live registrations");
 }
 
 // The save audit of the callback manager (#128; class S row dispatching):

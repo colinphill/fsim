@@ -5,7 +5,6 @@
 #include "fsim/runtime/uvm_tlm1.hpp"
 
 #include <algorithm>
-#include <functional>
 #include <stdexcept>
 #include <string>
 #include <string_view>

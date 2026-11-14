@@ -3,6 +3,7 @@
 #include "fsim/api.h"
 
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
 #include "fsim/app/sdf_control.hpp"
 #include "fsim/diagnostic/diagnostic.hpp"
 #include "fsim/project/project.hpp"
@@ -14,16 +15,12 @@
 #include <cstring>
 #include <filesystem>
 #include <functional>
-#include <limits>
 #include <memory>
 #include <mutex>
-#include <new>
 #include <optional>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <unordered_map>
-#include <utility>
 #include <vector>
 
 namespace fsim::api::detail {

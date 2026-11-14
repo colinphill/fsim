@@ -1,0 +1,20 @@
+#c stmt line 15 rhs type 7
+#c rhs type=7 value=7
+#c stmt line 16 rhs type 56
+#c rhs type=56 value=3
+#c   arg type=612 value=6
+#c stmt line 17 rhs type 56
+#c rhs type=56 value=3
+#c   arg type=608 value=7
+#c stmt line 18 rhs type 56
+#c rhs type=56 value=4
+#c   arg type=39 value=16
+#c stmt line 19 rhs type 56
+#c rhs type=56 value=(none)0
+#c   arg type=19 value=(none)0
+#c stmt line 20 rhs type 39
+#c rhs type=39 value=34
+#c   operand type=56 value=2
+#c     arg type=612 value=6
+#c   operand type=56 value=32
+#c     arg type=608 value=7

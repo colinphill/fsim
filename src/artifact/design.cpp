@@ -12,13 +12,9 @@
 
 #include <algorithm>
 #include <array>
-#include <atomic>
-#include <chrono>
 #include <cctype>
-#include <fstream>
 #include <limits>
 #include <set>
-#include <sstream>
 #include <span>
 #include <stdexcept>
 #include <system_error>
@@ -69,13 +65,19 @@ bool safe_name(const std::string_view value) {
           });
 }
 
-// A root alias is a safe name or a Verilog escaped identifier (`\$top`).
-bool safe_root_alias(const std::string_view value) {
-  return safe_name(value)
-      || (value.size() > 1U && value.front() == '\\'
-          && std::ranges::all_of(value, [](const unsigned char character) {
-               return std::isgraph(character) != 0;
-             }));
+// A root alias is a safe name or a Verilog escaped identifier (`\$top `)
+// with its one terminating space (IEEE 1800-2023 5.6.1).
+bool safe_root_alias(std::string_view value) {
+  if (safe_name(value)) {
+    return true;
+  }
+  if (value.ends_with(' ')) {
+    value.remove_suffix(1U);
+  }
+  return value.size() > 1U && value.front() == '\\'
+      && std::ranges::all_of(value, [](const unsigned char character) {
+           return std::isgraph(character) != 0;
+         });
 }
 
 class Writer {

@@ -56,3 +56,27 @@
 #c net top.icd type=vpiInterconnectNet nettype=16 resolved=1 size=4 decl=- typespec=vpiPackedArrayTypespec
 #c element top.icd[1] type=vpiInterconnectNet size=2
 #c element top.icd[0] type=vpiInterconnectNet size=2
+#c gcb type=vpiClockingBlock full=top.g.gcb instance=top event=vpiEventControl condition=-
+#c gcb condition-op optype=39 operand=clk
+#c gcb default-input none
+#c gcb default-output none
+#c gcb default-edges input=none output=none
+#c gcb.gd type=vpiClockingIODecl full=top.g.gcb.gd dir=input parent=gcb expr=gd
+#c gcb.gd input-skew type=vpiDelayControl delay=1
+#c gcb.gd output-skew none
+#c gcb.gq type=vpiClockingIODecl full=top.g.gcb.gq dir=output parent=gcb expr=gq
+#c gcb.gq input-skew none
+#c gcb.gq output-skew type=vpiDelayControl delay=2
+#c parent g
+#c top.g clocking blocks=1
+#c lcb type=vpiClockingBlock full=top.gl[1].lcb instance=top event=vpiEventControl condition=-
+#c lcb condition-op optype=40 operand=clk
+#c lcb default-input none
+#c lcb default-output none
+#c lcb default-edges input=none output=none
+#c lcb.gd type=vpiClockingIODecl full=top.gl[1].lcb.gd dir=input parent=lcb expr=gd
+#c lcb.gd input-skew none
+#c lcb.gd output-skew none
+#c parent gl[1]
+#c top.gl[1] clocking blocks=1
+#c by name lcb

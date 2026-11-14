@@ -25,9 +25,14 @@ std::string simple_top_name(std::string_view top)
 {
     // A Verilog escaped identifier (`lib.\t.has.dots`) keeps its dots and
     // colons (IEEE 1800-2023 5.6.1).
+    // The name keeps one terminating space, as the parser's does.
     if (const auto escape = top.find('\\');
         escape != std::string_view::npos) {
-        return std::string { top.substr(escape) };
+        auto name = top.substr(escape);
+        while (!name.empty() && name.back() == ' ') {
+            name.remove_suffix(1U);
+        }
+        return std::string { name } + ' ';
     }
     if (const auto colon = top.rfind(':');
         colon != std::string_view::npos) {

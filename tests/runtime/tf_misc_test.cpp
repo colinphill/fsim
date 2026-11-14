@@ -4,7 +4,6 @@
 #include "fsim/runtime/tf_plugin.hpp"
 
 #include <array>
-#include <cstdint>
 #include <stdexcept>
 #include <vector>
 

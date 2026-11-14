@@ -1,0 +1,20 @@
+#c mailbox type=vpiClassObj class-type=1 defn=- id-same=1 id-set=1
+#c mailbox message type=vpiConstant const-type=3 size=32 value=5 parent=1
+#c mailbox message type=vpiConstant const-type=3 size=32 value=7 parent=1
+#c semaphore type=vpiClassObj class-type=2 messages=none
+#c semaphore waiting type=vpiThread
+#c semaphore waiting count=1
+#c port task type=vpiTask name=bump parent=bus parent-type=vpiRefObj direct-parent-type=vpiInterface same=1
+#c with call=vpiMethodFuncCall type=vpiConstraint name=- enabled=1 virtual=0 parent=1
+#c with item type=vpiOperation op=18
+#c with item type=vpiOperation op=20
+#c result greet value=n4
+#c result select type=vpiBitSelect value=9
+#c constraint c_limit item type=vpiOperation value=1 parent=1
+#c constraint operand type=vpiRefObj name=x value=5
+#c constraint operand type=vpiRefObj name=limit value=20
+#c constraint defn item value=-1
+#c box typespec=Box#(8)
+#c box variable data type=vpiBitVar automatic=1 size=8 typespec=vpiBitTypespec parent=1 scope=1 value=-1
+#c box variable made type=vpiIntVar automatic=0 size=32 typespec=vpiIntTypespec parent=1 scope=1 value=3
+#c box variable done type=vpiNamedEventArray automatic=1 size=2 typespec=vpiArrayTypespec parent=1 scope=1 value=-1

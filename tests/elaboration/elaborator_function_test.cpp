@@ -1,6 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_test_support.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 #include "fsim/semantic/compiled_design_normalization.hpp"
+#include "fsim/elaboration/elaborator.hpp"
+#include "fsim/frontend/parser.hpp"
+#include "fsim/frontend/source.hpp"
+#include "fsim/frontend/token.hpp"
+#include "fsim/runtime/logic.hpp"
+#include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir.hpp"
+#include "fsim/semantic/systemverilog_hir.hpp"
+#include <algorithm>
+#include <cassert>
+#include <cstdint>
+#include <iostream>
+#include <optional>
+#include <string_view>
+#include <vector>
 
 namespace fsim::tests::elaboration {
 

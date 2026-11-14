@@ -1,6 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "verilog_parser_internal.hpp"
 #include "fsim/support/index_distance.hpp"
+#include "fsim/frontend/design.hpp"
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/parser.hpp"
+#include "fsim/frontend/source.hpp"
+#include "fsim/frontend/systemverilog_scalars.hpp"
+#include "fsim/frontend/token.hpp"
+#include "parser_support.hpp"
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <iterator>
+#include <limits>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 namespace fsim::frontend {
 
@@ -162,11 +179,9 @@ DesignUnit VerilogParser::parse_package(const Token& start) {
                 parse_class(previous(), unit.name, true),
                 qualifier);
         } else {
-            error(
-                qualifier,
-                "FSIM-SV-PARSE-254",
-                "package 'virtual' must introduce a class");
-            skip_to_semicolon();
+            // A variable of a virtual interface type is a data declaration
+            // (IEEE 1800-2023 A.2.1.3, 25.9).
+            parse_virtual_interface_declaration(unit, qualifier);
         }
     } else if (match_keyword("interface")) {
         module_has_non_time_item_ = true;
@@ -264,6 +279,30 @@ DesignUnit VerilogParser::parse_package(const Token& start) {
             } else {
                 unit.tasks.push_back(std::move(task));
             }
+        }
+    } else if (at(TokenKind::Identifier)
+        && (current().text == "sequence" || current().text == "property")) {
+        // A sequence or property declared in a package (IEEE 1800-2023
+        // 16.8, 16.12, 26.2); a design element imports it or names it
+        // `pkg::name`.
+        module_has_non_time_item_ = true;
+        const auto declaration_start = advance();
+        auto declaration = parse_assertion_declaration(declaration_start,
+            declaration_start.text == "sequence"
+                ? SystemVerilogAssertionDeclarationKind::Sequence
+                : SystemVerilogAssertionDeclarationKind::Property);
+        if (std::ranges::any_of(unit.systemverilog_assertion_declarations,
+                [&](const SystemVerilogAssertionDeclaration& existing) {
+                    return !declaration.name.empty()
+                        && existing.name == declaration.name;
+                })) {
+            error(declaration_start, "FSIM-SV-SEM-192",
+                "duplicate assertion declaration '" + declaration.name + "'");
+        } else {
+            package_members_.add_member(unit.name, declaration.name,
+                SystemVerilogPackageMember::value);
+            unit.systemverilog_assertion_declarations.push_back(
+                std::move(declaration));
         }
     } else if (keyword("const")) {
         module_has_non_time_item_ = true;
@@ -510,11 +549,17 @@ void VerilogParser::parse_generate_region(
             parse_class(previous(), unit.name, true),
             qualifier);
       } else {
-        error(
-            qualifier,
-            "FSIM-SV-PARSE-387",
-            "generated 'virtual' must introduce a class declaration");
-        skip_to_semicolon();
+        const auto declared = direct_region.then_body.variables.size();
+        parse_virtual_interface_declaration(
+            direct_region.then_body.variables,
+            direct_region.then_body.signals, {}, qualifier);
+        for (auto index = declared;
+             index < direct_region.then_body.variables.size(); ++index) {
+          ++current_generate_names_[
+              direct_region.then_body.variables[index].name];
+          direct_local_names.push_back(
+              direct_region.then_body.variables[index].name);
+        }
       }
       continue;
     }
@@ -972,11 +1017,14 @@ void VerilogParser::parse_generate_branch(
               parse_class(previous(), scope, true),
               qualifier);
         } else {
-          error(
-              qualifier,
-              "FSIM-SV-PARSE-387",
-              "generated 'virtual' must introduce a class declaration");
-          skip_to_semicolon();
+          // A virtual interface variable of the block (IEEE 1800-2023 25.9).
+          const auto declared = body.variables.size();
+          parse_virtual_interface_declaration(
+              body.variables, body.signals, {}, qualifier);
+          for (auto index = declared; index < body.variables.size(); ++index) {
+            ++current_generate_names_[body.variables[index].name];
+            local_names.push_back(body.variables[index].name);
+          }
         }
     } else if (match_keyword("interface")) {
         const auto qualifier = previous();
@@ -1019,6 +1067,26 @@ void VerilogParser::parse_generate_branch(
                 generated.systemverilog_aliases.begin()),
             std::make_move_iterator(
                 generated.systemverilog_aliases.end()));
+    } else if (at(TokenKind::Identifier)
+        && (current().text == "sequence" || current().text == "property")) {
+        // A sequence or property declared in a generate block (IEEE
+        // 1800-2023 16.8, 16.12, 27.3) is visible in that block.
+        const auto declaration_start = advance();
+        auto declaration = parse_assertion_declaration(declaration_start,
+            declaration_start.text == "sequence"
+                ? SystemVerilogAssertionDeclarationKind::Sequence
+                : SystemVerilogAssertionDeclarationKind::Property);
+        if (std::ranges::any_of(body.systemverilog_assertion_declarations,
+                [&](const SystemVerilogAssertionDeclaration& existing) {
+                    return !declaration.name.empty()
+                        && existing.name == declaration.name;
+                })) {
+            error(declaration_start, "FSIM-SV-SEM-192",
+                "duplicate assertion declaration '" + declaration.name + "'");
+        } else {
+            body.systemverilog_assertion_declarations.push_back(
+                std::move(declaration));
+        }
     } else if (match_keyword("clocking")) {
         // A clocking block of a generate block (IEEE 1800-2023 14.3, 27.3);
         // a sequence or property declared in it joins the block's
@@ -1500,117 +1568,125 @@ Expression VerilogParser::signed_parameter_value(Expression value,
 }
 
 Type VerilogParser::parse_parameter_type() {
-  parameter_signing_only_ = false;
-  if (at(TokenKind::Identifier)
-      && declaration_word_standard(current().text)
-      && !keyword_reserved(keyword_set_, current().text)
-      && contains_word(
-          {"bit", "byte", "chandle", "int", "interconnect", "logic",
-           "longint", "process", "shortint", "shortreal", "signed",
-           "string", "unsigned", "uwire"},
-          current().text)) {
-    const auto later_type = advance();
-    (void)require_standard(
-        "parameter type '" + later_type.text + "'",
-        *declaration_word_standard(later_type.text),
-        later_type);
-    Type type;
-    if (!apply_systemverilog_integral_type(type, later_type.text)) {
-      type = Type{
-          later_type.text == "string" ? ValueDomain::String
-                                      : ValueDomain::Logic4,
-          later_type.text,
-          std::nullopt,
-          later_type.text != "unsigned"};
+  auto parsed = [this]() -> Type {
+    parameter_signing_only_ = false;
+    if (at(TokenKind::Identifier)
+        && declaration_word_standard(current().text)
+        && !keyword_reserved(keyword_set_, current().text)
+        && contains_word(
+            {"bit", "byte", "chandle", "int", "interconnect", "logic",
+             "longint", "process", "shortint", "shortreal", "signed",
+             "string", "unsigned", "uwire"},
+            current().text)) {
+      const auto later_type = advance();
+      (void)require_standard(
+          "parameter type '" + later_type.text + "'",
+          *declaration_word_standard(later_type.text),
+          later_type);
+      Type type;
+      if (!apply_systemverilog_integral_type(type, later_type.text)) {
+        type = Type{
+            later_type.text == "string" ? ValueDomain::String
+                                        : ValueDomain::Logic4,
+            later_type.text,
+            std::nullopt,
+            later_type.text != "unsigned"};
+      }
+      const auto descriptor =
+          systemverilog_integral_type_descriptor(later_type.text);
+      if (!descriptor || !descriptor->fixed_width) parse_optional_range(type);
+      return type;
     }
-    const auto descriptor =
-        systemverilog_integral_type_descriptor(later_type.text);
-    if (!descriptor || !descriptor->fixed_width) parse_optional_range(type);
-    return type;
-  }
-  if (keyword("struct") || keyword("union")) {
-    return parse_systemverilog_aggregate_type();
-  }
-  if (keyword("enum")) {
-    return parse_systemverilog_enum_type();
-  }
-  Type type{
-      ValueDomain::Integer,
-      "implicit",
-      std::nullopt,
-      true};
-  if (keyword("string")) {
-    (void)advance();
-    type.spelling = "string";
-    type.domain = ValueDomain::String;
-    type.is_signed = false;
-    return type;
-  }
-  if (keyword("chandle") || keyword("process")) {
-    const auto token = advance();
-    type.spelling = token.text;
-    type.domain = ValueDomain::Bit2;
-    type.is_signed = false;
-    type.systemverilog_scalar = SystemVerilogScalarKind::Chandle;
-    return type;
-  }
-  if (keyword("event")) {
-    (void)advance();
-    type.spelling = "event";
-    type.domain = ValueDomain::Logic4;
-    type.is_signed = false;
-    return type;
-  }
-  if (keyword("shortreal") || keyword("real")
-      || keyword("realtime")) {
-    const auto token = advance();
-    type.spelling = token.text;
-    type.domain = ValueDomain::Bit2;
-    type.is_signed = true;
-    type.systemverilog_scalar =
-        token.text == "shortreal"
-            ? SystemVerilogScalarKind::ShortReal
-        : token.text == "real"
-            ? SystemVerilogScalarKind::Real
-            : SystemVerilogScalarKind::Realtime;
-    return type;
-  }
-  if (keyword("bit") || keyword("logic") || keyword("reg")
-      || keyword("byte") || keyword("shortint") || keyword("int")
-      || keyword("longint") || keyword("integer") || keyword("time")) {
-    const auto token = advance();
-    (void)apply_systemverilog_integral_type(type, token.text);
-  } else if (
-      keyword("signed") || keyword("unsigned")
-      || at(TokenKind::LeftBracket)) {
-    const bool signing_only = !at(TokenKind::LeftBracket);
-    type.spelling = "logic";
-    type.domain = ValueDomain::Logic4;
-    type.is_signed = false;
+    if (keyword("struct") || keyword("union")) {
+      return parse_systemverilog_aggregate_type();
+    }
+    if (keyword("enum")) {
+      return parse_systemverilog_enum_type();
+    }
+    Type type{
+        ValueDomain::Integer,
+        "implicit",
+        std::nullopt,
+        true};
+    if (keyword("string")) {
+      (void)advance();
+      type.spelling = "string";
+      type.domain = ValueDomain::String;
+      type.is_signed = false;
+      return type;
+    }
+    if (keyword("chandle") || keyword("process")) {
+      const auto token = advance();
+      type.spelling = token.text;
+      type.domain = ValueDomain::Bit2;
+      type.is_signed = false;
+      type.systemverilog_scalar = SystemVerilogScalarKind::Chandle;
+      return type;
+    }
+    if (keyword("event")) {
+      (void)advance();
+      type.spelling = "event";
+      type.domain = ValueDomain::Logic4;
+      type.is_signed = false;
+      return type;
+    }
+    if (keyword("shortreal") || keyword("real")
+        || keyword("realtime")) {
+      const auto token = advance();
+      type.spelling = token.text;
+      type.domain = ValueDomain::Bit2;
+      type.is_signed = true;
+      type.systemverilog_scalar =
+          token.text == "shortreal"
+              ? SystemVerilogScalarKind::ShortReal
+          : token.text == "real"
+              ? SystemVerilogScalarKind::Real
+              : SystemVerilogScalarKind::Realtime;
+      return type;
+    }
+    if (keyword("bit") || keyword("logic") || keyword("reg")
+        || keyword("byte") || keyword("shortint") || keyword("int")
+        || keyword("longint") || keyword("integer") || keyword("time")) {
+      const auto token = advance();
+      (void)apply_systemverilog_integral_type(type, token.text);
+    } else if (
+        keyword("signed") || keyword("unsigned")
+        || at(TokenKind::LeftBracket)) {
+      const bool signing_only = !at(TokenKind::LeftBracket);
+      type.spelling = "logic";
+      type.domain = ValueDomain::Logic4;
+      type.is_signed = false;
+      parse_optional_signedness(type);
+      parse_optional_range(type);
+      // A signing without a range takes the range of the parameter's final
+      // value (IEEE 1800-2017 6.20.2).
+      if (signing_only && !type.packed_range && !type.packed_range_expression
+          && type.systemverilog_packed_dimensions.empty()) {
+        type.spelling = "implicit";
+        type.implicit_type = true;
+        type.domain = ValueDomain::Integer;
+        parameter_signing_only_ = true;
+      }
+      return type;
+    } else if (is_named_type_reference_start()) {
+      auto named_type = parse_named_type();
+      parse_optional_range(named_type);
+      return named_type;
+    } else {
+      // No data type was written (IEEE 1800-2023 6.20.2): the spelling is
+      // a placeholder, and a user type named `implicit` is a named type.
+      type.implicit_type = true;
+    }
     parse_optional_signedness(type);
-    parse_optional_range(type);
-    // A signing without a range takes the range of the parameter's final
-    // value (IEEE 1800-2017 6.20.2).
-    if (signing_only && !type.packed_range && !type.packed_range_expression
-        && type.systemverilog_packed_dimensions.empty()) {
-      type.spelling = "implicit";
-      type.domain = ValueDomain::Integer;
-      parameter_signing_only_ = true;
+    if (type.implicit_type
+        || type.spelling == "logic"
+        || type.spelling == "reg"
+        || type.spelling == "bit") {
+      parse_optional_range(type);
     }
     return type;
-  } else if (is_named_type_reference_start()) {
-    auto named_type = parse_named_type();
-    parse_optional_range(named_type);
-    return named_type;
-  }
-  parse_optional_signedness(type);
-  if (type.spelling == "implicit"
-      || type.spelling == "logic"
-      || type.spelling == "reg"
-      || type.spelling == "bit") {
-    parse_optional_range(type);
-  }
-  return type;
+  }();
+  return parsed;
 }
 
 Type VerilogParser::parse_type_parameter_actual() {
@@ -1749,6 +1825,7 @@ void VerilogParser::parse_parameter_group(
       && parameter_signing_only_;
   if (implicit_value_type) {
     type.spelling = "implicit";
+    type.implicit_type = true;
     type.domain = ValueDomain::Integer;
     type.is_signed = true;
   }

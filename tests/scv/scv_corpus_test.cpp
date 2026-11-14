@@ -6,9 +6,7 @@
 #include "fsim/systemc/scv_random.hpp"
 #include "fsim/systemc/scv_recording.hpp"
 
-#include <array>
 #include <cassert>
-#include <cstdint>
 
 int main()
 {

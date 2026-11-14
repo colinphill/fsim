@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/app/built_project.hpp"
 #include "fsim/app/design_artifact.hpp"
-#include "application_workflow_test_support.hpp"
 #include "../api/api_workspace_support.hpp"
 
 #include <array>
@@ -10,8 +10,6 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <ranges>
-#include <sstream>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -168,10 +166,13 @@ void test_plusargs(
     const auto expected = fsim::runtime::PackedLogic4::from_msb_string(
         wide_digits);
     assert(interpreted.wide_value == expected);
+    // $typename resolves a typedef back to its type and writes "$" for the
+    // name of an anonymous unpacked array (IEEE 1800-2023 20.6.1 a and d;
+    // the clause's examples give "bit" for `node` and "...AB_t$[0:9]").
     const auto expected_output = std::vector<std::string> {
         "text=hello_world", "types=int", "|integer", "|real", "|string",
-        "|wide_t", "|logic signed[136:0]", "|logic[136:0]",
-        "containers=int[$]", "|int[longint]", "|int[3:1]",
+        "|logic signed[136:0]", "|logic signed[136:0]", "|logic[136:0]",
+        "containers=int$[$]", "|int$[longint]", "|int$[3:1]",
         "|typename_class", "|virtual typename_if"
     };
     if (interpreted.output != expected_output) {

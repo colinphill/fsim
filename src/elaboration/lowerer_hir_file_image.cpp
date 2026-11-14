@@ -3,7 +3,6 @@
 #include "fsim/support/stack_growth.hpp"
 
 #include <algorithm>
-#include <array>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>

@@ -16,7 +16,6 @@
 #include <mutex>
 #include <optional>
 #include <set>
-#include <stdexcept>
 #include <string_view>
 #include <type_traits>
 #include <utility>

@@ -3,8 +3,6 @@
 #include "fsim/systemc/kernel_backend_protocol.hpp"
 
 #include <cassert>
-#include <cstddef>
-#include <cstdint>
 #include <string_view>
 #include <type_traits>
 #include <utility>

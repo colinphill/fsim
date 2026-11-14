@@ -12,7 +12,6 @@
 #include <tcl.h>
 
 #include <algorithm>
-#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <limits>

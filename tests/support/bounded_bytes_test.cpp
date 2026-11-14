@@ -8,7 +8,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <ranges>
 #include <span>
 #include <string>
 #include <vector>

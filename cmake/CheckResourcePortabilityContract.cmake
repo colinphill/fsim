@@ -166,7 +166,7 @@ set(FSIM_CODE_COVERAGE_CONTROL_CLI
 set(FSIM_CODE_COVERAGE_CONTROL_CLI_IMPLEMENTATION
   "${FSIM_SOURCE_DIR}/src/cli/driver.cpp")
 set(FSIM_CODE_COVERAGE_CONTROL_APPLICATION
-  "${FSIM_SOURCE_DIR}/include/fsim/app/application.hpp")
+  "${FSIM_SOURCE_DIR}/include/fsim/app/built_project.hpp")
 set(FSIM_CODE_COVERAGE_CONTROL_IMPLEMENTATION
   "${FSIM_SOURCE_DIR}/src/app/application_coverage_control.cpp")
 set(FSIM_CODE_COVERAGE_CONTROL_TEST
@@ -786,7 +786,7 @@ set(FSIM_VHDL_2019_ARTIFACT_LIBRARY_HEADER
 set(FSIM_VHDL_2019_ARTIFACT_PORTABLE_HEADER
   "${FSIM_SOURCE_DIR}/include/fsim/app/design_artifact.hpp")
 set(FSIM_VHDL_2019_ARTIFACT_DESIGN_HEADER
-  "${FSIM_SOURCE_DIR}/include/fsim/app/design_artifact.hpp")
+  "${FSIM_SOURCE_DIR}/include/fsim/app/artifact_schema.hpp")
 set(FSIM_VHDL_2019_ARTIFACT_PORTABLE_CODEC
   "${FSIM_SOURCE_DIR}/src/app/application_design_artifact_codec_internal.hpp")
 set(FSIM_VHDL_2019_ARTIFACT_DESIGN_CODEC
@@ -3620,7 +3620,7 @@ foreach(FSIM_SYSTEMVERILOG_2023_POLICY IN ITEMS
     "static_reference"
     "FSIM-ELAB-SVFUNC-013"
     "FSIM-ELAB-SVTASK-015"
-    "kCompiledHirBundleSchema = 3"
+    "kCompiledHirBundleSchema = 6"
     "visit_clocking_delays"
     "FSIM-ELAB-CLOCK-008"
     "FSIM-ELAB-CLOCK-009"
@@ -4655,7 +4655,7 @@ endforeach()
 
 foreach(FSIM_VHDL_2019_ARTIFACT_POLICY IN ITEMS
     "kPortableSchemaVersion = 16"
-    "kCompiledHirBundleSchema = 3"
+    "kCompiledHirBundleSchema = 6"
     "kRuntimeStateSchema = 92"
     "kVhdlHirStateSchema = 8"
     "vhdl_2019_type.base.predefined_attribute"
@@ -4665,7 +4665,7 @@ foreach(FSIM_VHDL_2019_ARTIFACT_POLICY IN ITEMS
     "vhdl-2019-round-trip"
     "vhdl-2019-hir.bin"
     "vhdl_mode_view_bindings"
-    "compiled-HIR schema 3")
+    "compiled-HIR schema 6")
   string(FIND
     "${FSIM_VHDL_2019_ARTIFACT_LIBRARY_HEADER_CONTENTS}${FSIM_VHDL_2019_ARTIFACT_PORTABLE_HEADER_CONTENTS}${FSIM_VHDL_2019_ARTIFACT_DESIGN_HEADER_CONTENTS}${FSIM_VHDL_2019_ARTIFACT_PORTABLE_CODEC_CONTENTS}${FSIM_VHDL_2019_ARTIFACT_DESIGN_CODEC_CONTENTS}${FSIM_VHDL_2019_ARTIFACT_PORTABLE_TEST_CONTENTS}${FSIM_VHDL_2019_ARTIFACT_DESIGN_TEST_CONTENTS}${FSIM_VHDL_2019_ARTIFACT_PORTABLE_CONTRACT_CONTENTS}${FSIM_VHDL_2019_ARTIFACT_NESTED_CONTRACT_CONTENTS}${FSIM_VHDL_2019_ARTIFACT_STALE_CONTRACT_CONTENTS}"
     "${FSIM_VHDL_2019_ARTIFACT_POLICY}" FSIM_INDEX)

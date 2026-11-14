@@ -1,12 +1,22 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/systemc/kernel_backend_inventory.hpp"
+#include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/semantic/hierarchy_path.hpp"
+#include "fsim/systemc/kernel_backend_protocol.hpp"
+#include "fsim/systemc/kernel_backend_value_codec.hpp"
 
 #include <algorithm>
 #include <array>
 #include <limits>
-#include <ranges>
 #include <string_view>
 #include <utility>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <optional>
+#include <span>
+#include <string>
+#include <vector>
 
 namespace fsim::systemc {
 namespace {

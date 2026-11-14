@@ -1,0 +1,4 @@
+#c line 10 rhs type 19 name .find prefix - with yes
+#c   with type 39 operands 2
+#c line 11 rhs type 19 name .sum prefix - with none
+#c line 12 rhs type 19 name .min prefix - with none

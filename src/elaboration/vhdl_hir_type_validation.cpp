@@ -421,7 +421,34 @@ private:
         if (subtype.type_mark.target.valid()) {
             return subtype.type_mark.target;
         }
+        // A mark that denotes a type the compiler provides, where the unit
+        // sees it, is that type: a source type of the same simple name that
+        // is not visible there is another type (IEEE 1076-2019 12.3, 13.2,
+        // 16.3, 16.7).
+        if (compiler_provided_mark(subtype.type_mark.spelling)) {
+            return std::nullopt;
+        }
         return named_type(subtype.type_mark.spelling);
+    }
+
+    // Whether a type mark without a target denotes, at the unit's scope, a
+    // compiler-provided STD.STANDARD or IEEE.STD_LOGIC_1164 type by the
+    // resolver's identity.
+    bool compiler_provided_mark(const std::string_view spelling) const
+    {
+        const auto scope = specialization_.scope();
+        if (spelling.empty() || !scope.valid()) {
+            return false;
+        }
+        const semantic::CompiledDesignResolver resolver { specialization_ };
+        const auto identity = resolver.resolve_vhdl_type_identity(spelling, scope);
+        if (identity.type) {
+            return false;
+        }
+        return identity.standard_scalar_type
+                != semantic::CompiledVhdlStandardScalarIdentity::none
+            || identity.builtin_type != semantic::vhdl::BuiltinTypeIdentity::none
+            || resolver.resolve_vhdl_intrinsic_enumeration(spelling, scope).has_value();
     }
 
     // The subtype of record element `element` of an object of subtype
@@ -1003,8 +1030,8 @@ private:
                         || (!prefix->vhdl->referenced_name->selected
                             && prefix->vhdl->referenced_name->overloads
                                    .empty()))
-                    && equal_ignoring_ascii_case(
-                        prefix->vhdl->text, "std_ulogic")
+                    && provided_type(prefix->vhdl->text, prefix->vhdl->scope)
+                        == semantic::CompiledVhdlProvidedType::std_ulogic
                     && prefix->vhdl->scope
                         == type_declaration_scope(array)) {
                     return bound(std::nullopt, expression);
@@ -1028,35 +1055,39 @@ private:
         return result;
     }
 
+    // The index range of a compiler-provided index subtype (IEEE 1076-2019
+    // 16.3), by its identity.
     static ArrayDimensionProfile index_profile(
-        const std::string_view spelling)
+        const semantic::CompiledVhdlProvidedType provided)
     {
+        using Provided = semantic::CompiledVhdlProvidedType;
         constexpr auto maximum = std::numeric_limits<std::int64_t>::max();
-        const auto name = simple_name_of(spelling);
-        if (equal_ignoring_ascii_case(name, "natural")) {
+        switch (provided) {
+        case Provided::natural:
             return ascending_index_profile(0, maximum);
-        }
-        if (equal_ignoring_ascii_case(name, "positive")) {
+        case Provided::positive:
             return ascending_index_profile(1, maximum);
-        }
-        if (equal_ignoring_ascii_case(name, "integer")) {
+        case Provided::integer:
             return ascending_index_profile(
                 std::numeric_limits<std::int64_t>::min(), maximum);
-        }
-        if (equal_ignoring_ascii_case(name, "boolean")
-            || equal_ignoring_ascii_case(name, "bit")) {
+        case Provided::boolean:
+        case Provided::bit:
             return ascending_index_profile(0, 1);
-        }
-        if (equal_ignoring_ascii_case(name, "character")) {
+        case Provided::character:
             return ascending_index_profile(0, 255);
+        default:
+            break;
         }
         return { };
     }
 
     ArrayDimensionProfile index_profile(
-        const semantic::vhdl::Name& index_subtype) const
+        const semantic::vhdl::Name& index_subtype,
+        const semantic::ScopeId scope) const
     {
-        auto result = index_profile(index_subtype.spelling);
+        auto result = index_profile(index_subtype.selected
+                ? semantic::CompiledVhdlProvidedType::none
+                : provided_type(index_subtype.spelling, scope));
         const auto declaration = index_subtype.selected
             ? specialization_.find_declaration(*index_subtype.selected)
             : std::nullopt;
@@ -1559,106 +1590,142 @@ private:
         return std::nullopt;
     }
 
-    TypeProfile builtin_profile(const std::string_view spelling) const
+    // The profile of a compiler-provided type (IEEE 1076-2019 16.3, 16.4,
+    // 16.7, 16.8, G), by its identity.
+    static TypeProfile builtin_profile(
+        const semantic::CompiledVhdlProvidedType provided)
     {
-        const auto name = simple_name_of(spelling);
-        if (equal_ignoring_ascii_case(name, "integer")) {
+        using Provided = semantic::CompiledVhdlProvidedType;
+        switch (provided) {
+        case Provided::integer:
             return { ProfileKind::integer, std::nullopt, std::nullopt,
                 { }, false };
-        }
-        if (equal_ignoring_ascii_case(name, "natural")) {
+        case Provided::natural:
             return { ProfileKind::integer, 0,
                 std::numeric_limits<std::int64_t>::max(), { }, false };
-        }
-        if (equal_ignoring_ascii_case(name, "positive")) {
+        case Provided::positive:
             return { ProfileKind::integer, 1,
                 std::numeric_limits<std::int64_t>::max(), { }, false };
-        }
-        if (equal_ignoring_ascii_case(name, "string")) {
+        case Provided::string:
             return { ProfileKind::string, std::nullopt, std::nullopt,
                 { }, false };
-        }
-        constexpr std::array array_names {
-            std::string_view { "bit_vector" },
-            std::string_view { "boolean_vector" },
-            std::string_view { "integer_vector" },
-            std::string_view { "real_vector" },
-            std::string_view { "time_vector" },
-            std::string_view { "std_logic_vector" },
-            std::string_view { "std_ulogic_vector" },
-            std::string_view { "signed" },
-            std::string_view { "unsigned" },
-            std::string_view { "ufixed" },
-            std::string_view { "sfixed" },
-            std::string_view { "unresolved_ufixed" },
-            std::string_view { "unresolved_sfixed" },
-            std::string_view { "u_ufixed" },
-            std::string_view { "u_sfixed" },
-            std::string_view { "float" },
-            std::string_view { "unresolved_float" },
-            std::string_view { "u_float" },
-            std::string_view { "float32" },
-            std::string_view { "float64" },
-            std::string_view { "float128" },
-        };
-        if (std::ranges::any_of(array_names,
-                [&](const auto candidate) {
-                    return equal_ignoring_ascii_case(name, candidate);
-                })) {
+        case Provided::bit_vector:
+        case Provided::boolean_vector:
+        case Provided::integer_vector:
+        case Provided::real_vector:
+        case Provided::time_vector:
+        case Provided::std_logic_vector:
+        case Provided::std_ulogic_vector:
+        case Provided::numeric_std_unsigned:
+        case Provided::numeric_std_signed:
+        case Provided::numeric_bit_unsigned:
+        case Provided::numeric_bit_signed:
+        case Provided::std_logic_arith_unsigned:
+        case Provided::std_logic_arith_signed:
+        case Provided::sfixed:
+        case Provided::ufixed:
+        case Provided::ieee_float: {
             TypeProfile result { ProfileKind::array, std::nullopt,
                 std::nullopt, { }, false };
-            result.dimensions.push_back(index_profile("integer"));
+            result.dimensions.push_back(index_profile(Provided::integer));
             return result;
         }
-        constexpr std::array scalar_names {
-            std::string_view { "bit" },
-            std::string_view { "boolean" },
-            std::string_view { "character" },
-            std::string_view { "std_logic" },
-            std::string_view { "std_ulogic" },
-            std::string_view { "real" },
-            std::string_view { "time" },
-        };
-        if (support::find_vhdl_standard_enumeration(name) != nullptr
-            || std::ranges::any_of(scalar_names,
-                [&](const auto candidate) {
-                    return equal_ignoring_ascii_case(name, candidate);
-                })) {
+        case Provided::bit:
+        case Provided::boolean:
+        case Provided::character:
+        case Provided::std_logic:
+        case Provided::std_ulogic:
+        case Provided::real:
+        case Provided::time:
+        case Provided::severity_level:
+        case Provided::file_open_kind:
+        case Provided::file_open_status:
+        case Provided::range_direction:
             return { ProfileKind::scalar, std::nullopt, std::nullopt,
                 { }, false };
+        default:
+            break;
         }
         return { };
+    }
+
+    // The compiler-provided type a mark denotes where it is written.
+    semantic::CompiledVhdlProvidedType provided_type(
+        const std::string_view spelling, const semantic::ScopeId scope) const
+    {
+        return scope.valid()
+            ? semantic::CompiledDesignResolver { specialization_ }
+                  .resolve_vhdl_provided_type(spelling, scope)
+            : semantic::CompiledVhdlProvidedType::none;
+    }
+
+    // The compiler-provided type a canonical identity such as
+    // "std.standard.string" or "ieee.std_logic_1164.std_ulogic" names.
+    static semantic::CompiledVhdlProvidedType provided_type_of_identity(
+        const std::string_view identity)
+    {
+        using Provided = semantic::CompiledVhdlProvidedType;
+        const auto dot = identity.find_last_of('.');
+        if (dot == std::string_view::npos) {
+            return Provided::none;
+        }
+        const auto package = identity.substr(0U, dot);
+        const auto name = identity.substr(dot + 1U);
+        for (auto value = static_cast<unsigned>(Provided::boolean);
+             value <= static_cast<unsigned>(Provided::std_logic_arith_signed);
+             ++value) {
+            const auto type = static_cast<Provided>(value);
+            if (!equal_ignoring_ascii_case(
+                    semantic::vhdl_provided_type_name(type), name)) {
+                continue;
+            }
+            const std::string_view owner = type <= Provided::time_vector
+                ? "std.standard"
+                : type <= Provided::std_logic_vector ? "ieee.std_logic_1164"
+                : type <= Provided::numeric_std_signed ? "ieee.numeric_std"
+                : type <= Provided::numeric_bit_signed ? "ieee.numeric_bit"
+                : type == Provided::sfixed || type == Provided::ufixed
+                ? "ieee.fixed_pkg"
+                : type == Provided::ieee_float ? "ieee.float_pkg"
+                : type == Provided::std_logic_arith_unsigned
+                    || type == Provided::std_logic_arith_signed
+                ? "ieee.std_logic_arith"
+                : "std.textio";
+            if (equal_ignoring_ascii_case(owner, package)) {
+                return type;
+            }
+        }
+        return Provided::none;
+    }
+
+    // A subtype indication for a type mark written at `scope` (a qualified
+    // expression's or a nominal type's mark), with the type it denotes
+    // there: a retained declaration, or the provided type it names.
+    SubtypeIndication mark_subtype(
+        const std::string_view mark, const semantic::ScopeId scope) const
+    {
+        SubtypeIndication subtype;
+        subtype.type_mark.spelling = std::string { mark };
+        if (const auto type = named_type(mark, scope)) {
+            subtype.type_mark.target = *type;
+        } else {
+            subtype.provided_type = provided_type(mark, scope);
+        }
+        return subtype;
     }
 
     TypeProfile builtin_profile(
         const SubtypeIndication& subtype,
         const semantic::ScopeId scope) const
     {
-        auto result = builtin_profile(subtype.type_mark.spelling);
-        if (result.kind != ProfileKind::array
-            && result.kind != ProfileKind::string) {
-            return result;
-        }
-
-        // A simple spelling is not enough to establish an array type. In
-        // particular, two context-visible declarations can make a name such
-        // as INTEGER_VECTOR ambiguous while the projection deliberately
-        // retains only its source spelling. Preserve source ambiguity before
-        // consulting the compiler-owned predefined identity path.
-        const auto identity_resolution
-            = semantic::CompiledDesignResolver { specialization_ }
-                  .resolve_vhdl_type_identity(
-                      subtype.type_mark.spelling, scope);
-        if (identity_resolution.status
-            == semantic::CompiledResolutionStatus::ambiguous) {
-            return { };
-        }
-        if (!predefined_array_identity(subtype, scope)
-            && !ieee_fixed_or_float_array(
-                subtype, identity_resolution.type, scope)) {
-            return { };
-        }
-        return result;
+        // The type the mark denotes where it is written (12.3, 12.4): a
+        // retained declaration of a provided package, or one the compiler
+        // provides without one. A same-named source type, or an ambiguous
+        // name, is none of them.
+        return builtin_profile(subtype.type_mark.target.valid()
+                ? semantic::CompiledDesignResolver { specialization_ }
+                      .vhdl_provided_type_of(subtype.type_mark.target)
+                : provided_type(subtype.type_mark.spelling, scope));
     }
 
     // Whether a subtype denotes an array type of the IEEE fixed- or
@@ -1779,7 +1846,7 @@ private:
                     const auto& dimension
                         = definition->array_dimensions[dimension_index];
                     auto converted = index_profile(
-                        dimension.index_subtype);
+                        dimension.index_subtype, nested_scope);
                     converted.constrained = !dimension.unconstrained
                         || dimension.constraint.has_value();
                     if (dimension.constraint) {
@@ -2264,9 +2331,10 @@ private:
         }
         auto type = subtype_type(subtype);
         if (!type) {
-            auto name = std::string_view { subtype.type_mark.spelling };
-            name = simple_name_of(name);
-            return equal_ignoring_ascii_case(name, "string") || equal_ignoring_ascii_case(name, "bit_vector");
+            return subtype.provided_type
+                    == semantic::CompiledVhdlProvidedType::string
+                || subtype.provided_type
+                    == semantic::CompiledVhdlProvidedType::bit_vector;
         }
         std::unordered_set<std::uint32_t> visiting;
         while (type && visiting.insert(type->value()).second) {
@@ -2375,16 +2443,15 @@ private:
             return false;
         }
         if (!found->vhdl->referenced_name || !found->vhdl->referenced_name->selected) {
-            // STD.STANDARD's scalar types are not retained as declarations.
-            for (const std::string_view predefined :
-                { "integer", "natural", "positive", "boolean", "bit", "character", "real",
-                    "time" }) {
-                if (equal_ignoring_ascii_case(found->vhdl->text, predefined)) {
-                    return true;
-                }
-            }
-            return support::find_vhdl_standard_enumeration(found->vhdl->text)
-                != nullptr;
+            // STD.STANDARD's scalar types are not retained as declarations:
+            // the name denotes one where it is written (12.3, 12.4).
+            const auto provided
+                = provided_type(found->vhdl->text, found->vhdl->scope);
+            const auto kind = builtin_operand_class(provided);
+            return kind == OperandClass::integer
+                || kind == OperandClass::floating
+                || kind == OperandClass::physical
+                || kind == OperandClass::enumeration;
         }
         const auto declaration = specialization_.find_declaration(
             *found->vhdl->referenced_name->selected);
@@ -2607,18 +2674,19 @@ private:
                             "a VHDL range bound is an expression, not a type mark", source);
                     }
                     // The bounds of an index constraint have the index type.
-                    auto index_name = implicit_index
-                        ? std::string_view { }
-                        : std::string_view { dimension.index_subtype.spelling };
-                    index_name.remove_prefix(std::min(index_name.size(),
-                        index_name.find_last_of(".:") + 1U));
+                    using Provided = semantic::CompiledVhdlProvidedType;
+                    const auto index_provided
+                        = implicit_index || dimension.index_subtype.selected
+                        ? Provided::none
+                        : provided_type(dimension.index_subtype.spelling,
+                              type_declaration_scope(type));
                     // (An anonymous range's placeholder index is INTEGER, so
                     // INTEGER itself is not checked.)
-                    const auto integer_index = equal_ignoring_ascii_case(index_name, "natural")
-                        || equal_ignoring_ascii_case(index_name, "positive");
-                    const auto enumeration_index = equal_ignoring_ascii_case(index_name, "character")
-                        || equal_ignoring_ascii_case(index_name, "boolean")
-                        || equal_ignoring_ascii_case(index_name, "bit");
+                    const auto integer_index = index_provided == Provided::natural
+                        || index_provided == Provided::positive;
+                    const auto enumeration_index = index_provided == Provided::character
+                        || index_provided == Provided::boolean
+                        || index_provided == Provided::bit;
                     const auto bound_kind = [&](const std::optional<semantic::ExpressionId> id) {
                         return id ? operand_type(*id).kind : OperandClass::unknown;
                     };
@@ -2633,8 +2701,8 @@ private:
                         }
                     }
                     const std::optional<std::int64_t> minimum
-                        = equal_ignoring_ascii_case(index_name, "natural") ? std::optional<std::int64_t> { 0 }
-                        : equal_ignoring_ascii_case(index_name, "positive")
+                        = index_provided == Provided::natural ? std::optional<std::int64_t> { 0 }
+                        : index_provided == Provided::positive
                         ? std::optional<std::int64_t> { 1 }
                         : std::nullopt;
                     const auto left = static_bound(range.left, range.left_expression);
@@ -2673,16 +2741,17 @@ private:
                     continue;
                 }
                 if (!index_declaration) {
-                    auto spelling = std::string_view { dimension.index_subtype.spelling };
-                    spelling = simple_name_of(spelling);
-                    for (const auto predefined : { "bit_vector", "string", "real", "time",
-                             "std_logic_vector", "std_ulogic_vector" }) {
-                        if (equal_ignoring_ascii_case(spelling, predefined)) {
-                            report("FSIM-ELAB-VHARRAY-012",
-                                "a VHDL array index subtype must be discrete",
-                                dimension.source.valid() ? dimension.source : type.source);
-                            break;
-                        }
+                    using Provided = semantic::CompiledVhdlProvidedType;
+                    const auto provided = provided_type(
+                        dimension.index_subtype.spelling,
+                        type_declaration_scope(type));
+                    const auto kind = builtin_operand_class(provided);
+                    if (kind == OperandClass::array
+                        || provided == Provided::real
+                        || provided == Provided::time) {
+                        report("FSIM-ELAB-VHARRAY-012",
+                            "a VHDL array index subtype must be discrete",
+                            dimension.source.valid() ? dimension.source : type.source);
                     }
                 }
                 if (index_declaration && index_declaration->vhdl != nullptr
@@ -3777,12 +3846,7 @@ private:
                 if (mark.empty()) {
                     return std::nullopt;
                 }
-                SubtypeIndication subtype;
-                subtype.type_mark.spelling = std::string { mark };
-                if (const auto type = named_type(mark, value.scope)) {
-                    subtype.type_mark.target = *type;
-                }
-                return specialized_subtype(std::move(subtype));
+                return specialized_subtype(mark_subtype(mark, value.scope));
             }
         }
         if (value.referenced_name) {
@@ -3847,12 +3911,7 @@ private:
             }
         }
         if (!value.nominal_type.empty()) {
-            SubtypeIndication subtype;
-            subtype.type_mark.spelling = value.nominal_type;
-            if (const auto type = named_type(
-                    value.nominal_type, value.scope)) {
-                subtype.type_mark.target = *type;
-            }
+            auto subtype = mark_subtype(value.nominal_type, value.scope);
             return specialized_subtype(std::move(subtype));
         }
         if (value.kind != semantic::vhdl::ExpressionKind::name) {
@@ -4152,57 +4211,89 @@ private:
         return root_for_type(subtype_type(specialized_subtype(subtype)));
     }
 
-    static OperandClass builtin_operand_class(const std::string_view spelling)
+    // The operand class of a compiler-provided type (IEEE 1076-2019 16.3,
+    // 16.4, 16.7, 16.8); unknown for none and for the types of the fixed-
+    // and floating-point packages, which classify by their retained
+    // declarations.
+    static OperandClass builtin_operand_class(
+        const semantic::CompiledVhdlProvidedType type)
     {
-        const auto name = simple_name_of(spelling);
-        const auto any = [&](const std::initializer_list<std::string_view> names) {
-            return std::ranges::any_of(names,
-                [&](const auto candidate) { return equal_ignoring_ascii_case(name, candidate); });
-        };
-        if (any({ "integer", "natural", "positive" })) {
+        using Provided = semantic::CompiledVhdlProvidedType;
+        switch (type) {
+        case Provided::integer:
+        case Provided::natural:
+        case Provided::positive:
             return OperandClass::integer;
-        }
-        if (any({ "real" })) {
+        case Provided::real:
             return OperandClass::floating;
-        }
-        if (any({ "time", "delay_length" })) {
+        case Provided::time:
+        case Provided::delay_length:
             return OperandClass::physical;
-        }
-        if (support::find_vhdl_standard_enumeration(name) != nullptr
-            || any({ "boolean", "bit", "character", "std_ulogic",
-                "std_logic" })) {
+        case Provided::boolean:
+        case Provided::bit:
+        case Provided::character:
+        case Provided::severity_level:
+        case Provided::file_open_kind:
+        case Provided::file_open_status:
+        case Provided::range_direction:
+        case Provided::std_ulogic:
+        case Provided::std_logic:
             return OperandClass::enumeration;
-        }
-        if (any({ "string", "bit_vector", "std_ulogic_vector",
-                "std_logic_vector", "boolean_vector", "integer_vector",
-                "real_vector", "time_vector", "signed", "unsigned" })) {
+        case Provided::string:
+        case Provided::bit_vector:
+        case Provided::boolean_vector:
+        case Provided::integer_vector:
+        case Provided::real_vector:
+        case Provided::time_vector:
+        case Provided::std_ulogic_vector:
+        case Provided::std_logic_vector:
+        case Provided::numeric_std_unsigned:
+        case Provided::numeric_std_signed:
+        case Provided::numeric_bit_unsigned:
+        case Provided::numeric_bit_signed:
+        case Provided::std_logic_arith_unsigned:
+        case Provided::std_logic_arith_signed:
             return OperandClass::array;
-        }
         // STD.TEXTIO's TEXT is a file type and LINE an access type.
-        if (any({ "text" })) {
+        case Provided::textio_text:
             return OperandClass::other;
-        }
-        if (any({ "line" })) {
+        case Provided::textio_line:
             return OperandClass::access;
+        default:
+            return OperandClass::unknown;
         }
-        return OperandClass::unknown;
     }
 
-    static std::string builtin_root(const std::string_view spelling)
+    // The root type a compiler-provided type or subtype belongs to, named
+    // as the operand checks compare roots.
+    static std::string builtin_root(
+        const semantic::CompiledVhdlProvidedType type)
     {
-        const auto name = simple_name_of(spelling);
-        if (equal_ignoring_ascii_case(name, "natural") || equal_ignoring_ascii_case(name, "positive")) {
+        using Provided = semantic::CompiledVhdlProvidedType;
+        switch (type) {
+        case Provided::natural:
+        case Provided::positive:
             return "integer";
-        }
-        if (equal_ignoring_ascii_case(name, "delay_length")) {
+        case Provided::delay_length:
             return "time";
-        }
-        if (equal_ignoring_ascii_case(name, "std_logic")) {
+        case Provided::std_logic:
             return "std_ulogic";
+        case Provided::numeric_std_unsigned:
+        case Provided::numeric_bit_unsigned:
+        case Provided::std_logic_arith_unsigned:
+            return "unsigned";
+        case Provided::numeric_std_signed:
+        case Provided::numeric_bit_signed:
+        case Provided::std_logic_arith_signed:
+            return "signed";
+        case Provided::textio_line:
+            return "line";
+        case Provided::textio_text:
+            return "text";
+        default:
+            return std::string {
+                semantic::vhdl_provided_type_name(type) };
         }
-        std::string result { name };
-        lowercase_ascii(result);
-        return result;
     }
 
     OperandType subtype_operand_type(
@@ -4224,7 +4315,12 @@ private:
         if (definition == nullptr) {
             // The chain may end at a predefined type without a retained
             // definition (`subtype r is real range ...`).
-            auto spelling = std::string_view { subtype.type_mark.spelling };
+            // The resolution pass stamped which provided type each mark
+            // denotes where it is written; a source subtype's own name is
+            // never consulted, so a local integer subtype named LINE does not
+            // inherit STD.TEXTIO.LINE's access classification.
+            const semantic::CompiledDesignResolver resolver { specialization_ };
+            auto provided = subtype.provided_type;
             auto type = subtype_type(subtype);
             std::unordered_set<std::uint32_t> visiting;
             while (type && visiting.insert(type->value()).second) {
@@ -4234,26 +4330,27 @@ private:
                 }
                 if (link->form != TypeForm::subtype
                     && link->form != TypeForm::alias) {
-                    spelling = link->name;
+                    provided = resolver.vhdl_provided_type_of(link->id);
                     break;
                 }
                 if (!link->base.type_mark.spelling.empty()) {
-                    // A source subtype's name is not its base type's class.
-                    // In particular, a local integer subtype named LINE must
-                    // not inherit STD.TEXTIO.LINE's access classification.
-                    spelling = link->base.type_mark.spelling;
+                    provided = link->base.provided_type;
                 }
                 type = subtype_type(link->base);
             }
-            const auto kind = builtin_operand_class(spelling);
+            const auto kind = builtin_operand_class(provided);
             return { kind,
                 kind == OperandClass::unknown
                     ? std::string { }
-                    : builtin_root(spelling) };
+                    : builtin_root(provided) };
         }
-        const auto named = builtin_operand_class(definition->name);
-        if (named != OperandClass::unknown && library_type(*definition)) {
-            return { named, builtin_root(definition->name) };
+        if (library_type(*definition)) {
+            const auto provided = semantic::CompiledDesignResolver {
+                specialization_ }.vhdl_provided_type_of(definition->id);
+            const auto named = builtin_operand_class(provided);
+            if (named != OperandClass::unknown) {
+                return { named, builtin_root(provided) };
+            }
         }
         auto root = "#" + std::to_string(definition->id.value());
         if (library_type(*definition)) {
@@ -4345,11 +4442,7 @@ private:
                 value.text.starts_with(qualified)
                 && value.operands.size() == 1U) {
                 const auto mark = std::string_view { value.text }.substr(qualified.size());
-                SubtypeIndication subtype;
-                subtype.type_mark.spelling = std::string { mark };
-                if (const auto type = named_type(mark, value.scope)) {
-                    subtype.type_mark.target = *type;
-                }
+                const auto subtype = mark_subtype(mark, value.scope);
                 return support::with_stack([&] { return subtype_operand_type(subtype, depth + 1U); });
             }
             // T'LEFT, T'RIGHT, T'LOW and T'HIGH of a scalar type mark have
@@ -4748,14 +4841,12 @@ private:
                         return dimension.unconstrained;
                     });
         } else {
-            auto simple = mark;
-            simple.remove_prefix(simple.find_last_of('.') + 1U);
-            static constexpr std::array<std::string_view, 6> predefined {
-                "bit_vector", "string", "boolean_vector", "integer_vector",
-                "real_vector", "time_vector"
-            };
-            unconstrained = std::ranges::any_of(predefined,
-                [&](const std::string_view name) { return equal_ignoring_ascii_case(simple, name); });
+            // The predefined array types of STD.STANDARD are unconstrained
+            // (16.3): a mark denoting one where it is written (12.3).
+            const auto identity = semantic::CompiledDesignResolver { specialization_ }
+                                      .resolve_vhdl_type_identity(mark, expression.scope);
+            unconstrained = !identity.type
+                && semantic::vhdl::is_standard_array_builtin(identity.builtin_type);
         }
         if (unconstrained) {
             report("FSIM-ELAB-VHACCESS-031",
@@ -4779,12 +4870,7 @@ private:
         }
         const auto spelling = dimension.index_subtype.text();
         if (!spelling.empty()) {
-            SubtypeIndication subtype;
-            subtype.type_mark.spelling = spelling;
-            if (const auto type = named_type(spelling, scope)) {
-                subtype.type_mark.target = *type;
-            }
-            return subtype_operand_type(subtype, 0U);
+            return subtype_operand_type(mark_subtype(spelling, scope), 0U);
         }
         if (dimension.constraint && dimension.constraint->left_expression) {
             return operand_type(*dimension.constraint->left_expression);
@@ -4868,12 +4954,7 @@ private:
             && expression.operands.size() == 1U) {
             const auto mark = std::string_view { expression.text }.substr(
                 qualified_prefix.size());
-            const auto type = named_type(mark, expression.scope);
-            SubtypeIndication subtype;
-            subtype.type_mark.spelling = std::string { mark };
-            if (type) {
-                subtype.type_mark.target = *type;
-            }
+            const auto subtype = mark_subtype(mark, expression.scope);
             const auto expected = subtype_operand_type(subtype, 0U);
             const auto actual = operand_type(expression.operands.front());
             if (const auto operand = specialization_.find_expression(
@@ -4920,14 +5001,14 @@ private:
                 if (literal.size() == 3U && literal.front() == '\'' && literal.back() == '\'') {
                     literal = literal.substr(1U, 1U);
                 }
-                auto simple = mark;
-                simple.remove_prefix(simple.find_last_of('.') + 1U);
+                using Provided = semantic::CompiledVhdlProvidedType;
                 const auto in = [&](const std::string_view literals) {
                     return literal.size() == 1U
                         && literals.find(literal.front()) != std::string_view::npos;
                 };
-                if ((equal_ignoring_ascii_case(simple, "bit") && !in("01"))
-                    || ((equal_ignoring_ascii_case(simple, "std_ulogic") || equal_ignoring_ascii_case(simple, "std_logic"))
+                if ((subtype.provided_type == Provided::bit && !in("01"))
+                    || ((subtype.provided_type == Provided::std_ulogic
+                            || subtype.provided_type == Provided::std_logic)
                         && !in("UX01ZWLH-"))) {
                     report("FSIM-ELAB-VHQUAL-005",
                         "the operand of a VHDL qualified expression does not have "
@@ -5561,11 +5642,7 @@ private:
             const auto conversion_subtype = [&](const auto& name,
                                                 const semantic::ScopeId scope)
                 -> std::optional<SubtypeIndication> {
-                const auto selected = name.selected
-                    ? name.selected
-                    : name.overloads.size() == 1U
-                    ? std::optional { name.overloads.front() }
-                    : std::nullopt;
+                const auto selected = name.selected;
                 if (selected) {
                     const auto declaration
                         = specialization_.find_declaration(*selected);
@@ -5604,12 +5681,11 @@ private:
             };
             if (expression.text.starts_with(qualified_prefix)
                 && expression.operands.size() == 1U) {
-                semantic::vhdl::Name type_name;
-                type_name.spelling
-                    = expression.text.substr(qualified_prefix.size());
-                type_name.canonical = type_name.spelling;
-                const auto target = conversion_subtype(
-                    type_name, expression.scope);
+                // The type mark analysis resolved (9.3.5, 12.3, 12.4).
+                const auto target = expression.qualified_type_mark
+                    ? conversion_subtype(
+                          *expression.qualified_type_mark, expression.scope)
+                    : std::nullopt;
                 return finish(target
                     && support::with_stack([&] { return locally_static_subtype(
                         *target, expression.scope, active_expressions,
@@ -6991,7 +7067,9 @@ private:
                 return equal_ignoring_ascii_case(expression.text, literal);
             })
             || has_textio_side_literal
-            || builtin_operand_class(expression.text) != OperandClass::unknown
+            || builtin_operand_class(
+                   provided_type(expression.text, expression.scope))
+                != OperandClass::unknown
             || vhdl_character_control_literal(expression.text)) {
             return;
         }
@@ -7261,10 +7339,10 @@ private:
             && expression.decoded_string && expression.text.starts_with('"')) {
             const auto* array = root_definition(context);
             if (array != nullptr && array->form == TypeForm::array && array->element_subtype) {
-                auto element = std::string_view { array->element_subtype->type_mark.spelling };
-                element = simple_name_of(element);
-                const std::string_view allowed = equal_ignoring_ascii_case(element, "bit") ? "01"
-                    : (equal_ignoring_ascii_case(element, "std_ulogic") || equal_ignoring_ascii_case(element, "std_logic"))
+                using Provided = semantic::CompiledVhdlProvidedType;
+                const auto element = array->element_subtype->provided_type;
+                const std::string_view allowed = element == Provided::bit ? "01"
+                    : (element == Provided::std_ulogic || element == Provided::std_logic)
                         ? "UX01ZWLH-"
                         : std::string_view { };
                 if (!allowed.empty()
@@ -7863,11 +7941,10 @@ private:
             }
         }
         // Index constraints of the predefined NATURAL/POSITIVE-indexed arrays.
-        auto mark = std::string_view { subtype.type_mark.spelling };
-        mark = simple_name_of(mark);
+        using Provided = semantic::CompiledVhdlProvidedType;
         const std::optional<std::int64_t> minimum
-            = equal_ignoring_ascii_case(mark, "bit_vector") ? std::optional<std::int64_t> { 0 }
-            : equal_ignoring_ascii_case(mark, "string")     ? std::optional<std::int64_t> { 1 }
+            = subtype.provided_type == Provided::bit_vector ? std::optional<std::int64_t> { 0 }
+            : subtype.provided_type == Provided::string     ? std::optional<std::int64_t> { 1 }
                                              : std::nullopt;
         if (minimum && subtype.constraints.size() == 1U) {
             const auto& range = subtype.constraints.front();
@@ -7968,11 +8045,11 @@ private:
                     }
                     break;
                 }
-                auto name = std::string_view { current.type_mark.spelling };
-                name = simple_name_of(name);
-                const bool positive
-                    = equal_ignoring_ascii_case(name, "positive");
-                if (positive || equal_ignoring_ascii_case(name, "natural")) {
+                const bool positive = current.provided_type
+                    == semantic::CompiledVhdlProvidedType::positive;
+                if (positive
+                    || current.provided_type
+                        == semantic::CompiledVhdlProvidedType::natural) {
                     range = std::pair {
                         std::int64_t { positive ? 1 : 0 },
                         elaboration_detail::vhdl_integer_maximum(
@@ -8530,7 +8607,8 @@ private:
     // IEEE 1076-1993 6.5: the bounds of a slice's discrete range have one
     // type, the index type of the prefix.
     // The type of an array dimension's explicitly named index subtype.
-    OperandType index_operand_type(const semantic::vhdl::ArrayDimension& dimension) const
+    OperandType index_operand_type(const semantic::vhdl::ArrayDimension& dimension,
+        const semantic::ScopeId scope) const
     {
         const auto& index_name = dimension.index_subtype;
         if (index_name.selected) {
@@ -8544,12 +8622,11 @@ private:
             }
             return { };
         }
-        auto spelling = std::string_view { index_name.spelling };
-        spelling.remove_prefix(std::min(spelling.size(), spelling.find_last_of(".:") + 1U));
-        for (const std::string_view name : { "character", "boolean", "bit" }) {
-            if (equal_ignoring_ascii_case(spelling, name)) {
-                return { OperandClass::enumeration, std::string { name } };
-            }
+        using Provided = semantic::CompiledVhdlProvidedType;
+        const auto provided = provided_type(index_name.spelling, scope);
+        if (provided == Provided::character || provided == Provided::boolean
+            || provided == Provided::bit) {
+            return { OperandClass::enumeration, builtin_root(provided) };
         }
         return { };
     }
@@ -8567,7 +8644,8 @@ private:
             return;
         }
         for (std::size_t index { }; index < array->array_dimensions.size(); ++index) {
-            const auto index_type = index_operand_type(array->array_dimensions[index]);
+            const auto index_type = index_operand_type(
+                array->array_dimensions[index], type_declaration_scope(*array));
             const auto& range = declaration.subtype->constraints[index];
             if (index_type.kind != OperandClass::integer
                 && index_type.kind != OperandClass::enumeration) {
@@ -8785,7 +8863,9 @@ private:
             const auto identity = predefined_array_identity(
                 *subtype, value->vhdl->scope);
             return identity == "ieee.numeric_std.signed"
-                || identity == "ieee.numeric_std.unsigned";
+                || identity == "ieee.numeric_std.unsigned"
+                || identity == "ieee.std_logic_arith.signed"
+                || identity == "ieee.std_logic_arith.unsigned";
         };
         // STRING has no arithmetic, and BIT_VECTOR has none before
         // VHDL-2008 (NUMERIC_BIT_UNSIGNED); string and bit-string literals
@@ -9219,8 +9299,7 @@ private:
             target = named_type(subtype.type_mark.spelling, scope);
         }
         if (target) {
-            if (visiting->size() >= 64U
-                || !visiting->insert(target->value()).second) {
+            if (!visiting->insert(target->value()).second) {
                 return std::nullopt;
             }
         }
@@ -9328,6 +9407,13 @@ private:
                         && (type_name == "std_logic_vector"
                             || type_name == "std_ulogic_vector")) {
                         return "ieee.std_logic_1164." + type_name;
+                    }
+                    // The Synopsys STD_LOGIC_ARITH package's array types
+                    // carry its arithmetic, as NUMERIC_STD's do.
+                    if (semantic::vhdl::is_package(
+                            owner, "ieee", "std_logic_arith")
+                        && (type_name == "signed" || type_name == "unsigned")) {
+                        return "ieee.std_logic_arith." + type_name;
                     }
                     const bool numeric_std_package
                         = semantic::vhdl::is_package(
@@ -9842,6 +9928,7 @@ private:
         }
         SubtypeIndication result;
         result.type_mark.spelling = std::string { element };
+        result.provided_type = provided_type_of_identity(element);
         return result;
     }
 
@@ -13890,6 +13977,8 @@ private:
                             context->type_mark.spelling = *predefined;
                             context->type_mark.target
                                 = semantic::TypeId { };
+                            context->provided_type
+                                = provided_type_of_identity(*predefined);
                             context->constraints.clear();
                             context->executable_width.reset();
                         } else if (root != nullptr

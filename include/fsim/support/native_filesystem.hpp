@@ -3,14 +3,12 @@
 
 #include "fsim/support/path.hpp"
 
-#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <ios>
 #include <string>
 #include <system_error>
-#include <thread>
 #include <utility>
 
 /// Filesystem operations that accept paths longer than Windows' MAX_PATH.

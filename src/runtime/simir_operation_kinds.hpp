@@ -5,7 +5,6 @@
 // name) instead of dispatching over operations at run time.
 #pragma once
 
-#include "fsim/runtime/simir.hpp"
 
 #include <cstddef>
 #include <cstdint>

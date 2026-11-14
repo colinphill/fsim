@@ -1,0 +1,25 @@
+#c 0 sys-initialized
+#c 0 sys-on
+#c 1 sys-off
+#c 2 sys-on
+#c 3 sys-kill
+#c 4 enable a1
+#c 5 disable a1
+#c 5 disable c1
+#c 6 reset a1
+#c 6 disable a1
+#c 7 sys-disable-pass-action
+#c 8 enable-pass-action a1
+#c 9 disable-fail-action c1
+#c 10 sys-enable-fail-action
+#c 11 enable-nonvacuous-action a1
+#c 12 sys-disable-vacuous-action
+#c 13 sys-lock
+#c 14 sys-unlock
+#c 15 lock a1
+#c 17 unlock a1
+#c 18 disable a1
+#c 18 disable c1
+#c 19 sys-on
+#c 20 disable-pass-action c1
+#c 21 sys-end

@@ -1491,6 +1491,14 @@ CompiledDesign::find_type(const TypeId id) const noexcept
 std::optional<CompiledExpressionView>
 CompiledDesign::find_expression(const ExpressionId id) const noexcept
 {
+    // A constant a class specialization binding was folded to (Hir).
+    if (id.valid() && id.value() >= sv::interned_constant_base) {
+        const auto* interned = systemverilog_hir.find_interned_constant(id);
+        return interned != nullptr
+            ? std::optional<CompiledExpressionView> {
+                  CompiledExpressionView { interned, nullptr } }
+            : std::nullopt;
+    }
     return find_language_record(
         std::span { semantics.expression_identities() },
         std::span { lookup_indexes_.expressions.records },
@@ -1873,7 +1881,11 @@ bool CompiledDesign::valid() const
             const CompiledSystemVerilogPackageDeclarationIdentity& identity) {
             return !identity.library.empty() && !identity.package.empty()
                 && (identity.form == sv::DeclarationForm::function
-                    || identity.form == sv::DeclarationForm::task)
+                    || identity.form == sv::DeclarationForm::task
+                    || identity.form == sv::DeclarationForm::variable
+                    || identity.form == sv::DeclarationForm::net
+                    || identity.form == sv::DeclarationForm::parameter
+                    || identity.form == sv::DeclarationForm::local_parameter)
                 && !identity.name.empty() && !identity.source_digest.empty()
                 && identity.source_begin < identity.source_end;
         };
@@ -1899,7 +1911,8 @@ bool CompiledDesign::valid() const
             const auto* expression = find_by_id(
                 systemverilog_hir.expressions(), *use.expression);
             if (expression == nullptr
-                || expression->kind != sv::ExpressionKind::call
+                || (expression->kind != sv::ExpressionKind::call
+                    && expression->kind != sv::ExpressionKind::name)
                 || !expression->referenced_name
                 || !valid_callsite_owner(expression->scope)) {
                 return false;

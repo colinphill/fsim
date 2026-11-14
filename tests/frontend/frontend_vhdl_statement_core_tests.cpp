@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
-#include "fsim/frontend/frontend.hpp"
 
+#include "fsim/frontend/design_core.hpp"
+#include "fsim/frontend/diagnostic.hpp"
+#include "fsim/frontend/parser.hpp"
+#include "fsim/frontend/token.hpp"
 #include <algorithm>
 #include <array>
-#include <limits>
 #include <optional>
-#include <ranges>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace fsim::tests::frontend {
 
@@ -385,13 +387,21 @@ begin
     disconnect local_explicit : std_logic after 2 ns;
     disconnect others : std_logic after 3 ns;
   begin
-    simple: result <= guarded transport null after 1 ns,
+    simple: result <= guarded transport source after 1 ns,
                                       source after 3 ns;
-    result <= guarded source when enabled else null;
+    result <= guarded source when enabled else unaffected;
     with selector select result <= guarded reject 1 ns inertial
-      source after 2 ns when '1', null after 2 ns when others;
+      source after 2 ns when '1', unaffected when others;
     local_explicit <= guarded source;
     local_other <= guarded source;
+    nulls: process
+    begin
+      local_explicit <= transport null after 1 ns, source after 3 ns;
+      local_explicit <= source when enabled else null;
+      with selector select local_explicit <= reject 1 ns inertial
+        source after 2 ns when '1', null after 2 ns when others;
+      wait;
+    end process;
   end block scope;
   all_scope: block (enabled) is
     signal local_all : std_logic;
@@ -404,14 +414,16 @@ end architecture;)",
         Language::Vhdl2008);
     const auto& guarded_body = guarded.design.units.front().generate_regions.front().then_body;
     const auto& all_body = guarded.design.units.front().generate_regions[1].then_body;
+    // Null waveform elements appear only in sequential assignments: one
+    // in a concurrent assignment is an error (IEEE 1076-2019 11.6), which
+    // elaboration reports (FSIM-ELAB-VHDLGUARD-004).
+    const auto& nulls = guarded_body.processes.front().statements;
     require(
         !guarded.ok()
             && guarded_body.concurrent_statements.size() == 5
             && guarded_body.concurrent_statements[0]
                 .vhdl_guarded_assignment
-            && guarded_body.concurrent_statements[0]
-                .vhdl_waveform.front()
-                .disconnect
+            && guarded_body.concurrent_statements[0].vhdl_waveform.size() == 2
             && guarded_body.concurrent_statements[0]
                     .vhdl_waveform.back()
                     .value.text
@@ -420,11 +432,19 @@ end architecture;)",
                 .vhdl_guarded_assignment
             && guarded_body.concurrent_statements[1]
                 .else_statements.front()
-                .vhdl_waveform.front()
-                .disconnect
+                .vhdl_unaffected
             && guarded_body.concurrent_statements[2]
                 .vhdl_guarded_assignment
             && guarded_body.concurrent_statements[2]
+                .case_alternatives.back()
+                .statements.front()
+                .vhdl_unaffected
+            && guarded_body.processes.size() == 1
+            && nulls.size() == 4
+            && nulls[0].vhdl_waveform.front().disconnect
+            && nulls[0].vhdl_waveform.back().value.text == "source"
+            && nulls[1].else_statements.front().vhdl_waveform.front().disconnect
+            && nulls[2]
                 .case_alternatives.back()
                 .statements.front()
                 .vhdl_waveform.front()
@@ -595,7 +615,6 @@ architecture rtl of malformed_waveforms is
 begin
   result <= unaffected, '1' after 1 ns;
   result <= ;
-  result <= null after 1 ns;
 end architecture;
 )",
         Language::Vhdl2008);
@@ -606,17 +625,16 @@ end architecture;
                 return diagnostic.code == code;
             });
     };
+    // A concurrent null waveform is an elaboration error
+    // (FSIM-ELAB-VHDLGUARD-004, elaborator_vhdl_concurrent_test).
     require(
         !malformed.ok()
             && has_code("FSIM-VHDL-PARSE-125")
-            && has_code("FSIM-VHDL-PARSE-126")
-            && has_code("FSIM-VHDL-UNSUPPORTED-025"),
-        "malformed, empty, and null VHDL waveforms are targeted (mixed="
+            && has_code("FSIM-VHDL-PARSE-126"),
+        "malformed and empty VHDL waveforms are targeted (mixed="
             + std::to_string(has_code("FSIM-VHDL-PARSE-125"))
             + ", empty="
             + std::to_string(has_code("FSIM-VHDL-PARSE-126"))
-            + ", null="
-            + std::to_string(has_code("FSIM-VHDL-UNSUPPORTED-025"))
             + ")");
 }
 
@@ -790,7 +808,9 @@ void test_vhdl_revision_expression_profiles()
             std::string { name } + ".vhd",
             "architecture rtl of " + std::string { name } + " is\n"
                 + std::string { declarations } + "\nbegin\n"
-                + std::string { statements } + "\nend architecture;\n",
+                + std::string { statements }
+                + (standard == VhdlStandard::Vhdl1987 ? "\nend;\n"
+                                                      : "\nend architecture;\n"),
             Language::Vhdl2008,
             standard);
     };
@@ -811,7 +831,7 @@ void test_vhdl_revision_expression_profiles()
       return exact_wide_t is
   begin
     return value;
-  end function;
+  end select_wide;
   signal source : exact_wide_t;
   signal result : exact_wide_t;
   signal empty : null_t;)",

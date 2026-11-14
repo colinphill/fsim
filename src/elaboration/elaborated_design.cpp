@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/elaboration/elaborator.hpp"
+#include "fsim/runtime/simir_interpreter.hpp"
 #include "fsim/runtime/simir_shared_body_scan.hpp"
 #include "fsim/support/parallel_for.hpp"
 #include "elaborated_design_process_access.hpp"
@@ -11,9 +12,13 @@
 #include <algorithm>
 #include <exception>
 #include <limits>
+#include <map>
 #include <memory>
+#include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
+#include <tuple>
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
@@ -619,6 +624,7 @@ void ElaboratedDesign::freeze_hierarchy_paths()
     container_by_name_.clear();
     container_element_packed_shape_.clear();
     signal_packed_shape_.clear();
+    event_array_by_name_.clear();
     signal_unpacked_shape_.clear();
     signal_unpacked_element_members_.clear();
     virtual_interface_write_counts_.clear();
@@ -984,6 +990,12 @@ runtime::simir::ProcessProgramView ElaboratedDesign::process_view(
     return runtime::simir::ProcessProgramView(processes_[process]);
 }
 
+void ElaboratedDesign::record_vpi_callee(
+    std::string caller, VpiCalleeInfo callee)
+{
+    pending_vpi_callees_.emplace_back(std::move(caller), std::move(callee));
+}
+
 void ElaboratedDesign::finalize_process_rows()
 {
     if (process_builder_) {
@@ -991,6 +1003,55 @@ void ElaboratedDesign::finalize_process_rows()
         process_builder_.reset();
     }
     uses_simulation_control_ = scan_simulation_control();
+    if (pending_vpi_callees_.empty()) {
+        return;
+    }
+    std::unordered_map<std::string_view, std::size_t> by_instance;
+    std::map<std::pair<std::string_view, std::string_view>,
+        std::vector<std::size_t>>
+        by_unit;
+    for (std::size_t index = 0U; index < specializations_.size(); ++index) {
+        const auto& specialization = specializations_[index];
+        by_instance.emplace(specialization.instance, index);
+        by_unit[{ specialization.library, specialization.unit }].push_back(
+            index);
+    }
+    // A call bound to two callables (through a virtual interface, say) has
+    // no one callee.
+    std::set<std::tuple<std::size_t, bool, std::uint32_t>> ambiguous;
+    for (auto& [caller, callee] : pending_vpi_callees_) {
+        const auto owner = by_instance.find(caller);
+        if (owner == by_instance.end()) {
+            continue;
+        }
+        const auto& source = specializations_[owner->second];
+        const std::vector<std::size_t> own { owner->second };
+        const auto& targets = callee.instance.empty()
+            ? by_unit.at({ source.library, source.unit })
+            : own;
+        for (const auto target : targets) {
+            auto& callees = specializations_[target].vpi_callees;
+            const auto existing = std::ranges::find_if(callees,
+                [&](const VpiCalleeInfo& recorded) {
+                    return recorded.statement == callee.statement
+                        && recorded.id == callee.id;
+                });
+            if (existing == callees.end()) {
+                callees.push_back(callee);
+            } else if (existing->declaration != callee.declaration
+                || existing->dpi != callee.dpi
+                || existing->instance != callee.instance) {
+                ambiguous.emplace(target, callee.statement, callee.id);
+            }
+        }
+    }
+    pending_vpi_callees_.clear();
+    for (const auto& [target, statement, id] : ambiguous) {
+        std::erase_if(specializations_[target].vpi_callees,
+            [&](const VpiCalleeInfo& recorded) {
+                return recorded.statement == statement && recorded.id == id;
+            });
+    }
 }
 
 detail::RuntimeProcessProgramTableBuilder::
@@ -1180,6 +1241,18 @@ ElaboratedDesign::hierarchical_reads() const noexcept
     return hierarchical_reads_;
 }
 
+const std::unordered_map<std::string, runtime::simir::ContainerType>&
+ElaboratedDesign::class_container_types() const noexcept
+{
+    return class_container_types_;
+}
+
+void ElaboratedDesign::record_class_container_type(
+    std::string identity, runtime::simir::ContainerType type)
+{
+    class_container_types_.try_emplace(std::move(identity), std::move(type));
+}
+
 const std::vector<runtime::simir::ModuleTimingCheck>&
 ElaboratedDesign::verilog_timing_checks() const noexcept
 {
@@ -1275,6 +1348,19 @@ std::vector<std::pair<std::string, std::uint64_t>> interface_handle_rows(
     std::vector<std::pair<std::string, std::uint64_t>> result(
         handles.begin(), handles.end());
     std::ranges::sort(result);
+    return result;
+}
+
+// The class container types as artifact rows, in identity order.
+std::vector<std::pair<std::string, runtime::simir::ContainerType>>
+class_container_rows(
+    const std::unordered_map<std::string, runtime::simir::ContainerType>&
+        types)
+{
+    std::vector<std::pair<std::string, runtime::simir::ContainerType>> result(
+        types.begin(), types.end());
+    std::ranges::sort(result, { },
+        &std::pair<std::string, runtime::simir::ContainerType>::first);
     return result;
 }
 
@@ -1685,6 +1771,7 @@ ElaboratedDesignState ElaboratedDesign::state() const&
         verilog_primitives_, sdf_net_delays_,
         interface_handle_rows(systemverilog_interface_handles_),
         hierarchical_reads_, uses_simulation_control_,
+        class_container_rows(class_container_types_),
     };
     if (process_rows_) {
         result.processes.reserve(process_rows_->rows.size());
@@ -1748,6 +1835,7 @@ detail::ElaboratedDesignProcessAccess::artifact_state(
         design.verilog_primitives_, design.sdf_net_delays_,
         interface_handle_rows(design.systemverilog_interface_handles_),
         design.hierarchical_reads_, design.uses_simulation_control_,
+        class_container_rows(design.class_container_types_),
     };
     result.signal_names.reserve(design.signal_by_path_.size());
     for (const auto& [path, signal] : design.signal_by_path_) {
@@ -1812,6 +1900,7 @@ detail::ElaboratedDesignProcessAccess::take_artifact_state(
         interface_handle_rows(design.systemverilog_interface_handles_),
         std::move(design.hierarchical_reads_),
         design.uses_simulation_control_,
+        class_container_rows(design.class_container_types_),
     };
     result.signal_names.reserve(design.signal_by_path_.size());
     for (const auto& [path, signal] : design.signal_by_path_) {
@@ -1882,6 +1971,7 @@ ElaboratedDesignState ElaboratedDesign::state() &&
         std::move(verilog_primitives_), std::move(sdf_net_delays_),
         interface_handle_rows(systemverilog_interface_handles_),
         std::move(hierarchical_reads_), uses_simulation_control_,
+        class_container_rows(class_container_types_),
     };
     result.signal_names.reserve(signal_by_path_.size());
     for (const auto& [path, signal] : signal_by_path_) {
@@ -2524,6 +2614,10 @@ ElaboratedDesign::from_state_with_process_rows(
     result.sdf_net_delays_ = std::move(state.sdf_net_delays);
     result.hierarchical_reads_ = std::move(state.hierarchical_reads);
     result.uses_simulation_control_ = state.uses_simulation_control;
+    for (auto& [identity, type] : state.class_container_types) {
+        result.class_container_types_.emplace(
+            std::move(identity), std::move(type));
+    }
     for (auto& [path, handle] : state.systemverilog_interface_handles) {
         result.systemverilog_interface_handles_.emplace(
             std::move(path), handle);

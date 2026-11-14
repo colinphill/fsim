@@ -2,11 +2,25 @@
 #include "elaborator_internal.hpp"
 #include "fsim/support/design_library.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
+#include "elaboration_targets.hpp"
+#include "fsim/elaboration/elaborator.hpp"
+#include "fsim/semantic/compiled_design.hpp"
+#include "fsim/semantic/model.hpp"
+#include "fsim/semantic/systemverilog_hir.hpp"
+#include "fsim/semantic/vhdl_hir.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cctype>
 #include <sstream>
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 namespace fsim::elaboration::elaboration_detail {
 
@@ -413,9 +427,16 @@ std::optional<TargetSpec> parse_target(const std::string_view spelling) {
         if (escape > 1U && remainder[escape - 1U] == '.') {
             result.library = std::string{remainder.substr(0, escape - 1U)};
         }
-        result.unit = std::string{remainder.substr(escape)};
-        return result.unit.size() > 1U ? std::optional { result }
-                                       : std::nullopt;
+        // The name keeps one terminating space, as the parser's does.
+        auto name = remainder.substr(escape);
+        while (!name.empty() && name.back() == ' ') {
+            name.remove_suffix(1U);
+        }
+        if (name.size() <= 1U) {
+            return std::nullopt;
+        }
+        result.unit = std::string { name } + ' ';
+        return result;
     }
     if (const auto dot = remainder.rfind('.'); dot != std::string_view::npos) {
         result.library = std::string{remainder.substr(0, dot)};
@@ -675,17 +696,19 @@ std::optional<semantic::CompiledUnitView> choose_top_unit(
 }
 
 
-CompiledSystemVerilogUnitMatch find_exact_systemverilog_module(
+CompiledSystemVerilogUnitMatch find_exact_systemverilog_cell(
     const semantic::CompiledDesign& compiled,
     const std::string_view library,
     const std::string_view name)
 {
     CompiledSystemVerilogUnitMatch result;
-    static constexpr std::array module_kinds {
+    static constexpr std::array cell_kinds {
         semantic::sv::UnitKind::module,
+        semantic::sv::UnitKind::interface,
+        semantic::sv::UnitKind::program,
     };
     for (const auto candidate : systemverilog_unit_candidates(
-             compiled, name, module_kinds, false,
+             compiled, name, cell_kinds, false,
              SystemVerilogLibraryMatch::exact_logical, library)) {
         if (result.unit) {
             result.ambiguous = true;

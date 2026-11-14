@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "../../src/app/application_compiled_environment_vhdl.hpp"
+#include "fsim/semantic/compiled_design.hpp"
 #include "../../src/app/application_internal.hpp"
 #include "../../src/app/application_workspace_internal.hpp"
 #include "../../src/elaboration/elaboration_targets.hpp"

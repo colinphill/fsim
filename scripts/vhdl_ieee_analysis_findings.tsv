@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Derived IEEE package files that fsim does not analyze today (standard, package,
+# first error code, note). fsim.ieee-derived-analysis requires exactly these
+# failures: a file that starts to analyze, or fails with another code, fails the
+# check.
+2008	fixed_pkg	FSIM-VHDL-UNSUPPORTED-022	package instantiation `package fixed_pkg is new ieee.fixed_generic_pkg generic map (...)` in a project source is not supported (the 2019 original fails the same way)
+2008	float_pkg	FSIM-VHDL-UNSUPPORTED-022	package instantiation `package float_pkg is new ieee.float_generic_pkg generic map (...)` in a project source is not supported (the 2019 original fails the same way)

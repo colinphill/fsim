@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+wide w '0' tr='1' at 1000000 fs
+wide cp '0' direct='0' at 1000000 fs
+wide w '1' tr='0' at 2000000 fs
+wide cp '1' direct='1' at 2000000 fs
+wide w '0' tr='1' at 3000000 fs
+wide cp '0' direct='0' at 3000000 fs
+wide w '1' tr='0' at 4000000 fs
+wide cp '1' direct='1' at 4000000 fs
