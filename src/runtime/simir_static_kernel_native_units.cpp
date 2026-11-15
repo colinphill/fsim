@@ -2500,6 +2500,7 @@ void Interpreter::Impl::StaticKernel::concatenate_members(CompiledBody& program,
             case KOp::mark:
             case KOp::suspend:
             case KOp::step:
+            case KOp::sva_report:
                 break;
             case KOp::generic:
                 inst.y += register_base;

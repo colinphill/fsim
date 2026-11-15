@@ -174,12 +174,30 @@ enum class SystemVerilogVpiArrayKind {
 // type. `name` is the typedef's, empty for a built-in or inline type, and
 // `alias` (at most one) is the type a typedef of a typedef or of a built-in
 // type names (vpiTypedefAlias).
-// A parameter value an interface typespec assigns: the actual of
-// `virtual SBus#(16)` for the interface's parameter `name` (IEEE 1800-2023
-// 37.28, 37.30).
+// A parameter assignment (IEEE 1800-2023 37.28 param assign and def param):
+// the one record every form VPI presents is built from. Elaboration records
+// an instance's parameter overrides (23.10.2) and the defparams that set
+// its parameters (23.10.1) on the instance's specialization, and an
+// interface typespec's actuals on the typespec (37.30); the class model
+// builds a class typespec's (37.32 detail 3) when it is asked for them.
+// `name` is the parameter's, and `parameter_scope` the full name of the
+// scope that declares the parameter object set (vpiLhs): an instance, or a
+// named block of one for a defparam (23.10.1); empty when the parameter is
+// known by its name only (an interface typespec outside an instance). The right side
+// is the constant `value` when `constant`, else the HIR expression
+// `expression` seen from the scope `scope_path`, else (a type parameter)
+// the typespec of the type the parameter has. `defparam` marks a def param,
+// whose scope is the one that holds the defparam statement.
 struct SystemVerilogVpiParamAssign {
     std::string name;
     std::int64_t value { };
+    bool constant { };
+    bool connection_by_name { };
+    bool defparam { };
+    bool type_parameter { };
+    std::optional<std::uint32_t> expression;
+    std::string parameter_scope;
+    std::string scope_path;
 
     friend bool operator==(const SystemVerilogVpiParamAssign&,
         const SystemVerilogVpiParamAssign&) = default;
@@ -206,9 +224,9 @@ struct SystemVerilogVpiTypespec {
     // then holds the interface's typespec (its vpiParent, 37.30 details 1
     // and 2).
     std::string def_name;
-    // The parameter values an interface typespec's actuals assign, in the
-    // interface's parameter order (IEEE 1800-2023 37.30 vpiParamAssign); on
-    // the interface level of a modport typespec's `element`.
+    // The parameter assignments an interface typespec's actuals make, in
+    // the interface's parameter order (IEEE 1800-2023 37.30 vpiParamAssign);
+    // on the interface level of a modport typespec's `element`.
     std::vector<SystemVerilogVpiParamAssign> param_assigns;
     // A class typespec's class: the identity of the specialization, or of
     // the declaration of a class with no parameters (IEEE 1800-2023 8.25);
@@ -288,6 +306,10 @@ struct SystemVerilogVpiTypeInfo {
     // built-in kind (IEEE 1800-2023 6.6.7, 37.16 detail 11).
     std::string nettype;
     std::optional<SystemVerilogVpiDriverRange> driver_range;
+    // The SystemVerilog HIR scope a begin, fork or callable scope object
+    // is, in the unit of `semantic_unit_id`: the statement model finds the
+    // block or procedure by it (IEEE 1800-2023 37.12).
+    std::optional<std::uint32_t> hir_scope;
     std::optional<std::uint32_t> semantic_unit_id;
     std::optional<std::uint32_t> source_id;
     std::string semantic_unit;

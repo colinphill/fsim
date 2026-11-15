@@ -139,7 +139,10 @@ Capture run_once(
   vcd.flush();
   capture.vcd = vcd_output.str();
   const auto& objects = simulation.design().container_objects();
-  assert(objects.size() == 20);
+  // Seventeen module containers, three of slice_mid, and the static
+  // variables of unnamed blocks (IEEE 1800-2023 6.21): seven in the top's
+  // initial block, two and three in the generated children.
+  assert(objects.size() == 32);
   capture.values =
       simulation.read_container_object(objects[0].id);
   capture.pending =

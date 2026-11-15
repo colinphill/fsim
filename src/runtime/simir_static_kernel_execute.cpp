@@ -364,6 +364,9 @@ void Interpreter::Impl::StaticKernel::execute_body(
         case KOp::sva_outcome:
             execute_sva_outcome(registers, inst, member_index);
             break;
+        case KOp::sva_report:
+            execute_sva_report(inst, member_index);
+            break;
         case KOp::sva_sampled_load:
             execute_sva_sampled_load(body, registers, inst, member_index);
             break;
@@ -1269,6 +1272,9 @@ void Interpreter::Impl::StaticKernel::plan_sva_table()
     sva_table_.control_base = sva_control_base_.data();
     sva_table_.controls = impl_.assertion_controls.data();
     sva_table_.history = history_words_.data();
+    sva_table_.delta = &sva_delta_;
+    sva_table_.thread_process = &sva_thread_process_;
+    sva_table_.reports = &sva_reports_;
     if (total == 0U) {
         // No directive; an inline sampled read in procedural code still
         // reads the sampled words and rings through the table.
@@ -1325,16 +1331,147 @@ void Interpreter::Impl::StaticKernel::execute_sva_outcome(Word* registers,
     record();
 }
 
+void Interpreter::Impl::StaticKernel::append_sva_report(
+    const std::uint32_t member_index, const std::uint32_t pc,
+    const std::uint32_t sites)
+{
+    // The attempt the member popped last (the interpreter's sva_last_popped
+    // over the directives of the process): the start and fail position its
+    // pop left in the block (39.4.2 attemptStartTime).
+    using namespace sva::layout;
+    const std::int64_t* popped = nullptr;
+    if (sva_table_.blocks != nullptr) {
+        const auto base = sva_member_base_[member_index];
+        for (std::uint32_t site = 0U; site < sites; ++site) {
+            const auto* const block = sva_table_.blocks[base + site];
+            if (block != nullptr && block[h_pop_serial] != 0
+                && (popped == nullptr
+                    || block[h_pop_serial] > popped[h_pop_serial])) {
+                popped = block;
+            }
+        }
+    }
+    if (sva_reports_.count == sva_reports_.capacity) {
+        grow_sva_reports();
+    }
+    auto* const row = sva_reports_.words + sva_reports_.count * sva_report_stride;
+    row[sva_report_member] = static_cast<std::int64_t>(member_index);
+    row[sva_report_site] = static_cast<std::int64_t>(
+        pc | (popped != nullptr ? sva_report_popped : 0U));
+    row[sva_report_time] = sva_now_;
+    row[sva_report_delta] = static_cast<std::int64_t>(sva_delta_);
+    row[sva_report_thread] = sva_thread_process_;
+    row[sva_report_start] = popped != nullptr ? popped[h_last_start] : 0;
+    row[sva_report_fail_line] = popped != nullptr ? popped[h_last_fail_line] : 0;
+    row[sva_report_fail_column]
+        = popped != nullptr ? popped[h_last_fail_column] : 0;
+    ++sva_reports_.count;
+}
+
+void Interpreter::Impl::StaticKernel::execute_sva_report(
+    const KInst& inst, const std::uint32_t member_index)
+{
+    append_sva_report(member_index, inst.x, inst.aux);
+}
+
+void Interpreter::Impl::StaticKernel::grow_sva_reports()
+{
+    const auto capacity = std::max<std::uint64_t>(64U, sva_reports_.capacity * 2U);
+    sva_report_words_.resize(capacity * sva_report_stride);
+    sva_reports_.words = sva_report_words_.data();
+    sva_reports_.capacity = capacity;
+}
+
+void Interpreter::Impl::StaticKernel::native_sva_report_grow(
+    StaticKernelNativeFrame* frame)
+{
+    auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
+    try {
+        kernel.grow_sva_reports();
+    } catch (...) {
+        kernel.scratch().native_exception = std::current_exception();
+        frame->status = 1U;
+    }
+}
+
+void Interpreter::Impl::StaticKernel::take_sva_reports(
+    std::vector<HostRequestEvent>& rows)
+{
+    for (std::uint64_t index = 0U; index < sva_reports_.count; ++index) {
+        const auto* const row = sva_reports_.words + index * sva_report_stride;
+        const auto member_index = static_cast<std::uint32_t>(row[sva_report_member]);
+        const auto site = static_cast<std::uint64_t>(row[sva_report_site]);
+        const auto pc = static_cast<std::uint32_t>(site & 0xffff'ffffU);
+        const auto& request = operation_get<HostRequest>(
+            members_[member_index].operations()[pc]);
+        // A behavioral thread of the member made it: the thread's process
+        // (running_process).
+        const auto thread = static_cast<std::uint64_t>(row[sva_report_thread]);
+        const ProcessId process = thread != 0U
+                && (thread >> 32U) == static_cast<std::uint64_t>(member_index) + 1U
+            ? static_cast<ProcessId>(thread & 0xffff'ffffU)
+            : members_[member_index].process;
+        HostRequestEvent event;
+        event.process = process;
+        event.design_process = impl_.design_process_of(process);
+        event.dynamic_root = impl_.dynamic_root_of(process);
+        event.request = &request;
+        event.time = static_cast<SimulationTick>(row[sva_report_time]);
+        event.delta = static_cast<std::uint64_t>(row[sva_report_delta]);
+        if (const auto* const outcome = std::get_if<SvaOutcomeRequest>(&request.request);
+            outcome != nullptr && (site & sva_report_popped) != 0U) {
+            event.attempt_start = row[sva_report_start];
+            if (outcome->outcome == support::SvaOutcome::failure
+                && row[sva_report_fail_line] != 0) {
+                event.fail = std::pair {
+                    static_cast<std::uint32_t>(row[sva_report_fail_line]),
+                    static_cast<std::uint32_t>(row[sva_report_fail_column]) };
+            }
+        }
+        rows.push_back(event);
+    }
+    sva_reports_.count = 0U;
+}
+
 void Interpreter::Impl::StaticKernel::note_sva_code(
-    const std::size_t index) noexcept
+    const std::size_t index)
 {
     const auto& compiled = members_[index].compiled;
     if (compiled
         && std::ranges::any_of(compiled->code, [](const KInst& inst) {
                return inst.op == KOp::sva_tick || inst.op == KOp::sva_outcome
-                   || inst.op == KOp::sva_sampled_load;
+                   || inst.op == KOp::sva_sampled_load
+                   || inst.op == KOp::sva_report;
            })) {
         sva_table_used_ = true;
+    }
+    if (compiled
+        && std::ranges::any_of(compiled->code, [](const KInst& inst) {
+               return inst.op == KOp::sva_report;
+           })) {
+        sva_reports_used_ = true;
+        impl_.ensure_host_request_drain();
+    }
+}
+
+bool Interpreter::Impl::host_request_rows_pending() const noexcept
+{
+    return !host_request_rows.empty()
+        || (static_kernel && static_kernel->sva_reports_pending());
+}
+
+void Interpreter::Impl::take_kernel_host_request_rows()
+{
+    if (static_kernel && static_kernel->sva_reports_pending()) {
+        static_kernel->take_sva_reports(host_request_rows);
+    }
+}
+
+void Interpreter::Impl::ensure_host_request_drain()
+{
+    if (host_request_drain_token == 0U) {
+        host_request_drain_token = scheduler.add_safe_point_hook(
+            [this](Scheduler&, SchedulerPhase) { drain_host_request_rows(); });
     }
 }
 
@@ -2756,6 +2893,7 @@ void Interpreter::Impl::StaticKernel::set_instruction_helpers(
     helpers.sva_verify = &StaticKernel::native_sva_verify;
     helpers.sva_bind = &StaticKernel::native_sva_bind;
     helpers.sva_verify_outcome = &StaticKernel::native_sva_verify_outcome;
+    helpers.sva_report_grow = &StaticKernel::native_sva_report_grow;
     [&]<std::size_t... K>(std::index_sequence<K...>) {
         ((helpers.generic_ops[K] = &StaticKernel::native_generic_kind<K>), ...);
         ((helpers.step_ops[K] = &StaticKernel::native_step_kind<K>), ...);

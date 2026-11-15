@@ -1976,6 +1976,18 @@ bool Interpreter::Impl::execute_operation(ProcessState& process,
                     scheduler.delta());
             }
             ++process.pc;
+        } else if constexpr (std::is_same_v<OperationType, HostRequest>) {
+            std::array<std::optional<std::int64_t>,
+                host_request_argument_limit>
+                arguments { };
+            for (const auto& argument : op.arguments) {
+                arguments.at(argument.position)
+                    = get_register(process, argument.source)
+                          .known_signed_value();
+            }
+            run_host_request(process.id, op, arguments, scheduler.now(),
+                scheduler.delta());
+            ++process.pc;
         } else if constexpr (std::is_same_v<OperationType, FormatDisplay>) {
             // %t of a time value follows $timeformat (IEEE
             // 1800-2017 21.2.1.3, 20.4.3).

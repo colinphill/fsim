@@ -4120,70 +4120,61 @@ bool Lowerer::lower_hir_statement_unsuspended(
     std::optional<semantic::ScopeId> nested_scope;
     if (statement->systemverilog != nullptr) {
         const auto& input = *statement->systemverilog;
-        constexpr std::string_view concurrent_assertion_action_marker {
-            "\x1f"
-            "fsim.concurrent-assertion-action-region|"
-        };
-        if (input.kind == semantic::sv::StatementKind::display
-            && input.output_text.starts_with(
-                concurrent_assertion_action_marker)) {
-            process_.operations.emplace_back(
-                WaitRegion { runtime::SchedulerPhase::reactive });
-            sample_concurrent_assertion_reads_ = false;
-            return true;
-        }
-        // An expect statement's local-variable requests and subroutine
-        // calls read the design's sampled values (IEEE 1800-2023 16.10,
-        // 16.11, 16.5.1) between its two markers: its procedure is not an
-        // assertion process, which reads them so throughout.
-        constexpr std::string_view sampled_reads_marker {
-            "\x1f"
-            "fsim.concurrent-assertion-sampled-reads|"
-        };
-        if (input.kind == semantic::sv::StatementKind::display
-            && input.output_text.starts_with(sampled_reads_marker)) {
-            sample_concurrent_assertion_reads_
-                = input.output_text.substr(sampled_reads_marker.size()) == "on";
-            return true;
-        }
-        // The subroutine calls attached to a sequence run in the Reactive
-        // region with sampled by-value arguments (IEEE 1800-2023 16.11).
-        constexpr std::string_view concurrent_assertion_call_marker {
-            "\x1f"
-            "fsim.concurrent-assertion-call-region|"
-        };
-        if (input.kind == semantic::sv::StatementKind::display
-            && input.output_text.starts_with(
-                concurrent_assertion_call_marker)) {
-            process_.operations.emplace_back(
-                WaitRegion { runtime::SchedulerPhase::reactive });
-            return true;
-        }
-        constexpr std::string_view concurrent_assertion_marker {
-            "\x1f"
-            "fsim.concurrent-assertion|"
-        };
-        if (input.kind == semantic::sv::StatementKind::display
-            && !input.value
-            && input.output_text.starts_with(concurrent_assertion_marker)) {
-            // The marker is slot|kind|outcome|name; a start report stays
-            // inert unless a foreign library is loaded.
-            const std::string_view payload { std::string_view { input.output_text }
-                    .substr(concurrent_assertion_marker.size()) };
-            const auto slot_end = payload.find('|');
-            const auto kind_end = slot_end == std::string_view::npos
-                ? std::string_view::npos
-                : payload.find('|', slot_end + 1U);
-            if (kind_end != std::string_view::npos
-                && payload.substr(kind_end + 1U).starts_with("start|")) {
-                process_.operations.emplace_back(Display {
-                    input.output_text,
-                    input.output_newline,
-                    input.output_postponed,
-                    true,
+        if (input.kind == semantic::sv::StatementKind::sva_marker) {
+            if (!input.sva_marker) {
+                return false;
+            }
+            const auto& marker = *input.sva_marker;
+            switch (marker.kind) {
+            case support::SvaMarkerKind::action_region:
+                // The pass and fail statements run in the Reactive region
+                // (IEEE 1800-2023 16.14.1) and read current values.
+                process_.operations.emplace_back(
+                    WaitRegion { runtime::SchedulerPhase::reactive });
+                sample_concurrent_assertion_reads_ = false;
+                return true;
+            case support::SvaMarkerKind::call_region:
+                // The subroutine calls attached to a sequence run in the
+                // Reactive region with sampled by-value arguments (16.11).
+                process_.operations.emplace_back(
+                    WaitRegion { runtime::SchedulerPhase::reactive });
+                return true;
+            case support::SvaMarkerKind::sampled_reads_on:
+            case support::SvaMarkerKind::sampled_reads_off:
+                // An expect statement's local-variable requests and
+                // subroutine calls read the design's sampled values (16.10,
+                // 16.11, 16.5.1) between its two markers: its procedure is
+                // not an assertion process, which reads them so throughout.
+                sample_concurrent_assertion_reads_
+                    = marker.kind == support::SvaMarkerKind::sampled_reads_on;
+                return true;
+            case support::SvaMarkerKind::outcome: {
+                // A start report stays inert unless a foreign library is
+                // loaded (HostRequest::inert).
+                process_.operations.emplace_back(HostRequest {
+                    SvaOutcomeRequest { marker.outcome, marker.directive,
+                        marker.slot, marker.name },
+                    { },
+                    marker.outcome == support::SvaOutcome::start,
                 });
                 return true;
             }
+            case support::SvaMarkerKind::pending: {
+                SvaPendingRequest pending { marker.outcome, marker.directive,
+                    marker.slot, marker.name, { } };
+                for (const auto& action : marker.actions) {
+                    pending.actions.push_back({ action.report,
+                        runtime_assertion_severity(action.severity),
+                        action.newline, action.text,
+                        runtime_source_location(
+                            hir_source_span(action.source)) });
+                }
+                process_.operations.emplace_back(
+                    HostRequest { std::move(pending), { }, false });
+                return true;
+            }
+            }
+            return false;
         }
         source = input.source;
         target = input.target;
@@ -12323,8 +12314,9 @@ bool Lowerer::lower_hir_statement_unsuspended(
             // an integral value; a string takes its bytes (IEEE 1800-2017
             // 11.4.12, 6.16).
             if (!signal_assignment && !nonblocking
-                && string_binding->kind == HirStringBindingKind::local
-                && string_binding->local
+                && (string_binding->kind == HirStringBindingKind::local
+                        ? string_binding->local.has_value()
+                        : string_binding->object.has_value())
                 && target_expression->systemverilog != nullptr) {
                 const auto concat = specialized_hir_unit_->find_expression(
                     *value);
@@ -12356,8 +12348,16 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         const auto text
                             = lower_hir_packed_characters_to_string(
                                 *packed, *width);
-                        process_.operations.emplace_back(CopyStringRegister {
-                            *string_binding->local, text });
+                        if (string_binding->kind
+                            == HirStringBindingKind::local) {
+                            process_.operations.emplace_back(
+                                CopyStringRegister {
+                                    *string_binding->local, text });
+                        } else {
+                            process_.operations.emplace_back(
+                                WriteStringObject {
+                                    *string_binding->object, text });
+                        }
                         return true;
                     }
                 }
@@ -18701,15 +18701,28 @@ bool Lowerer::lower_hir_statement_unsuspended(
                                         std::vector<HirCasePatternBinding>& destination,
                                         std::vector<HirCasePatternBinding> incoming,
                                         const semantic::SourceSpanId source_span) {
+            // The identifiers a pattern declares are unique in it (IEEE
+            // 1800-2023 12.6): one declaration per identifier.
+            const auto bound_name
+                = [&](const HirCasePatternBinding& bound) -> std::string {
+                const auto declaration = specialized_hir_unit_ != nullptr
+                    ? specialized_hir_unit_->find_declaration(bound.declaration)
+                    : std::nullopt;
+                return declaration && declaration->systemverilog != nullptr
+                    ? declaration->systemverilog->name
+                    : std::string { };
+            };
             for (auto& binding : incoming) {
+                const auto name = bound_name(binding);
                 if (std::ranges::any_of(
                         destination,
                         [&](const auto& existing) {
-                            return existing.name == binding.name;
+                            return existing.declaration == binding.declaration
+                                || bound_name(existing) == name;
                         })) {
                     report(
                         "FSIM-ELAB-SVMATCH-007",
-                        "case matches pattern binds '" + binding.name
+                        "case matches pattern binds '" + name
                             + "' more than once",
                         hir_source_span(source_span));
                     return false;
@@ -18773,8 +18786,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                                                         const auto& lower)
             -> std::optional<LoweredChoice> {
             const auto& aggregate = *operand.container_type;
-            const auto member_name = std::string_view { pattern.text }.substr(
-                std::string_view { "@match-tagged:" }.size());
+            const auto member_name = std::string_view { pattern.text };
             const auto found = std::find(std::next(aggregate.member_names.begin()),
                 aggregate.member_names.end(), member_name);
             if (found == aggregate.member_names.end()
@@ -18810,7 +18822,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                       pattern.operands.front());
             if (pattern.operands.empty()
                 || (payload && payload->systemverilog != nullptr
-                    && payload->systemverilog->text == "@match-wildcard")) {
+                    && payload->systemverilog->pattern
+                        == semantic::sv::PatternKind::wildcard)) {
                 return LoweredChoice { tag_matches, { } };
             }
             const auto& member_type = aggregate.element_types[member];
@@ -19091,12 +19104,12 @@ bool Lowerer::lower_hir_statement_unsuspended(
             }
             if (pattern_matching && expression->systemverilog != nullptr) {
                 const auto& pattern = *expression->systemverilog;
-                if (pattern.kind == semantic::sv::ExpressionKind::call
-                    && pattern.text == "@match-wildcard") {
+                if (pattern.kind == semantic::sv::ExpressionKind::pattern
+                    && pattern.pattern == semantic::sv::PatternKind::wildcard) {
                     return LoweredChoice { one, { } };
                 }
-                if (pattern.kind == semantic::sv::ExpressionKind::call
-                    && pattern.text == "@match-guard") {
+                if (pattern.kind == semantic::sv::ExpressionKind::pattern
+                    && pattern.pattern == semantic::sv::PatternKind::guard) {
                     if (pattern.operands.size() != 2U) {
                         report(
                             "FSIM-ELAB-SVMATCH-005",
@@ -19145,15 +19158,10 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     raw->matched = result;
                     return raw;
                 }
-                constexpr auto bind_prefix
-                    = std::string_view { "@match-bind:" };
-                if (pattern.kind == semantic::sv::ExpressionKind::call
-                    && pattern.text.starts_with(bind_prefix)) {
-                    const auto name = std::string_view {
-                        pattern.text
-                    }
-                                          .substr(bind_prefix.size());
-                    if (name.empty()) {
+                if (pattern.kind == semantic::sv::ExpressionKind::pattern
+                    && pattern.pattern == semantic::sv::PatternKind::bind) {
+                    if (pattern.text.empty() || !pattern.referenced_name
+                        || !pattern.referenced_name->selected) {
                         report(
                             "FSIM-ELAB-SVMATCH-007",
                             "a case matches binding pattern requires a name",
@@ -19163,7 +19171,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     return LoweredChoice {
                         one,
                         { HirCasePatternBinding {
-                            std::string { name },
+                            *pattern.referenced_name->selected,
                             operand.value,
                             operand.width,
                             operand.domain,
@@ -19175,15 +19183,12 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         } },
                     };
                 }
-                constexpr auto tagged_prefix
-                    = std::string_view { "@match-tagged:" };
                 // A string or unpacked value matches a binding or a
                 // wildcard only.
                 if (operand.string
                     || (operand.container
-                        && !(pattern.kind
-                                == semantic::sv::ExpressionKind::call
-                            && pattern.text.starts_with(tagged_prefix)
+                        && !(pattern.kind == semantic::sv::ExpressionKind::pattern
+                            && pattern.pattern == semantic::sv::PatternKind::tagged
                             && operand.container_type
                             && hir_tagged_union_aggregate(
                                 *operand.container_type)))) {
@@ -19194,14 +19199,14 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         hir_source_span(pattern.source));
                     return LoweredChoice { make_false(), { } };
                 }
-                if (pattern.kind == semantic::sv::ExpressionKind::call
-                    && pattern.text.starts_with(tagged_prefix)
+                if (pattern.kind == semantic::sv::ExpressionKind::pattern
+                    && pattern.pattern == semantic::sv::PatternKind::tagged
                     && operand.container) {
                     return lower_tagged_aggregate_pattern(
                         pattern, operand, self);
                 }
-                if (pattern.kind == semantic::sv::ExpressionKind::call
-                    && pattern.text.starts_with(tagged_prefix)) {
+                if (pattern.kind == semantic::sv::ExpressionKind::pattern
+                    && pattern.pattern == semantic::sv::PatternKind::tagged) {
                     const auto* type = type_definition(operand);
                     if (type == nullptr
                         || type->form
@@ -19214,10 +19219,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                             hir_source_span(pattern.source));
                         return LoweredChoice { make_false(), { } };
                     }
-                    const auto member_name = std::string_view {
-                        pattern.text
-                    }
-                                                 .substr(tagged_prefix.size());
+                    const auto member_name = std::string_view { pattern.text };
                     const auto member = std::ranges::find(
                         type->members, member_name,
                         &semantic::sv::PackedMember::name);
@@ -19272,8 +19274,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                               pattern.operands.front());
                     if (pattern.operands.empty()
                         || (payload && payload->systemverilog != nullptr
-                            && payload->systemverilog->text
-                                == "@match-wildcard")) {
+                            && payload->systemverilog->pattern
+                                == semantic::sv::PatternKind::wildcard)) {
                         return LoweredChoice { tag_matches, { } };
                     }
                     const auto member_index = static_cast<std::size_t>(
@@ -19300,7 +19302,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 }
                 if (pattern.kind
                         == semantic::sv::ExpressionKind::assignment_pattern
-                    && pattern.text == "@match-structure") {
+                    && pattern.pattern == semantic::sv::PatternKind::structure) {
                     const auto* type = type_definition(operand);
                     if (type == nullptr
                         || (type->form
@@ -19413,8 +19415,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     }
                     return result;
                 }
-                if (pattern.kind == semantic::sv::ExpressionKind::call
-                    && pattern.text == "@match-unsupported") {
+                if (pattern.kind == semantic::sv::ExpressionKind::pattern
+                    && pattern.pattern == semantic::sv::PatternKind::unsupported) {
                     report(
                         "FSIM-ELAB-SVMATCH-003",
                         "case matches pattern is unsupported",
@@ -23459,14 +23461,11 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     });
                     return true;
                 }
-                process_.operations.emplace_back(Display {
-                    std::string {
-                        "\x1f"
-                        "fsim.printtimescale|" }
-                        + (argument
-                                ? argument->systemverilog->text
-                                : std::string { }),
-                    true,
+                process_.operations.emplace_back(HostRequest {
+                    PrintTimescaleRequest { argument
+                            ? argument->systemverilog->text
+                            : std::string { } },
+                    { },
                     false,
                 });
                 return true;
@@ -23529,7 +23528,10 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 };
                 bool valid = language_ != frontend::Language::Vhdl2008
                     && !named;
-                std::string payload;
+                ScopeTaskRequest request;
+                request.task = is_scope ? ScopeTaskKind::scope
+                    : is_showvars       ? ScopeTaskKind::showvars
+                                        : ScopeTaskKind::showscopes;
                 if (is_scope) {
                     // The argument names a module instance, task, function
                     // or named block. A literal or expression cannot, so
@@ -23538,11 +23540,11 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     // checked when the task runs.
                     valid = valid && input.task_arguments.size() == 1U;
                     if (valid) {
-                        const auto name = spelled_name(
+                        auto name = spelled_name(
                             *input.task_arguments.front().actual, false);
                         valid = name.has_value();
                         if (name) {
-                            payload = *name;
+                            request.name = std::move(*name);
                         }
                     }
                 } else if (is_showvars) {
@@ -23550,25 +23552,22 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         if (!valid) {
                             break;
                         }
-                        const auto name
-                            = spelled_name(*argument.actual, true);
+                        auto name = spelled_name(*argument.actual, true);
                         valid = name.has_value();
                         if (name) {
-                            payload += payload.empty() ? "" : "\x1e";
-                            payload += *name;
+                            request.variables.push_back(std::move(*name));
                         }
                     }
                 } else {
                     // $showscopes [ (n) ]: n is a constant, zero for the
                     // current level, nonzero for everything below.
                     valid = valid && input.task_arguments.size() <= 1U;
-                    payload = "0";
                     if (valid && !input.task_arguments.empty()) {
                         const auto level = hir_constant_integer(
                             *input.task_arguments.front().actual);
                         valid = level.has_value();
                         if (level) {
-                            payload = *level != 0 ? "1" : "0";
+                            request.all_levels = *level != 0;
                         }
                     }
                 }
@@ -23593,15 +23592,9 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     lexical_scope += lexical_scope.empty() ? "" : ".";
                     lexical_scope += segment;
                 }
-                process_.operations.emplace_back(Display {
-                    std::string {
-                        "\x1f"
-                        "fsim.scope-task|" }
-                        + std::string { input.task.spelling.substr(1U) }
-                        + "|" + lexical_scope + "|" + payload,
-                    true,
-                    false,
-                });
+                request.lexical_scope = std::move(lexical_scope);
+                process_.operations.emplace_back(
+                    HostRequest { std::move(request), { }, false });
                 return true;
             }
             if (input.task.spelling == "$save"
@@ -23610,8 +23603,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 // $save, $incsave and $restart take a file name "supplied as
                 // a string enclosed in quotation marks" (IEEE 1800-2023
                 // D.9). The host acts at the end of the time slot, once the
-                // events of the slot have drained, so the request is a
-                // marker the host reads, not an operation of the design.
+                // events of the slot have drained, so the operation is a
+                // request to the host.
                 const auto* file = [&]() -> const semantic::sv::Expression* {
                     if (input.task_arguments.size() != 1U
                         || input.task_arguments.front().formal
@@ -23635,11 +23628,15 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         span);
                     return true;
                 }
-                process_.operations.emplace_back(Display {
-                    std::string { simulation_control_marker }
-                        + std::string { input.task.spelling.substr(1U) } + "|"
-                        + *file->decoded_string,
-                    false,
+                process_.operations.emplace_back(HostRequest {
+                    SimulationControlRequest {
+                        input.task.spelling == "$save"
+                            ? SimulationControlKind::save
+                            : input.task.spelling == "$incsave"
+                            ? SimulationControlKind::incsave
+                            : SimulationControlKind::restart,
+                        *file->decoded_string },
+                    { },
                     false,
                 });
                 return true;
@@ -23647,9 +23644,9 @@ bool Lowerer::lower_hir_statement_unsuspended(
             if (input.task.spelling == "$reset") {
                 // $reset [ ( stop_value [ , reset_value [ , diagnostics_value
                 // ] ] ) ] (IEEE 1800-2023 D.8). Each argument is an integer
-                // value evaluated here and sent to the host ahead of the
-                // request; reset_value is typically a variable, whose value
-                // survives the reset only through this argument.
+                // value the request evaluates when it runs; reset_value is
+                // typically a variable, whose value survives the reset only
+                // through this argument.
                 const bool valid = language_ != frontend::Language::Vhdl2008
                     && input.task_arguments.size() <= 3U
                     && std::ranges::all_of(
@@ -23665,6 +23662,12 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         span);
                     return true;
                 }
+                HostRequest request {
+                    SimulationControlRequest {
+                        SimulationControlKind::reset, { } },
+                    { },
+                    false,
+                };
                 for (std::size_t position = 0U;
                      position < input.task_arguments.size(); ++position) {
                     const auto& actual = *input.task_arguments[position].actual;
@@ -23676,22 +23679,10 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         lowered = resize_register(
                             *lowered, 32U, hir_expression_signed(actual));
                     }
-                    FormatDisplay argument;
-                    argument.source = *lowered;
-                    argument.format = OutputFormat::decimal;
-                    argument.prefix = std::string { simulation_control_marker }
-                        + "arg|" + std::to_string(position) + "|";
-                    argument.newline = false;
-                    argument.signed_decimal = true;
-                    argument.suppress_leading_zero = true;
-                    process_.operations.emplace_back(std::move(argument));
+                    request.arguments.push_back({
+                        static_cast<std::uint8_t>(position), *lowered });
                 }
-                process_.operations.emplace_back(Display {
-                    std::string { simulation_control_marker } + "reset|"
-                        + std::to_string(input.task_arguments.size()),
-                    false,
-                    false,
-                });
+                process_.operations.emplace_back(std::move(request));
                 return true;
             }
             if (input.task.spelling == "$timeformat") {
@@ -24354,17 +24345,12 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 // $assertcontrol ( control_type [ , [ assertion_type ] [ , [
                 // directive_type ] [ , [ levels ] [ , list ] ] ] ] ) and the
                 // convenience tasks, `task [ ( levels [ , list ] ) ]` (IEEE
-                // 1800-2023 20.11). Each integer argument is evaluated here
-                // and sent to the host ahead of the request, as
-                // `arg|<position>|<value>` with positions control_type 0,
+                // 1800-2023 20.11). The integer arguments are the request's,
+                // evaluated when it runs, at positions control_type 0,
                 // assertion_type 1, directive_type 2 and levels 3; the
                 // request names the task, the calling scope (where the list
                 // items are resolved, as for $dumpvars, 21.7.1.2) and the
-                // list items.
-                constexpr std::string_view marker {
-                    "\x1f"
-                    "fsim.assertion-control|"
-                };
+                // list items. The tasks are in AssertionControlTask's order.
                 const bool control = input.task.spelling == "$assertcontrol";
                 const std::size_t integers = control ? 4U : 1U;
                 const bool named = std::ranges::any_of(input.task_arguments,
@@ -24386,9 +24372,13 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         span);
                     return true;
                 }
-                std::string request = std::string { marker }
-                    + input.task.spelling.substr(1U) + "|"
-                    + hir_instance_path();
+                AssertionControlRequest control_request;
+                control_request.task = static_cast<AssertionControlTask>(
+                    std::ranges::find(
+                        assertion_control_tasks, input.task.spelling)
+                    - assertion_control_tasks.begin());
+                control_request.calling_scope = hir_instance_path();
+                HostRequest request { { }, { }, false };
                 for (std::size_t index = 0U;
                      index < input.task_arguments.size(); ++index) {
                     const auto& argument = input.task_arguments[index];
@@ -24405,15 +24395,9 @@ bool Lowerer::lower_hir_statement_unsuspended(
                             lowered = resize_register(*lowered, 32U,
                                 hir_expression_signed(*argument.actual));
                         }
-                        FormatDisplay argument_display;
-                        argument_display.source = *lowered;
-                        argument_display.format = OutputFormat::decimal;
-                        argument_display.prefix = std::string { marker } + "arg|"
-                            + std::to_string(control ? index : 3U) + "|";
-                        argument_display.newline = false;
-                        argument_display.signed_decimal = true;
-                        argument_display.suppress_leading_zero = true;
-                        process_.operations.emplace_back(std::move(argument_display));
+                        request.arguments.push_back({
+                            static_cast<std::uint8_t>(control ? index : 3U),
+                            *lowered });
                         continue;
                     }
                     const auto expression = argument.actual
@@ -24425,9 +24409,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                                 != semantic::sv::ExpressionKind::name
                             && expression->systemverilog->kind
                                 != semantic::sv::ExpressionKind::index)
-                        || expression->systemverilog->text.empty()
-                        || expression->systemverilog->text.find('|')
-                            != std::string::npos) {
+                        || expression->systemverilog->text.empty()) {
                         report("FSIM-ELAB-SVASSERT-005",
                             input.task.spelling
                                 + " list items must name scopes or "
@@ -24435,23 +24417,14 @@ bool Lowerer::lower_hir_statement_unsuspended(
                             hir_source_span(argument.source));
                         return true;
                     }
-                    request += '|';
-                    request += expression->systemverilog->text;
+                    control_request.items.push_back(
+                        expression->systemverilog->text);
                 }
-                {
-                    // The call's place, `src|<line>|<column>|<path>`, where
-                    // the host reports a control_type outside Table 20-5 or
-                    // a negative levels argument.
-                    const auto call_source = runtime_source_location(span);
-                    process_.operations.emplace_back(Display {
-                        std::string { marker } + "src|"
-                            + std::to_string(call_source.line) + "|"
-                            + std::to_string(call_source.column) + "|"
-                            + call_source.path.str(),
-                        false, false });
-                }
-                process_.operations.emplace_back(Display {
-                    std::move(request), false, false });
+                // Where the host reports a control_type outside Table 20-5
+                // or a negative levels argument.
+                control_request.call = runtime_source_location(span);
+                request.request = std::move(control_request);
+                process_.operations.emplace_back(std::move(request));
                 return true;
             }
             if (input.task.spelling.starts_with(container_push_prefix)) {
@@ -24498,12 +24471,10 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 const auto prefix = start
                     ? coverage_control_start_prefix
                     : coverage_control_stop_prefix;
-                process_.operations.emplace_back(Display {
-                    std::string { "\x1f"
-                                  "fsim.coverage-control|" }
-                        + (start ? "start|" : "stop|")
-                        + input.task.spelling.substr(prefix.size()),
-                    false,
+                process_.operations.emplace_back(HostRequest {
+                    CoverageControlRequest { start,
+                        input.task.spelling.substr(prefix.size()) },
+                    { },
                     false,
                 });
                 return true;
@@ -29332,6 +29303,7 @@ std::optional<SignalId> Lowerer::hir_monitor_expression_signal(
     info.type_name = real_value ? "real" : "logic";
     info.source_domain = domain;
     info.is_signed = hir_expression_signed(expression);
+    info.generated = true;
     info.systemverilog_scalar = real_value
         ? scalar_kind
         : frontend::SystemVerilogScalarKind::None;

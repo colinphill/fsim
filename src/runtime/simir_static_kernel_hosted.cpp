@@ -975,8 +975,8 @@ void Interpreter::Impl::StaticKernel::run_hosted_initializers()
         }
         const auto program = impl_.processes.program_view(id);
         if (program.initialize()
-            && program.name().find(".$declaration_initializer_")
-                != std::string::npos) {
+            && program.startup_phase()
+                == ProcessStartupPhase::declaration_initializer) {
             initializers.push_back(id);
         }
     }
@@ -986,6 +986,9 @@ void Interpreter::Impl::StaticKernel::run_hosted_initializers()
     std::erase_if(hosted_active_, [&](const HostedReady& ready) {
         return std::ranges::binary_search(initializers, ready.process);
     });
+    // Their writes are initialization, no transaction and no event
+    // (settle_declaration_initializer_write).
+    const InitializationWriteScope initialization { impl_ };
     for (const auto id : initializers) {
         HostedReady ready;
         ready.process = id;

@@ -2207,6 +2207,8 @@ Simulation::Impl::Impl(
             = std::move(published_vpi.read_only_container_words);
         vpi_word_handles = std::move(published_vpi.word_handles);
         vpi_string_handles = std::move(published_vpi.string_handles);
+        vpi_declaration_objects
+            = std::move(published_vpi.declaration_objects);
         vpi_live_memories = std::move(published_vpi.live_memories);
         vpi_container_scalar_kinds
             = std::move(published_vpi.container_scalar_kinds);
@@ -2617,6 +2619,7 @@ Simulation::Impl::Impl(
             return control == nullptr || control->on;
         },
         false);
+    register_concurrent_assertions();
     interpreter->set_sva_attempt_hook(
         [this](const runtime::simir::ProcessId process,
             const std::int64_t start) {
@@ -2633,7 +2636,9 @@ Simulation::Impl::Impl(
                 return;
             }
             publish_assertion_disabled(process, identity->second.first,
-                identity->second.second, start);
+                identity->second.second, start,
+                interpreter->scheduler().now(),
+                interpreter->scheduler().delta());
         });
     interpreter->set_sva_step_hook(
         [this](const runtime::simir::ProcessId process,
@@ -2646,16 +2651,20 @@ Simulation::Impl::Impl(
     interpreter->set_sva_action_filter(
         [this](const runtime::simir::ProcessId process) {
             std::uint32_t off { };
-            if (!concurrent_assertion_action_enabled(process, "pass")) {
+            if (!concurrent_assertion_action_enabled(process, support::SvaOutcome::pass)) {
                 off |= 1U << 1U;
             }
-            if (!concurrent_assertion_action_enabled(process, "failure")) {
+            if (!concurrent_assertion_action_enabled(process, support::SvaOutcome::failure)) {
                 off |= 1U << 2U;
             }
-            if (!concurrent_assertion_action_enabled(process, "vacuous")) {
+            if (!concurrent_assertion_action_enabled(process, support::SvaOutcome::vacuous)) {
                 off |= 1U << 3U;
             }
             return off;
+        });
+    interpreter->set_host_request_hook(
+        [this](const runtime::simir::HostRequestEvent& event) {
+            run_host_request(event);
         });
     interpreter_output_hook =
         [this](
@@ -2664,446 +2673,12 @@ Simulation::Impl::Impl(
             const bool newline,
             const SimulationTick time,
             const std::uint64_t delta) {
-            if (trusted_builtin_stdout_output && !text.empty()
-                && text.front() == '\x1f') {
-                interpreter->prepare_output_callback_observation();
-            }
-            constexpr std::string_view assertion_marker {
-                "\x1f"
-                "fsim.concurrent-assertion|"
-            };
-            constexpr std::string_view pending_assertion_marker {
-                "\x1f"
-                "fsim.concurrent-assertion-pending|"
-            };
-            constexpr std::string_view control_marker {
-                "\x1f"
-                "fsim.assertion-control|"
-            };
-            constexpr std::string_view coverage_control_marker {
-                "\x1f"
-                "fsim.coverage-control|"
-            };
-            constexpr std::string_view print_timescale_marker {
-                "\x1f"
-                "fsim.printtimescale|"
-            };
-            constexpr std::string_view scope_task_marker {
-                "\x1f"
-                "fsim.scope-task|"
-            };
-            if (text.starts_with(runtime::simir::simulation_control_marker)) {
-                // $save, $incsave, $restart and $reset (IEEE 1800-2023
-                // D.8, D.9).
-                run_simulation_control(process,
-                    text.substr(
-                        runtime::simir::simulation_control_marker.size()));
-                return;
-            }
-            if (text.starts_with(scope_task_marker)) {
-                run_scope_task(process,
-                    text.substr(scope_task_marker.size()), time, delta);
-                return;
-            }
-            if (text.starts_with(print_timescale_marker)) {
-                const auto runtime_process = interpreter->design_process(process);
-                const auto process_occurrence = std::ranges::find(
-                    built.design_ir.processes(),
-                    runtime_process,
-                    &semantic::design::ProcessOccurrence::runtime_index);
-                if (process_occurrence == built.design_ir.processes().end()) {
-                    throw std::runtime_error {
-                        "$printtimescale process has no DesignIR occurrence"
-                    };
-                }
-                const auto& current_specialization
-                    = built.design_ir.specializations().at(
-                        process_occurrence->specialization.value());
-                const auto& current_instance = built.design_ir.instances().at(
-                    current_specialization.instance.value());
-                const auto requested = text.substr(
-                    print_timescale_marker.size());
-                const auto find_instance = [&](const std::string_view path) {
-                    return std::ranges::find_if(
-                        built.design_ir.instances(), [&](const auto& instance) {
-                            return built.design_ir.path(instance.path) == path;
-                        });
-                };
-                auto selected = built.design_ir.instances().end();
-                if (requested.empty()) {
-                    selected = built.design_ir.instances().begin()
-                        + static_cast<std::ptrdiff_t>(
-                            current_specialization.instance.value());
-                } else {
-                    auto target = requested;
-                    constexpr std::string_view root_prefix { "$root." };
-                    if (target.starts_with(root_prefix)) {
-                        target.remove_prefix(root_prefix.size());
-                    }
-                    selected = find_instance(target);
-                    auto prefix = std::string {
-                        built.design_ir.path(current_instance.path) };
-                    while (selected == built.design_ir.instances().end()
-                        && !prefix.empty()) {
-                        selected = find_instance(prefix + "."
-                            + std::string { target });
-                        const auto separator = prefix.rfind('.');
-                        if (separator == std::string::npos) {
-                            prefix.clear();
-                        } else {
-                            prefix.erase(separator);
-                        }
-                    }
-                }
-                if (selected == built.design_ir.instances().end()) {
-                    throw std::runtime_error {
-                        "$printtimescale references unavailable instance '"
-                        + std::string { requested } + "'"
-                    };
-                }
-                const auto& specialization
-                    = built.design_ir.specializations().at(
-                        selected->specialization.value());
-                if (!specialization.unit.valid()
-                    || specialization.unit.value()
-                        >= built.semantics.units().size()) {
-                    throw std::runtime_error {
-                        "$printtimescale instance has no semantic unit"
-                    };
-                }
-                const auto& semantic_unit = built.semantics.units().at(
-                    specialization.unit.value());
-                const auto unit = std::ranges::find_if(
-                    built.systemverilog_hir.units(),
-                    [&](const semantic::sv::Unit& candidate) {
-                        return candidate.library == semantic_unit.library
-                            && candidate.name == semantic_unit.name;
-                    });
-                if (unit == built.systemverilog_hir.units().end()) {
-                    throw std::runtime_error {
-                        "$printtimescale instance has no SystemVerilog HIR unit"
-                    };
-                }
-                const auto time_unit = unit->compilation.time_unit.empty()
-                    ? std::string_view { "1s" }
-                    : std::string_view { unit->compilation.time_unit };
-                const auto time_precision
-                    = unit->compilation.time_precision.empty()
-                    ? std::string_view { "1s" }
-                    : std::string_view { unit->compilation.time_precision };
-                if (output_hook) {
-                    output_hook(
-                        process,
-                        "Time scale of ("
-                            + std::string {
-                                built.design_ir.path(selected->path) }
-                            + ") is "
-                            + std::string { time_unit } + " / "
-                            + std::string { time_precision },
-                        true,
-                        time,
-                        delta);
-                }
-                return;
-            }
-            if (text.starts_with(pending_assertion_marker)) {
-                const auto payload = text.substr(
-                    pending_assertion_marker.size());
-                std::vector<std::string_view> fields;
-                std::size_t begin { };
-                while (begin <= payload.size()) {
-                    const auto end = payload.find('|', begin);
-                    fields.push_back(payload.substr(
-                        begin, end == std::string_view::npos ? payload.size() - begin : end - begin));
-                    if (end == std::string_view::npos)
-                        break;
-                    begin = end + 1U;
-                }
-                if (fields.size() < 4U
-                    || (fields[2] != "failure"
-                        && fields[2] != "vacuous"
-                        && fields[2] != "obligation"
-                        && fields[2] != "obligation-vacuous")) {
-                    throw std::runtime_error {
-                        "malformed pending concurrent-assertion marker"
-                    };
-                }
-                PendingConcurrentAssertion pending;
-                pending.process = interpreter->dynamic_process_root(process);
-                pending.design_process = interpreter->design_process(process);
-                pending.kind = fields[1];
-                pending.vacuous = fields[2] == "vacuous"
-                    || fields[2] == "obligation-vacuous";
-                pending.name = fields[3];
-                const auto parsed_slot = std::from_chars(
-                    fields[0].data(),
-                    fields[0].data() + fields[0].size(), pending.slot);
-                if (parsed_slot.ec != std::errc { }
-                    || parsed_slot.ptr
-                        != fields[0].data() + fields[0].size()) {
-                    throw std::runtime_error {
-                        "malformed pending concurrent-assertion slot"
-                    };
-                }
-                const auto decode = [](const std::string_view encoded) {
-                    const auto nibble = [](const char character)
-                        -> std::optional<unsigned> {
-                        if (character >= '0' && character <= '9')
-                            return static_cast<unsigned>(character - '0');
-                        if (character >= 'a' && character <= 'f')
-                            return static_cast<unsigned>(
-                                character - 'a' + 10);
-                        return std::nullopt;
-                    };
-                    if (encoded.size() % 2U != 0U)
-                        return std::optional<std::string> { };
-                    std::string result;
-                    result.reserve(encoded.size() / 2U);
-                    for (std::size_t index = 0U;
-                        index < encoded.size(); index += 2U) {
-                        const auto high = nibble(encoded[index]);
-                        const auto low = nibble(encoded[index + 1U]);
-                        if (!high || !low)
-                            return std::optional<std::string> { };
-                        result.push_back(static_cast<char>(
-                            (*high << 4U) | *low));
-                    }
-                    return std::optional<std::string> { std::move(result) };
-                };
-                for (std::size_t index = 4U; index < fields.size(); ++index) {
-                    std::array<std::string_view, 8> action_fields;
-                    std::size_t action_begin { };
-                    for (std::size_t field = 0U;
-                        field < action_fields.size(); ++field) {
-                        const auto end = fields[index].find(',', action_begin);
-                        action_fields[field] = fields[index].substr(
-                            action_begin,
-                            end == std::string_view::npos
-                                ? fields[index].size() - action_begin
-                                : end - action_begin);
-                        action_begin = end == std::string_view::npos
-                            ? fields[index].size() + 1U
-                            : end + 1U;
-                    }
-                    PendingConcurrentAssertionAction action;
-                    action.report = action_fields[0] == "R";
-                    std::uint32_t severity { };
-                    std::uint32_t newline_value { };
-                    std::uint32_t generated_text { };
-                    const auto severity_result = std::from_chars(
-                        action_fields[1].data(),
-                        action_fields[1].data() + action_fields[1].size(),
-                        severity);
-                    const auto newline_result = std::from_chars(
-                        action_fields[2].data(),
-                        action_fields[2].data() + action_fields[2].size(),
-                        newline_value);
-                    auto message = decode(action_fields[3]);
-                    auto path = decode(action_fields[4]);
-                    const auto line_result = std::from_chars(
-                        action_fields[5].data(),
-                        action_fields[5].data() + action_fields[5].size(),
-                        action.source.line);
-                    const auto column_result = std::from_chars(
-                        action_fields[6].data(),
-                        action_fields[6].data() + action_fields[6].size(),
-                        action.source.column);
-                    const auto generated_text_result = std::from_chars(
-                        action_fields[7].data(),
-                        action_fields[7].data() + action_fields[7].size(),
-                        generated_text);
-                    if ((action_fields[0] != "R" && action_fields[0] != "D")
-                        || severity_result.ec != std::errc { }
-                        || severity > static_cast<std::uint32_t>(
-                               runtime::simir::AssertionSeverity::failure)
-                        || newline_result.ec != std::errc { }
-                        || newline_value > 1U || !message || !path
-                        || line_result.ec != std::errc { }
-                        || column_result.ec != std::errc { }
-                        || generated_text_result.ec != std::errc { }
-                        || generated_text
-                            > static_cast<std::uint32_t>(
-                                semantic::sv::GeneratedTextKind::
-                                    systemverilog_file_macro_derived)) {
-                        throw std::runtime_error {
-                            "malformed pending concurrent-assertion action"
-                        };
-                    }
-                    action.severity = static_cast<
-                        runtime::simir::AssertionSeverity>(severity);
-                    action.newline = newline_value != 0U;
-                    action.text = std::move(*message);
-                    action.source.path = std::move(*path);
-                    pending.actions.push_back(std::move(action));
-                }
-                if (fields[2] == "obligation") {
-                    // The actions of a monitor attempt that is still
-                    // obligated when simulation ends.
-                    sva_obligations[pending.design_process] = std::move(pending);
-                    return;
-                }
-                if (fields[2] == "obligation-vacuous") {
-                    sva_vacuous_obligations[pending.design_process]
-                        = std::move(pending);
-                    return;
-                }
-                const auto attempt = pending.process;
-                pending_concurrent_assertions[attempt] = std::move(pending);
-                return;
-            }
-            if (text.starts_with(control_marker)) {
-                run_assertion_control(process,
-                    text.substr(control_marker.size()), time, delta);
-                return;
-            }
-            if (text.starts_with(coverage_control_marker)) {
-                const auto control = text.substr(
-                    coverage_control_marker.size());
-                const auto separator = control.find('|');
-                if (separator == std::string_view::npos
-                    || separator + 1U == control.size()) {
-                    throw std::runtime_error {
-                        "malformed covergroup control marker"
-                    };
-                }
-                const auto action = control.substr(0U, separator);
-                const auto identity = control.substr(separator + 1U);
-                if (find_systemverilog_covergroup_instance(
-                        built.systemverilog_hir, identity)
-                    == nullptr) {
-                    throw std::runtime_error {
-                        "covergroup control references unavailable instance '"
-                        + std::string { identity } + "'"
-                    };
-                }
-                if (action == "start") {
-                    stopped_covergroups.erase(std::string { identity });
-                } else if (action == "stop") {
-                    stopped_covergroups.insert(std::string { identity });
-                } else {
-                    throw std::runtime_error {
-                        "malformed covergroup control action"
-                    };
-                }
-                return;
-            }
-            if (text.starts_with(assertion_marker)) {
-                const auto payload = text.substr(assertion_marker.size());
-                const auto slot_end = payload.find('|');
-                const auto kind_end = slot_end == std::string_view::npos
-                    ? std::string_view::npos
-                    : payload.find('|', slot_end + 1U);
-                const auto outcome_end = kind_end == std::string_view::npos
-                    ? std::string_view::npos
-                    : payload.find('|', kind_end + 1U);
-                if (slot_end != std::string_view::npos
-                    && kind_end != std::string_view::npos
-                    && outcome_end != std::string_view::npos) {
-                    const auto coverage_key
-                        = interpreter->design_process(process);
-                    const auto outcome = payload.substr(
-                        kind_end + 1U,
-                        outcome_end - kind_end - 1U);
-                    if (outcome == "register") {
-                        concurrent_assertion_design_processes.insert_or_assign(
-                            coverage_key,
-                            std::pair { std::string { payload.substr(
-                                            slot_end + 1U,
-                                            kind_end - slot_end - 1U) },
-                                std::string {
-                                    payload.substr(outcome_end + 1U) } });
-                        return;
-                    }
-                    if (outcome == "start") {
-                        // An attempt of an evaluator that is not the
-                        // monitor starts; assertion controls stop new
-                        // attempts (39.5.2), as for the monitor.
-                        if (const auto* const control
-                            = concurrent_assertion_control(coverage_key);
-                            control != nullptr && !control->on) {
-                            return;
-                        }
-                        publish_assertion_attempt_start(
-                            coverage_key, static_cast<std::int64_t>(time));
-                        return;
-                    }
-                    if (outcome == "abort") {
-                        const std::array processes { coverage_key };
-                        interpreter->kill_dynamic_processes(processes);
-                        std::erase_if(
-                            pending_concurrent_assertions,
-                            [&](const auto& item) {
-                                return item.second.design_process
-                                    == coverage_key;
-                            });
-                        // The attempt ends in the disabled state (IEEE
-                        // 1800-2023 16.12, 39.4.2).
-                        publish_assertion_disabled(coverage_key,
-                            payload.substr(
-                                slot_end + 1U, kind_end - slot_end - 1U),
-                            payload.substr(outcome_end + 1U),
-                            interpreter->sva_outcome_start(coverage_key)
-                                .value_or(static_cast<std::int64_t>(time)));
-                        return;
-                    }
-                    pending_concurrent_assertions.erase(
-                        interpreter->dynamic_process_root(process));
-                    concurrent_assertion_actions_suppressed[process]
-                        = !concurrent_assertion_action_enabled(
-                            coverage_key, outcome);
-                    std::uint32_t slot { };
-                    const auto slot_text = payload.substr(0, slot_end);
-                    std::from_chars(
-                        slot_text.data(), slot_text.data() + slot_text.size(),
-                        slot);
-                    const auto kind = payload.substr(
-                        slot_end + 1U, kind_end - slot_end - 1U);
-                    const auto coverage_index
-                        = ensure_concurrent_assertion_coverage(
-                            coverage_key, slot, kind,
-                            payload.substr(outcome_end + 1U));
-                    auto& coverage
-                        = concurrent_assertion_coverage[coverage_index];
-                    ConcurrentAssertionEvent event;
-                    event.name = coverage.name;
-                    event.process = coverage.process;
-                    event.kind = coverage.kind;
-                    event.slot = coverage.slot;
-                    event.instance_identity = coverage.instance_identity;
-                    event.source_span = coverage.source_span;
-                    event.time = time;
-                    event.delta = delta;
-                    event.attempt_start = static_cast<runtime::SimulationTick>(
-                        interpreter->sva_outcome_start(coverage_key)
-                            .value_or(static_cast<std::int64_t>(time)));
-                    event.action_suppressed
-                        = concurrent_assertion_actions_suppressed[process];
-                    ++coverage.attempts;
-                    if (outcome == "pass") {
-                        event.outcome = ConcurrentAssertionOutcome::pass;
-                        ++coverage.passes;
-                    } else if (outcome == "vacuous") {
-                        event.outcome = ConcurrentAssertionOutcome::vacuous;
-                        ++coverage.vacuous;
-                    } else {
-                        event.outcome = ConcurrentAssertionOutcome::failure;
-                        ++coverage.failures;
-                        // The expression that rejected the attempt.
-                        if (const auto where
-                            = interpreter->sva_outcome_fail(coverage_key)) {
-                            event.fail_line = where->first;
-                            event.fail_column = where->second;
-                        }
-                    }
-                    // Not retained: a long run would grow without bound.
-                    publish_vpi_assertion(event, coverage_key);
-                    if (concurrent_assertion_hook) {
-                        concurrent_assertion_hook(event);
-                    }
-                }
-                return;
-            }
-            if (concurrent_assertion_actions_suppressed[process]) {
+            // The action statements of an outcome the assertion controls
+            // turned off (IEEE 1800-2023 20.11) print nothing.
+            if (const auto suppressed
+                = concurrent_assertion_actions_suppressed.find(process);
+                suppressed != concurrent_assertion_actions_suppressed.end()
+                && suppressed->second) {
                 return;
             }
             if (output_hook) {
@@ -3479,7 +3054,7 @@ void Simulation::Impl::refresh_observation_hooks()
 [[nodiscard]] std::size_t Simulation::Impl::ensure_concurrent_assertion_coverage(
     const runtime::simir::ProcessId process,
     const std::uint32_t slot,
-    const std::string_view kind,
+    const ConcurrentAssertionCoverageKind kind,
     const std::string_view name)
 {
     if (const auto found = concurrent_assertion_indices.find(process);
@@ -3488,13 +3063,7 @@ void Simulation::Impl::refresh_observation_hooks()
     }
     ConcurrentAssertionCoverage coverage;
     coverage.slot = slot;
-    coverage.kind = kind == "assumption"
-        ? ConcurrentAssertionCoverageKind::assumption
-        : kind == "cover"
-        ? ConcurrentAssertionCoverageKind::cover
-        : kind == "restriction"
-        ? ConcurrentAssertionCoverageKind::restriction
-        : ConcurrentAssertionCoverageKind::assertion;
+    coverage.kind = kind;
     coverage.name = name;
     const auto occurrence = std::ranges::find_if(
         built.design_ir.processes(),
@@ -3527,10 +3096,329 @@ void Simulation::Impl::refresh_observation_hooks()
     return inserted;
 }
 
+namespace {
+
+    [[nodiscard]] ConcurrentAssertionCoverageKind coverage_kind(
+        const support::SvaDirective directive) noexcept
+    {
+        switch (directive) {
+        case support::SvaDirective::assumption:
+            return ConcurrentAssertionCoverageKind::assumption;
+        case support::SvaDirective::cover:
+            return ConcurrentAssertionCoverageKind::cover;
+        case support::SvaDirective::restriction:
+            return ConcurrentAssertionCoverageKind::restriction;
+        case support::SvaDirective::assertion:
+            break;
+        }
+        return ConcurrentAssertionCoverageKind::assertion;
+    }
+
+} // namespace
+
+void Simulation::Impl::run_host_request(
+    const runtime::simir::HostRequestEvent& event)
+{
+    using namespace runtime::simir;
+    const auto& request = event.request->request;
+    if (const auto* const control
+        = std::get_if<SimulationControlRequest>(&request)) {
+        run_simulation_control(*control, event.arguments);
+    } else if (const auto* const scope
+        = std::get_if<ScopeTaskRequest>(&request)) {
+        run_scope_task(event.process, *scope, event.time, event.delta);
+    } else if (const auto* const timescale
+        = std::get_if<PrintTimescaleRequest>(&request)) {
+        run_print_timescale(
+            event.process, timescale->target, event.time, event.delta);
+    } else if (const auto* const assertion_control
+        = std::get_if<AssertionControlRequest>(&request)) {
+        for (const auto& argument : event.request->arguments) {
+            // An integer argument with an unknown value (x or z) has no
+            // value to act on (20.11).
+            if (!event.arguments.at(argument.position)) {
+                throw std::runtime_error {
+                    "an assertion control argument has an unknown value"
+                };
+            }
+        }
+        run_assertion_control(event.process, *assertion_control,
+            event.arguments, event.time, event.delta);
+    } else if (const auto* const coverage_control
+        = std::get_if<CoverageControlRequest>(&request)) {
+        if (find_systemverilog_covergroup_instance(
+                built.systemverilog_hir, coverage_control->identity)
+            == nullptr) {
+            throw std::runtime_error {
+                "covergroup control references unavailable instance '"
+                + coverage_control->identity + "'"
+            };
+        }
+        if (coverage_control->start) {
+            stopped_covergroups.erase(coverage_control->identity);
+        } else {
+            stopped_covergroups.insert(coverage_control->identity);
+        }
+    } else if (const auto* const pending_request
+        = std::get_if<SvaPendingRequest>(&request)) {
+        PendingConcurrentAssertion pending;
+        pending.process = event.dynamic_root;
+        pending.design_process = event.design_process;
+        pending.slot = pending_request->slot;
+        pending.kind = coverage_kind(pending_request->directive);
+        pending.name = pending_request->name;
+        pending.vacuous
+            = pending_request->outcome == support::SvaOutcome::vacuous
+            || pending_request->outcome
+                == support::SvaOutcome::obligation_vacuous;
+        for (const auto& action : pending_request->actions) {
+            PendingConcurrentAssertionAction replayed;
+            replayed.report = action.report;
+            replayed.newline = action.newline;
+            replayed.severity = action.severity;
+            replayed.text = action.text;
+            replayed.source = action.source;
+            pending.actions.push_back(std::move(replayed));
+        }
+        switch (pending_request->outcome) {
+        case support::SvaOutcome::obligation:
+            // The actions of a monitor attempt that is still obligated when
+            // simulation ends.
+            sva_obligations[pending.design_process] = std::move(pending);
+            break;
+        case support::SvaOutcome::obligation_vacuous:
+            sva_vacuous_obligations[pending.design_process]
+                = std::move(pending);
+            break;
+        default: {
+            const auto attempt = pending.process;
+            pending_concurrent_assertions[attempt] = std::move(pending);
+            break;
+        }
+        }
+    } else if (const auto* const outcome
+        = std::get_if<SvaOutcomeRequest>(&request)) {
+        run_sva_outcome(event, *outcome);
+    }
+}
+
+void Simulation::Impl::register_concurrent_assertions()
+{
+    // Each directive's monitor names itself in its program (an
+    // SvaOutcomeRequest registration): its directive kind and name, keyed by
+    // the monitor's design process. The directives exist from elaboration
+    // (IEEE 1800-2023 39.3), before any process runs.
+    for (const auto& process_info : built.design_ir.processes()) {
+        const auto process = runtime::simir::InterpreterProgramAccess::view(
+            *interpreter, process_info.runtime_index);
+        for (std::size_t instruction = 0U;
+             instruction < process.operations().size(); ++instruction) {
+            const auto* const request
+                = runtime::simir::operation_get_if<runtime::simir::HostRequest>(
+                    &process.operations()[instruction]);
+            if (request == nullptr) {
+                continue;
+            }
+            const auto* const outcome
+                = std::get_if<runtime::simir::SvaOutcomeRequest>(&request->request);
+            if (outcome == nullptr
+                || outcome->outcome != support::SvaOutcome::registration) {
+                continue;
+            }
+            concurrent_assertion_design_processes.insert_or_assign(
+                static_cast<runtime::simir::ProcessId>(process_info.runtime_index),
+                std::pair { coverage_kind(outcome->directive), outcome->name });
+        }
+    }
+}
+
+void Simulation::Impl::run_sva_outcome(
+    const runtime::simir::HostRequestEvent& event,
+    const runtime::simir::SvaOutcomeRequest& request)
+{
+    const auto coverage_key = event.design_process;
+    const auto kind = coverage_kind(request.directive);
+    const auto attempt_start = event.attempt_start.value_or(
+        static_cast<std::int64_t>(event.time));
+    switch (request.outcome) {
+    case support::SvaOutcome::registration:
+        // Read from the program before the run (register_concurrent_assertions).
+        throw std::logic_error { "a concurrent assertion registration reached the host at run time" };
+    case support::SvaOutcome::start:
+        // An attempt of an evaluator that is not the monitor starts;
+        // assertion controls stop new attempts (39.5.2), as for the
+        // monitor.
+        if (const auto* const control
+            = concurrent_assertion_control(coverage_key);
+            control != nullptr && !control->on) {
+            return;
+        }
+        publish_assertion_attempt_start(
+            coverage_key, static_cast<std::int64_t>(event.time));
+        return;
+    case support::SvaOutcome::abort: {
+        const std::array processes { coverage_key };
+        interpreter->kill_dynamic_processes(processes);
+        std::erase_if(pending_concurrent_assertions, [&](const auto& item) {
+            return item.second.design_process == coverage_key;
+        });
+        // The attempt ends in the disabled state (IEEE 1800-2023 16.12,
+        // 39.4.2).
+        publish_assertion_disabled(coverage_key, kind, request.name,
+            attempt_start, event.time, event.delta);
+        return;
+    }
+    case support::SvaOutcome::pass:
+    case support::SvaOutcome::failure:
+    case support::SvaOutcome::vacuous:
+        break;
+    case support::SvaOutcome::obligation:
+    case support::SvaOutcome::obligation_vacuous:
+        throw std::runtime_error {
+            "a concurrent assertion outcome request carries a pending outcome"
+        };
+    }
+    pending_concurrent_assertions.erase(event.dynamic_root);
+    concurrent_assertion_actions_suppressed[event.process]
+        = !concurrent_assertion_action_enabled(coverage_key, request.outcome);
+    const auto coverage_index = ensure_concurrent_assertion_coverage(
+        coverage_key, request.slot, kind, request.name);
+    auto& coverage = concurrent_assertion_coverage[coverage_index];
+    ConcurrentAssertionEvent published;
+    published.name = coverage.name;
+    published.process = coverage.process;
+    published.kind = coverage.kind;
+    published.slot = coverage.slot;
+    published.instance_identity = coverage.instance_identity;
+    published.source_span = coverage.source_span;
+    published.time = event.time;
+    published.delta = event.delta;
+    published.attempt_start
+        = static_cast<runtime::SimulationTick>(attempt_start);
+    published.action_suppressed
+        = concurrent_assertion_actions_suppressed[event.process];
+    ++coverage.attempts;
+    if (request.outcome == support::SvaOutcome::pass) {
+        published.outcome = ConcurrentAssertionOutcome::pass;
+        ++coverage.passes;
+    } else if (request.outcome == support::SvaOutcome::vacuous) {
+        published.outcome = ConcurrentAssertionOutcome::vacuous;
+        ++coverage.vacuous;
+    } else {
+        published.outcome = ConcurrentAssertionOutcome::failure;
+        ++coverage.failures;
+        // The expression that rejected the attempt.
+        if (event.fail) {
+            published.fail_line = event.fail->first;
+            published.fail_column = event.fail->second;
+        }
+    }
+    // Not retained: a long run would grow without bound.
+    publish_vpi_assertion(published, coverage_key);
+    if (concurrent_assertion_hook) {
+        concurrent_assertion_hook(published);
+    }
+}
+
+void Simulation::Impl::run_print_timescale(
+    const runtime::simir::ProcessId process, const std::string_view requested,
+    const SimulationTick time, const std::uint64_t delta)
+{
+    const auto runtime_process = interpreter->design_process(process);
+    const auto process_occurrence = std::ranges::find(
+        built.design_ir.processes(),
+        runtime_process,
+        &semantic::design::ProcessOccurrence::runtime_index);
+    if (process_occurrence == built.design_ir.processes().end()) {
+        throw std::runtime_error {
+            "$printtimescale process has no DesignIR occurrence"
+        };
+    }
+    const auto& current_specialization
+        = built.design_ir.specializations().at(
+            process_occurrence->specialization.value());
+    const auto& current_instance = built.design_ir.instances().at(
+        current_specialization.instance.value());
+    const auto find_instance = [&](const std::string_view path) {
+        return std::ranges::find_if(
+            built.design_ir.instances(), [&](const auto& instance) {
+                return built.design_ir.path(instance.path) == path;
+            });
+    };
+    auto selected = built.design_ir.instances().end();
+    if (requested.empty()) {
+        selected = built.design_ir.instances().begin()
+            + static_cast<std::ptrdiff_t>(
+                current_specialization.instance.value());
+    } else {
+        auto target = requested;
+        constexpr std::string_view root_prefix { "$root." };
+        if (target.starts_with(root_prefix)) {
+            target.remove_prefix(root_prefix.size());
+        }
+        selected = find_instance(target);
+        auto prefix = std::string {
+            built.design_ir.path(current_instance.path) };
+        while (selected == built.design_ir.instances().end()
+            && !prefix.empty()) {
+            selected = find_instance(prefix + "." + std::string { target });
+            const auto separator = prefix.rfind('.');
+            if (separator == std::string::npos) {
+                prefix.clear();
+            } else {
+                prefix.erase(separator);
+            }
+        }
+    }
+    if (selected == built.design_ir.instances().end()) {
+        throw std::runtime_error {
+            "$printtimescale references unavailable instance '"
+            + std::string { requested } + "'"
+        };
+    }
+    const auto& specialization = built.design_ir.specializations().at(
+        selected->specialization.value());
+    if (!specialization.unit.valid()
+        || specialization.unit.value() >= built.semantics.units().size()) {
+        throw std::runtime_error {
+            "$printtimescale instance has no semantic unit"
+        };
+    }
+    const auto& semantic_unit
+        = built.semantics.units().at(specialization.unit.value());
+    const auto unit = std::ranges::find_if(built.systemverilog_hir.units(),
+        [&](const semantic::sv::Unit& candidate) {
+            return candidate.library == semantic_unit.library
+                && candidate.name == semantic_unit.name;
+        });
+    if (unit == built.systemverilog_hir.units().end()) {
+        throw std::runtime_error {
+            "$printtimescale instance has no SystemVerilog HIR unit"
+        };
+    }
+    const auto time_unit = unit->compilation.time_unit.empty()
+        ? std::string_view { "1s" }
+        : std::string_view { unit->compilation.time_unit };
+    const auto time_precision = unit->compilation.time_precision.empty()
+        ? std::string_view { "1s" }
+        : std::string_view { unit->compilation.time_precision };
+    if (output_hook) {
+        output_hook(process,
+            "Time scale of (" + std::string { built.design_ir.path(selected->path) }
+                + ") is " + std::string { time_unit } + " / "
+                + std::string { time_precision },
+            true, time, delta);
+    }
+}
+
 void Simulation::Impl::finish_concurrent_assertions(
     const SimulationTick time,
     const std::uint64_t delta)
 {
+    // The rows of a region the end of the run cut short.
+    if (interpreter) {
+        interpreter->drain_host_requests();
+    }
     // Each entry carries the tick its attempt started at when the monitor
     // knows it (attemptStartTime of an attempt the end of simulation ends,
     // IEEE 1800-2023 39.4.2).
@@ -3596,7 +3484,9 @@ void Simulation::Impl::finish_concurrent_assertions(
             ? ConcurrentAssertionOutcome::vacuous
             : ConcurrentAssertionOutcome::failure;
         event.action_suppressed = !concurrent_assertion_action_enabled(
-            pending.design_process, pending.vacuous ? "vacuous" : "failure");
+            pending.design_process,
+            pending.vacuous ? support::SvaOutcome::vacuous
+                            : support::SvaOutcome::failure);
         publish_vpi_assertion(event, pending.design_process);
         if (concurrent_assertion_hook) {
             concurrent_assertion_hook(event);
@@ -3620,15 +3510,15 @@ void Simulation::Impl::finish_concurrent_assertions(
 }
 bool Simulation::Impl::concurrent_assertion_action_enabled(
     const runtime::simir::ProcessId design_process,
-    const std::string_view outcome) const
+    const support::SvaOutcome outcome) const
 {
     const auto* const control = concurrent_assertion_control(design_process);
     if (control == nullptr) {
         return true;
     }
-    return outcome == "pass" ? control->pass
-        : outcome == "vacuous" ? control->vacuous
-                               : control->fail;
+    return outcome == support::SvaOutcome::pass ? control->pass
+        : outcome == support::SvaOutcome::vacuous ? control->vacuous
+                                                  : control->fail;
 }
 
 const Simulation::Impl::AssertionControl*
@@ -3671,7 +3561,6 @@ void Simulation::Impl::build_assertion_controls()
     executor_assertion_controls.clear();
     assertion_control_scopes.clear();
     assertion_control_instances.clear();
-    assertion_control_arguments.clear();
     const auto& instances = built.design_ir.instances();
     for (const auto& instance : instances) {
         assertion_control_instances.emplace(
@@ -3853,112 +3742,55 @@ void Simulation::Impl::set_assertion_checking(
 }
 
 void Simulation::Impl::run_assertion_control(
-    const runtime::simir::ProcessId process, const std::string_view payload,
+    const runtime::simir::ProcessId process,
+    const runtime::simir::AssertionControlRequest& request,
+    const std::array<std::optional<std::int64_t>, 4>& arguments,
     const SimulationTick time, const std::uint64_t delta)
 {
-    constexpr std::string_view argument_prefix { "arg|" };
-    constexpr std::string_view source_prefix { "src|" };
-    if (payload.starts_with(source_prefix)) {
-        // `src|<line>|<column>|<path>`: the place of a control task
-        // call, sent ahead of the request.
-        const auto rest = payload.substr(source_prefix.size());
-        const auto line_end = rest.find('|');
-        const auto column_end = line_end == std::string_view::npos
-            ? std::string_view::npos
-            : rest.find('|', line_end + 1U);
-        runtime::simir::SourceLocation source;
-        if (column_end == std::string_view::npos
-            || std::from_chars(rest.data(), rest.data() + line_end,
-                   source.line)
-                    .ec
-                != std::errc { }
-            || std::from_chars(rest.data() + line_end + 1U,
-                   rest.data() + column_end, source.column)
-                    .ec
-                != std::errc { }) {
-            throw std::runtime_error {
-                "malformed assertion control source marker"
-            };
-        }
-        source.path = std::string { rest.substr(column_end + 1U) };
-        assertion_control_sources[process] = std::move(source);
-        return;
-    }
-    if (payload.starts_with(argument_prefix)) {
-        // `arg|<position>|<value>`: one evaluated integer argument, sent
-        // ahead of the request.
-        const auto rest = payload.substr(argument_prefix.size());
-        const auto bar = rest.find('|');
-        std::uint32_t position { };
-        std::int64_t value { };
-        if (bar == std::string_view::npos
-            || std::from_chars(rest.data(), rest.data() + bar, position).ec
-                != std::errc { }
-            || position >= 4U
-            || std::from_chars(rest.data() + bar + 1U,
-                   rest.data() + rest.size(), value)
-                    .ec
-                != std::errc { }) {
-            throw std::runtime_error {
-                "malformed assertion control argument marker"
-            };
-        }
-        assertion_control_arguments[process][position] = value;
-        return;
-    }
-    // `<task>|<calling scope>[|<list item>...]`.
-    std::vector<std::string_view> fields;
-    for (std::size_t begin = 0U;;) {
-        const auto bar = payload.find('|', begin);
-        fields.push_back(payload.substr(begin,
-            bar == std::string_view::npos ? std::string_view::npos
-                                          : bar - begin));
-        if (bar == std::string_view::npos) {
-            break;
-        }
-        begin = bar + 1U;
-    }
-    if (fields.size() < 2U) {
-        throw std::runtime_error { "malformed assertion control marker" };
-    }
-    const auto arguments = assertion_control_arguments[process];
-    assertion_control_arguments.erase(process);
-    auto source = std::move(assertion_control_sources[process]);
-    assertion_control_sources.erase(process);
-    const auto task = fields[0];
-    const auto calling_scope = fields[1];
+    using runtime::simir::AssertionControlTask;
+    const auto& source = request.call;
+    const std::string_view calling_scope { request.calling_scope };
     // The convenience tasks as $assertcontrol calls (20.11): On, Off and
     // Kill of assertion types 15, the action controls of types 31, every
     // directive type.
     struct Convenience {
-        std::string_view task;
+        AssertionControlTask task;
+        std::string_view name;
         int control;
         std::int64_t types;
     };
     constexpr std::array conveniences {
-        Convenience { "asserton", 3, 15 },
-        Convenience { "assertoff", 4, 15 },
-        Convenience { "assertkill", 5, 15 },
-        Convenience { "assertpasson", 6, 31 },
-        Convenience { "assertpassoff", 7, 31 },
-        Convenience { "assertfailon", 8, 31 },
-        Convenience { "assertfailoff", 9, 31 },
-        Convenience { "assertnonvacuouson", 10, 31 },
-        Convenience { "assertvacuousoff", 11, 31 },
+        Convenience { AssertionControlTask::asserton, "asserton", 3, 15 },
+        Convenience { AssertionControlTask::assertoff, "assertoff", 4, 15 },
+        Convenience { AssertionControlTask::assertkill, "assertkill", 5, 15 },
+        Convenience {
+            AssertionControlTask::assertpasson, "assertpasson", 6, 31 },
+        Convenience {
+            AssertionControlTask::assertpassoff, "assertpassoff", 7, 31 },
+        Convenience {
+            AssertionControlTask::assertfailon, "assertfailon", 8, 31 },
+        Convenience {
+            AssertionControlTask::assertfailoff, "assertfailoff", 9, 31 },
+        Convenience { AssertionControlTask::assertnonvacuouson,
+            "assertnonvacuouson", 10, 31 },
+        Convenience { AssertionControlTask::assertvacuousoff,
+            "assertvacuousoff", 11, 31 },
     };
     std::int64_t control_type { };
     std::int64_t assertion_types { 255 };
-    if (task == "assertcontrol") {
+    std::string_view task { "assertcontrol" };
+    if (request.task == AssertionControlTask::assertcontrol) {
         control_type = arguments[0].value_or(0);
         assertion_types = arguments[1].value_or(255);
     } else {
         const auto found = std::ranges::find(
-            conveniences, task, &Convenience::task);
+            conveniences, request.task, &Convenience::task);
         if (found == conveniences.end()) {
-            throw std::runtime_error { "malformed assertion control marker" };
+            throw std::runtime_error { "malformed assertion control request" };
         }
         control_type = found->control;
         assertion_types = found->types;
+        task = found->name;
     }
     const auto directive_types = arguments[2].value_or(7);
     const auto levels = arguments[3].value_or(0);
@@ -4009,7 +3841,7 @@ void Simulation::Impl::run_assertion_control(
         return depth;
     };
     std::vector<bool> selected(assertion_controls.size(), false);
-    if (fields.size() == 2U) {
+    if (request.items.empty()) {
         for (std::size_t index = 0U; index < assertion_controls.size();
              ++index) {
             const auto& control = assertion_controls[index];
@@ -4024,10 +3856,9 @@ void Simulation::Impl::run_assertion_control(
             selected[index] = levels == 0 || depth <= levels;
         }
     }
-    for (std::size_t item = 2U; item < fields.size(); ++item) {
+    for (const std::string_view name : request.items) {
         // A hierarchical name searched upward from the calling scope (23.8):
         // below each enclosing scope, then from the top.
-        const auto name = fields[item];
         std::optional<std::string> resolved;
         bool assertion { };
         const auto try_name = [&](std::string candidate) {
@@ -4153,9 +3984,10 @@ void Simulation::Impl::run_assertion_control(
     // call without arguments (only the control_type of $assertcontrol) is
     // an assertion system callback (39.4.1); any other is an assertion
     // callback of each assertion object it changed (39.4.2).
-    const bool system = fields.size() == 2U
+    const bool system = request.items.empty()
         && std::ranges::all_of(
-            std::span { arguments }.subspan(task == "assertcontrol" ? 1U : 3U),
+            std::span { arguments }.subspan(
+                request.task == AssertionControlTask::assertcontrol ? 1U : 3U),
             [](const std::optional<std::int64_t>& argument) {
                 return !argument.has_value();
             });

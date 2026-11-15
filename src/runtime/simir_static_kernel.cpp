@@ -8462,7 +8462,10 @@ void Interpreter::Impl::StaticKernel::verify_run(const std::uint32_t member_inde
                 std::vector<std::uint8_t> optional_generic(
                     member.operations().size(), 0U);
                 for (const auto& inst : body.code) {
-                    if (inst.op == KOp::generic && inst.aux == 2U
+                    // An assertion report's row (KOp::sva_report) is the
+                    // compiled run's; the replay does not make it again.
+                    if (((inst.op == KOp::generic && inst.aux == 2U)
+                            || inst.op == KOp::sva_report)
                         && inst.x < optional_generic.size()) {
                         optional_generic[inst.x] = 1U;
                     }
@@ -9297,11 +9300,12 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_operation(
                     }
                 }
             } else if constexpr (std::is_same_v<T, Display>
+                || std::is_same_v<T, HostRequest>
                 || std::is_same_v<T, FormatDisplay>
                 || std::is_same_v<T, TimeDisplay>
                 || std::is_same_v<T, SystemVerilogMath>
                 || std::is_same_v<T, SystemVerilogScalarBinary>) {
-                // A sequential member's immediate output, time queries and
+                // A sequential member's immediate output, host requests, time queries and
                 // real-number operations: the behavioral tier's semantics, on
                 // the member's registers.
                 (void)(this->*behavioral_operation_steps()[operation_kind_of<T>])(
@@ -10183,8 +10187,29 @@ void Interpreter::Impl::StaticKernel::initialize()
                     && impl_.get_signal(write->signal).event_variable;
             });
     };
+    // A static variable's declaration initializer runs before every
+    // procedure (IEEE 1800-2023 6.8, 10.5): those once members run first.
+    // Their writes are initialization, no transaction and no event
+    // (settle_declaration_initializer_write).
+    std::vector<bool> initializer_ran;
+    {
+        const InitializationWriteScope initialization { impl_ };
+        for (std::uint32_t index = 0U; index < members_.size(); ++index) {
+            if (members_[index].kind == StaticKernelMemberKind::once
+                && !members_[index].vhdl
+                && member_program(index).startup_phase()
+                    == ProcessStartupPhase::declaration_initializer) {
+                initializer_ran.resize(members_.size(), false);
+                initializer_ran[index] = true;
+                run(index);
+            }
+        }
+    }
     for (std::uint32_t index = 0U; index < members_.size(); ++index) {
         if (members_[index].kind == StaticKernelMemberKind::once) {
+            if (index < initializer_ran.size() && initializer_ran[index]) {
+                continue;
+            }
             if (after_procedures(members_[index])) {
                 continue;
             }
@@ -10297,12 +10322,29 @@ bool Interpreter::Impl::StaticKernel::scan_inputs(const bool all)
     return changed;
 }
 
+Interpreter::Impl::StaticKernel::InitializationWriteScope::
+    InitializationWriteScope(Interpreter::Impl& impl) noexcept
+    : impl_ { impl }
+    , previous_ { std::exchange(impl.declaration_initialization_active, true) }
+{
+}
+
+Interpreter::Impl::StaticKernel::InitializationWriteScope::
+    ~InitializationWriteScope()
+{
+    impl_.declaration_initialization_active = previous_;
+}
+
 Interpreter::Impl::StaticKernel::HostWakeScope::HostWakeScope(
     StaticKernel& kernel, const SignalId signal)
     : kernel_ { kernel }
 {
     // An event the previous delta's update phase made, or SystemVerilog work
     // of this delta (stamped for this one), wakes VHDL work in this delta.
+    // An event of the next delta waits for it, unless the update phase that
+    // precedes that delta made it (a host write the scheduler applies there,
+    // such as a VHPI propagating deposit): its readers resume in the cycle
+    // of the update (IEEE 1076-2019 14.7.5.3 c), d)), the next activation.
     const auto& impl = kernel.impl_;
     const auto event = signal < impl.signal_events.size()
         ? impl.signal_events[signal]
@@ -10310,7 +10352,8 @@ Interpreter::Impl::StaticKernel::HostWakeScope::HostWakeScope(
     const auto now = impl.scheduler.now();
     const auto delta = impl.scheduler.delta();
     hold_ = kernel.mixed_ && kernel.host_boundary_ && event
-        && *event == std::pair { now, delta + 1U };
+        && *event == std::pair { now, delta + 1U }
+        && impl.scheduler.current_phase() != SchedulerPhase::update;
     members_ = kernel.next_round_.size();
     threads_ = kernel.vhdl_ready_threads_.size();
     const bool systemverilog = kernel.mixed_ && event

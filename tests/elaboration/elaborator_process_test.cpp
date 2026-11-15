@@ -366,12 +366,15 @@ endmodule
         < operation_index
               .operator()<fsim::runtime::simir::WaitFor>(
                   local_operations));
+    // The unnamed block's variable is static storage (a signal, owner
+    // 11-14): the delayed value is written to it after the wait (IEEE
+    // 1800-2023 10.4.1, 9.4.5).
     assert(
         operation_index
             .operator()<fsim::runtime::simir::WaitFor>(
                 local_operations)
         < operation_index
-              .operator()<fsim::runtime::simir::CopyRegister>(
+              .operator()<fsim::runtime::simir::WriteBlocking>(
                   local_operations));
 
     auto inconsistent_assignment_control =
@@ -451,7 +454,7 @@ module invalid_force;
   bit [3:0] two_state;
   logic signed [31:0] index;
   initial begin
-    logic [3:0] local_value;
+    automatic logic [3:0] local_value;
     force local_value = 4'h1;
     force four_state[index] = 1'b1;
     force two_state = four_state;
@@ -468,6 +471,38 @@ endmodule
     assert(has_diagnostic(rejected_force, "FSIM-ELAB-SVFORCE-002"));
     // A four-state value forced onto a two-state target converts.
     assert(!has_diagnostic(rejected_force, "FSIM-ELAB-SVFORCE-003"));
+
+    // A static variable of an unnamed block is a signal (IEEE 1800-2023
+    // 6.21; owner 11-14), so it can be forced (10.6.2): the later
+    // procedural write leaves the forced value.
+    const auto static_force = fsim::frontend::parse_text(
+        "static_force.sv",
+        R"(
+module static_force;
+  logic [3:0] q;
+  initial begin
+    logic [3:0] local_value;
+    force local_value = 4'h5;
+    local_value = 4'h0;
+    q = local_value;
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(static_force.ok());
+    const auto elaborated_static_force = compile_and_elaborate(
+        static_force.design, "static_force");
+    assert(elaborated_static_force.ok());
+    auto static_force_interpreter
+        = elaborated_static_force.design->create_interpreter();
+    assert(static_force_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    const auto static_force_q
+        = elaborated_static_force.design->find_signal("q");
+    assert(static_force_q);
+    assert(static_force_interpreter->signal_value(*static_force_q)
+               .to_msb_string()
+        == "0101");
 
     const auto invalid_procedural_assign = fsim::frontend::parse_text(
         "invalid_procedural_assign.sv",
@@ -1335,26 +1370,32 @@ endmodule
     const auto elaborated_locals = compile_and_elaborate(
         local_variables.design, "local_variables");
     assert(elaborated_locals.ok());
-    const auto& local_process =
-        elaborated_locals.design->processes().front();
-    assert(
-        local_process.debug_locals.size() == 1
-        && local_process.debug_locals.front().name == "state"
-        && local_process.debug_locals.front().type_name == "logic"
-        && local_process.debug_locals.front().width == 1);
-    assert(std::any_of(
-        local_process.operations.begin(),
-        local_process.operations.end(),
+    // `state` of the unnamed block is static storage, a signal with no
+    // hierarchical name (IEEE 1800-2023 6.21, 9.3.5; owner 11-14), not a
+    // register of the procedure; its constant initializer is the signal's
+    // initial value (6.8).
+    const auto& local_processes = elaborated_locals.design->processes();
+    const auto local_process = std::ranges::find_if(local_processes,
+        [](const auto& process) {
+            return process.startup_phase
+                == fsim::runtime::simir::ProcessStartupPhase::ordinary;
+        });
+    assert(local_process != local_processes.end());
+    assert(local_process->debug_locals.empty());
+    // `state = 1'b1;` is the procedure's first blocking write.
+    const auto state_write = std::ranges::find_if(local_process->operations,
         [](const fsim::runtime::simir::Operation& operation) {
-          return fsim::runtime::simir::operation_holds<
-              fsim::runtime::simir::CopyRegister>(operation);
-        }));
+            return fsim::runtime::simir::operation_holds<
+                fsim::runtime::simir::WriteBlocking>(operation);
+        });
+    assert(state_write != local_process->operations.end());
+    const auto state_signal = fsim::runtime::simir::operation_get_if<
+        fsim::runtime::simir::WriteBlocking>(&*state_write)->signal;
     auto local_interpreter =
         elaborated_locals.design->create_interpreter();
     const auto local_run = local_interpreter->run();
     assert(local_run.status == fsim::runtime::RunStatus::completed);
-    assert(
-        local_interpreter->read_debug_local(0, 0).to_msb_string()
+    assert(local_interpreter->signal_value(state_signal).to_msb_string()
         == "1");
     const auto local_q =
         elaborated_locals.design->find_signal("q");

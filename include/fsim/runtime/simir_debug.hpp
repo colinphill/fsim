@@ -115,3 +115,14 @@ struct DebugContainerLocal {
   ContainerType type;
   SourceLocation source;
 };
+
+/// A static variable declared in a block of the process (IEEE 1800-2023
+/// 6.21): its storage is the instance's signal, string or container object,
+/// not a register of the process.
+struct DebugStaticLocal {
+  std::string name;
+  std::optional<SignalId> signal;
+  std::optional<StringObjectId> string;
+  std::optional<ContainerObjectId> container;
+  SourceLocation source;
+};

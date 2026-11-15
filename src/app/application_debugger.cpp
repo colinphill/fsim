@@ -433,6 +433,45 @@ namespace {
   return formatted ? formatted.text : "<invalid scalar>";
 }
 
+// The type and value of a static variable of a process's block (IEEE
+// 1800-2023 6.21), held in the instance's signal, string or container
+// object; `format_packed` formats a packed value with its literals.
+template <typename FormatPacked>
+[[nodiscard]] std::pair<std::string, std::string> static_local_value(
+    const Simulation& simulation,
+    const runtime::simir::DebugStaticLocal& local,
+    FormatPacked&& format_packed) {
+  if (local.signal) {
+    const auto& info = simulation.runtime_adapter().signals().at(*local.signal);
+    // A time variable holding x or z bits has no scalar value (6.11.1);
+    // its bits are shown.
+    if (info.systemverilog_scalar == runtime::SystemVerilogScalarKind::Time) {
+      const auto decoded = runtime::decode_systemverilog_scalar_payload(
+          simulation.read_signal(*local.signal), info.systemverilog_scalar);
+      if (decoded) {
+        return { info.type_name, format_scalar_local(simulation, decoded.value) };
+      }
+    } else if (info.systemverilog_scalar
+        != runtime::SystemVerilogScalarKind::None) {
+      return { info.type_name,
+          format_scalar_local(
+              simulation, simulation.read_scalar_signal(*local.signal)) };
+    }
+    return { info.type_name,
+        format_packed(simulation.read_signal(*local.signal),
+            info.enumeration_literals) };
+  }
+  if (local.string) {
+    return { "string",
+        escaped_string(simulation.read_string_object(*local.string)) };
+  }
+  if (local.container) {
+    return { "container",
+        format_container(simulation.read_container_object(*local.container)) };
+  }
+  return { };
+}
+
 [[nodiscard]] std::string_view design_path(
     const Simulation& simulation,
     const semantic::HierarchyPathId id) {
@@ -443,7 +482,10 @@ namespace {
 design_signal_paths(const Simulation& simulation) {
   std::vector<std::pair<std::string, SignalId>> result;
   for (const auto& object : simulation.design_ir().objects()) {
+    // A variable of an unnamed block has no hierarchical name (IEEE
+    // 1800-2023 6.21); `locals` of its process shows it.
     if (design_object_is_signal_bearing(object)
+        && !object.no_hierarchical_name
         && object.runtime_index <= std::numeric_limits<SignalId>::max()) {
       result.emplace_back(
           design_path(simulation, object.path),
@@ -461,6 +503,7 @@ design_container_paths(const Simulation& simulation) {
       std::string, runtime::simir::ContainerObjectId>> result;
   for (const auto& object : simulation.design_ir().objects()) {
     if (object.kind == semantic::design::ObjectKind::container
+        && !object.no_hierarchical_name
         && object.runtime_index
             <= std::numeric_limits<runtime::simir::ContainerObjectId>::max()) {
       result.emplace_back(
@@ -1424,6 +1467,14 @@ DebuggerFrameInfo DebuggerSession::frame(const std::size_t index) const
     }
     result.locals.push_back({ local.name, "container", std::move(value) });
   }
+  for (const auto& local : program.debug_static_locals) {
+    auto [type, value] = static_local_value(simulation_, local,
+        [](const auto& packed, const auto& literals) {
+          return format_value(packed, literals);
+        });
+    result.locals.push_back(
+        { local.name, std::move(type), std::move(value) });
+  }
   return result;
 }
 
@@ -1768,6 +1819,7 @@ DebuggerSession::resolve_signal(
   for (const auto& path : lexical_paths(name)) {
     for (const auto& object : simulation_.design_ir().objects()) {
       if (object.kind == semantic::design::ObjectKind::string
+          && !object.no_hierarchical_name
           && design_path(simulation_, object.path) == path
           && object.runtime_index
               <= std::numeric_limits<runtime::simir::StringObjectId>::max()) {
@@ -1789,6 +1841,7 @@ DebuggerSession::resolve_signal(
     const auto object = std::ranges::find_if(
         simulation_.design_ir().objects(), [&](const auto& candidate) {
           return candidate.kind == semantic::design::ObjectKind::container
+              && !candidate.no_hierarchical_name
               && design_path(simulation_, candidate.path) == path
               && candidate.runtime_index <= std::numeric_limits<
                   runtime::simir::ContainerObjectId>::max();
@@ -1999,7 +2052,8 @@ void DebuggerSession::show_locals()  {
             current_execution_point_->design_process);
     if (process.debug_locals.empty()
         && process.debug_string_locals.empty()
-        && process.debug_container_locals.empty()) {
+        && process.debug_container_locals.empty()
+        && process.debug_static_locals.empty()) {
       output_ << "(no locals)\n";
       return;
     }
@@ -2055,6 +2109,15 @@ void DebuggerSession::show_locals()  {
               << format_container(
                      simulation_.read_process_container_local(
                          process_id, index))
+              << '\n';
+    }
+    // The static variables of the process's blocks (IEEE 1800-2023 6.21).
+    for (const auto& local : process.debug_static_locals) {
+      output_ << local.name << " = "
+              << static_local_value(simulation_, local,
+                     [](const auto& value, const auto& literals) {
+                       return format_value(value, literals);
+                     }).second
               << '\n';
     }
   }

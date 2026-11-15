@@ -62,6 +62,16 @@ std::vector<fsim_vpi_handle_v1> Simulation::vpi_signal_object_handles(
     return handles;
 }
 
+fsim_vpi_handle_v1 Simulation::vpi_declared_object(
+    const std::string_view instance, const std::uint32_t declaration) const
+{
+    const auto found = impl_->vpi_declaration_objects.find(
+        std::pair { std::string { instance }, declaration });
+    return found == impl_->vpi_declaration_objects.end()
+        ? fsim_vpi_handle_v1 { }
+        : found->second;
+}
+
 std::vector<std::pair<fsim_vpi_handle_v1, runtime::simir::ProcessId>>
 Simulation::vpi_driver_objects(const fsim_vpi_handle_v1 object)
 {
@@ -527,7 +537,10 @@ std::optional<SignalId> Simulation::find_signal(
 {
     const auto found = std::ranges::find_if(
         impl_->built.design_ir.objects(), [&](const auto& object) {
+            // A variable of an unnamed block has no hierarchical name
+            // (IEEE 1800-2023 6.21), so no path finds it.
             return design_object_is_signal_bearing(object)
+                && !object.no_hierarchical_name
                 && object.path.valid()
                 && object.path.value()
                     < impl_->built.design_ir.hierarchy_paths().size()

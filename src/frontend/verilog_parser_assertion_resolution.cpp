@@ -124,11 +124,14 @@ void VerilogParser::resolve_generate_assertion_references(DesignUnit& unit)
                             return block.name == name;
                         });
             });
-        resolve_expect_statements(unit, body.processes, body.tasks,
-            body.signals, body.concurrent_statements);
+        const bool expect_properties = resolve_expect_statements(unit,
+            body.processes, body.tasks, body.signals,
+            body.concurrent_statements,
+            body.systemverilog_assertion_declarations);
         // A block without directives still resolves when its procedures
-        // read the end point of a sequence it sees (9.4.2.4, 16.13.6).
-        if (body.systemverilog_concurrent_assertions.empty()
+        // read the end point of a sequence it sees (9.4.2.4, 16.13.6), or
+        // when an expect statement declared its property spec (37.73).
+        if (body.systemverilog_concurrent_assertions.empty() && !expect_properties
             && !reads_sequence_endpoint(unit, outer, body)) {
             return;
         }
@@ -534,8 +537,9 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                         return block.name == name;
                     });
         });
-    resolve_expect_statements(unit, unit.processes, unit.tasks, unit.signals,
-        unit.concurrent_statements);
+    (void)resolve_expect_statements(unit, unit.processes, unit.tasks,
+        unit.signals, unit.concurrent_statements,
+        unit.systemverilog_assertion_declarations);
     check_sequence_dependencies(unit);
     const auto design_names = assertion_design_unit_names(unit);
     resolve_assertion_declaration_references(unit);
@@ -2088,36 +2092,18 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
         assertion.condition = std::move(*condition);
         assertion.span = directive.span;
         assertion.assertion_message = "concurrent assertion '" + process.name + "' failed";
-        const auto kind_name = directive.kind == SystemVerilogConcurrentAssertionKind::Assume
-            ? "assumption"
-            : directive.kind == SystemVerilogConcurrentAssertionKind::Cover
-            ? "cover"
-            : directive.kind == SystemVerilogConcurrentAssertionKind::Restrict
-            ? "restriction"
-            : "assertion";
+        const auto sva_kind = sva_directive(directive.kind);
+        const auto marker_slot = static_cast<std::uint32_t>(index);
         const auto coverage_marker =
-            [&](const std::string_view outcome) {
-                Statement marker;
-                marker.kind = StatementKind::Display;
-                marker.output_newline = false;
-                marker.output_text = std::string { "\x1f"
-                                                   "fsim.concurrent-assertion|" }
-                    + std::to_string(index)
-                    + "|" + kind_name
-                    + "|" + std::string { outcome }
-                    + "|" + process.name;
-                marker.span = directive.span;
-                return marker;
+            [&](const support::SvaOutcome outcome) {
+                return sva_marker_statement(support::SvaMarkerKind::outcome,
+                    outcome, sva_kind, marker_slot, process.name,
+                    directive.span);
             };
         const auto action_region_marker = [&] {
-            Statement marker;
-            marker.kind = StatementKind::Display;
-            marker.output_newline = false;
-            marker.output_text = std::string { "\x1f"
-                                               "fsim.concurrent-assertion-action-region|" }
-                + process.name;
-            marker.span = directive.span;
-            return marker;
+            return sva_marker_statement(support::SvaMarkerKind::action_region,
+                support::SvaOutcome::pass, sva_kind, marker_slot,
+                process.name, directive.span);
         };
         // The pass and fail statements run only while the assertion
         // controls enable them (IEEE 1800-2023 20.11): `bit` of the
@@ -2178,39 +2164,16 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
         };
         const auto serialized_actions = [](const std::vector<Statement>& statements) {
             auto begin = std::size_t { 0 };
-            constexpr std::string_view internal_marker {
-                "\x1f"
-                "fsim.concurrent-assertion"
-            };
             while (begin < statements.size()
-                && statements[begin].kind == StatementKind::Display
-                && statements[begin].output_text.starts_with(
-                    internal_marker)) {
+                && statements[begin].kind == StatementKind::SvaMarker) {
                 ++begin;
             }
             return std::span<const Statement> { statements }.subspan(begin);
         };
-        const auto pending_marker = [&](const std::string_view outcome,
+        const auto pending_marker = [&](const support::SvaOutcome outcome,
                                         const std::span<const Statement> actions) {
-            constexpr char digits[] = "0123456789abcdef";
-            const auto encode = [&](const std::string_view text) {
-                std::string result;
-                result.reserve(text.size() * 2U);
-                for (const auto character : text) {
-                    const auto byte = static_cast<unsigned char>(character);
-                    result.push_back(digits[byte >> 4U]);
-                    result.push_back(digits[byte & 0x0fU]);
-                }
-                return result;
-            };
-            Statement marker;
-            marker.kind = StatementKind::Display;
-            marker.output_newline = false;
-            marker.output_text
-                = std::string { "\x1f"
-                                "fsim.concurrent-assertion-pending|" }
-                + std::to_string(index) + "|" + kind_name + "|"
-                + std::string { outcome } + "|" + process.name;
+            auto marker = sva_marker_statement(support::SvaMarkerKind::pending,
+                outcome, sva_kind, marker_slot, process.name, directive.span);
             // Only display and report actions can be replayed when a
             // pending attempt resolves at the end of simulation; those in
             // unnamed blocks and assertion control gates (gated_actions;
@@ -2247,24 +2210,14 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             };
             collect(collect, actions);
             for (const auto* replayed_action : replayed) {
-                const auto& action = *replayed_action;
-                marker.output_text += "|";
-                marker.output_text += action.kind == StatementKind::Report ? "R" : "D";
-                marker.output_text += "," + std::to_string(static_cast<std::underlying_type_t<AssertionSeverity>>(action.assertion_severity));
-                marker.output_text += action.output_newline ? ",1," : ",0,";
-                marker.output_text += encode(action.output_text) + ",";
-                marker.output_text += encode(action.span.source_name) + ",";
-                marker.output_text += std::to_string(action.span.begin.line) + ",";
-                marker.output_text += std::to_string(action.span.begin.column) + ",";
-                marker.output_text += std::to_string(
-                    static_cast<std::underlying_type_t<GeneratedTextKind>>(
-                        action.output_generated_text));
+                marker.sva_marker->actions.push_back(
+                    sva_replayed_action(*replayed_action));
             }
             marker.span = directive.span;
             return marker;
         };
         assertion.assertion_has_pass_action = true;
-        assertion.statements.push_back(coverage_marker("pass"));
+        assertion.statements.push_back(coverage_marker(support::SvaOutcome::pass));
         const auto pass_actions = directive.pass_action_statements.empty()
             ? action_statements(directive.pass_action_tokens)
             : directive.pass_action_statements;
@@ -2280,7 +2233,7 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             }
         }
         assertion.assertion_has_failure_action = true;
-        assertion.else_statements.push_back(coverage_marker("failure"));
+        assertion.else_statements.push_back(coverage_marker(support::SvaOutcome::failure));
         const auto failure_actions = directive.failure_action_statements.empty()
             ? action_statements(directive.failure_action_tokens)
             : directive.failure_action_statements;
@@ -2302,7 +2255,7 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                 // Every clock tick starts an attempt (cbAssertionStart,
                 // IEEE 1800-2023 39.4.2); the runtime drops the report
                 // while the assertion is disabled.
-                process.statements.push_back(coverage_marker("start"));
+                process.statements.push_back(coverage_marker(support::SvaOutcome::start));
                 Statement attempt;
                 attempt.kind = StatementKind::Fork;
                 attempt.span = directive.span;
@@ -2325,7 +2278,7 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                 disable.kind = StatementKind::If;
                 disable.condition = std::move(*disable_condition);
                 disable.span = directive.span;
-                disable.statements.push_back(coverage_marker("abort"));
+                disable.statements.push_back(coverage_marker(support::SvaOutcome::abort));
                 disable.else_statements.push_back(std::move(attempt));
                 process.statements.push_back(std::move(disable));
             };
@@ -2339,7 +2292,7 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                 ExpressionKind::IntegerLiteral, "0", { }, directive.span };
             actions.success.push_back(std::move(success));
             actions.failure.push_back(std::move(failure));
-            actions.vacuous.push_back(coverage_marker("vacuous"));
+            actions.vacuous.push_back(coverage_marker(support::SvaOutcome::vacuous));
             append_actions(actions.vacuous, pass_actions,
                 semantic::sva::control_vacuous);
             actions.clock = process.sensitivities;
@@ -2348,7 +2301,7 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             actions.locals = general_property_locals;
             if (disable_condition) {
                 actions.disable = std::move(*disable_condition);
-                actions.abort.push_back(coverage_marker("abort"));
+                actions.abort.push_back(coverage_marker(support::SvaOutcome::abort));
             }
             auto evaluation = general_property_evaluation(
                 general_tokens, unit, actions);
@@ -2370,7 +2323,7 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                     assertion_local_initializers.begin(),
                     assertion_local_initializers.end());
             }
-            process.statements.push_back(coverage_marker("start"));
+            process.statements.push_back(coverage_marker(support::SvaOutcome::start));
             process.statements.push_back(std::move(*evaluation));
         } else if (property_abort) {
             Statement aborted;
@@ -2379,7 +2332,7 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             aborted.span = property_abort->span;
             if (property_abort->outcome
                 == SystemVerilogPropertyAbortOutcome::VacuousSuccess) {
-                aborted.statements.push_back(coverage_marker("vacuous"));
+                aborted.statements.push_back(coverage_marker(support::SvaOutcome::vacuous));
                 append_actions(aborted.statements, pass_actions,
                     semantic::sva::control_vacuous);
             } else {
@@ -2495,7 +2448,7 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                 evaluation.kind = StatementKind::Block;
                 evaluation.span = directive.span;
                 evaluation.statements.push_back(pending_marker(
-                    strong_eventually ? "failure" : "vacuous",
+                    strong_eventually ? support::SvaOutcome::failure : support::SvaOutcome::vacuous,
                     strong_eventually
                         ? pending_failure_actions
                         : std::span<const Statement> { pass_actions }));
@@ -2523,7 +2476,7 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                 evaluation.kind = StatementKind::Block;
                 evaluation.span = directive.span;
                 evaluation.statements.push_back(pending_marker(
-                    strong_eventually ? "failure" : "vacuous",
+                    strong_eventually ? support::SvaOutcome::failure : support::SvaOutcome::vacuous,
                     strong_eventually
                         ? pending_failure_actions
                         : std::span<const Statement> { pass_actions }));
@@ -2629,7 +2582,7 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             evaluation.kind = StatementKind::Block;
             evaluation.span = directive.span;
             evaluation.statements.push_back(pending_marker(
-                strong_always ? "failure" : "vacuous",
+                strong_always ? support::SvaOutcome::failure : support::SvaOutcome::vacuous,
                 strong_always
                     ? pending_failure_actions
                     : std::span<const Statement> { pass_actions }));
@@ -2702,7 +2655,7 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             evaluation.kind = StatementKind::Block;
             evaluation.span = directive.span;
             evaluation.statements.push_back(pending_marker(
-                strong ? "failure" : "vacuous",
+                strong ? support::SvaOutcome::failure : support::SvaOutcome::vacuous,
                 strong
                     ? pending_failure_actions
                     : std::span<const Statement> { pass_actions }));
@@ -2801,8 +2754,8 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                 attempt.fork_join_kind = ForkJoinKind::None;
                 attempt.statements.push_back(pending_marker(
                     sequence_strong && !*sequence_strong
-                        ? "vacuous"
-                        : "failure",
+                        ? support::SvaOutcome::vacuous
+                        : support::SvaOutcome::failure,
                     sequence_strong && !*sequence_strong
                         ? std::span<const Statement> { pass_actions }
                         : pending_failure_actions));
@@ -2834,7 +2787,7 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                     const auto pending_failure_actions
                         = serialized_actions(failure_statements);
                     attempt.statements.push_back(pending_marker(
-                        *sequence_strong ? "failure" : "vacuous",
+                        *sequence_strong ? support::SvaOutcome::failure : support::SvaOutcome::vacuous,
                         *sequence_strong
                             ? pending_failure_actions
                             : std::span<const Statement> { pass_actions }));
@@ -2872,7 +2825,7 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                     = serialized_actions(assertion.else_statements);
                 auto pending = implication_nexttime
                     ? std::optional<Statement> { pending_marker(
-                          implication_strong_nexttime ? "failure" : "vacuous",
+                          implication_strong_nexttime ? support::SvaOutcome::failure : support::SvaOutcome::vacuous,
                           implication_strong_nexttime
                               ? pending_failure_actions
                               : std::span<const Statement> { pass_actions }) }
@@ -2891,7 +2844,7 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             } else {
                 implication.statements.push_back(std::move(assertion));
             }
-            implication.else_statements.push_back(coverage_marker("vacuous"));
+            implication.else_statements.push_back(coverage_marker(support::SvaOutcome::vacuous));
             append_actions(implication.else_statements, pass_actions,
                 semantic::sva::control_vacuous);
             append_evaluation(std::move(implication));
@@ -2908,7 +2861,7 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             process.statements.push_back(std::move(guarded));
         }
         process.statements.insert(
-            process.statements.begin(), coverage_marker("register"));
+            process.statements.begin(), coverage_marker(support::SvaOutcome::registration));
         unit.processes.push_back(std::move(process));
     }
     resolve_procedural_sva_endpoints(unit);

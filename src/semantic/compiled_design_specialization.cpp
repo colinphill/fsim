@@ -1925,7 +1925,9 @@ class HirIntegralEvaluator {
         std::map<DeclarationId, std::optional<std::int64_t>> values;
         std::map<DeclarationId, std::optional<std::string>> string_values;
         std::map<DeclarationId, VhdlConstantValue> vhdl_values;
-        std::map<std::string, std::optional<std::int64_t>> pattern_values;
+        // The pattern variables a match bound, by their declarations (IEEE
+        // 1800-2023 12.6).
+        std::map<std::uint32_t, std::optional<std::int64_t>> pattern_values;
         std::optional<std::int64_t> result;
         std::optional<std::string> string_result;
         std::optional<VhdlConstantValue> vhdl_result;
@@ -11739,11 +11741,11 @@ private:
             }
             const auto& source = *pattern->systemverilog;
             if (pattern_matching
-                && source.kind == sv::ExpressionKind::call) {
-                if (source.text == "@match-wildcard") {
+                && source.kind == sv::ExpressionKind::pattern) {
+                if (source.pattern == sv::PatternKind::wildcard) {
                     return true;
                 }
-                if (source.text == "@match-guard") {
+                if (source.pattern == sv::PatternKind::guard) {
                     if (source.operands.size() != 2U) {
                         return std::nullopt;
                     }
@@ -11762,16 +11764,13 @@ private:
                     }
                     return guard;
                 }
-                constexpr auto bind_prefix
-                    = std::string_view { "@match-bind:" };
-                if (source.text.starts_with(bind_prefix)) {
-                    const auto name = source.text.substr(
-                        bind_prefix.size());
-                    if (name.empty()) {
+                if (source.pattern == sv::PatternKind::bind) {
+                    if (!source.referenced_name
+                        || !source.referenced_name->selected) {
                         return std::nullopt;
                     }
                     call_frames_.back().pattern_values.insert_or_assign(
-                        name, selector);
+                        source.referenced_name->selected->value(), selector);
                     return true;
                 }
                 return std::nullopt;
@@ -14098,12 +14097,17 @@ private:
         if (expression.kind == Kind::name
             || (!systemverilog
                 && expression.kind == Kind::logic_literal)) {
-            for (auto frame = call_frames_.rbegin();
-                frame != call_frames_.rend(); ++frame) {
-                if (const auto value = frame->pattern_values.find(
-                        expression.text);
-                    value != frame->pattern_values.end()) {
-                    return value->second;
+            if constexpr (systemverilog) {
+                for (auto frame = call_frames_.rbegin();
+                    frame != call_frames_.rend()
+                    && expression.referenced_name
+                    && expression.referenced_name->selected;
+                    ++frame) {
+                    if (const auto value = frame->pattern_values.find(
+                            expression.referenced_name->selected->value());
+                        value != frame->pattern_values.end()) {
+                        return value->second;
+                    }
                 }
             }
             if constexpr (!systemverilog) {
@@ -19398,6 +19402,7 @@ SpecializedHirAssociationResult resolve_specialized_hir_associations_impl(
             }
         }
         binding.source = actual.source;
+        binding.named = actual.formal.has_value();
         if (effective_kind
             == SpecializedHirAssociationKind::expression) {
             if (!actual.expression) {

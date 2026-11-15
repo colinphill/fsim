@@ -844,12 +844,14 @@ void ApplicationTestFixture::test_simulation_semantics()
         == fsim::runtime::RunStatus::stopped);
     assert(select_concat_hybrid.result.time == 2);
     assert(select_concat_hybrid.process_count == 2);
+    // The last two are the static variables of the unnamed blocks
+    // (IEEE 1800-2023 6.21): local_copy and assignment_local.
     assert((
         select_concat_hybrid.final_values
         == std::vector<std::string> {
             "Z10100X1", "1100XZ01", "0", "0", "0",
             "Z101", "00XZ", "Z1010XZ01", "10XZ1111",
-            "XZ10" }));
+            "XZ10", "Z101", "XZ10" }));
 
     auto vhdl_select_concat_config = config;
     vhdl_select_concat_config.project.name = "vhdl-select-concat-test";

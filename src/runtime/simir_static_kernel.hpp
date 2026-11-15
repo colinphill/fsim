@@ -551,6 +551,11 @@ template <typename Operations>
         using T = std::decay_t<decltype(value)>;
         if constexpr (std::is_same_v<T, Report>) {
             return value.severity != AssertionSeverity::failure;
+        } else if constexpr (std::is_same_v<T, HostRequest>) {
+            // A host request (assertion outcomes, controls, Annex D tasks)
+            // runs through the host request service.
+            (void)value;
+            return true;
         } else if constexpr (std::is_same_v<T, Display>
             || std::is_same_v<T, FormatDisplay>
             || std::is_same_v<T, TimeDisplay>) {
@@ -973,6 +978,9 @@ template <typename OperationAt, typename Types, typename NineValued = std::nullp
         } else if constexpr (std::is_same_v<T, Halt>) {
             // $exit ends the member's program (StaticKernel::exit_program).
             return true;
+        } else if constexpr (std::is_same_v<T, HostRequest>) {
+            (void)value;
+            return true;
         } else if constexpr (std::is_same_v<T, Display>
             || std::is_same_v<T, FormatDisplay>
             || std::is_same_v<T, StringDisplay>
@@ -1104,6 +1112,9 @@ template <typename OperationAt, typename Types, typename NineValued = std::nullp
                 || std::is_same_v<T, CoverageSample>
                 || std::is_same_v<T, CoverageQuery>
                 || std::is_same_v<T, CoverageControl>
+                // Assertion outcomes and controls, Annex D tasks (16.14,
+                // 20.11, D.8-D.13): the host's services, on registers.
+                || std::is_same_v<T, HostRequest>
                 || std::is_same_v<T, CoverageAccess>
                 || std::is_same_v<T, CoverageDatabaseControl>
                 || std::is_same_v<T, SystemCommand>
@@ -1716,9 +1727,7 @@ template <typename ViewOf, typename Ignored, typename Excluded, typename Resolve
         candidates[id] = program.startup_phase() == ProcessStartupPhase::ordinary
             && program.scheduling_domain()
                 == ProcessSchedulingDomain::systemverilog
-            && program.static_sensitivity().empty()
-            && program.name().find(".$declaration_initializer_")
-                == std::string::npos;
+            && program.static_sensitivity().empty();
         any_candidate = any_candidate || candidates[id];
     }
     std::vector<bool> late(process_count, false);

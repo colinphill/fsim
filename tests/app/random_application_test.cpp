@@ -530,8 +530,8 @@ module random_test;
   initial begin
     logic [2:0] scoped;
     mode_t mode;
-    logic [136:0] wide;
-    logic [136:0] wide_immediate;
+    automatic logic [136:0] wide;
+    automatic logic [136:0] wide_immediate;
     u = $urandom_range(4'bx);
     a = $urandom;
     b = $urandom();
@@ -633,7 +633,7 @@ module random_test;
   initial p0 = $urandom;
   initial p1 = $urandom;
   initial begin
-    logic [136:0] wide_only;
+    automatic logic [136:0] wide_only;
     logic [31:0] random_bits;
     random_bits = $urandom;
     wide_only = {1'b1, 104'b0, random_bits};

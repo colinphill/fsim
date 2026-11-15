@@ -61,6 +61,7 @@ Process VerilogParser::parse_initial()
             && body->label.empty()
             && body->systemverilog_imports.empty()
             && body->type_aliases.empty()) {
+            process.body_block = body->span;
             process.variables = std::move(body->declarations);
             process.statements = std::move(body->statements);
         } else {
@@ -103,6 +104,7 @@ Process VerilogParser::parse_final()
             && body->label.empty()
             && body->systemverilog_imports.empty()
             && body->type_aliases.empty()) {
+            process.body_block = body->span;
             process.variables = std::move(body->declarations);
             process.statements = std::move(body->statements);
         } else {
@@ -433,6 +435,8 @@ VerilogParser::parse_if_statement(const Token& start)
                         "malformed if-matches statement");
                     return std::nullopt;
                 }
+                selection->generated_role
+                    = support::GeneratedStatementRole::if_matches;
                 selections.push_back(std::move(*selection));
             }
             index_ += offset + 1U;
@@ -524,9 +528,11 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
         && at(TokenKind::Identifier) && at(TokenKind::Colon, 1)
         && !keyword_reserved(keyword_set_, current().text)
         && (keyword("assert", 2) || keyword("assume", 2)
-            || keyword("cover", 2))) {
+            || keyword("cover", 2)
+            || (keyword("expect", 2) && at(TokenKind::LeftParen, 3)))) {
         // A label on an immediate assertion names it (9.3.5, 16.3); one on a
-        // concurrent assertion statement names that assertion (16.14.6).
+        // concurrent assertion statement names that assertion (16.14.6), and
+        // one on an expect statement names the statement (9.3.5, 37.60).
         assertion_label = advance();
         (void)advance();
     }
@@ -919,7 +925,7 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
             = std::make_shared<SystemVerilogConcurrentAssertion>(
                 parse_concurrent_assertion(directive,
                     SystemVerilogConcurrentAssertionKind::Assert,
-                    std::nullopt, true));
+                    std::move(assertion_label), true));
         statement.span = span_from(directive, previous());
         return statement;
     }

@@ -24,6 +24,16 @@ namespace fsim::frontend {
 [[nodiscard]] std::unordered_set<std::string> assertion_design_unit_names(
     const DesignUnit& unit);
 
+/// The directive a concurrent assertion statement checks (16.14).
+[[nodiscard]] support::SvaDirective sva_directive(
+    SystemVerilogConcurrentAssertionKind kind) noexcept;
+/// A marker statement of a concurrent assertion's generated monitor.
+[[nodiscard]] Statement sva_marker_statement(support::SvaMarkerKind kind,
+    support::SvaOutcome outcome, support::SvaDirective directive,
+    std::uint32_t slot, std::string name, const SourceSpan& span);
+/// The replay record of a display or report action (16.12.2).
+[[nodiscard]] SvaReplayedAction sva_replayed_action(const Statement& action);
+
 namespace assertion_resolution_detail {
 
 [[nodiscard]] std::optional<Expression> scalar_expression(

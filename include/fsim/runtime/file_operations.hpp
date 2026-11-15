@@ -18,15 +18,19 @@ struct FileOpen {
     std::uint32_t destination { }, path { }, mode { };
     std::optional<std::uint32_t> status;
     bool vhdl { };
+    // $fopen without a type opens a multichannel descriptor for writing
+    // (IEEE 1800-2023 21.3.1); `mode` is then unused.
+    bool multichannel { };
     FileOpen(std::uint32_t destination_value = 0,
         std::uint32_t path_value = 0, std::uint32_t mode_value = 0,
         std::optional<std::uint32_t> status_value = std::nullopt,
-        bool vhdl_value = false)
+        bool vhdl_value = false, bool multichannel_value = false)
         : destination(destination_value)
         , path(path_value)
         , mode(mode_value)
         , status(status_value)
         , vhdl(vhdl_value)
+        , multichannel(multichannel_value)
     {
     }
 };
@@ -134,12 +138,28 @@ struct InputScanTarget {
     bool two_state { };
     SystemVerilogScalarKind scalar_kind { SystemVerilogScalarKind::None };
 };
+/// The VHDL TextIO procedure a string-source FileScan of one conversion
+/// carries out (IEEE 1076-2019 16.4, 16.7).
+enum class VhdlTextioRead : std::uint8_t {
+    none,
+    // READ of a TEXTIO type before VHDL-2008.
+    read,
+    // READ of a TEXTIO type in VHDL-2008 and later.
+    read_2008,
+    // OREAD and HREAD (VHDL-2008).
+    radix_read_2008,
+    // SREAD.
+    sread,
+    // READ, OREAD and HREAD of STD_ULOGIC(_VECTOR) (16.7).
+    logic9,
+};
 struct InputScanConversion {
     std::string prefix;
     InputScanFormat format { InputScanFormat::decimal };
     std::uint32_t maximum_characters { };
     bool suppress { };
     InputScanTarget target;
+    VhdlTextioRead vhdl_textio { VhdlTextioRead::none };
 };
 struct FileScan {
     std::uint32_t destination { }, handle { }, source { };
@@ -189,66 +209,45 @@ struct FileScan {
     }
 };
 
-// A VHDL TextIO READ/SREAD is lowered to a string-source FileScan with one
-// conversion whose prefix is one of these markers.
-inline constexpr std::string_view vhdl_textio_read_marker
-    = "\x1f" "fsim-vhdl-textio-read";
-inline constexpr std::string_view vhdl_textio_read_2008_marker
-    = "\x1f" "fsim-vhdl-textio-read-2008";
-inline constexpr std::string_view vhdl_textio_radix_read_2008_marker
-    = "\x1f" "fsim-vhdl-textio-radix-read-2008";
-inline constexpr std::string_view vhdl_textio_sread_marker
-    = "\x1f" "fsim-vhdl-textio-sread";
-// READ, OREAD and HREAD of STD_ULOGIC(_VECTOR) (IEEE 1076-2019 16.7).
-inline constexpr std::string_view vhdl_textio_logic9_marker
-    = "\x1f" "fsim-vhdl-textio-logic9";
-
-/// The TextIO marker of a VHDL TextIO scan, or empty for any other scan.
-[[nodiscard]] inline std::string_view vhdl_textio_marker(
+/// The VHDL TextIO procedure of a TextIO scan (a string-source FileScan of
+/// one conversion), or none for any other scan.
+[[nodiscard]] inline VhdlTextioRead vhdl_textio_kind(
     const FileScan& operation) noexcept
 {
     if (!operation.string_source || !operation.consume_string_source
         || operation.conversions.size() != 1U) {
-        return { };
+        return VhdlTextioRead::none;
     }
-    const std::string_view prefix { operation.conversions.front().prefix };
-    return prefix == vhdl_textio_read_marker
-            || prefix == vhdl_textio_read_2008_marker
-            || prefix == vhdl_textio_radix_read_2008_marker
-            || prefix == vhdl_textio_sread_marker
-            || prefix == vhdl_textio_logic9_marker
-        ? prefix
-        : std::string_view { };
+    return operation.conversions.front().vhdl_textio;
 }
 
 [[nodiscard]] inline bool vhdl_textio_read(const FileScan& operation) noexcept
 {
-    return !vhdl_textio_marker(operation).empty();
+    return vhdl_textio_kind(operation) != VhdlTextioRead::none;
 }
 
 [[nodiscard]] inline bool vhdl_textio_read_2008(
     const FileScan& operation) noexcept
 {
-    const auto marker = vhdl_textio_marker(operation);
-    return marker == vhdl_textio_read_2008_marker
-        || marker == vhdl_textio_radix_read_2008_marker;
+    const auto kind = vhdl_textio_kind(operation);
+    return kind == VhdlTextioRead::read_2008
+        || kind == VhdlTextioRead::radix_read_2008;
 }
 
 [[nodiscard]] inline bool vhdl_textio_radix_read_2008(
     const FileScan& operation) noexcept
 {
-    return vhdl_textio_marker(operation)
-        == vhdl_textio_radix_read_2008_marker;
+    return vhdl_textio_kind(operation) == VhdlTextioRead::radix_read_2008;
 }
 
 [[nodiscard]] inline bool vhdl_textio_sread(const FileScan& operation) noexcept
 {
-    return vhdl_textio_marker(operation) == vhdl_textio_sread_marker;
+    return vhdl_textio_kind(operation) == VhdlTextioRead::sread;
 }
 
 [[nodiscard]] inline bool vhdl_textio_logic9(const FileScan& operation) noexcept
 {
-    return vhdl_textio_marker(operation) == vhdl_textio_logic9_marker;
+    return vhdl_textio_kind(operation) == VhdlTextioRead::logic9;
 }
 
 enum class FileBinaryTargetKind : std::uint8_t {

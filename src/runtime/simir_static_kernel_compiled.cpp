@@ -1297,6 +1297,43 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
         }
         return static_cast<std::uint32_t>(found - sites.begin());
     };
+    // The number of those directives (the blocks a KOp::sva_report scans).
+    const auto sva_site_count = [&] {
+        std::vector<std::uint32_t> sites;
+        for (const auto& operation : member.operations()) {
+            if (const auto* sva = operation_get_if<SvaOperation>(&operation);
+                sva != nullptr && sva->kind != SvaKind::control
+                && std::ranges::find(sites, sva->site) == sites.end()) {
+                sites.push_back(sva->site);
+            }
+        }
+        return static_cast<std::uint32_t>(sites.size());
+    };
+    // A concurrent assertion outcome or pending report is a kernel row
+    // (KOp::sva_report); the registration and attempt-start reports, and
+    // the other requests, run through the operation's helper.
+    const auto sva_report_request = [](const HostRequest& request) {
+        if (const auto* const outcome = std::get_if<SvaOutcomeRequest>(&request.request)) {
+            return outcome->outcome != support::SvaOutcome::registration
+                && outcome->outcome != support::SvaOutcome::start;
+        }
+        return std::holds_alternative<SvaPendingRequest>(request.request);
+    };
+    // A monitor's registration is static data the host reads before the run.
+    const auto sva_registration = [](const HostRequest& request) {
+        const auto* const outcome = std::get_if<SvaOutcomeRequest>(&request.request);
+        return outcome != nullptr
+            && outcome->outcome == support::SvaOutcome::registration;
+    };
+    const auto emit_sva_report = [&](KInst& inst, const std::uint32_t pc) {
+        inst.op = KOp::sva_report;
+        inst.x = pc;
+        inst.y = 0U;
+        inst.aux = sva_site_count();
+        sva_table_used_ = true;
+        sva_reports_used_ = true;
+        impl_.ensure_host_request_drain();
+    };
     // Private arrays are bound from the start; design memories bind at
     // ReadContainerObject.
     std::vector<std::uint32_t> container_of_register(
@@ -2683,6 +2720,30 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                         inst.x = pc;
                         inst.y = 0U;
                     }
+                } else if constexpr (std::is_same_v<T, HostRequest>) {
+                    // An outcome or pending report is a kernel row; an
+                    // attempt-start report (HostRequest::inert) tests the
+                    // kernel's bind flag as Display does (aux 2).
+                    if (sva_report_request(op)) {
+                        emit_sva_report(inst, pc);
+                        return;
+                    }
+                    if (sva_registration(op)) {
+                        inst.op = KOp::nop;
+                        return;
+                    }
+                    inst.op = KOp::generic;
+                    inst.x = pc;
+                    inst.y = 0U;
+                    if (op.inert) {
+                        inst.aux = 2U;
+                    }
+                    for (const auto& argument : op.arguments) {
+                        if (argument.source >= register_count
+                            || width[argument.source] != 32U) {
+                            throw reject("host_request_argument");
+                        }
+                    }
                 } else if constexpr (std::is_same_v<T, FormatDisplay>
                     || std::is_same_v<T, StringDisplay>
                     || std::is_same_v<T, TimeDisplay>
@@ -3742,6 +3803,12 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                     // An attempt-start report tests the bind flag
                     // (KOp::generic, aux 2); it is not a wide operation.
                     generic = generic || !op.inert;
+                } else if constexpr (std::is_same_v<T, HostRequest>) {
+                    // An outcome or pending report is a kernel row
+                    // (KOp::sva_report, below).
+                    generic = generic
+                        || (!op.inert && !sva_report_request(op)
+                            && !sva_registration(op));
                 } else if constexpr (std::is_same_v<T, Report>
                     || std::is_same_v<T, CodeCoverageHit>
                     || std::is_same_v<T, CodeCoverageToggle>
@@ -4763,6 +4830,16 @@ Interpreter::Impl::StaticKernel::compile_once(const std::uint32_t member_index)
                 inst.sub = op.function == SystemVerilogMathFunction::Stime ? 1U : 0U;
                 inst.width = op.function == SystemVerilogMathFunction::Stime ? 32U : 64U;
                 inst.imm_a = *ticks;
+            } else if constexpr (std::is_same_v<T, HostRequest>) {
+                // Only an outcome or pending report reaches here (the
+                // classification above sends the others to the helper).
+                if (sva_registration(op)) {
+                    inst.op = KOp::nop;
+                } else if (!sva_report_request(op)) {
+                    throw reject("operation");
+                } else {
+                    emit_sva_report(inst, pc);
+                }
             } else if constexpr (std::is_same_v<T, SvaOperation>) {
                 if (op.kind == SvaKind::control) {
                     // An assertion control read (IEEE 1800-2023 20.11): an

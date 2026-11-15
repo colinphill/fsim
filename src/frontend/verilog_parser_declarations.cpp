@@ -2268,12 +2268,13 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
           Process initializer_process;
           initializer_process.kind = ProcessKind::Initial;
           initializer_process.name = "$class_initializer_" + name.text;
+          initializer_process.declaration_initializer = true;
           initializer_process.statements.push_back(std::move(assignment));
           initializer_process.span
               = initializer_process.statements.front().span;
           const auto position = std::ranges::find_if(
               unit.processes, [](const Process& process) {
-                return !process.name.starts_with("$class_initializer_");
+                return !process.declaration_initializer;
               });
           unit.processes.insert(position, std::move(initializer_process));
         }
@@ -2289,6 +2290,7 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
           Process process;
           process.kind = ProcessKind::Initial;
           process.name = "$declaration_initializer_" + name.text;
+          process.declaration_initializer = true;
           process.statements.push_back(std::move(assignment));
           process.span = process.statements.front().span;
           unit.processes.push_back(std::move(process));
@@ -2450,6 +2452,7 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
       Process process;
       process.kind = ProcessKind::Initial;
       process.name = "$declaration_initializer_" + name.text;
+      process.declaration_initializer = true;
       process.statements.push_back(std::move(assignment));
       process.span = process.statements.front().span;
       unit.processes.push_back(std::move(process));
@@ -3622,6 +3625,7 @@ Process VerilogParser::parse_always() {
         && body->label.empty()
         && body->systemverilog_imports.empty()
         && body->type_aliases.empty()) {
+      process.body_block = body->span;
       process.variables = std::move(body->declarations);
       process.statements = std::move(body->statements);
     } else {

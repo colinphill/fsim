@@ -1782,6 +1782,9 @@ void run_dynamic_packed_selection_test()
         record.source = source;
         record.origin = origin;
         record.initializer = initializer;
+        // Automatic: a register of the process (a static variable of the
+        // block would be a signal, IEEE 1800-2023 6.21).
+        record.lifetime = semantic::sv::Lifetime::automatic;
         record.type.emplace();
         record.type->target.source = source;
         record.type->target.spelling = "logic";

@@ -138,7 +138,62 @@ per completed phase).
 
 ## 4. Log
 
-### 2026-11-13: Gate BB: conformance rows, class methods in the kernel, kernel coverage of VHDL resolution and signal history, nettypes, recursive SVA, provided-type identity (this commit, sweeps `bbg3g`, `bbg3ga`)
+### 2026-11-15: Gate BC checkpoint S: block S (part 1 in 3cba265e, part 2 here), VPI statement and scope model, static initializers, typed markers (this commit, sweeps `bcSg`, `bcSga`)
+
+This commit is checkpoint S of gate BC (plan `.local-artifacts/followups/gate-bc-plan-1114.md`; owner decisions in memory `gate-bc-decisions-1114`). Part 1 (3cba265e, pushed without a sweep) held items 2-9, 11-14 and 27; this commit adds the rest of the block S work done so far and carries the sweep and cocotb results for both parts. Items 15, 16, 18-26, 28, 31, 33b, 35-37 and 41 stay open for the next builds of the gate; findings made after 11-15 are on the plan's Found list for the owner (F1-F10).
+
+**Contents:**
+- **VPI statement and scope model (items 30, 38):** `vpiExpectStmt` keeps the expect statement through frontend, SV HIR and codec (37.73; property spec, pass and else statements, the generated monitor hidden from statement walks); match patterns are typed expression kinds (`vpiAnyPattern`, `vpiTaggedPattern`, `vpiStructPattern`, 37.72), `if (e matches p)` stays an if with a `vpiMatchOp` condition, and pattern bind variables are declarations of a match scope per case item (12.6); procedural concurrent assertions are reached from their scope, not the statement walk (16.14.6, 37.12); generated SVA objects are hidden by a typed synthesized flag. A procedure's `vpiStmt` is its begin-end; an unnamed begin/fork that declares items is a scope object, as are for and foreach loops (37.12 details 1-3); strict naming (owner 11-14): an unnamed scope and everything in it has no `vpiFullName` and is not found by name (9.3.5, 6.21), loop variables of unlabeled loops included (owner-accepted 11-15). Hierarchical references into a block under an unnamed scope are errors (`fsim.elaboration-error.unnamed_scope_hierarchical`). Module, interface, program and generate type parameters are `vpiTypeParameter` objects with param assigns (37.28; item 38). One record type for every `vpiParamAssign` form (item 10; kept before block H with its path keys, H3b swaps the keys).
+- **Unnamed-scope variables and static initializers (items 30(e2b), 33):** variables of unnamed begin/fork blocks get static storage signals like named-block statics (owner 11-14). Static variable declaration initializers run once, before any initial or always procedure, in a typed startup phase `ProcessStartupPhase::declaration_initializer`, ahead of `cbStartOfSimulation` (6.8, 6.21, 10.5, 38.36.3). An initializer write is initialization, not a transaction (owner 11-15): no event and no VHDL transaction for a plain target on both engines (`foreign_vhpi_stable_mixed`); resolved, forced and aggregate-alias targets still take the committed write and are open as item 33b (next build). Block-static string targets take integral concatenations (11.4.12, 6.16; `br_gh800`), and a locator method initializes a block-static queue (7.12.1; `t_array_query_with`).
+- **Traces, debugger and Tcl (items 32, 39, 40):** VCD/FST dumps, debugger name tables, Tcl `get_signals` and `Simulation::find_signal` hold only objects with hierarchical names (21.7.2.3); unnamed-block statics are debugger `locals`. No `__fsim.uvm.activity.*` variable is dumped (21.7; owner 11-15, expected-trace drops approved; `trace_format` checks the five design variables exactly and reads the FST state values with `fst_reader`, a frame that does not shrink is stored raw). `std::randomize` enum domains use declared literal values at any width.
+- **Typed markers and codecs (items 17, 29, 34):** in-band display markers are typed operations (concurrent-assertion outcome, assertion and coverage control, scope tasks); user system-task call sites are a typed operation; hand-written codec field lists are structural with enum range checks.
+- **Kernel, mixed designs (cocotb):** a VHDL reader woken by a host write applied in a scheduler update phase (a VHPI propagating deposit) resumes in the next activation, the cycle of that update (1076-2019 14.7.5.3 c), d)); the mixed kernel held it one delta more, so after part 1's import-cycle stamping (item 27 D4) `rising_edge(clk)` was already false when the process ran (cocotb `examples/mixed_language`, VHDL top, both versions). `vhpi_get_time` reports 0 cycles before the first simulation cycle (vhpiCbStartOfSimulation; nvc `vhpi6`).
+
+**Behaviour change (strict 6.8):** verilator `t_tri_select_eqcase` initializes `logic c = 1'bz === a[2]` from a net whose declaration assignment has not run yet when static initializers execute; the LRM leaves that order open, and the harness classes the case as order-dependent (skip).
+
+**Results:** see the table below (frozen archive `bcS`, BASE `bbg3g`/`bbg3ga`).
+
+| Suite | bbg3g passed / in scope | bcSg passed / in scope | Excluded (bcSg) |
+|---|---:|---:|---:|
+| ivtest | 2633 / 2633 | 2633 / 2633 | 278 |
+| nvc | 1254 / 1257 | 1257 / 1257 | 225 |
+| sv-tests | 1495 / 1495 | 1496 / 1496 | 1 |
+| verilator | 2072 / 2072 | 2073 / 2073 | 342 |
+| vests | 3662 / 3663 | 3663 / 3663 | 2 |
+| vhdl-compliance | 65 / 65 | 65 / 65 | 7 |
+| cocotb 2.1 Verilog | 708 / 708 | 708 / 708 | 1 |
+| cocotb 2.1 VHDL | 646 / 646 | 646 / 646 | 1 |
+| cocotb master Verilog | 735 / 735 | 735 / 735 | 1 |
+| cocotb master VHDL | 666 / 666 | 666 / 666 | 1 |
+
+Gains: nvc `issue1428`, `issue810`, `vests45`; sv-tests `chapter-16/16.2--assert0-uvm`; verilator `t_interface_array_virtual`, `t_interface_dearray`; vests `billowitch/compliant/tc1747`. The one change from pass is the owner-accepted `t_tri_select_eqcase` (order-dependent skip, above). The AOT sweep `bcSga` matches suite for suite against `bbg3ga` (0 losses, the same gains). Targeted ctest (wide regex, `vhpi` added): 1841/1841. D6 not run (owner 11-15: D6 runs when the performance regression is attacked, block P).
+
+**Changed test assertions (every one, with the reason):**
+- *Schema pins* (`schema_identity_test`, `application_test_artifact_phases`, `runtime_direct_artifact_rows_test`, `object_artifact_test`, `library_artifact_test`): runtime state 126 -> 127, design IR 12 -> 13, compiled HIR / bundle 6 -> 7, SV constraint HIR 32 -> 33, with the matching rejection texts. Schema 6 is added to the rejected prior schemas (`prior-compiled-hir-schema-v6`, the `.fsimlib` loop), and the future schema moves to 8.
+- *`application_test_cli_trace`*: the VCD check that the `__fsim.uvm.activity` scope and its seven variables are present is inverted: no `__fsim` or `activity` scope is written (owner 11-15). The FST frame check `stored < uncompressed` becomes `<=`: a frame that does not shrink is stored raw, and this design's frame is now small enough not to compress.
+- *`trace_format_application_test`*: strengthened. `check_fst` takes the exact handle count (it was `>= 4`): 5 for the typed design, 1 for the logic9 design. The header variable count is `== 5` (it was `>= 12`, which counted the activity variables). The "no `xxx` bytes" check is replaced by decoding the FST with `fst_reader` and requiring every recorded `state_value` payload to be `010` (BUSY).
+- *`application_test_simulation`*: the debugger value table gains `Z101` and `XZ10`, the static variables `local_copy` and `assignment_local` of two unnamed blocks (6.21).
+- *`application_test_non_project_cli`, `time_application_test`*: scalar-surface counts 7 -> 9. The two extra are the initial block's static variables `real_out` and `handle_out` (`time_out` holds x bits, so it has no scalar value).
+- *`sv_container_application_test`*: container objects 20 -> 32. The 12 extra are unnamed-block statics: 7 in the top's initial block, and 2 and 3 in the generated children.
+- *`random_application_test`*: the 137-bit `wide`, `wide_immediate` and `wide_only` locals are declared `automatic`, so the test still exercises the automatic wide-randomize path it was written for. The static form is covered by the sweep cases.
+- *`compiled_hir_cache_application_test`*: the pending-attempt marker is now a typed `SvaMarker` (pending kind, a replayed action with generated text), not an `output_text` prefix. The malformed case now clears the generated-text action's source span and expects "compiled-HIR generated source-name text has invalid provenance". It is still a rejection test, of the typed form.
+- *`frontend_interface_tests`*: the call-region marker is matched as `StatementKind::SvaMarker` with kind `call_region` (it was a `Display` text prefix).
+- *`frontend_statement_tests`*: the case-matches check reads typed pattern kinds (`is_pattern(expr, kind)`) with the same structure: wildcard, bind, tagged, structure, guard.
+- *`runtime_vpi_object_tests`*: the object-kind count ends at `TypeParameter`, the new last kind (it was `NamedEventArray`).
+- *`foreign_vpi_virtual_params`*: a param assign made by named association prints `(named)` (`vpiConnByName`, 37.28); one expected line changes.
+- *`foreign_vhpi_stable_mixed.expected`*: drops `p'quiet change value=0 at 0` / `value=1 at 0`. An SV static initializer is not a transaction on the VHDL port (owner-approved 11-15).
+- *`elaborator_process_test`*:
+  - Process 5's ordering check is `WaitFor` before `WriteBlocking`; the copy is now a static-storage write, not a `CopyRegister`.
+  - The invalid-force fixture declares `automatic logic [3:0] local_value`, so SVFORCE-002 (force of an automatic variable, 10.6.2) is still tested. A new positive test forces the static form (`force 4'h5`, write `4'h0`; `q == "0101"`).
+  - `local_variables` now finds the ordinary process, requires `debug_locals.empty()`, and checks that the first `WriteBlocking`'s storage signal reads `1` after the run (`q == "1"`). The assertion that a declaration-initializer process exists is removed: a constant initializer is the variable's initial value, so no process is made.
+- *`elaborator_hir_lowering_test`*: `add_local` marks the record `Lifetime::automatic`, so `DynamicInsert` and the other register paths are still exercised.
+- *`elaborator_sv_container_test`*: the initial-block locals of `container_lowering` (`key`, `located`, `locations`, `query_result`, `preserved`, `fresh`) and of `static_slices` (`located`, `locations`) are declared `automatic`. This keeps the counts (6, 5) and the process-register checks (`container_register_count`, `debug_container_locals`, selected-slice register types) meaning what they were written for.
+- *Duplicate local variable*: FSIM-ELAB-053 is still reported, now by a code fix. Static storage for unnamed-block variables had turned the error into HIR-001 naming `$block_1.duplicate`, so `materialize_compiled_systemverilog_static_storage` now rejects a second declaration of a name in the same scope with FSIM-ELAB-053. The test is unchanged.
+- *New tests*: `foreign_vpi_param_assigns`, `foreign_vpi_static_initializers`, the `unnamed_scope_hierarchical_reference` elaboration-error fixture, and added cases in `foreign_vpi_statements` and `foreign_vpi_extends_args`.
+
+**Windows:** no mingw syntax sweep at this checkpoint; owner 11-15: it runs only at the final commit of the full closure gate.
+
+### 2026-11-13: Gate BB: conformance rows, class methods in the kernel, kernel coverage of VHDL resolution and signal history, nettypes, recursive SVA, provided-type identity (`94069b8b`, sweeps `bbg3g`, `bbg3ga`)
 
 This commit holds gate BB of the 11-09 backlog split (workers bb1-bb7 and their follow-up rounds, then the lead alone after 11-12; list and decisions in `.local-artifacts/followups/backlog-gates-1109.md`): the remaining foreign-interface conformance rows, #188, kernel coverage (af1), #183 and the class executor lowered into the kernel. Everything except the unscheduled large items was closed in this gate (owner 11-12); the items the owner could not be asked about while away were deferred and are listed under Backlog.
 

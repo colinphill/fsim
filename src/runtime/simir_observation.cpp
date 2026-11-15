@@ -292,6 +292,9 @@ void Interpreter::Impl::OutputCallback::operator()(
     if (owner == nullptr) {
         throw std::logic_error("output callback has no interpreter owner");
     }
+    if (owner->host_request_rows_pending()) {
+        owner->drain_host_request_rows();
+    }
     if (!trusted_text_only) {
         owner->prepare_callback_observation();
     }
@@ -309,6 +312,9 @@ void Interpreter::Impl::ReportCallback::operator()(
     }
     if (owner == nullptr) {
         throw std::logic_error("report callback has no interpreter owner");
+    }
+    if (owner->host_request_rows_pending()) {
+        owner->drain_host_request_rows();
     }
     if (!trusted_text_only) {
         owner->prepare_callback_observation();

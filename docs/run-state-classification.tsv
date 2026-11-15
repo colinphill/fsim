@@ -390,6 +390,10 @@ interp.impl	code_coverage_counters	P	plain run state
 interp.impl	code_coverage_overflow_hook	Cfg	hook or callback installed by the embedder
 interp.impl	system_command_hook	Cfg	hook or callback installed by the embedder
 interp.impl	vcd_control_hook	Cfg	hook or callback installed by the embedder
+interp.impl	host_request_hook	Cfg	hook or callback installed by the embedder
+interp.impl	host_request_drain_token	Cfg	the safe-point observer that drains host_request_rows, registered with the scheduler on the first row
+interp.impl	host_request_draining	W	true only inside drain_host_request_rows
+interp.impl	host_request_rows	S	empty at every save point (drained at the end of each region): the save audit refuses with FSIM-SAVE-0011 when it is not
 interp.impl	coverage_database_control_hook	Cfg	hook or callback installed by the embedder
 interp.impl	fork_spawn_filter	Cfg	hook or callback installed by the embedder
 interp.impl	fork_spawn_filter_observes	Cfg	hook or callback installed by the embedder
@@ -960,6 +964,11 @@ kernel.impl	sva_control_base_	D	derived from the artifact or rebuilt after resto
 kernel.impl	sva_table_	D	pointers into the host's sampled words and the block table, refreshed per frame
 kernel.impl	sva_table_used_	D	set when the kernel's code has an SVA operation (lowering or a restored body), a function of the artifact
 kernel.impl	sva_now_	W	the time step copied for generated code at each frame bind
+kernel.impl	sva_delta_	W	the delta of sva_now_, copied for generated code at each frame bind
+kernel.impl	sva_thread_process_	W	the running behavioral thread's process, set while the thread runs
+kernel.impl	sva_report_words_	W	storage of the assertion report rows; only the first sva_reports_.count rows are live, written before each is read
+kernel.impl	sva_reports_	S	scratch: assertion report rows, empty at a save point (a non-empty buffer refuses the save)
+kernel.impl	sva_reports_used_	D	set when the kernel's code has a KOp::sva_report (lowering or a restored body), a function of the artifact
 kernel.impl	container_elements_	D	derived from the artifact or rebuilt after restore
 kernel.impl	member_process_	D	derived from the artifact or rebuilt after restore
 kernel.impl	container_of_object_	D	derived from the artifact or rebuilt after restore
@@ -1483,7 +1492,6 @@ sim.impl	reset_count	P+ids	application run state (S6)
 sim.impl	reset_value	P+ids	application run state (S6)
 sim.impl	section_registry	Cfg	registered at construction; the registry itself holds no run state
 sim.impl	state_file_identity	Cfg	the command line and libraries of the run, set by the driver
-sim.impl	reset_arguments	S	exact test in the app.control audit (FSIM-SAVE-0011): a $reset or $restart stops the run and is carried out before the next save point; a failed save ends the run
 sim.impl	save_requests	W	drained by save_quiet_point, which pops each request before it writes; a request behind the one being written is an action of the saving run that a restart does not repeat (IEEE 1800-2023 D.9 saves state, not pending save commands)
 sim.impl	restart_request	S	exact test in the app.control audit (FSIM-SAVE-0011): a $reset or $restart stops the run and is carried out before the next save point; a failed save ends the run
 sim.impl	last_full_save	Cfg	the base of a following $incsave: the last full file saved or restored
@@ -1560,8 +1568,6 @@ sim.impl	concurrent_assertion_controls	D	derived from the artifact (build_assert
 sim.impl	executor_assertion_controls	D	derived from the artifact (build_assertion_controls)
 sim.impl	assertion_control_scopes	D	derived from the artifact (build_assertion_controls)
 sim.impl	assertion_control_instances	D	derived from the artifact (build_assertion_controls)
-sim.impl	assertion_control_arguments	S	exact test in the app.control audit (FSIM-SAVE-0011): the arg| payloads are sent in the same statement as the request that consumes them
-sim.impl	assertion_control_sources	S	exact test in the app.control audit (FSIM-SAVE-0011): the src| payload is sent in the same statement as the request that consumes it
 sim.impl	class_property_change_hook	Cfg	observers and hooks installed by the embedder
 sim.impl	class_property_container_change_hook	Cfg	observers and hooks installed by the embedder
 sim.impl	class_container_watches	Cfg	observers and hooks installed by the embedder

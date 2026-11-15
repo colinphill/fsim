@@ -215,6 +215,7 @@ runtime::simir::Process host_stub(const runtime::simir::ProcessProgramView& host
     stub.call_frames = { };
     stub.debug_string_locals.clear();
     stub.debug_container_locals.clear();
+    stub.debug_static_locals.clear();
     stub.expression_profiles = { };
     stub.register_value_kinds = { };
     stub.static_trigger_regions = { };

@@ -902,7 +902,8 @@ std::shared_ptr<const runtime::SystemVerilogVpiTypespec> vpi_typespec(
     template<typename LocalMap, typename GlobalMap>
     bool register_static_storage_alias(LocalMap& local, GlobalMap& global,
         const std::string& name, const std::string& path,
-        const std::string& key)
+        const std::string& key,
+        std::set<std::string, std::less<>>& storage_paths)
     {
         const auto found = local.find(name);
         if (found == local.end()) {
@@ -910,7 +911,10 @@ std::shared_ptr<const runtime::SystemVerilogVpiTypespec> vpi_typespec(
         }
         const auto id = found->second;
         local.emplace(key, id);
-        global.emplace(path + "." + key, id);
+        // The key finds the storage; it names no variable (6.21).
+        auto global_key = path + "." + key;
+        storage_paths.insert(global_key);
+        global.emplace(std::move(global_key), id);
         return true;
     }
 
@@ -927,97 +931,17 @@ hierarchy_sv_type_layout_detail::systemverilog_constant_container_initializer(
         specialization, type, initializer, element_type);
 }
 
-std::string HierarchyBuilder::collect_user_system_task_arguments(
-    const semantic::SpecializedHirUnit& specialization,
+std::string HierarchyBuilder::process_static_scope(
     const semantic::sv::Process& process)
 {
-    user_system_task_arguments_.clear();
-    const auto visit = [&](const auto& self,
-                           const std::span<const semantic::StatementId> list)
-        -> void {
-        for (const auto id : list) {
-            const auto record = specialization.find_statement(id);
-            if (!record || record->systemverilog == nullptr) {
-                continue;
-            }
-            const auto& statement = *record->systemverilog;
-            // A variable of the process body that a nonblocking assignment
-            // writes is static storage like a named block's (IEEE 1800-2023
-            // 6.21, 10.4.2): its update lands in the NBA region, after the
-            // process has moved on, so it is a design object, not a register
-            // of the process.
-            if (statement.kind == semantic::sv::StatementKind::assignment
-                && statement.assignment_kind
-                    == semantic::sv::AssignmentKind::nonblocking
-                && statement.target) {
-                const auto root = [&](const auto& walk,
-                                      const semantic::ExpressionId target)
-                    -> void {
-                    const auto expression
-                        = specialization.find_expression(target);
-                    if (!expression || expression->systemverilog == nullptr) {
-                        return;
-                    }
-                    const auto& source = *expression->systemverilog;
-                    if (source.kind == semantic::sv::ExpressionKind::name) {
-                        user_system_task_arguments_.insert(source.text);
-                    } else if ((source.kind
-                                    == semantic::sv::ExpressionKind::index
-                                || source.kind
-                                    == semantic::sv::ExpressionKind::slice
-                                || source.kind
-                                    == semantic::sv::ExpressionKind::
-                                        concatenation)
-                        && !source.operands.empty()) {
-                        for (const auto operand : source.operands) {
-                            walk(walk, operand);
-                            if (source.kind
-                                != semantic::sv::ExpressionKind::
-                                    concatenation) {
-                                break;
-                            }
-                        }
-                    }
-                };
-                root(root, *statement.target);
-            }
-            if (statement.kind == semantic::sv::StatementKind::task_call) {
-                if (design_.user_system_task(statement.task.spelling)
-                    == nullptr) {
-                    continue;
-                }
-                for (const auto& argument : statement.task_arguments) {
-                    const auto expression = argument.actual
-                        ? specialization.find_expression(*argument.actual)
-                        : std::nullopt;
-                    if (expression && expression->systemverilog != nullptr
-                        && expression->systemverilog->kind
-                            == semantic::sv::ExpressionKind::name) {
-                        user_system_task_arguments_.insert(
-                            expression->systemverilog->text);
-                    }
-                }
-                continue;
-            }
-            self(self, statement.statements);
-            self(self, statement.else_statements);
-            for (const auto& alternative : statement.case_alternatives) {
-                self(self, alternative.statements);
-            }
-        }
-    };
-    visit(visit, process.statements);
-    // The process body is the outermost block: it publishes under its
-    // generated name when it declares one of those variables.
-    for (const auto declaration_id : process.declarations) {
-        const auto declaration = specialization.find_declaration(declaration_id);
-        if (declaration && declaration->systemverilog != nullptr
-            && user_system_task_arguments_.contains(
-                declaration->systemverilog->name)) {
-            return "$block_" + std::to_string(process.scope.value());
-        }
+    // Every static variable of the body is storage of its own, whatever
+    // reads or writes it: a nonblocking assignment's update lands after the
+    // process has moved on (10.4.2) and a foreign system task reaches its
+    // argument as an object (38.3.3). The name is the body's HIR scope.
+    if (process.declarations.empty()) {
+        return { };
     }
-    return { };
+    return "$block_" + std::to_string(process.scope.value());
 }
 
 bool HierarchyBuilder::materialize_compiled_systemverilog_static_storage(
@@ -1034,12 +958,22 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_static_storage(
     const SystemVerilogPackedFallbackResolver& packed_fallback_resolver)
 {
     const auto& specialization = *materialization.specialization;
+    // A block's items share one name space (IEEE 1800-2023 3.13, 6.21).
+    std::unordered_set<std::string_view> declared_here;
     for (const auto id : declarations) {
         const auto record = specialization.find_declaration(id);
         if (!record || record->systemverilog == nullptr) {
             return false;
         }
         const auto& source = *record->systemverilog;
+        if (!scope_path.empty() && !source.name.empty()
+            && !declared_here.emplace(source.name).second) {
+            report("FSIM-ELAB-053",
+                "duplicate local variable in the same scope '" + source.name
+                    + "'",
+                compiled_source_span(*compiled_, source.source));
+            return false;
+        }
         if (scope_path.empty()
             || (source.form != semantic::sv::DeclarationForm::variable
                 && source.form != semantic::sv::DeclarationForm::port)
@@ -1064,36 +998,39 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_static_storage(
             continue;
         }
         std::optional<HirSystemVerilogConstant> packed_initializer;
-        // Runtime initializers still use the callable initialization path.
+        // An initializer that is not an elaboration constant of the
+        // storage's form runs once, as the variable's declaration
+        // initializer process, before any procedure starts (IEEE 1800-2023
+        // 6.8, 6.21, 10.5).
+        bool runtime_initializer { };
         if (source.form == semantic::sv::DeclarationForm::variable
             && source.initializer) {
             if (string) {
-                if (!specialization.evaluate_string_expression(*source.initializer)) {
-                    continue;
-                }
+                runtime_initializer = !specialization.evaluate_string_expression(
+                    *source.initializer);
             } else if (container) {
                 auto element_type = *source.type;
                 element_type.unpacked_dimensions.clear();
                 element_type.container_form.reset();
                 element_type.container_element_types.clear();
-                if (!constant_container_initializer(specialization, *container,
-                        *source.initializer, &element_type)) {
-                    continue;
-                }
+                runtime_initializer = !constant_container_initializer(
+                    specialization, *container, *source.initializer,
+                    &element_type);
             } else if (frontend::is_real_scalar_kind(
                            hir_systemverilog_declared_scalar_kind(
                                specialization, *source.type, source.scope))) {
                 // A real variable holds its IEEE payload, which the typed
                 // constant (an integer conversion) is not (IEEE 1800-2023
-                // 6.12): the callable initialization path stores it.
-                continue;
+                // 6.12).
+                runtime_initializer = true;
             } else {
                 std::string error;
                 packed_initializer = evaluate_hir_systemverilog_typed_constant(
                     specialization, *source.initializer, *source.type, error);
                 if (!packed_initializer || packed_initializer->unbounded
                     || packed_initializer->width != *width) {
-                    continue;
+                    packed_initializer.reset();
+                    runtime_initializer = true;
                 }
             }
         }
@@ -1108,7 +1045,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_static_storage(
         storage.form = semantic::sv::DeclarationForm::variable;
         storage.direction = semantic::sv::Direction::unknown;
         if (source.form == semantic::sv::DeclarationForm::port
-            || packed_initializer) {
+            || packed_initializer || runtime_initializer) {
             storage.initializer.reset();
         }
         storage.name = scope_path + "." + source.name;
@@ -1119,8 +1056,14 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_static_storage(
                 packed_fallback_resolver)) {
             return false;
         }
+        // A single root's members are also found without the root's name;
+        // the storage's name relative to its instance is no such name.
+        if (design_.roots_.size() == 1U) {
+            design_.storage_alias_paths_.insert(storage.name);
+        }
         const auto signal = register_static_storage_alias(materialization.signals,
-            design_.signal_by_name_, storage.name, materialization.path, key);
+            design_.signal_by_name_, storage.name, materialization.path, key,
+            design_.storage_alias_paths_);
         if (signal) {
             static_callable_signals_.insert(materialization.signals.at(key));
         }
@@ -1130,13 +1073,18 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_static_storage(
         }
         const auto string_object = register_static_storage_alias(
             materialization.string_objects, design_.string_by_name_,
-            storage.name, materialization.path, key);
+            storage.name, materialization.path, key,
+            design_.storage_alias_paths_);
         const auto container_object = register_static_storage_alias(
             materialization.container_objects, design_.container_by_name_,
-            storage.name, materialization.path, key);
+            storage.name, materialization.path, key,
+            design_.storage_alias_paths_);
         if (!signal && !string_object && !container_object
             && !event_array) {
             return false;
+        }
+        if (runtime_initializer) {
+            materialization.declaration_initializers.push_back(id);
         }
     }
     for (const auto id : statements) {
@@ -1149,37 +1097,57 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_static_storage(
         if (statement.kind == semantic::sv::StatementKind::task_call) {
             continue;
         }
+        // An expect statement's expansion declares its attempt's state and
+        // the property's local variables, one valuation per attempt (16.10,
+        // 16.17): no storage. Only its action blocks hold source statements.
+        if (statement.generated_role
+            == support::GeneratedStatementRole::expect) {
+            std::vector<semantic::StatementId> actions;
+            const auto collect = [&](const auto& self,
+                                     const std::vector<semantic::StatementId>& ids)
+                -> bool {
+                for (const auto child_id : ids) {
+                    const auto child = specialization.find_statement(child_id);
+                    if (!child || child->systemverilog == nullptr) {
+                        return false;
+                    }
+                    const auto& nested = *child->systemverilog;
+                    if (nested.generated_role
+                            == support::GeneratedStatementRole::expect_pass
+                        || nested.generated_role
+                            == support::GeneratedStatementRole::expect_else) {
+                        actions.push_back(child_id);
+                        continue;
+                    }
+                    if (!self(self, nested.statements)
+                        || !self(self, nested.else_statements)) {
+                        return false;
+                    }
+                    for (const auto& alternative : nested.case_alternatives) {
+                        if (!self(self, alternative.statements)) {
+                            return false;
+                        }
+                    }
+                }
+                return true;
+            };
+            if (!collect(collect, statement.statements)
+                || !collect(collect, statement.else_statements)
+                || !materialize_compiled_systemverilog_static_storage(unit,
+                    materialization, { }, actions, scope_path, automatic, path,
+                    initializers, packed_type_resolver,
+                    packed_default_resolver, packed_fallback_resolver)) {
+                return false;
+            }
+            continue;
+        }
         auto nested_path = scope_path;
-        // An unnamed block of a process publishes under its generated name
-        // when it, or a block nested in it, declares a variable that a
-        // foreign system task takes as an argument.
-        const auto declares_task_argument = [&](const auto& self,
-                                                const auto& block) -> bool {
-            for (const auto declaration_id : block.declarations) {
-                const auto declaration
-                    = specialization.find_declaration(declaration_id);
-                if (declaration && declaration->systemverilog != nullptr
-                    && user_system_task_arguments_.contains(
-                        declaration->systemverilog->name)) {
-                    return true;
-                }
-            }
-            for (const auto nested_id : block.statements) {
-                const auto nested = specialization.find_statement(nested_id);
-                if (nested && nested->systemverilog != nullptr
-                    && nested->systemverilog->kind
-                        != semantic::sv::StatementKind::task_call
-                    && self(self, *nested->systemverilog)) {
-                    return true;
-                }
-            }
-            return false;
-        };
+        // A block is a scope of its own when it is named or declares items
+        // (IEEE 1800-2023 9.3.5, 37.12 detail 1); an unnamed one is named
+        // by its HIR scope. Its static variables are storage (6.21).
         if (statement.nested_scope
             && (!statement.label.empty() || !scope_path.empty()
-                || (!user_system_task_arguments_.empty()
-                    && declares_task_argument(declares_task_argument,
-                        statement)))) {
+                || !statement.declarations.empty())) {
             const auto name = !statement.label.empty()
                 ? statement.label
                 : "$block_" + std::to_string(statement.nested_scope->value());
@@ -1366,13 +1334,16 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
             }
             const auto key = "@static:" + std::to_string(declaration_id.value());
             const auto signal = register_static_storage_alias(materialization.signals,
-                design_.signal_by_name_, result.name, materialization.path, key);
+                design_.signal_by_name_, result.name, materialization.path, key,
+            design_.storage_alias_paths_);
             const auto string_object = register_static_storage_alias(
                 materialization.string_objects, design_.string_by_name_,
-                result.name, materialization.path, key);
+                result.name, materialization.path, key,
+            design_.storage_alias_paths_);
             const auto container_object = register_static_storage_alias(
                 materialization.container_objects, design_.container_by_name_,
-                result.name, materialization.path, key);
+                result.name, materialization.path, key,
+            design_.storage_alias_paths_);
             if (!signal && !string_object && !container_object) {
                 return false;
             }
@@ -1511,10 +1482,8 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
         return true;
     }
     // A variable's initializer that is not a constant runs as its
-    // time-zero declaration initializer process (6.8).
-    constexpr std::string_view initializer_prefix {
-        "$declaration_initializer_"
-    };
+    // declaration initializer process (6.8): the generated process whose
+    // assignment's target resolves to this declaration.
     // A package variable's initializer that is not an elaboration constant
     // runs as a package startup action, before any procedure starts (IEEE
     // 1800-2023 6.8, 6.21, 10.5); the materializers below report it through
@@ -1527,28 +1496,43 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
         && (package_object_initializer || std::ranges::any_of(unit.processes,
             [&](const semantic::ProcessId process_id) {
                 const auto process = compiled_->find_process(process_id);
-                if (!process || process->systemverilog == nullptr) {
+                if (!process || process->systemverilog == nullptr
+                    || !process->systemverilog->declaration_initializer
+                    || process->systemverilog->statements.size() != 1U) {
                     return false;
                 }
-                const std::string_view process_name
-                    = process->systemverilog->name;
-                return process_name.size()
-                        == initializer_prefix.size() + declaration.name.size()
-                    && process_name.starts_with(initializer_prefix)
-                    && process_name.substr(initializer_prefix.size())
-                        == declaration.name;
+                const auto statement = compiled_->find_statement(
+                    process->systemverilog->statements.front());
+                if (!statement || statement->systemverilog == nullptr
+                    || !statement->systemverilog->target) {
+                    return false;
+                }
+                const auto target = compiled_->find_expression(
+                    *statement->systemverilog->target);
+                return target && target->systemverilog != nullptr
+                    && target->systemverilog->referenced_name
+                    && target->systemverilog->referenced_name->selected
+                        == std::optional { declaration_id };
             }));
     if (compiled_systemverilog_string_declaration(
             working_specialization, declaration)) {
-        return materialize_compiled_systemverilog_string_declaration(
-            declaration,
-            working_specialization,
-            materialized_path,
-            string_objects,
-            read_only_strings,
-            compiled_port_direction(declaration),
-            compiled_source_span(*compiled_, declaration.source),
-            declaration_initializer_process);
+        const auto first_new = design_.string_object_info_.size();
+        if (!materialize_compiled_systemverilog_string_declaration(
+                declaration,
+                working_specialization,
+                materialized_path,
+                string_objects,
+                read_only_strings,
+                compiled_port_direction(declaration),
+                compiled_source_span(*compiled_, declaration.source),
+                declaration_initializer_process)) {
+            return false;
+        }
+        if (design_.string_object_info_.size() > first_new) {
+            design_.string_object_info_.back().hir_declaration
+                = declaration_id;
+        }
+        return true;
     }
     const auto builtin_net_kind = declaration.type
         ? net_type_for(declaration, *declaration.type)
@@ -1920,6 +1904,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                 frontend::SystemVerilogScalarKind::None,
             };
             signal.event_variable = true;
+            info.hir_declaration = declaration_id;
             design_.signal_info_.push_back(std::move(info));
             design_.signals_.push_back(std::move(signal));
             array_elements.emplace_back(
@@ -2155,6 +2140,8 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                 compiled_port_direction(declaration),
                 std::nullopt,
             });
+        design_.container_object_info_.back().hir_declaration
+            = declaration_id;
         if (declaration.type) {
             auto& recorded = design_.container_object_info_.back();
             // An array of nets of a user-defined nettype is a net array
@@ -2425,6 +2412,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
             if (net_bridge) {
                 configure_net_signal(signal, declaration, net_type);
             }
+            info.hir_declaration = declaration_id;
             design_.signal_info_.push_back(std::move(info));
             design_.signals_.push_back(std::move(signal));
             declared_signal_names.insert(declaration.name);
@@ -2924,6 +2912,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
     };
     signal.event_variable = event_variable;
     configure_net_signal(signal, declaration, net_type);
+    info.hir_declaration = declaration_id;
     design_.signal_info_.push_back(std::move(info));
     design_.signals_.push_back(std::move(signal));
     declared_signal_names.insert(declaration.name);

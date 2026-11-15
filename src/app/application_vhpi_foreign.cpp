@@ -4747,8 +4747,12 @@ private:
             // Without one: every simulation cycle of the simulation phase
             // (IEEE 1076-2019 23.18).
             // The end of the processes of a cycle the scheduler has already
-            // moved past reports that cycle.
-            const auto count = phase_ != vhpiSimulationPhase ? 0U
+            // moved past reports that cycle. The start of the simulation
+            // phase precedes its first cycle (vhpiCbStartOfSimulation): no
+            // simulation cycle has occurred yet.
+            const auto count = phase_ != vhpiSimulationPhase
+                    || (!cycled_ && !cycle_started_)
+                ? 0U
                 : closed_cycle_ ? (time != nullptr ? closed_cycle_->first
                                                    : closed_cycle_->second)
                 : time != nullptr ? simulation_.delta()

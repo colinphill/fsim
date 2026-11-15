@@ -143,4 +143,61 @@ module top;
         for (byte unsigned j = 0; j < 3; j++)
             n = j;
     endtask
+
+    // An expect statement is one statement: its property spec, its pass
+    // statement and its else statement, NULL when the source has none; a
+    // label names it (9.3.5, 16.17, 37.60, 37.73). The monitor code it
+    // expands to, and that code's variables and nets, are none of the
+    // design's. The property may read the task's own names.
+    logic ea, eb;
+    task automatic expecting(input logic v);
+        e1: expect (@(posedge clk) disable iff (eb) ea ##1 v)
+            $display("expect passed");
+        else
+            $display("expect failed");
+        expect (@(posedge clk) v);
+    endtask
+
+    // Pattern matching (12.6, 37.72): a case-matches item's choice is its
+    // pattern (a tagged pattern names its member, a bind pattern its
+    // variable, and a guard is no object); an if-matches statement is the
+    // if statement it is written as, its condition a match operation of
+    // the expression and the pattern (12.6.2, Annex M).
+    typedef union tagged { void None; int Some; } opt_t;
+    opt_t ov;
+    task automatic matching;
+        case (ov) matches
+            tagged None: n = 0;
+            tagged Some .v &&& (v > 1): n = v;
+            default: n = -1;
+        endcase
+        if (ov matches tagged Some .w)
+            n = w;
+        else
+            n = 5;
+    endtask
+
+    // A concurrent assertion statement in a procedure is no statement of
+    // the procedure (16.14.6, 37.60); its scope holds it (37.12).
+    always @(posedge clk) begin
+        ea <= d[0];
+        assert property (1'b1);
+    end
+    // Unnamed scopes (37.12 details 1-3): a begin-end or fork that
+    // declares items is a scope with no name; one around a named block
+    // that declares nothing itself is not (detail 1's example).
+    initial begin
+        int ux;
+        ux = 1;
+        fork
+            int uz;
+            uz = 2;
+        join
+        begin
+            begin : blk
+                logic bv;
+                bv = 1'b1;
+            end
+        end
+    end
 endmodule

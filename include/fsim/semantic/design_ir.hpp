@@ -133,6 +133,11 @@ struct Object {
     std::uint64_t width{};
     bool signed_value{};
     std::string external_type;
+    // Declared in an unnamed block that declares items, or in a block within
+    // one (IEEE 1800-2023 6.21, 9.3.5): the object has no hierarchical name,
+    // so traces, debugger name tables and name lookups leave it out; `path`
+    // is only its storage identity.
+    bool no_hierarchical_name{};
 };
 
 struct Port {
@@ -191,6 +196,9 @@ struct ProcessOccurrence {
     std::vector<SensitivityId> sensitivities;
     std::vector<DriverId> drivers;
     std::vector<TransactionId> transactions;
+    // A process the frontend generated for an assertion construct (IEEE
+    // 1800-2023 16.12, 16.17): no VPI process (37.63).
+    bool synthesized{};
 };
 
 struct Conversion {

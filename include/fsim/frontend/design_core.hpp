@@ -5,6 +5,7 @@
 #include "fsim/frontend/systemverilog_scalars.hpp"
 #include "fsim/frontend/token.hpp"
 #include "fsim/support/rare_vector.hpp"
+#include "fsim/support/sva_marker.hpp"
 #include "fsim/support/uvm_role.hpp"
 #include <cstddef>
 #include <cstdint>
@@ -56,6 +57,21 @@ struct PackedRange {
     [[nodiscard]] std::uint64_t width() const noexcept;
 };
 
+/// A pattern of a `case ... matches` item or `matches` operator (IEEE
+/// 1800-2023 12.6): `.*` (wildcard), `.v` (bind: text is v), `tagged m p`
+/// (tagged: text is m, the nested pattern its operand), `'{...}`
+/// (structure: aggregate choices and operands), `p &&& guard` (guard:
+/// operands pattern and guard), or a malformed one (unsupported).
+enum class SystemVerilogPatternKind : std::uint8_t {
+    none,
+    wildcard,
+    bind,
+    tagged,
+    structure,
+    guard,
+    unsupported,
+};
+
 enum class ExpressionKind {
     Invalid,
     Identifier,
@@ -78,6 +94,9 @@ enum class ExpressionKind {
     // VHDL-2019 `expression when condition else expression`. Operands are
     // condition, selected result, and remaining conditional/final result.
     Conditional,
+    // A SystemVerilog case pattern (IEEE 1800-2023 12.6), of the form its
+    // systemverilog_pattern names; a structure pattern is an Aggregate.
+    Pattern,
 };
 
 // `text` contains the identifier/literal/operator/callee. Operands retain
@@ -125,6 +144,9 @@ struct Expression {
     // identifier. `text` remains the decoded lowering spelling.
     std::optional<std::string> vhdl_selected_name_spelling;
     GeneratedTextKind generated_text { GeneratedTextKind::none };
+    SystemVerilogPatternKind systemverilog_pattern {
+        SystemVerilogPatternKind::none
+    };
     // The data type of `type(data_type)` (IEEE 1800-2017 6.23); a
     // `type(expression)` keeps its expression as the only operand.
     std::shared_ptr<const Type> systemverilog_type_operand;
@@ -981,6 +1003,9 @@ struct SignalDeclaration {
     // A VHDL guarded signal's kind (IEEE 1076-2008 6.4.2.3): 1 for bus, 2
     // for register, 0 for an ordinary signal.
     std::uint8_t vhdl_guarded_kind { };
+    // A net or variable the frontend generated for an assertion construct
+    // (IEEE 1800-2023 16): no declaration of the source, so no VPI object.
+    bool synthesized { };
 };
 
 struct VariableDeclaration {
@@ -1034,6 +1059,9 @@ struct VariableDeclaration {
         , vhdl_private(variable_vhdl_private)
     {
     }
+    // A variable the frontend generated for an assertion construct (IEEE
+    // 1800-2023 16): no declaration of the source, so no VPI object.
+    bool synthesized { };
 };
 
 struct FunctionArgument {
@@ -1564,6 +1592,9 @@ enum class StatementKind {
     ProceduralAssign,
     Deassign,
     WaitOrder,
+    // A point of a concurrent assertion's generated monitor
+    // (Statement::sva_marker).
+    SvaMarker,
 };
 
 enum class ForkJoinKind {
@@ -1683,6 +1714,31 @@ enum class SystemVerilogAssertionControlKind {
     FailOff,
     NonvacuousOn,
     VacuousOff,
+};
+
+/// A display or report action a concurrent assertion replays when the end
+/// of simulation resolves one of its attempts (IEEE 1800-2023 16.12.2).
+struct SvaReplayedAction {
+    bool report { };
+    AssertionSeverity severity { AssertionSeverity::Error };
+    bool newline { true };
+    std::string text;
+    SourceSpan span;
+    GeneratedTextKind generated_text { GeneratedTextKind::none };
+};
+
+/// A point of a concurrent assertion's generated monitor
+/// (support::SvaMarkerKind).
+struct SvaMarker {
+    support::SvaMarkerKind kind { support::SvaMarkerKind::outcome };
+    support::SvaOutcome outcome { support::SvaOutcome::pass };
+    support::SvaDirective directive { support::SvaDirective::assertion };
+    // The directive's index in its unit (the coverage slot).
+    std::uint32_t slot { };
+    // The monitor process's name.
+    std::string name;
+    // A pending marker's replayed actions, in order.
+    std::vector<SvaReplayedAction> actions;
 };
 
 struct Statement {
@@ -1901,6 +1957,18 @@ struct Statement {
     // (IEEE 1800-2023 37.62 vpiArgument).
     support::RareVector<Expression> output_arguments;
     GeneratedTextKind output_generated_text { GeneratedTextKind::none };
+    // StatementKind::SvaMarker.
+    support::RareOptional<SvaMarker> sva_marker;
+    // A statement generated for an assertion construct (IEEE 1800-2023
+    // 37.60, 37.73).
+    support::GeneratedStatementRole generated_role {
+        support::GeneratedStatementRole::none
+    };
+    // GeneratedStatementRole::expect: the index of the inline property
+    // declaration, among the assertion declarations of the scope that holds
+    // the statement's procedure or task, that is the expect statement's
+    // property spec (37.73 vpiPropertySpec).
+    support::RareOptional<std::uint32_t> expect_property;
 
     // Block contents or the true branch/delayed statement.
     support::RareVector<Statement> statements;
@@ -1981,6 +2049,14 @@ struct Process {
     // index in the concurrent assertions of the unit or generate block that
     // holds the process (IEEE 1800-2023 37.49).
     std::optional<std::size_t> systemverilog_assertion_directive;
+    // A process the frontend generated for an assertion construct (a
+    // monitor's clock or enable process, 16.12, 16.17): no process of the
+    // source, so no VPI object (37.63).
+    bool synthesized { };
+    // A process the frontend generated to run one static variable's
+    // declaration initializer (IEEE 1800-2023 6.8): it runs before every
+    // initial or always procedure.
+    bool declaration_initializer { };
     std::string name;
     std::vector<ParameterDeclaration> constants;
     std::vector<TypeAliasDeclaration> type_aliases;
@@ -2005,6 +2081,11 @@ struct Process {
     // map inside this process (IEEE 1076-2019 9.3.4).
     std::vector<GenericSubprogramInstantiation> generic_function_instances;
     std::vector<GenericSubprogramInstantiation> generic_procedure_instances;
+    // The process's statement was an unnamed begin-end whose declarations
+    // and statements the parser moved into the process: the block's span.
+    // The block is still the procedure's statement (IEEE 1800-2023 37.44),
+    // and a scope when it declares items (9.3.5, 37.12 detail 1).
+    std::optional<SourceSpan> body_block;
 };
 
 /// Typed source-level HDL function.

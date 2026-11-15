@@ -9,6 +9,7 @@
 // same call.
 
 #include "vpi_user.h"
+#include "sv_vpi_user.h"
 #include "fsim/runtime/acc_handle_bridge.h"
 #include "acc_internal.hpp"
 #include "fsim/runtime/veriuser.h"
@@ -732,6 +733,13 @@ std::vector<vpiHandle> members(const PLI_INT32 relation,
   std::vector<vpiHandle> found;
   if (const auto iterator = vpi_iterate(relation, reference)) {
     while (const auto member = vpi_scan(iterator)) {
+      // A SystemVerilog type parameter is a VPI parameter of its scope
+      // (IEEE 1800-2023 37.28) but no ACC parameter, which has a value
+      // (IEEE 1364-2005 23.6).
+      if (relation == vpiParameter
+          && vpi_get(vpiType, member) == vpiTypeParameter) {
+        continue;
+      }
       found.push_back(member);
     }
   }

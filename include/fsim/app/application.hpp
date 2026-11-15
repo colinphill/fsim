@@ -747,6 +747,10 @@ public:
     /// Registry handles that publish `signal` (a net, port, or alias of it).
     [[nodiscard]] std::vector<fsim_vpi_handle_v1> vpi_signal_object_handles(
         runtime::simir::SignalId signal) const;
+    /// The object published for the HIR declaration `declaration` in the
+    /// instance at `instance`, or 0 (IEEE 1800-2023 38.3.3).
+    [[nodiscard]] fsim_vpi_handle_v1 vpi_declared_object(
+        std::string_view instance, std::uint32_t declaration) const;
     /// The driver objects beneath the net or variable `object`, each with the
     /// kernel process that drives it (IEEE 1800-2023 37.16); materializes
     /// them first.

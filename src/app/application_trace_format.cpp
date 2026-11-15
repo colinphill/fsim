@@ -73,11 +73,6 @@ namespace {
                 state.initialization_observer);
             state.initialization_observer = 0U;
         }
-        if (state.simulation && state.uvm_activity_observer != 0U) {
-            state.simulation->remove_uvm_activity_hook(
-                state.uvm_activity_observer);
-            state.uvm_activity_observer = 0U;
-        }
     }
 
     void publish_staging(TraceState& state)

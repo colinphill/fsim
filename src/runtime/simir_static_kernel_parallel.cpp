@@ -419,6 +419,23 @@ void Interpreter::Impl::StaticKernel::build_parallel_plan()
                     // delay, whose write reaches its target later through
                     // the kernel's timers (a worker logs it for the replay).
                     return true;
+                } else if constexpr (std::is_same_v<T, HostRequest>) {
+                    // A request a worker logs for the replay (LaneOutput);
+                    // its arguments would be read there, after the member
+                    // ran on, so a request with arguments stays serial. An
+                    // outcome or pending report is a row of the leader's
+                    // buffer (KOp::sva_report), so its member stays serial.
+                    if (const auto* const outcome
+                        = std::get_if<SvaOutcomeRequest>(&op.request)) {
+                        if (outcome->outcome != support::SvaOutcome::registration
+                            && outcome->outcome != support::SvaOutcome::start) {
+                            return false;
+                        }
+                    }
+                    if (std::holds_alternative<SvaPendingRequest>(op.request)) {
+                        return false;
+                    }
+                    return op.arguments.empty();
                 } else if constexpr (std::is_same_v<T, IntegerBinary>
                     || std::is_same_v<T, IntegerUnary>
                     || std::is_same_v<T, IntegerCheck>

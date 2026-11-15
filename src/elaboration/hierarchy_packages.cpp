@@ -7704,12 +7704,13 @@ namespace {
         }
     }
 
-    std::string compiled_instance_path(
+    // The path of the scope an instance statement of `instance_scope`
+    // stands in: the parent's path and the named scopes between.
+    std::string compiled_instance_scope_path(
         const semantic::CompiledDesign& compiled,
         const semantic::ScopeId unit_scope,
         const semantic::ScopeId instance_scope,
-        const std::string_view parent_path,
-        const std::string_view instance_name)
+        const std::string_view parent_path)
     {
         std::vector<std::string_view> scopes;
         auto current = std::optional { instance_scope };
@@ -7735,6 +7736,18 @@ namespace {
             result += ".";
             result += *iterator;
         }
+        return result;
+    }
+
+    std::string compiled_instance_path(
+        const semantic::CompiledDesign& compiled,
+        const semantic::ScopeId unit_scope,
+        const semantic::ScopeId instance_scope,
+        const std::string_view parent_path,
+        const std::string_view instance_name)
+    {
+        auto result = compiled_instance_scope_path(
+            compiled, unit_scope, instance_scope, parent_path);
         result += ".";
         result += instance_name;
         return result;
@@ -14079,17 +14092,6 @@ namespace {
                             compiled.semantics, scope, region);
                     });
         };
-        std::unordered_set<std::string> case_match_bindings;
-        for (const auto& expression : compiled.systemverilog_hir.expressions()) {
-            static constexpr std::string_view binding_prefix { "@match-bind:" };
-            if (compiled_scope_belongs_to_unit(
-                    compiled, expression.scope, unit.id)
-                && expression.kind == ExpressionKind::call
-                && expression.text.starts_with(binding_prefix)) {
-                case_match_bindings.insert(
-                    expression.text.substr(binding_prefix.size()));
-            }
-        }
         for (const auto& expression : compiled.systemverilog_hir.expressions()) {
             if (!compiled_scope_belongs_to_unit(
                     compiled, expression.scope, unit.id)
@@ -14260,8 +14262,9 @@ namespace {
                         == DeclarationForm::parameter
                     || base_declaration->systemverilog->form
                         == DeclarationForm::local_parameter
-                    || case_match_bindings.contains(
-                        base_declaration->systemverilog->name)
+                    // A pattern variable's type is the matched member's
+                    // (12.6).
+                    || base_declaration->systemverilog->pattern_variable
                     || (base_declaration->systemverilog->type
                         && base_declaration->systemverilog->type
                             ->container_form))) {
@@ -15691,7 +15694,7 @@ void HierarchyBuilder::add_root(
         static_cast<void>(instantiate_compiled_systemverilog_unit(
             CompiledSystemVerilogInstantiationContext {
                 *selected, active_root_, { }, { }, { }, { },
-                std::nullopt, std::nullopt, { } }));
+                std::nullopt, std::nullopt, { }, { } }));
         active_compiled_systemverilog_configuration_
             = saved_configuration;
         active_compiled_systemverilog_configuration_root_
@@ -15707,7 +15710,7 @@ void HierarchyBuilder::add_root(
                 ? compiled_systemverilog_root_parameter_actuals(
                       *root.systemverilog)
                 : std::vector<semantic::SpecializedHirActualIdentity> { },
-            { }, { }, { }, std::nullopt, std::nullopt, { } }));
+            { }, { }, { }, std::nullopt, std::nullopt, { }, { } }));
 }
 
 std::optional<HierarchyBuilder::SystemVerilogAliasPlan>
@@ -16868,6 +16871,7 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit_in_stack(
     const auto source_instance = context.source_instance;
     auto prepared_specialization
         = std::move(context.prepared_specialization);
+    auto param_assigns = std::move(context.param_assigns);
     if (compiled_ == nullptr || root.identity == nullptr
         || root.systemverilog == nullptr || root.vhdl != nullptr) {
         report(
@@ -17223,6 +17227,7 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit_in_stack(
                 std::move(*root_alias_plan),
                 { },
                 context.type_owner_contexts,
+                { },
             });
     auto& root_materialization = *root_materialization_owner;
     std::vector<PendingVirtualInterfaceInitializer>
@@ -17255,9 +17260,14 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit_in_stack(
     }
     for (const auto process_id : active_processes) {
         const auto process = specialized->find_process(process_id);
+        // A concurrent assertion declares its property and sequence local
+        // variables, one valuation per attempt (16.10): no storage.
+        if (process && process->systemverilog != nullptr
+            && process->systemverilog->concurrent_assertion) {
+            continue;
+        }
         const auto process_scope = process && process->systemverilog != nullptr
-            ? collect_user_system_task_arguments(
-                *specialized, *process->systemverilog)
+            ? process_static_scope(*process->systemverilog)
             : std::string { };
         if (!process || process->systemverilog == nullptr
             || !materialize_compiled_systemverilog_static_storage(unit,
@@ -17387,6 +17397,7 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit_in_stack(
     specialization.instance = path;
     specialization.source_unit = unit.id;
     specialization.source_instance = source_instance;
+    specialization.vpi_param_assigns = std::move(param_assigns);
     const auto program_owner
         = unit.kind == semantic::sv::UnitKind::program
         ? std::optional<std::uint32_t> { specialization_id }
@@ -17629,6 +17640,7 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit_in_stack(
         && !lower_compiled_systemverilog_processes(
             unit, *specialized, path, source_language,
             active_concurrent_statements, active_processes,
+            root_materialization.declaration_initializers,
             generate_occurrences, generated_materializations, lowerer,
             clocking_processes, specialization, program_owner,
             concurrent_order, &deferred_processes, &deferred_statements,
@@ -17754,6 +17766,29 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit_in_stack(
     // would have (IEEE 1800-2023 37.5 vpiTypedef, 37.25).
     for (const auto declaration_id : active_declarations) {
         const auto declaration = specialized->find_declaration(declaration_id);
+        // A type parameter has the type its actual binds, else its default
+        // (37.28 detail 2).
+        if (declaration && declaration->systemverilog != nullptr
+            && declaration->systemverilog->form
+                == semantic::sv::DeclarationForm::type_parameter) {
+            const auto actual = std::ranges::find(actuals, declaration_id,
+                &semantic::SpecializedHirActualIdentity::declaration);
+            const auto* const type
+                = actual != actuals.end() && actual->systemverilog_type
+                ? &*actual->systemverilog_type
+                : declaration->systemverilog->default_type
+                ? &*declaration->systemverilog->default_type
+                : nullptr;
+            auto typespec = type == nullptr ? std::nullopt
+                : hierarchy_sv_type_layout_detail::systemverilog_vpi_typespec(
+                      *specialized, *type, declaration->systemverilog->scope);
+            specialization.vpi_type_parameters.push_back({ declaration_id,
+                typespec ? std::make_shared<
+                               const runtime::SystemVerilogVpiTypespec>(
+                               std::move(*typespec))
+                         : nullptr });
+            continue;
+        }
         if (declaration && declaration->systemverilog != nullptr
             && (declaration->systemverilog->form
                     == semantic::sv::DeclarationForm::parameter
@@ -18721,6 +18756,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_generated_scopes(
                 &parent->container_declaration_bindings
             },
             root_materialization.type_owner_contexts,
+            { },
         };
         for (const auto declaration_id :
             occurrence.region->declarations) {
@@ -18741,10 +18777,15 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_generated_scopes(
         }
         for (const auto process_id : occurrence.region->processes) {
             const auto process = occurrence.specialization->find_process(process_id);
+            // A concurrent assertion declares its property and sequence local
+            // variables, one valuation per attempt (16.10): no storage.
+            if (process && process->systemverilog != nullptr
+                && process->systemverilog->concurrent_assertion) {
+                continue;
+            }
             const auto process_scope
                 = process && process->systemverilog != nullptr
-                ? collect_user_system_task_arguments(
-                    *occurrence.specialization, *process->systemverilog)
+                ? process_static_scope(*process->systemverilog)
                 : std::string { };
             if (!process || process->systemverilog == nullptr
                 || !materialize_compiled_systemverilog_static_storage(unit,
@@ -19312,6 +19353,18 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_instance_worklist(
             return false;
         }
         auto child_actuals = std::move(parameter_result.actuals);
+        // The overrides' actuals are seen from the scope the instance
+        // statement stands in (37.28 vpiRhs).
+        auto child_param_assigns = std::move(parameter_result.param_assigns);
+        for (auto& assign : child_param_assigns) {
+            if (!assign.defparam) {
+                assign.scope_path = materialization.generated
+                        || materialization.bound
+                    ? std::string { working_path }
+                    : compiled_instance_scope_path(*compiled_, unit.scope,
+                          record.scope, working_path);
+            }
+        }
         // A type named through an interface port depends on the connected
         // interface's parameters; the frontend retains them as hidden
         // parameters `__fsim_ifp_<port>__<name>` bound here.
@@ -19690,6 +19743,7 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_instance_worklist(
                 = std::move(child_interface_specialization),
                 .type_owner_contexts
                 = materialization.type_owner_contexts,
+                .param_assigns = std::move(child_param_assigns),
             });
         active_compiled_systemverilog_configuration_
             = saved_configuration;
@@ -23441,6 +23495,7 @@ HierarchyBuilder::compiled_systemverilog_package_variable_signal(
         { },
         { },
         std::move(*alias_plan),
+        { },
         { },
         { },
     };
@@ -33654,6 +33709,7 @@ void HierarchyBuilder::instantiate_systemc_hdl_child(
                 .source_instance = std::nullopt,
                 .prepared_specialization = std::move(specialization),
                 .type_owner_contexts = { },
+                .param_assigns = { },
             }));
         return;
     }
@@ -35826,6 +35882,7 @@ bool HierarchyBuilder::instantiate_compiled_vhdl_unit_in_stack(
                         .prepared_specialization
                         = std::move(child_specialization),
                         .type_owner_contexts = { },
+                        .param_assigns = { },
                     })) {
                 return false;
             }

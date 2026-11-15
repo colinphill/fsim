@@ -551,6 +551,7 @@ void HierarchyBuilder::activate_compiled_systemverilog_defparams(
             defparam.source,
             &specialization,
             false,
+            std::string { hierarchy_prefix },
         });
     }
 }

@@ -70,6 +70,11 @@ namespace codec_detail {
                 return false;
             }
         }
+        if constexpr (std::same_as<Value, semantic::sv::SvaMarker>) {
+            if (!support::sva_outcome_valid(value.kind, value.outcome)) {
+                return false;
+            }
+        }
         if constexpr (std::same_as<Value, semantic::sv::SourceToken>) {
             return value.source.valid()
                 && value.source.value() < semantics.source_spans().size()
@@ -223,6 +228,7 @@ namespace codec_detail {
                                 "callable", "children", "statements",
                                 "array_parameter", "array_local_parameter",
                                 "local_type_parameter", "uvm_role",
+                                "synthesized",
                             };
                             const auto field_name
                                 = *invalid_field

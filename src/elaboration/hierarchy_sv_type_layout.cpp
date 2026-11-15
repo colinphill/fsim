@@ -889,6 +889,7 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
                       const semantic::sv::Declaration* declaration { };
                       semantic::DeclarationId id;
                       std::optional<std::int64_t> actual;
+                      bool by_name { };
                   };
                   std::vector<Formal> formals;
                   std::size_t ordinal { };
@@ -900,24 +901,19 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
                               != semantic::sv::DeclarationForm::parameter) {
                           continue;
                       }
-                      const auto position = ordinal++;
-                      std::optional<std::int64_t> value;
-                      const auto& actuals = input.interface_parameter_actuals;
-                      for (std::size_t index { }; index < actuals.size();
-                           ++index) {
-                          if (actuals[index].formal
-                                  && !actuals[index].formal->empty()
-                              ? *actuals[index].formal == declaration->name
-                              : index == position) {
-                              value = actuals[index].kind
-                                      == semantic::sv::ActualKind::expression
-                                      && actuals[index].expression
-                                  ? specialization.evaluate_integral_expression(
-                                        *actuals[index].expression)
-                                  : std::nullopt;
-                          }
-                      }
-                      formals.push_back({ declaration, declaration_id, value });
+                      const auto* const actual = semantic::sv::parameter_actual(
+                          input.interface_parameter_actuals, ordinal++,
+                          declaration->name);
+                      const auto value = actual != nullptr
+                              && actual->kind
+                                  == semantic::sv::ActualKind::expression
+                              && actual->expression
+                          ? specialization.evaluate_integral_expression(
+                                *actual->expression)
+                          : std::nullopt;
+                      formals.push_back({ declaration, declaration_id, value,
+                          actual != nullptr && actual->formal
+                              && !actual->formal->empty() });
                   }
                   std::vector<semantic::SpecializedHirActualIdentity> applied;
                   for (const auto& formal : formals) {
@@ -936,7 +932,12 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
                               *formal.declaration->initializer);
                       }
                       if (value) {
-                          assigns.push_back({ formal.declaration->name, *value });
+                          runtime::SystemVerilogVpiParamAssign assign;
+                          assign.name = formal.declaration->name;
+                          assign.value = *value;
+                          assign.constant = true;
+                          assign.connection_by_name = formal.by_name;
+                          assigns.push_back(std::move(assign));
                       }
                   }
               }

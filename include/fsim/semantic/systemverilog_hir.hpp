@@ -3,6 +3,7 @@
 
 #include "fsim/semantic/model.hpp"
 #include "fsim/support/rare_vector.hpp"
+#include "fsim/support/sva_marker.hpp"
 #include "fsim/support/uvm_role.hpp"
 
 #include <charconv>
@@ -154,6 +155,9 @@ enum class ExpressionKind : std::uint8_t {
     class_static_property,
     class_method_call,
     class_static_method_call,
+    // A case pattern (12.6) of the form `pattern` names; a structure
+    // pattern is an assignment_pattern with pattern == structure.
+    pattern,
 };
 
 enum class ScalarKind : std::uint8_t {
@@ -223,6 +227,9 @@ enum class StatementKind : std::uint8_t {
     deassign,
     wait_order,
     report,
+    // A point of a concurrent assertion's generated monitor
+    // (Statement::sva_marker).
+    sva_marker,
 };
 
 enum class ProcessKind : std::uint8_t {
@@ -280,6 +287,20 @@ enum class OutputFormat : std::uint8_t {
     pattern,
     strength,
     library,
+};
+
+/// A pattern of a `case ... matches` item or `matches` operator (IEEE
+/// 1800-2023 12.6): `.*`, `.v` (text v), `tagged m p` (text m, nested
+/// pattern operand), `'{...}` (associations and operands), `p &&& guard`
+/// (operands pattern and guard), or a malformed one.
+enum class PatternKind : std::uint8_t {
+    none,
+    wildcard,
+    bind,
+    tagged,
+    structure,
+    guard,
+    unsupported,
 };
 
 enum class GeneratedTextKind : std::uint8_t {
@@ -365,6 +386,7 @@ struct Expression {
     ResidualDependencies dependencies;
     bool folded { };
     GeneratedTextKind generated_text { GeneratedTextKind::none };
+    PatternKind pattern { PatternKind::none };
     // Exact semantic type selected for an explicitly typed assignment pattern.
     // Invalid or unresolved names leave this disengaged.
     std::optional<TypeId> nominal_type_target;
@@ -468,6 +490,36 @@ struct CaseAlternative {
     std::vector<StatementId> statements;
     bool is_default { };
     SourceSpanId source;
+};
+
+/// A display or report action a concurrent assertion replays when the end
+/// of simulation resolves one of its attempts (IEEE 1800-2023 16.12.2).
+struct SvaReplayedAction {
+    bool report { };
+    AssertionSeverity severity { AssertionSeverity::error };
+    bool newline { true };
+    std::string text;
+    SourceSpanId source;
+    GeneratedTextKind generated_text { GeneratedTextKind::none };
+};
+
+/// A point of a concurrent assertion's generated monitor
+/// (support::SvaMarkerKind).
+struct SvaMarker {
+    support::SvaMarkerKind kind { support::SvaMarkerKind::outcome };
+    support::SvaOutcome outcome { support::SvaOutcome::pass };
+    support::SvaDirective directive { support::SvaDirective::assertion };
+    std::uint32_t slot { };
+    std::string name;
+    std::vector<SvaReplayedAction> actions;
+};
+
+// The inline property declaration that is an expect statement's property
+// spec (IEEE 1800-2023 37.73): the unit or generate block whose assertion
+// declarations hold it, by scope, and its index among them.
+struct ExpectPropertyReference {
+    ScopeId container;
+    std::uint32_t declaration { };
 };
 
 struct Statement {
@@ -583,6 +635,15 @@ struct Statement {
     bool class_handle_transfer { };
     std::string class_handle_type;
     GeneratedTextKind output_generated_text { GeneratedTextKind::none };
+    // StatementKind::sva_marker.
+    support::RareOptional<SvaMarker> sva_marker;
+    // A statement generated for an assertion construct (IEEE 1800-2023
+    // 37.60, 37.73), and for an expect statement its property's inline
+    // declaration (37.73 vpiPropertySpec).
+    support::GeneratedStatementRole generated_role {
+        support::GeneratedStatementRole::none
+    };
+    std::optional<ExpectPropertyReference> expect_property;
     // Imports are owned by a block statement and apply only within its
     // nested lexical scope.
     std::vector<Import> imports;
@@ -605,6 +666,16 @@ struct Process {
     // The origin of the concurrent assertion statement an assertion process
     // was built from (IEEE 1800-2023 37.49).
     std::optional<OriginId> assertion;
+    // A process the frontend generated for an assertion construct (16.12,
+    // 16.17): no VPI process (37.63).
+    bool synthesized { };
+    // A process generated to run the declaration initializer of the static
+    // variable its one assignment targets (IEEE 1800-2023 6.8): it starts
+    // before every procedure.
+    bool declaration_initializer { };
+    // The unnamed begin-end the source gave as the procedure's statement,
+    // which the process's declarations and statements came from (37.44).
+    std::optional<SourceSpanId> body_block;
 };
 
 struct PackedRange {
@@ -753,6 +824,25 @@ struct ActualAssociation {
     friend bool operator==(
         const ActualAssociation&, const ActualAssociation&) = default;
 };
+
+/// The association of a parameter value assignment list that binds the
+/// formal at `position` of its parameter port list, whose declaration is
+/// named `name` (IEEE 1800-2023 23.10.2): a named association binds the
+/// formal it names (23.10.2.2), an ordered one the formal at its position
+/// (23.10.2.1). nullptr when the list leaves the formal at its default.
+[[nodiscard]] inline const ActualAssociation* parameter_actual(
+    const std::vector<ActualAssociation>& actuals, const std::size_t position,
+    const std::string_view name) noexcept
+{
+    for (std::size_t index = 0U; index < actuals.size(); ++index) {
+        const auto& actual = actuals[index];
+        if (actual.formal && !actual.formal->empty() ? *actual.formal == name
+                                                     : index == position) {
+            return &actual;
+        }
+    }
+    return nullptr;
+}
 
 inline AssociativeIndexTypeReference make_associative_index_metadata(
     const TypeReference& type)
@@ -1141,6 +1231,13 @@ struct Declaration {
     // The role in the governed UVM library of a declaration of its package
     // (none outside it).
     support::UvmRole uvm_role { };
+    // A net or variable the frontend generated for an assertion construct
+    // (IEEE 1800-2023 16): no VPI object.
+    bool synthesized { };
+    // The variable a pattern identifier (`.v`) declares implicitly for the
+    // matched case item or if statement (IEEE 1800-2023 12.6): its type and
+    // value are the matched member's, bound by the match; no storage.
+    bool pattern_variable { };
 };
 
 // A named constant usable as a casting size: a parameter, a local

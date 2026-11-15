@@ -117,12 +117,12 @@ module container_lowering #(
   endtask
 
   initial begin
-    key_t key;
-    int located[$];
-    int locations[$];
-    int query_result;
-    int preserved[];
-    logic [7:0] fresh[];
+    automatic key_t key;
+    automatic int located[$];
+    automatic int locations[$];
+    automatic int query_result;
+    automatic int preserved[];
+    automatic logic [7:0] fresh[];
     fill_shadowed(shadowed);
     assert (shadowed[0] == 8'h12);
     assert (shadowed[1] == 8'h34);
@@ -744,8 +744,8 @@ module static_slices;
   bit signed [7:0] signed_down[1:0];
   bit signed [7:0] signed_up[-1:0];
   initial begin
-    logic [7:0] located[$];
-    int locations[$];
+    automatic logic [7:0] located[$];
+    automatic int locations[$];
     down = '{8'h55, 8'h44, 8'h33, 8'h22, 8'h11, 8'h00};
     assert ($left(down[4:2]) == 4);
     assert ($right(down[4:2]) == 2);

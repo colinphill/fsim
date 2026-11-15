@@ -548,6 +548,9 @@ void audit_host(const Impl& impl, const Findings& findings)
     // Each test names the class S row it covers.
     FSIM_RS_IDLE("interp.impl", pending_updates);
     busy(!impl.pending_updates.empty(), "the staged signal updates");
+    FSIM_RS_IDLE("interp.impl", host_request_rows);
+    busy(!impl.host_request_rows.empty(),
+        "the concurrent-assertion rows of the region");
     FSIM_RS_IDLE("interp.impl", vhdl_values_before_initialization);
     busy(!impl.vhdl_values_before_initialization.empty(),
         "the VHPI deposits made before initialization");

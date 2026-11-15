@@ -289,11 +289,22 @@ enum class KOp : std::uint8_t {
     /// those of the registers the call's results keep) and pops the frame;
     /// sub 1 as for frame_push.
     frame_pop,
+    /// A concurrent assertion outcome or pending report (the HostRequest at
+    /// SimIR index x of the member, an SvaOutcomeRequest other than the
+    /// registration and attempt-start reports, or an SvaPendingRequest):
+    /// appends one row of StaticKernelSvaReports (sva_report_* words) with
+    /// the time step, its delta, the running thread's process and the start
+    /// and fail position of the attempt the member popped last (the largest
+    /// h_pop_serial among its aux directive blocks, IEEE 1800-2023 39.4.2).
+    /// The host delivers the rows in order at the end of the region and
+    /// before any later output (Impl::drain_host_request_rows). Only a full
+    /// buffer calls the helper (fsim_sk_sva_report_grow).
+    sva_report,
 };
 
-/// Number of kernel instruction kinds (KOp values 0 .. frame_pop).
+/// Number of kernel instruction kinds (KOp values 0 .. sva_report).
 inline constexpr std::size_t kernel_op_count
-    = static_cast<std::size_t>(KOp::frame_pop) + 1U;
+    = static_cast<std::size_t>(KOp::sva_report) + 1U;
 
 /// KOp::wide_alu operation families (KInst::offset).
 enum class WideFamily : std::uint32_t {

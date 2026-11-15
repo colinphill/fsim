@@ -35,6 +35,9 @@ void VerilogParser::resolve_assertion_declaration_references(DesignUnit& unit)
         for (const auto& local : declaration.local_variables) {
             local_names.insert(local.name);
         }
+        const std::unordered_set<std::string> procedure_names(
+            declaration.procedure_names.begin(),
+            declaration.procedure_names.end());
         std::unordered_set<std::string> sequence_formal_names;
         for (const auto& formal : declaration.formals) {
             if (formal.kind == SystemVerilogAssertionFormalKind::Sequence) {
@@ -126,7 +129,8 @@ void VerilogParser::resolve_assertion_declaration_references(DesignUnit& unit)
                     reference.kind = SystemVerilogAssertionReferenceKind::LocalVariable;
                 } else if (assertion_names.contains(root)) {
                     reference.kind = SystemVerilogAssertionReferenceKind::AssertionDeclaration;
-                } else if (design_names.contains(root)) {
+                } else if (design_names.contains(root)
+                    || procedure_names.contains(root)) {
                     reference.kind = SystemVerilogAssertionReferenceKind::DesignUnitObject;
                 } else {
                     error(
@@ -426,5 +430,50 @@ std::vector<Statement> action_statements(
 }
 
 } // namespace assertion_resolution_detail
+
+support::SvaDirective sva_directive(
+    const SystemVerilogConcurrentAssertionKind kind) noexcept
+{
+    switch (kind) {
+    case SystemVerilogConcurrentAssertionKind::Assume:
+        return support::SvaDirective::assumption;
+    case SystemVerilogConcurrentAssertionKind::Cover:
+        return support::SvaDirective::cover;
+    case SystemVerilogConcurrentAssertionKind::Restrict:
+        return support::SvaDirective::restriction;
+    case SystemVerilogConcurrentAssertionKind::Assert:
+        break;
+    }
+    return support::SvaDirective::assertion;
+}
+
+Statement sva_marker_statement(const support::SvaMarkerKind kind,
+    const support::SvaOutcome outcome, const support::SvaDirective directive,
+    const std::uint32_t slot, std::string name, const SourceSpan& span)
+{
+    Statement statement;
+    statement.kind = StatementKind::SvaMarker;
+    statement.span = span;
+    SvaMarker marker;
+    marker.kind = kind;
+    marker.outcome = outcome;
+    marker.directive = directive;
+    marker.slot = slot;
+    marker.name = std::move(name);
+    statement.sva_marker = std::move(marker);
+    return statement;
+}
+
+SvaReplayedAction sva_replayed_action(const Statement& action)
+{
+    SvaReplayedAction replayed;
+    replayed.report = action.kind == StatementKind::Report;
+    replayed.severity = action.assertion_severity;
+    replayed.newline = action.output_newline;
+    replayed.text = action.output_text;
+    replayed.span = action.span;
+    replayed.generated_text = action.output_generated_text;
+    return replayed;
+}
 
 } // namespace fsim::frontend

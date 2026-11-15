@@ -31,6 +31,7 @@
 #include <unordered_map>
 #include <memory>
 #include <optional>
+#include <unordered_set>
 #include <set>
 #include <span>
 #include <string>
@@ -191,6 +192,11 @@ struct SystemVerilogVpiPublishedDesign {
     // 1800-2023 37.17 vpiStringVar).
     std::map<fsim_vpi_handle_v1, runtime::simir::StringObjectId>
         string_handles;
+    // The variable, net, array or string object published for a HIR
+    // declaration in an instance (its path), so a name the elaborator
+    // resolved reaches its object by identity (IEEE 1800-2023 38.3.3).
+    std::map<std::pair<std::string, std::uint32_t>, fsim_vpi_handle_v1>
+        declaration_objects;
     // The design process occurrence (its index) each concurrent assertion
     // object was published for (IEEE 1800-2023 37.49).
     std::map<fsim_vpi_handle_v1, std::uint32_t> assertion_occurrences;
@@ -267,6 +273,11 @@ decode_recorded_vpi_class_parameter(const semantic::sv::Hir& hir,
 
 [[nodiscard]] std::unique_ptr<runtime::SystemVerilogVpiObjectRegistry>
 make_empty_systemverilog_vpi_registry();
+
+// The name an object of identifier `name` is published under: an escaped
+// identifier keeps its backslash and closing space (IEEE 1800-2023 5.6.1),
+// and a name holding a period or white space is written as one.
+[[nodiscard]] std::string systemverilog_vpi_identifier(std::string_view name);
 
 [[nodiscard]] runtime::SystemVerilogVpiTimeProfile
 systemverilog_vpi_time_profile(std::string_view resolution);
@@ -506,6 +517,25 @@ struct RuntimePathViews {
 
 [[nodiscard]] bool design_object_is_signal_bearing(
     const semantic::design::Object& object) noexcept;
+
+// The declarations of an unnamed block that declares items, or of a block
+// within one (IEEE 1800-2023 6.21, 9.3.5): they have no hierarchical name.
+// The design IR marks their objects (Object::no_hierarchical_name) so no
+// trace scope, debugger name table or name lookup lists them. A procedure
+// whose statement is an unnamed begin-end declares into the process's
+// scope (37.44).
+class UnnamedScopeDeclarations final {
+public:
+    UnnamedScopeDeclarations(
+        const semantic::sv::Hir& hir, const semantic::Model& model);
+    [[nodiscard]] bool contains(
+        std::optional<semantic::DeclarationId> declaration) const;
+
+private:
+    const semantic::sv::Hir* hir_ { };
+    const semantic::Model* model_ { };
+    std::unordered_set<std::uint32_t> scopes_;
+};
 
 [[nodiscard]] bool valid_runtime_projection(
     const semantic::design::DesignIr& design,
@@ -1155,7 +1185,6 @@ struct TraceState {
     std::vector<runtime::VcdSignal> declaration_handles;
     std::vector<runtime::TraceSignalId> signal_trace_ids;
     std::vector<runtime::SystemVerilogScalarKind> scalar_kinds;
-    std::array<runtime::TraceSignalId, 7> uvm_activity_trace_ids { };
     Simulation* simulation { };
     diagnostic::Engine* diagnostics { };
     project::TraceFormat format { project::TraceFormat::vcd };
@@ -1166,7 +1195,6 @@ struct TraceState {
     std::uint64_t observation_writer_observer { };
     std::uint64_t signal_change_observer { };
     std::uint64_t initialization_observer { };
-    std::uint64_t uvm_activity_observer { };
     SimulationTick tick_multiplier { 1 };
     TraceTerminalStatus terminal_status { TraceTerminalStatus::open };
     std::string terminal_diagnostic;

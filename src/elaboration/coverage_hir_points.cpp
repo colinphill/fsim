@@ -25,6 +25,8 @@ namespace {
         switch (kind) {
         case Kind::block:
         case Kind::null_statement:
+        // A point of a concurrent assertion's generated monitor.
+        case Kind::sva_marker:
             return false;
         case Kind::assignment:
         case Kind::force:

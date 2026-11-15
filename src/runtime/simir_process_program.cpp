@@ -140,6 +140,7 @@ ProcessInstanceProgram::ProcessInstanceProgram(Process process)
           std::move(process.startup_writable_string_object_ids) }
     , startup_writable_container_object_ids {
           std::move(process.startup_writable_container_object_ids) }
+    , debug_static_locals { std::move(process.debug_static_locals) }
 {
 }
 
@@ -175,6 +176,7 @@ ProcessInstanceProgram::ProcessInstanceProgram(
           process.startup_writable_string_object_ids() }
     , startup_writable_container_object_ids {
           process.startup_writable_container_object_ids() }
+    , debug_static_locals { process.debug_static_locals() }
 {
 }
 
@@ -719,6 +721,13 @@ ProcessProgramView::startup_writable_container_object_ids() const noexcept
         : instance_->startup_writable_container_object_ids;
 }
 
+const std::vector<DebugStaticLocal>&
+ProcessProgramView::debug_static_locals() const noexcept
+{
+    return facade_ != nullptr ? facade_->debug_static_locals
+                              : instance_->debug_static_locals;
+}
+
 Process ProcessProgramView::materialize() const
 {
     return materialize_impl(true);
@@ -786,6 +795,7 @@ Process ProcessProgramView::materialize_impl(
         = startup_writable_string_object_ids();
     process.startup_writable_container_object_ids
         = startup_writable_container_object_ids();
+    process.debug_static_locals = debug_static_locals();
     return process;
 }
 

@@ -6688,6 +6688,27 @@ if(TARGET fsim)
   endforeach()
 endif()
 
+# Invalid SystemVerilog designs that elaboration must reject, each with the
+# diagnostic code, top and required text named in its header.
+if(TARGET fsim)
+  file(GLOB elaboration_error_fixtures CONFIGURE_DEPENDS
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/compliance/elaboration_errors/*.sv")
+  foreach(elaboration_error_fixture IN LISTS elaboration_error_fixtures)
+    get_filename_component(elaboration_error_name
+      "${elaboration_error_fixture}" NAME_WE)
+    add_test(
+      NAME "fsim.elaboration-error.${elaboration_error_name}"
+      COMMAND "${CMAKE_COMMAND}"
+        "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+        "-DFSIM_FIXTURE=${elaboration_error_fixture}"
+        -P "${PROJECT_SOURCE_DIR}/tests/fixtures/compliance/elaboration_errors/run_elaboration_error.cmake")
+    set_tests_properties("fsim.elaboration-error.${elaboration_error_name}"
+      PROPERTIES
+      LABELS "application;compliance"
+      TIMEOUT 120)
+  endforeach()
+endif()
+
 # A component-nested block configuration must select the architecture named
 # by the component's explicit entity binding.
 if(TARGET fsim)

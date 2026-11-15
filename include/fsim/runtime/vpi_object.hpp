@@ -127,6 +127,14 @@ enum class SystemVerilogVpiObjectKind : std::uint32_t {
     /// An array of named events (IEEE 1800-2023 7.4, 37.43); its elements
     /// are its children, in declaration order.
     NamedEventArray,
+    /// A foreach statement, the scope of its loop variables (IEEE 1800-2023
+    /// 12.7.3, 37.12 detail 3); a for statement that declares its loop
+    /// variables is a For (detail 2).
+    Foreach,
+    /// A type parameter of a module, interface, program or generate block
+    /// (IEEE 1800-2023 37.28): no value; its typespec is the type it has at
+    /// the end of elaboration (detail 2).
+    TypeParameter,
 };
 
 enum class SystemVerilogVpiObjectError {
@@ -320,6 +328,11 @@ struct SystemVerilogVpiObjectDescriptor {
     /// name: an assertion a checker instance expanded into the module
     /// (`top.u_chk.ca`, IEEE 1800-2023 17.2) is held by the module.
     std::string name_prefix { };
+    /// An unnamed scope (an unnamed begin or fork that declares items,
+    /// IEEE 1800-2023 9.3.5, 37.12 detail 1): `name` is empty, the object
+    /// has no name and no full name, and neither it nor anything under it
+    /// can be found by name (6.21).
+    bool anonymous { };
 };
 
 struct SystemVerilogVpiObjectInfo {
@@ -466,6 +479,10 @@ public:
         fsim_vpi_handle_v1 handle) const;
     [[nodiscard]] SystemVerilogVpiObjectLookupResult find(
         std::string_view full_name) const;
+    /// The identity a saved state names an object by: its full name, or for
+    /// an object with none (one in an unnamed scope) the identity of its
+    /// parent and its place; empty for an invalid handle.
+    [[nodiscard]] std::string state_key(fsim_vpi_handle_v1 handle) const;
     [[nodiscard]] SystemVerilogVpiObjectLookupResult find_child(
         fsim_vpi_handle_v1 parent, std::string_view name) const;
     /// The kind of a live object, without copying its record.
@@ -601,6 +618,11 @@ private:
         std::vector<std::uint32_t> children;
         // The descriptor's name_prefix; part of the sibling key.
         std::string name_prefix { };
+        // An unnamed scope (SystemVerilogVpiObjectDescriptor::anonymous).
+        bool anonymous { };
+        // The identity of an object with no full name (one in an unnamed
+        // scope): its parent's identity and its ordinal; empty otherwise.
+        std::string state_key { };
     };
     struct IteratorRecord {
         std::uint16_t epoch { };
@@ -645,6 +667,8 @@ private:
     std::vector<std::uint32_t> free_iterators_;
     std::unordered_map<std::string, fsim_vpi_handle_v1> siblings_;
     std::unordered_map<std::string, fsim_vpi_handle_v1> full_names_;
+    // The objects with no full name, by state_key.
+    std::unordered_map<std::string, fsim_vpi_handle_v1> state_keys_;
     std::uint64_t next_value_observer_ { 1 };
     std::map<std::uint64_t, SystemVerilogVpiValueObserver>
         value_observers_;

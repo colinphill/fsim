@@ -618,11 +618,14 @@ class VerilogParser final : private detail::ParserBase {
   // the statements that evaluate its property (16.17). The hidden nets of
   // their disable conditions and the continuous assignments that keep them
   // go to `signals` and `concurrent_statements` of the scope.
-  void resolve_expect_statements(const DesignUnit& scope,
+  // Whether an expect statement declared its property in
+  // `assertion_declarations`.
+  bool resolve_expect_statements(const DesignUnit& scope,
       std::vector<Process>& processes,
       std::vector<TaskDeclaration>& tasks,
       std::vector<SignalDeclaration>& signals,
-      std::vector<Statement>& concurrent_statements);
+      std::vector<Statement>& concurrent_statements,
+      std::vector<SystemVerilogAssertionDeclaration>& assertion_declarations);
   bool resolve_sva_directive(DesignUnit& unit, std::size_t index);
   // The monitor process of a directive (index) or of an end point.
   bool resolve_sva_monitor(DesignUnit& unit,
@@ -735,9 +738,13 @@ class VerilogParser final : private detail::ParserBase {
   [[nodiscard]] bool reads_sequence_endpoint(const DesignUnit& unit,
       const std::vector<const GenerateBody*>& outer,
       const GenerateBody& body) const;
+  // `any_form`: declare the property whatever its first token (an expect
+  // statement's property spec, 37.73); otherwise only a clocked or
+  // disabled one.
   void declare_inline_property(
       SystemVerilogConcurrentAssertion& assertion,
-      std::vector<SystemVerilogAssertionDeclaration>& declarations);
+      std::vector<SystemVerilogAssertionDeclaration>& declarations,
+      bool any_form = false);
   SystemVerilogConcurrentAssertion parse_concurrent_assertion(
       const Token& start,
       SystemVerilogConcurrentAssertionKind kind,

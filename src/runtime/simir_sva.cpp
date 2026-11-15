@@ -272,6 +272,10 @@ void Interpreter::Impl::disable_sva_attempts(const SignalId net)
             continue;
         }
         const auto starts = active_monitor->disable_running(watch.outcomes);
+        if (sva_disabled_hook && !starts.empty() && host_request_rows_pending()) {
+            // The outcome rows made before come first (drain_host_request_rows).
+            drain_host_request_rows();
+        }
         if (sva_disabled_hook) {
             for (const auto start : starts) {
                 sva_disabled_hook(watch.design_process, start);
@@ -376,6 +380,12 @@ void Interpreter::Impl::sva_tick_reports(
     AssertionStorage& storage, sva::Monitor& active_monitor)
 {
     const auto attempt_starts = active_monitor.take_started();
+    if (((sva_attempt_hook && !attempt_starts.empty())
+            || (sva_step_hook && active_monitor.has_step_events()))
+        && host_request_rows_pending()) {
+        // The outcome rows made before come first (drain_host_request_rows).
+        drain_host_request_rows();
+    }
     if (sva_attempt_hook) {
         for (const auto when : attempt_starts) {
             sva_attempt_hook(storage.design_process(), when);

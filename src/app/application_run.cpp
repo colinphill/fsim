@@ -29,7 +29,6 @@
 #include "fsim/runtime/simir_ids.hpp"
 #include "fsim/runtime/systemverilog_scalar.hpp"
 #include "fsim/runtime/trace_model.hpp"
-#include "fsim/runtime/uvm_activity.hpp"
 #include "fsim/runtime/vcd_writer.hpp"
 #include "fsim/semantic/compiled_design.hpp"
 #include "fsim/semantic/design_ir.hpp"
@@ -139,51 +138,9 @@ namespace {
         }
     }
 
-    [[nodiscard]] std::uint64_t stable_trace_hash(
-        const std::string_view text) noexcept
-    {
-        std::uint64_t result { UINT64_C(14695981039346656037) };
-        for (const auto byte : text) {
-            result ^= static_cast<unsigned char>(byte);
-            result *= UINT64_C(1099511628211);
-        }
-        return result;
-    }
-
-    [[nodiscard]] runtime::PackedLogic4 trace_bits(
-        const std::size_t width,
-        const std::uint64_t value)
-    {
-        return runtime::PackedLogic4::from_aval_bval(width, value, 0U);
-    }
-
     void write_trace_observation(
         TraceState& state,
         const TraceObservationRecord& record);
-
-    void write_uvm_activity_trace_event(
-        TraceState& state,
-        const runtime::SystemVerilogUvmActivityEvent& event)
-    {
-        const std::array values {
-            trace_bits(64, event.sequence),
-            trace_bits(4, static_cast<std::uint8_t>(event.kind)),
-            trace_bits(4, static_cast<std::uint8_t>(event.action)),
-            trace_bits(64, event.root),
-            trace_bits(64, event.value),
-            trace_bits(64, stable_trace_hash(event.identity)),
-            trace_bits(64, stable_trace_hash(event.detail))
-        };
-        std::vector<TraceObservationValue> observed;
-        observed.reserve(values.size());
-        for (std::size_t index = 0; index < values.size(); ++index) {
-            observed.push_back({ state.uvm_activity_trace_ids[index], values[index], std::nullopt });
-        }
-        static_cast<void>(state.observations->accept(
-            TraceObservationKind::Uvm, event.time, event.delta,
-            runtime::TraceRegion::Callback,
-            "uvm:" + event.identity, observed));
-    }
 
 } // namespace
 
@@ -1302,21 +1259,6 @@ std::unique_ptr<TraceState> attach_trace(
         trace->tick_multiplier = scale->tick_multiplier;
         runtime::TraceDeclarationBuilder declaration_builder {
             simulation.design_ir().hierarchy_paths() };
-        constexpr std::array<std::string_view, 7> activity_names {
-            "sequence", "kind", "action", "root", "value",
-            "identity_hash", "detail_hash"
-        };
-        constexpr std::array<std::size_t, 7> activity_widths {
-            64, 4, 4, 64, 64, 64, 64
-        };
-        std::array<runtime::TraceSignalId, 7> activity_ids { };
-        for (std::size_t index = 0; index < activity_names.size(); ++index) {
-            activity_ids[index] = declaration_builder.add_variable(
-                "__fsim.uvm.activity." + std::string { activity_names[index] },
-                activity_widths[index], runtime::SystemVerilogScalarKind::None,
-                runtime::TraceSourceKind::Uvm);
-        }
-        trace->uvm_activity_trace_ids = activity_ids;
         trace->handles.resize(simulation.runtime_adapter().signals().size());
         trace->signal_trace_ids.resize(
             simulation.runtime_adapter().signals().size());
@@ -1356,10 +1298,14 @@ std::unique_ptr<TraceState> attach_trace(
                 }
             }
         }
+        // A variable of an unnamed block has no hierarchical name, so no
+        // trace scope declares it (a VCD scope has an identifier, IEEE
+        // 1800-2023 21.7.2.3).
         for (const auto& object : simulation.design_ir().objects()) {
             if (!design_object_is_signal_bearing(object)
                 || object.runtime_index
-                    > std::numeric_limits<SignalId>::max()) {
+                    > std::numeric_limits<SignalId>::max()
+                || object.no_hierarchical_name) {
                 continue;
             }
             const auto signal_id = static_cast<SignalId>(object.runtime_index);
@@ -1423,6 +1369,9 @@ std::unique_ptr<TraceState> attach_trace(
                 if (design_object == fst_string_by_runtime.end()) {
                     throw std::invalid_argument(
                         "FST string trace lacks DesignIR ownership");
+                }
+                if (design_object->second->no_hierarchical_name) {
+                    continue;
                 }
                 const auto fst_object = canonical_fst_trace_object(
                     simulation.design_ir(), *design_object->second);
@@ -1581,23 +1530,8 @@ std::unique_ptr<TraceState> attach_trace(
             }
         }
         trace->collecting_fst_initial_values = false;
-        for (const auto& event : simulation.uvm_activity().events()) {
-            write_uvm_activity_trace_event(*trace, event);
-        }
         trace->simulation = &simulation;
         const auto observer_lifetime = trace->callback_lifetime;
-        trace->uvm_activity_observer = simulation.add_uvm_activity_hook(
-            [observer_lifetime](const auto& event) {
-                auto* state = observer_lifetime->state;
-                if (!state
-                    || state->terminal_status != TraceTerminalStatus::open
-                    || (state->format == project::TraceFormat::vcd
-                        ? !state->writer
-                        : !state->fst_writer)) {
-                    return;
-                }
-                write_uvm_activity_trace_event(*state, event);
-            });
         // Initialization gives resolved, converted and GUARD signals their
         // initial values without events (IEEE 1076-2019 14.7.5.2): they are
         // time zero's values, recorded over the attach-time snapshot (the

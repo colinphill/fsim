@@ -115,6 +115,8 @@ std::vector<Observer> snapshot_observers(
         case SystemVerilogVpiObjectKind::Method:
         case SystemVerilogVpiObjectKind::Begin:
         case SystemVerilogVpiObjectKind::Fork:
+        case SystemVerilogVpiObjectKind::For:
+        case SystemVerilogVpiObjectKind::Foreach:
         case SystemVerilogVpiObjectKind::Covergroup:
             return true;
         default:
@@ -147,7 +149,7 @@ std::vector<Observer> snapshot_observers(
                 || kind == Kind::ClassProperty || kind == Kind::NamedEvent;
         case SystemVerilogVpiRelationshipKind::Parameters:
             return kind == Kind::Parameter || kind == Kind::ParameterAssignment
-                || kind == Kind::GenVar;
+                || kind == Kind::GenVar || kind == Kind::TypeParameter;
         case SystemVerilogVpiRelationshipKind::Processes:
             return kind == Kind::Process || kind == Kind::Initial
                 || kind == Kind::Always;
@@ -587,7 +589,7 @@ SystemVerilogVpiObjectRegistry::capabilities() noexcept
     return {
         2023U,
         static_cast<std::uint32_t>(
-            SystemVerilogVpiObjectKind::NamedEventArray) + 1U,
+            SystemVerilogVpiObjectKind::TypeParameter) + 1U,
         static_cast<std::uint32_t>(
             SystemVerilogVpiRelationshipKind::Coverage) + 1U,
         static_cast<std::uint32_t>(
@@ -604,7 +606,7 @@ bool SystemVerilogVpiObjectRegistry::supports(
 {
     return static_cast<std::uint32_t>(kind)
         <= static_cast<std::uint32_t>(
-            SystemVerilogVpiObjectKind::NamedEventArray);
+            SystemVerilogVpiObjectKind::TypeParameter);
 }
 bool SystemVerilogVpiObjectRegistry::supports(
     const SystemVerilogVpiRelationshipKind relationship) noexcept
@@ -813,8 +815,17 @@ SystemVerilogVpiObjectResult SystemVerilogVpiObjectRegistry::create(
 
     std::string normalized_name;
     std::string hierarchy_segment;
-    if (!normalize_name(
-            descriptor.name, normalized_name, hierarchy_segment)) {
+    const bool anonymous = descriptor.anonymous;
+    if (anonymous) {
+        if (!descriptor.name.empty()
+            || (descriptor.kind != SystemVerilogVpiObjectKind::Begin
+                && descriptor.kind != SystemVerilogVpiObjectKind::Fork
+                && descriptor.kind != SystemVerilogVpiObjectKind::For
+                && descriptor.kind != SystemVerilogVpiObjectKind::Foreach)) {
+            return { { }, SystemVerilogVpiObjectError::InvalidName };
+        }
+    } else if (!normalize_name(
+                   descriptor.name, normalized_name, hierarchy_segment)) {
         return { { }, SystemVerilogVpiObjectError::InvalidName };
     }
     if (descriptor.source
@@ -865,15 +876,25 @@ SystemVerilogVpiObjectResult SystemVerilogVpiObjectRegistry::create(
             || prefix.find('\0') != std::string::npos)) {
         return { { }, SystemVerilogVpiObjectError::InvalidName };
     }
-    auto key = sibling_key(descriptor.parent,
-        package_scope ? normalized_name + "::"
-            : prefix.empty() ? normalized_name
-                             : prefix + "." + normalized_name);
-    if (siblings_.contains(key)) {
-        return { { }, SystemVerilogVpiObjectError::DuplicateName };
+    if (anonymous && (top_level || !prefix.empty())) {
+        return { { }, SystemVerilogVpiObjectError::InvalidParent };
     }
+    std::string key;
+    if (!anonymous) {
+        key = sibling_key(descriptor.parent,
+            package_scope ? normalized_name + "::"
+                : prefix.empty() ? normalized_name
+                                 : prefix + "." + normalized_name);
+        if (siblings_.contains(key)) {
+            return { { }, SystemVerilogVpiObjectError::DuplicateName };
+        }
+    }
+    // An unnamed scope and what it holds have no full name (9.3.5, 6.21).
+    const bool nameless = anonymous
+        || (!top_level && records_[parent_slot].full_name.empty());
     std::string full_name;
-    if (top_level) {
+    if (nameless) {
+    } else if (top_level) {
         full_name = hierarchy_segment;
         if (package_scope) {
             full_name.append("::");
@@ -902,7 +923,7 @@ SystemVerilogVpiObjectResult SystemVerilogVpiObjectRegistry::create(
         }
         full_name.append(hierarchy_segment);
     }
-    if (full_names_.contains(full_name)) {
+    if (!nameless && full_names_.contains(full_name)) {
         return { { }, SystemVerilogVpiObjectError::DuplicateName };
     }
 
@@ -919,6 +940,17 @@ SystemVerilogVpiObjectResult SystemVerilogVpiObjectRegistry::create(
     const auto ordinal = descriptor.ordinal && *descriptor.ordinal < next_ordinal_
         ? *descriptor.ordinal
         : next_ordinal_++;
+    // A newline is in no identifier (5.6.1), so no full name is a key.
+    std::string state_key;
+    if (nameless) {
+        const auto& parent = records_[parent_slot];
+        state_key = (parent.full_name.empty() ? parent.state_key
+                                              : parent.full_name)
+            + "\n#" + std::to_string(ordinal);
+        if (state_keys_.contains(state_key)) {
+            return { { }, SystemVerilogVpiObjectError::DuplicateName };
+        }
+    }
     if (reused) {
         auto& record = records_[slot];
         ++record.epoch;
@@ -938,6 +970,8 @@ SystemVerilogVpiObjectResult SystemVerilogVpiObjectRegistry::create(
         record.initial_value.reset();
         record.live_value = false;
         record.name_prefix = std::move(descriptor.name_prefix);
+        record.anonymous = anonymous;
+        record.state_key = std::move(state_key);
     } else {
         if (records_.size() >= slot_mask) {
             return { { }, SystemVerilogVpiObjectError::ResourceLimit };
@@ -961,12 +995,20 @@ SystemVerilogVpiObjectResult SystemVerilogVpiObjectRegistry::create(
             false,
             { },
             std::move(descriptor.name_prefix),
+            anonymous,
+            std::move(state_key),
         });
     }
 
     const auto handle = encode_object(slot, records_[slot].epoch);
-    siblings_.emplace(std::move(key), handle);
-    full_names_.emplace(records_[slot].full_name, handle);
+    if (!anonymous) {
+        siblings_.emplace(std::move(key), handle);
+    }
+    if (nameless) {
+        state_keys_.emplace(records_[slot].state_key, handle);
+    } else {
+        full_names_.emplace(records_[slot].full_name, handle);
+    }
     if (!top_level) {
         auto& parent = records_[parent_slot];
         ++parent.live_children;
@@ -1064,6 +1106,19 @@ SystemVerilogVpiObjectRegistry::kind_of(const fsim_vpi_handle_v1 handle) const
         return std::nullopt;
     }
     return records_[slot].kind;
+}
+
+std::string SystemVerilogVpiObjectRegistry::state_key(
+    const fsim_vpi_handle_v1 handle) const
+{
+    std::scoped_lock lock { mutex_ };
+    std::uint32_t slot { };
+    if (!valid()
+        || resolve_object(handle, slot) != SystemVerilogVpiObjectError::None) {
+        return { };
+    }
+    const auto& record = records_[slot];
+    return record.full_name.empty() ? record.state_key : record.full_name;
 }
 
 SystemVerilogVpiObjectLookupResult SystemVerilogVpiObjectRegistry::find(
@@ -1908,7 +1963,8 @@ SystemVerilogVpiObjectRegistry::snapshot_values() const
                 }
                 snapshot.objects.push_back(SystemVerilogVpiObjectState {
                     handle,
-                    record.full_name,
+                    record.full_name.empty() ? record.state_key
+                                             : record.full_name,
                     *record.type,
                     ask_live ? std::nullopt
                              : visible_value(record, handle, true),
@@ -1980,10 +2036,14 @@ SystemVerilogVpiObjectRegistry::restore_values(
                 result.error = SystemVerilogVpiObjectStateError::InvalidState;
                 return result;
             }
-            const auto found = full_names_.find(state.full_name);
+            auto found = full_names_.find(state.full_name);
             if (found == full_names_.end()) {
-                result.error = SystemVerilogVpiObjectStateError::MissingObject;
-                return result;
+                found = state_keys_.find(state.full_name);
+                if (found == state_keys_.end()) {
+                    result.error
+                        = SystemVerilogVpiObjectStateError::MissingObject;
+                    return result;
+                }
             }
             std::uint32_t slot { };
             if (resolve_object(found->second, slot)
@@ -2106,13 +2166,20 @@ SystemVerilogVpiObjectError SystemVerilogVpiObjectRegistry::release(
         return SystemVerilogVpiObjectError::HasChildren;
     }
 
-    siblings_.erase(sibling_key(record.parent,
-        record.name_prefix.empty() ? record.name
-                                   : record.name_prefix + "." + record.name));
+    if (!record.anonymous) {
+        siblings_.erase(sibling_key(record.parent,
+            record.name_prefix.empty()
+                ? record.name
+                : record.name_prefix + "." + record.name));
+    }
     record.value.reset();
     record.forced_value.reset();
     record.initial_value.reset();
-    full_names_.erase(record.full_name);
+    if (record.full_name.empty()) {
+        state_keys_.erase(record.state_key);
+    } else {
+        full_names_.erase(record.full_name);
+    }
     record.live = false;
     if (record.kind != SystemVerilogVpiObjectKind::Root) {
         std::uint32_t parent_slot { };

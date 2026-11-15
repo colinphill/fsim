@@ -180,7 +180,7 @@ restore_systemverilog_vpi_checkpoint(
     }
     for (const auto& state : artifact.objects.objects) {
       const auto object = objects.lookup(state.source_handle);
-      if (!object || object.value->full_name != state.full_name) {
+      if (!object || objects.state_key(state.source_handle) != state.full_name) {
         result.error = SystemVerilogVpiCheckpointError::HandleMismatch;
         return result;
       }

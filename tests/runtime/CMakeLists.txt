@@ -1990,6 +1990,31 @@ fsim_add_foreign_conformance_test(
   vpi-extends-args vpi foreign_vpi_extends_args.sv
   foreign_vpi_extends_args.expected ""
   fsim_foreign_vpi_extends_args_plugin)
+# The parameter assignments and def params of module instances (IEEE
+# 1800-2023 37.28).
+add_library(fsim_foreign_vpi_param_assigns_plugin SHARED
+  foreign_vpi_param_assigns_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_param_assigns_plugin)
+target_link_libraries(fsim_foreign_vpi_param_assigns_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_param_assigns_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-param-assigns vpi foreign_vpi_param_assigns.sv
+  foreign_vpi_param_assigns.expected ""
+  fsim_foreign_vpi_param_assigns_plugin)
+# Static variable declaration initializers: once, before every procedure,
+# and no process of the source (IEEE 1800-2023 6.8, 6.21, 37.63).
+add_library(fsim_foreign_vpi_static_initializers_plugin SHARED
+  foreign_vpi_static_initializers_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_static_initializers_plugin)
+target_link_libraries(fsim_foreign_vpi_static_initializers_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_static_initializers_plugin PRIVATE
+  "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-static-initializers vpi foreign_vpi_static_initializers.sv
+  foreign_vpi_static_initializers.expected ""
+  fsim_foreign_vpi_static_initializers_plugin)
 # Container properties of a live class object: elements, indexes and size
 # changes (IEEE 1800-2023 37.17, 37.20, 37.33, 38.36.1).
 add_library(fsim_foreign_vpi_class_containers_plugin SHARED

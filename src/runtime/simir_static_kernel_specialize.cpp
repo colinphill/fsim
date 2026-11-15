@@ -171,6 +171,7 @@ inline constexpr bool specialize_effect = std::is_same_v<T, ReadSignal>
     || std::is_same_v<T, Report> || std::is_same_v<T, ContainerRead>
     || std::is_same_v<T, WriteContainerObjectElement> || std::is_same_v<T, Display>
     || std::is_same_v<T, FormatDisplay> || std::is_same_v<T, TimeDisplay>
+    || std::is_same_v<T, HostRequest>
     || std::is_same_v<T, SystemVerilogMath>
     || std::is_same_v<T, SystemVerilogScalarBinary>;
 
@@ -206,6 +207,10 @@ void map_reads(Operation& operation, F&& f)
             || std::is_same_v<T, IntegerUnary> || std::is_same_v<T, IntegerCheck>
             || std::is_same_v<T, FormatDisplay>) {
             op.source = f(op.source);
+        } else if constexpr (std::is_same_v<T, HostRequest>) {
+            for (auto& argument : op.arguments) {
+                argument.source = f(argument.source);
+            }
         } else if constexpr (std::is_same_v<T, Binary> || std::is_same_v<T, LogicalBinary>
             || std::is_same_v<T, IntegerBinary>) {
             op.lhs = f(op.lhs);

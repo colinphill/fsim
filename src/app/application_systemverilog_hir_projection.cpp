@@ -632,6 +632,9 @@ template <typename Input>
     if (initializer) {
         output.initializer = expression(*initializer, scope, output.origin);
     }
+    if constexpr (requires { input.synthesized; }) {
+        output.synthesized = input.synthesized;
+    }
     return id;
 }
 

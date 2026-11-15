@@ -1803,7 +1803,9 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     const auto fst_frame = fst_initial_frame(fst_bytes);
     assert(fst_frame.handles > 0U && fst_frame.waves > 0U);
     assert(fst_frame.uncompressed > 0U && fst_frame.stored > 0U);
-    assert(fst_frame.stored < fst_frame.uncompressed);
+    // A frame that does not shrink is stored raw (stored == uncompressed);
+    // this design's frame holds only its own variables.
+    assert(fst_frame.stored <= fst_frame.uncompressed);
     assert(!std::filesystem::exists(fst_trace_text + ".fsim-lock"));
     assert(!std::filesystem::exists(design / "phase.fst"));
 

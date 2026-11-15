@@ -93,84 +93,52 @@ namespace {
         return text;
     }
 
-    // The integer a $reset argument printed as; an unknown value (x or z) or
-    // anything else that is not a number is zero.
-    [[nodiscard]] std::int32_t parse_control_integer(
-        const std::string_view text) noexcept
-    {
-        std::int64_t value { };
-        const auto [end, error]
-            = std::from_chars(text.data(), text.data() + text.size(), value);
-        if (error != std::errc { } || end != text.data() + text.size()) {
-            return 0;
-        }
-        return static_cast<std::int32_t>(value);
-    }
-
 } // namespace
 
 // ------------------------------------------------------- system tasks
 
 void Simulation::Impl::run_simulation_control(
-    const runtime::simir::ProcessId process, const std::string_view payload)
+    const runtime::simir::SimulationControlRequest& request,
+    const std::array<std::optional<std::int64_t>, 4>& arguments)
 {
-    constexpr std::string_view argument_prefix { "arg|" };
-    if (payload.starts_with(argument_prefix)) {
-        // `arg|<position>|<value>`: one evaluated argument of $reset, sent
-        // ahead of the request marker.
-        const auto rest = payload.substr(argument_prefix.size());
-        const auto bar = rest.find('|');
-        if (bar == std::string_view::npos) {
-            return;
-        }
-        const auto position = parse_control_integer(rest.substr(0U, bar));
-        if (position >= 0 && position < 3) {
-            reset_arguments[process][static_cast<std::size_t>(position)]
-                = parse_control_integer(rest.substr(bar + 1U));
-        }
-        return;
-    }
-    const auto bar = payload.find('|');
-    const auto task = payload.substr(0U, bar);
-    const auto rest = bar == std::string_view::npos
-        ? std::string_view { }
-        : payload.substr(bar + 1U);
-    // A relative file name is relative to the workspace, as for $fopen and
-    // $readmemh: the design's file root.
-    auto file = std::filesystem::path { std::string { rest } };
-    if (file.is_relative() && !built.file_root.empty()) {
-        file = built.file_root / file;
-    }
-    if (task == "save" || task == "incsave") {
-        // Taken at the end of the current time slot (D.9, owner decision:
-        // wait for the slot's events to drain).
-        queue_save({ std::move(file), task == "incsave" });
-        return;
-    }
-    if (task == "restart") {
-        restart_request = std::move(file);
-        interpreter->scheduler().request_stop();
-        return;
-    }
-    if (task == "reset") {
+    using runtime::simir::SimulationControlKind;
+    if (request.kind == SimulationControlKind::reset) {
         // $reset [ ( stop_value [ , reset_value [ , diagnostics_value ] ] ) ]
         // (D.8): no stop_value enters interactive mode after the reset, which
-        // a batch run answers by ending the run (perform_reset).
-        const auto count = parse_control_integer(rest);
-        const auto arguments = reset_arguments[process];
-        reset_arguments.erase(process);
-        Simulation::ResetRequest request;
-        request.stop_value = count >= 1 ? arguments[0] : 0;
-        request.reset_value = count >= 2 ? arguments[1] : 0;
-        request.diagnostics_value = count >= 3 ? arguments[2] : 0;
+        // a batch run answers by ending the run (perform_reset). An absent
+        // argument, or one with an unknown value, is 0.
+        const auto value = [&](const std::size_t position) {
+            return static_cast<std::int32_t>(
+                arguments.at(position).value_or(0));
+        };
+        Simulation::ResetRequest reset;
+        reset.stop_value = value(0U);
+        reset.reset_value = value(1U);
+        reset.diagnostics_value = value(2U);
         if (const auto refusal = reset_refusal(); !refusal.empty()) {
             save_failure = refusal + " ($reset, IEEE 1800-2023 D.8)";
             interpreter->scheduler().request_stop();
             return;
         }
-        reset_requests.push_back(request);
+        reset_requests.push_back(reset);
         interpreter->scheduler().request_stop();
+        return;
     }
+    // A relative file name is relative to the workspace, as for $fopen and
+    // $readmemh: the design's file root.
+    auto file = std::filesystem::path { request.file };
+    if (file.is_relative() && !built.file_root.empty()) {
+        file = built.file_root / file;
+    }
+    if (request.kind == SimulationControlKind::restart) {
+        restart_request = std::move(file);
+        interpreter->scheduler().request_stop();
+        return;
+    }
+    // Taken at the end of the current time slot (D.9, owner decision: wait
+    // for the slot's events to drain).
+    queue_save(
+        { std::move(file), request.kind == SimulationControlKind::incsave });
 }
 
 bool Simulation::Impl::uvm_state_live() const
@@ -703,18 +671,6 @@ void Simulation::Impl::register_save_sections()
                         + " is not at rest at the save point");
                 }
             };
-            // `arg|` payloads are sent in the same statement as the `reset`
-            // marker that consumes them.
-            FSIM_RS_IDLE("sim.impl", reset_arguments);
-            busy(!reset_arguments.empty(), "the arguments of a $reset");
-            // Likewise the `arg|` payloads of an assertion control task.
-            FSIM_RS_IDLE("sim.impl", assertion_control_arguments);
-            busy(!assertion_control_arguments.empty(),
-                "the arguments of an assertion control task");
-            // And the `src|` payload that names the task's call site.
-            FSIM_RS_IDLE("sim.impl", assertion_control_sources);
-            busy(!assertion_control_sources.empty(),
-                "the call site of an assertion control task");
             // A $reset or $restart stops the run at its call; the request is
             // carried out before the run reaches another save point.
             FSIM_RS_IDLE("sim.impl", reset_requests);

@@ -91,6 +91,29 @@ inline constexpr std::uint32_t static_kernel_no_fast_notify_value = 0xFFFF'FFFFU
 /// Generated code's view of the concurrent assertion state (task #186;
 /// KOp::sva_tick, sva_outcome, sva_sampled_load). Field offsets are part of
 /// the ABI (static_asserts in the code generator).
+/// The rows KOp::sva_report appends (StaticKernel::sva_report_words_):
+/// `count` rows of sva_report_stride words at `words`, room for `capacity`.
+struct StaticKernelSvaReports {
+    std::int64_t* words { };
+    std::uint64_t count { };
+    std::uint64_t capacity { };
+};
+
+/// The words of one KOp::sva_report row.
+inline constexpr std::uint64_t sva_report_member = 0U;
+/// The HostRequest's SimIR index, with bit 32 set when a directive block
+/// of the member has popped an outcome (the start and fail words are its).
+inline constexpr std::uint64_t sva_report_site = 1U;
+inline constexpr std::uint64_t sva_report_time = 2U;
+inline constexpr std::uint64_t sva_report_delta = 3U;
+/// StaticKernel::sva_thread_process_ when the report was made.
+inline constexpr std::uint64_t sva_report_thread = 4U;
+inline constexpr std::uint64_t sva_report_start = 5U;
+inline constexpr std::uint64_t sva_report_fail_line = 6U;
+inline constexpr std::uint64_t sva_report_fail_column = 7U;
+inline constexpr std::uint64_t sva_report_stride = 8U;
+inline constexpr std::uint64_t sva_report_popped = std::uint64_t { 1U } << 32U;
+
 struct StaticKernelSvaTable {
     /// The attempt block base of each bound directive (sva::AttemptStorage
     /// publishes growth here), null until its monitor is bound.
@@ -117,6 +140,13 @@ struct StaticKernelSvaTable {
     /// time and cycle of the latest event, the time and cycle of the latest
     /// transaction).
     const std::uint64_t* history { };
+    /// The delta of `now` (StaticKernel::kernel_delta), for KOp::sva_report.
+    const std::uint64_t* delta { };
+    /// The running behavioral thread of the member (0 when none, else
+    /// (member + 1) << 32 | its process), for KOp::sva_report.
+    const std::int64_t* thread_process { };
+    /// The rows KOp::sva_report appends.
+    StaticKernelSvaReports* reports { };
 };
 
 /// Generated code's view of one unit activation. Field offsets are part of
@@ -277,6 +307,9 @@ struct StaticKernelNativeHelpers {
     /// (the code).
     void (*sva_verify_outcome)(StaticKernelNativeFrame*, std::uint32_t at,
         std::uint64_t value) { };
+    /// `fsim_sk_sva_report_grow`: room for one more KOp::sva_report row
+    /// (StaticKernelSvaReports, which generated code reloads after it).
+    void (*sva_report_grow)(StaticKernelNativeFrame*) { };
     /// Wide-register instructions by kind (`fsim_sk_wide_<op>`): instruction
     /// `at` with the caller's register file, where wide values live, and the
     /// narrow operand words x, y and z; `out` receives a narrow result and

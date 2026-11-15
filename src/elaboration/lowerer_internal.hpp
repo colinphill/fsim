@@ -754,6 +754,15 @@ public:
         std::optional<StringObjectId> string_object,
         std::optional<ContainerObjectId> container_object,
         std::string_view hierarchy);
+    /// Lower the initializer of a static block or callable variable that
+    /// has static storage in this instance (a signal, string or container
+    /// object) as a declaration-initializer process: it writes the value
+    /// once, before any procedure starts (IEEE 1800-2023 6.8, 6.21, 10.5).
+    [[nodiscard]] std::optional<Process>
+    lower_hir_declaration_initializer(
+        semantic::DeclarationId declaration,
+        frontend::Language language,
+        std::string_view hierarchy);
     /// Lower the initializer of static property `property` of class
     /// specialization `specialization_identity` as a one-shot startup
     /// process that writes the property (IEEE 1800-2017 8.9, 8.25).
@@ -1197,6 +1206,9 @@ private:
         // initial and always procedure has started (IEEE 1800-2017
         // 9.2.2.2.2).
         bool start_after_procedures { };
+        // A static variable's declaration initializer: it starts before
+        // every initial or always procedure (IEEE 1800-2023 6.8, 10.5).
+        bool declaration_initializer { };
         // A source always_comb or always_latch is not sensitive to what it
         // writes, or what a function it calls writes (IEEE 1800-2023
         // 9.2.2.2.1 a), 9.2.2.3).
@@ -2906,6 +2918,9 @@ private:
         std::optional<HirPackedMemberSelection> member;
         std::vector<std::uint64_t> values;
         std::vector<std::string> names;
+        // Each literal's value at the type's width, of any width; filled
+        // only when the profile is asked for wide values.
+        std::vector<PackedLogic4> wide_values;
         std::size_t width { };
         bool four_state { };
         bool signed_value { };
@@ -2915,7 +2930,8 @@ private:
         semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<HirEnumerationMethod>
     hir_systemverilog_enumeration_type_profile(HirEnumerationMethod result,
-        semantic::sv::TypeReference type, semantic::ScopeId scope) const;
+        semantic::sv::TypeReference type, semantic::ScopeId scope,
+        bool wide = false) const;
     [[nodiscard]] std::optional<semantic::sv::TypeReference>
     hir_systemverilog_value_type(semantic::ExpressionId expression,
         std::size_t trailing_segments = 0U) const;
@@ -2926,7 +2942,7 @@ private:
         std::string_view name, semantic::ScopeId scope) const;
     [[nodiscard]] std::optional<HirEnumerationMethod>
     hir_systemverilog_enumeration_profile(HirEnumerationMethod method,
-        semantic::DeclarationId declaration) const;
+        semantic::DeclarationId declaration, bool wide = false) const;
     // The text `%p` writes for a value (IEEE 1800-2017 21.2.1.7) when it is
     // not formatted like `%0d` or `%g`: an unpacked value as an assignment
     // pattern, a string (to be quoted) or an enumeration value's name.
@@ -3040,7 +3056,9 @@ private:
     hir_vhdl_member_selection(
         semantic::ExpressionId expression) const;
     struct HirCasePatternBinding {
-        std::string name;
+        // The pattern variable the identifier declares (IEEE 1800-2023
+        // 12.6); its uses resolve to it.
+        semantic::DeclarationId declaration;
         std::optional<runtime::simir::RegisterId> value;
         std::size_t width { };
         frontend::ValueDomain domain { frontend::ValueDomain::Unknown };

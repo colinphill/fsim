@@ -147,6 +147,8 @@ struct ProcessLayoutAccess {
 template <typename T>
 auto archive_fields(const ProcessLayoutReadView<T>& values)
 {
+    // Every member is listed: one added and not listed fails the build.
+    [[maybe_unused]] auto& [m0] = values;
     return std::tie(values.vector());
 }
 

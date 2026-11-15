@@ -2541,8 +2541,8 @@ void HierarchyBuilder::validate_process_drivers()
     for (std::size_t process_index = 0U;
         process_index < design_.process_count(); ++process_index) {
         const auto process = design_.process_view(process_index);
-        if (process.name().find("$declaration_initializer_")
-                != std::string::npos
+        if (process.startup_phase()
+                == ProcessStartupPhase::declaration_initializer
             || !is_continuous_process(process)) {
             continue;
         }
@@ -2586,8 +2586,8 @@ void HierarchyBuilder::validate_process_drivers()
     support::parallel_for(process_count,
         [&](const std::size_t worker, const std::size_t process_index) {
         const auto process = design_.process_view(process_index);
-        if (process.name().find("$declaration_initializer_")
-            != std::string::npos) {
+        if (process.startup_phase()
+            == ProcessStartupPhase::declaration_initializer) {
             return;
         }
         std::map<SignalId, std::vector<DriverRegion>> process_outputs;

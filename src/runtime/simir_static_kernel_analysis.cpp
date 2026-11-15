@@ -745,6 +745,7 @@ void Interpreter::Impl::StaticKernel::track_unknowns(CompiledBody& body,
         case KOp::sva_tick:
         case KOp::sva_outcome:
         case KOp::sva_sampled_load:
+        case KOp::sva_report:
             mode = u_clear;
             break;
         // Case equality (VHDL "=" on std_ulogic) compares the 'U' masks too;

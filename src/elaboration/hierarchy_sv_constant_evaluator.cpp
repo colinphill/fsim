@@ -1837,7 +1837,9 @@ private:
         std::map<semantic::DeclarationId, LocalUnpackedArray> arrays;
         std::size_t array_elements { };
         std::uint64_t array_bits { };
-        std::map<std::string, Value> pattern_values;
+        // The values of the pattern variables a match bound, by their
+        // declarations (IEEE 1800-2023 12.6).
+        std::map<std::uint32_t, Value> pattern_values;
         std::optional<Value> result;
     };
 
@@ -2626,8 +2628,11 @@ private:
             result.unbounded = true;
             return result;
         }
-        for (auto frame = frames_.rbegin(); frame != frames_.rend(); ++frame) {
-            if (const auto found = frame->pattern_values.find(record.text);
+        for (auto frame = frames_.rbegin(); frame != frames_.rend()
+             && record.referenced_name && record.referenced_name->selected;
+             ++frame) {
+            if (const auto found = frame->pattern_values.find(
+                    record.referenced_name->selected->value());
                 found != frame->pattern_values.end()) {
                 note_frame_read(frame);
                 return found->second;
@@ -2868,7 +2873,9 @@ private:
         }
         for (auto frame = frames_.rbegin(); frame != frames_.rend();
              ++frame) {
-            if (frame->pattern_values.contains(record.text)) {
+            if (record.referenced_name && record.referenced_name->selected
+                && frame->pattern_values.contains(
+                    record.referenced_name->selected->value())) {
                 return nullptr;
             }
         }
@@ -7323,11 +7330,11 @@ private:
             return std::nullopt;
         }
         const auto& pattern = *view->systemverilog;
-        if (pattern.kind == ExpressionKind::call) {
-            if (pattern.text == "@match-wildcard") {
+        if (pattern.kind == ExpressionKind::pattern) {
+            if (pattern.pattern == semantic::sv::PatternKind::wildcard) {
                 return true;
             }
-            if (pattern.text == "@match-guard") {
+            if (pattern.pattern == semantic::sv::PatternKind::guard) {
                 if (pattern.operands.size() != 2U) {
                     return std::nullopt;
                 }
@@ -7349,15 +7356,13 @@ private:
                 }
                 return accepted;
             }
-            constexpr auto bind_prefix
-                = std::string_view { "@match-bind:" };
-            if (pattern.text.starts_with(bind_prefix)) {
-                const auto name = pattern.text.substr(bind_prefix.size());
-                if (name.empty()) {
+            if (pattern.pattern == semantic::sv::PatternKind::bind) {
+                if (!pattern.referenced_name
+                    || !pattern.referenced_name->selected) {
                     return std::nullopt;
                 }
                 frames_.back().pattern_values.insert_or_assign(
-                    name, selector);
+                    pattern.referenced_name->selected->value(), selector);
                 return true;
             }
             return std::nullopt;

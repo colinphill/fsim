@@ -186,7 +186,9 @@ struct Simulation::Impl {
         runtime::simir::ProcessId process { };
         runtime::simir::ProcessId design_process { };
         std::uint32_t slot { };
-        std::string kind;
+        ConcurrentAssertionCoverageKind kind {
+            ConcurrentAssertionCoverageKind::assertion
+        };
         std::string name;
         bool vacuous { };
         std::vector<PendingConcurrentAssertionAction> actions;
@@ -276,8 +278,19 @@ struct Simulation::Impl {
     [[nodiscard]] std::size_t ensure_concurrent_assertion_coverage(
         const runtime::simir::ProcessId process,
         const std::uint32_t slot,
-        const std::string_view kind,
+        const ConcurrentAssertionCoverageKind kind,
         const std::string_view name);
+    // A host request of the design (runtime::simir::HostRequest).
+    void run_host_request(const runtime::simir::HostRequestEvent& event);
+    // One outcome row of a concurrent assertion monitor (16.14, 39.4.2).
+    /// Fills concurrent_assertion_design_processes from the monitors'
+    /// registrations in their programs.
+    void register_concurrent_assertions();
+    void run_sva_outcome(const runtime::simir::HostRequestEvent& event,
+        const runtime::simir::SvaOutcomeRequest& request);
+    // $printtimescale with a hierarchical name argument (20.4.1).
+    void run_print_timescale(runtime::simir::ProcessId process,
+        std::string_view requested, SimulationTick time, std::uint64_t delta);
 
     void finish_concurrent_assertions(
         const SimulationTick time,
@@ -813,10 +826,11 @@ struct Simulation::Impl {
     // no observation barrier, as a signal's read), else the host snapshot.
     [[nodiscard]] runtime::simir::ContainerValue vpi_container_value(
         runtime::simir::ContainerObjectId object) const;
-    // $scope, $showscopes and $showvars (IEEE 1800-2023 D.11-D.13): the
-    // task `name` with its payload, run by the process that called it.
+    // $scope, $showscopes and $showvars (IEEE 1800-2023 D.11-D.13), run by
+    // the process that called it.
     void run_scope_task(runtime::simir::ProcessId process,
-        std::string_view payload, SimulationTick time, std::uint64_t delta);
+        const runtime::simir::ScopeTaskRequest& request, SimulationTick time,
+        std::uint64_t delta);
     // The design objects the scope tasks list: the VPI registry when the
     // run publishes one, else one built on the first scope task.
     struct ScopeCatalog {
@@ -882,11 +896,12 @@ struct Simulation::Impl {
 
     void publish_assertion_attempt_start(
         runtime::simir::ProcessId design_process, std::int64_t start);
-    // The attempt of the design process's assertion (directive kind and
-    // name as its markers spell them) that started at `start` ended in the
-    // disabled state now (IEEE 1800-2023 16.12, 39.4.2).
+    // The attempt of the design process's assertion (its directive kind and
+    // name) that started at `start` ended in the disabled state at `time`
+    // (IEEE 1800-2023 16.12, 39.4.2).
     void publish_assertion_disabled(runtime::simir::ProcessId design_process,
-        std::string_view kind, std::string_view name, std::int64_t start);
+        ConcurrentAssertionCoverageKind kind, std::string_view name,
+        std::int64_t start, SimulationTick time, std::uint64_t delta);
     void publish_assertion_step(runtime::simir::ProcessId design_process,
         const runtime::sva::StepRecord& step);
 
@@ -1202,6 +1217,9 @@ struct Simulation::Impl {
     // interpreter's string objects (IEEE 1800-2023 37.17, 38.15).
     std::map<fsim_vpi_handle_v1, runtime::simir::StringObjectId>
         vpi_string_handles;
+    // The object published for a HIR declaration in an instance (its path).
+    std::map<std::pair<std::string, std::uint32_t>, fsim_vpi_handle_v1>
+        vpi_declaration_objects;
     // The watched string variables with the text last announced, and the
     // safe-point observer that compares them (0 until one is watched).
     std::map<fsim_vpi_handle_v1, std::string> vpi_watched_strings;
@@ -1286,10 +1304,6 @@ struct Simulation::Impl {
     runtime::RunStateSectionRegistry foreign_section_registry;
     /// The command line and libraries a restart must repeat.
     std::string state_file_identity;
-    /// The arguments $reset has sent for the calling process, by position,
-    /// until its request marker arrives.
-    std::map<runtime::simir::ProcessId, std::array<std::int32_t, 3>>
-        reset_arguments;
     struct SaveRequest {
         std::filesystem::path file;
         bool incremental { };
@@ -1303,9 +1317,10 @@ struct Simulation::Impl {
     std::filesystem::path last_full_save_file;
     /// A save that failed at the quiet point, reported when run() returns.
     std::optional<std::string> save_failure;
-    /// Called for the output text of a `simulation_control_marker` message.
-    void run_simulation_control(runtime::simir::ProcessId process,
-        std::string_view payload);
+    /// $save, $incsave, $restart and $reset (D.8, D.9).
+    void run_simulation_control(
+        const runtime::simir::SimulationControlRequest& request,
+        const std::array<std::optional<std::int64_t>, 4>& arguments);
     void register_save_sections();
     [[nodiscard]] std::string state_identity() const;
     [[nodiscard]] Simulation::StateFileResult write_state_file(
@@ -1553,8 +1568,9 @@ struct Simulation::Impl {
         concurrent_assertion_indices;
 
     // The design process of each concurrent assertion directive's monitor,
-    // with the directive kind and name its register marker gives.
-    std::map<runtime::simir::ProcessId, std::pair<std::string, std::string>>
+    // with the directive kind and name its registration gives.
+    std::map<runtime::simir::ProcessId,
+        std::pair<ConcurrentAssertionCoverageKind, std::string>>
         concurrent_assertion_design_processes;
 
     std::map<std::uint32_t, bool>
@@ -1610,32 +1626,27 @@ struct Simulation::Impl {
     // enclosing scopes.
     std::set<std::string, std::less<>> assertion_control_scopes;
     std::set<std::string, std::less<>> assertion_control_instances;
-    // The evaluated integer arguments of a control task call, sent ahead of
-    // its request: control_type, assertion_type, directive_type, levels.
-    std::map<runtime::simir::ProcessId,
-        std::array<std::optional<std::int64_t>, 4U>>
-        assertion_control_arguments;
-    // The place of a control task call, sent ahead of its request, where
-    // a warning about the call is reported.
-    std::map<runtime::simir::ProcessId, runtime::simir::SourceLocation>
-        assertion_control_sources;
     void build_assertion_controls();
     // Sets the control words of its sites from its state.
     void publish_assertion_control(std::size_t index);
-    // One $assertcontrol or convenience task request (20.11).
+    // One $assertcontrol or convenience task request (20.11), with its
+    // integer arguments control_type, assertion_type, directive_type and
+    // levels.
     void run_assertion_control(runtime::simir::ProcessId process,
-        std::string_view payload, SimulationTick time, std::uint64_t delta);
+        const runtime::simir::AssertionControlRequest& request,
+        const std::array<std::optional<std::int64_t>, 4>& arguments,
+        SimulationTick time, std::uint64_t delta);
     // On, Off and Kill of one assertion (20.11, 39.5.2): Kill also aborts
     // its attempts and flushes its queued deferred reports.
     void set_assertion_checking(std::size_t index, int control);
     [[nodiscard]] const AssertionControl* concurrent_assertion_control(
         runtime::simir::ProcessId design_process) const;
 
-    // Whether the action of an outcome ("pass", "vacuous", else fail) of a
+    // Whether the action of an outcome (pass, vacuous, else fail) of a
     // design process's assertion runs.
     [[nodiscard]] bool concurrent_assertion_action_enabled(
         runtime::simir::ProcessId design_process,
-        std::string_view outcome) const;
+        support::SvaOutcome outcome) const;
 
     ClassPropertyChangeHook class_property_change_hook;
     ClassPropertyContainerChangeHook class_property_container_change_hook;

@@ -879,9 +879,10 @@ bool ElaboratedDesign::scan_simulation_control()
     using namespace runtime::simir;
     const auto holds = [](const OperationList& operations) {
         return std::ranges::any_of(operations, [](const Operation& operation) {
-            const auto* display = operation_get_if<Display>(&operation);
-            return display != nullptr
-                && display->text.starts_with(simulation_control_marker);
+            const auto* request = operation_get_if<HostRequest>(&operation);
+            return request != nullptr
+                && std::holds_alternative<SimulationControlRequest>(
+                    request->request);
         });
     };
     if (process_rows_) {
@@ -1297,6 +1298,11 @@ ElaboratedDesign::find_signal(
         return object->signal;
     }
     return std::nullopt;
+}
+
+bool ElaboratedDesign::storage_alias_path(const std::string_view path) const
+{
+    return storage_alias_paths_.contains(path);
 }
 
 std::vector<std::pair<std::string, runtime::simir::SignalId>>

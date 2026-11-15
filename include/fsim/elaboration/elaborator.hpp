@@ -19,6 +19,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <set>
 #include <string_view>
 #include <unordered_map>
 #include <utility>
@@ -609,6 +610,14 @@ struct SignalInfo {
         vpi_typespec { };
     // Set on each element of an array of named events.
     std::shared_ptr<const VpiEventArrayDeclaration> vpi_event_array { };
+    // The elaborator made this signal for its own lowering (a sampled or
+    // monitored expression's value): no declaration of the source, so no VPI
+    // object and no scope of one (IEEE 1800-2023 37.12, 37.17).
+    bool generated { };
+    // The SystemVerilog HIR declaration whose storage this signal is (of
+    // the specialization's unit), so later stages reach the declaration by
+    // identity and never by the storage's name.
+    std::optional<semantic::DeclarationId> hir_declaration { };
 };
 
 /// The signal descriptions of a design. While elaboration builds the design
@@ -802,6 +811,7 @@ struct StringObjectInfo {
     frontend::PortDirection direction {
         frontend::PortDirection::Unknown
     };
+    std::optional<semantic::DeclarationId> hir_declaration { };  // HIR declaration whose storage this is
 };
 
 /// The name prefix of the container object that holds a class's static
@@ -831,6 +841,7 @@ struct ContainerObjectInfo {
     // The array's typespec (IEEE 1800-2023 37.25).
     std::shared_ptr<const runtime::SystemVerilogVpiTypespec>
         vpi_typespec { };
+    std::optional<semantic::DeclarationId> hir_declaration { };  // HIR declaration whose storage this is
 };
 
 using VhdlProtectedObjectId = std::uint32_t;
@@ -929,6 +940,13 @@ struct CoverageFsmMachine {
 /// vpiTypedef; 37.25); empty when its type has no typespec model.
 struct VpiTypedefInfo {
     std::string name;
+    std::shared_ptr<const runtime::SystemVerilogVpiTypespec> typespec { };
+};
+
+/// A type parameter an instance declares, with the typespec of the type it
+/// has at the end of elaboration (IEEE 1800-2023 37.28 detail 2).
+struct VpiTypeParameterInfo {
+    semantic::DeclarationId declaration;
     std::shared_ptr<const runtime::SystemVerilogVpiTypespec> typespec { };
 };
 
@@ -1130,6 +1148,16 @@ struct SpecializationInfo {
     // 19.4.2).
     std::vector<std::pair<std::string, semantic::DeclarationId>>
         vhdl_generate_occurrences;
+    // The parameter assignments that set the instance's parameters, as
+    // elaboration bound them: the overrides of its instantiation (IEEE
+    // 1800-2023 23.10.2, 37.28 vpiParamAssign of the instance), then the
+    // defparams that redefine them (23.10.1, 37.28 vpiDefParam of the scope
+    // holding each defparam); a parameter left at its default has none
+    // (37.28 detail 4).
+    std::vector<runtime::SystemVerilogVpiParamAssign> vpi_param_assigns;
+    // The type parameters of the instance's unit, each with the type it has
+    // (37.28 type parameter, vpiTypespec).
+    std::vector<VpiTypeParameterInfo> vpi_type_parameters;
 };
 
 using UdpTableId = std::uint32_t;
@@ -1752,6 +1780,13 @@ public:
     /// parent signal.
     [[nodiscard]] std::vector<std::pair<std::string, runtime::simir::SignalId>>
     signal_paths() const;
+    /// Whether a path among signal_paths(), string_paths() or
+    /// container_paths() names a variable's storage rather than the
+    /// variable (a static storage key, or the root-relative name of a
+    /// block's static storage): it is no hierarchical name (IEEE 1800-2023
+    /// 6.21, 23.6). Recorded while the design is built; the DesignIR built
+    /// at elaboration keeps the result.
+    [[nodiscard]] bool storage_alias_path(std::string_view path) const;
     /// Return every debug-visible string object path in lexical order.
     /// String port aliases may refer to the same object ID as their connected
     /// parent object.
@@ -1974,6 +2009,9 @@ private:
     std::unordered_map<semantic::HierarchyPathId,
         runtime::simir::ContainerObjectId, HierarchyPathHash>
         container_by_path_;
+    // Paths of the name maps below that are storage keys, not names (see
+    // storage_alias_path); construction record, not saved.
+    std::set<std::string, std::less<>> storage_alias_paths_;
     // Construction drafts. Cleared before the design is published.
     std::unordered_map<std::string, runtime::simir::SignalId> signal_by_name_;
     std::unordered_map<

@@ -30,6 +30,18 @@ module top;
     // defaults (37.32 detail 3).
     class PD extends P #(8);
     endclass
+    // A named association marks its assignment (37.28 vpiConnByName).
+    class PN extends P #(.D(9));
+    endclass
+    // A type parameter's assignment has the typespec of the type the use
+    // writes, else of the default type (37.28 vpiRhs, 37.32 detail 3).
+    class TP #(type E = int, int N = 1);
+        E e;
+    endclass
+    class TD extends TP #(logic [3:0]);
+    endclass
+    class TF extends TP #(.N(3));
+    endclass
 
     Derived d;
     // The live object has Base's property a = 3 + 4 once constructed (8.17).

@@ -1736,10 +1736,10 @@ endmodule
             })
             && process_has(sequence_process,
                 [](const Statement& statement) {
-                    return statement.kind == StatementKind::Display
-                        && statement.output_text.starts_with(
-                            "\x1f"
-                            "fsim.concurrent-assertion-call-region|");
+                    return statement.kind == StatementKind::SvaMarker
+                        && statement.sva_marker
+                        && statement.sva_marker->kind
+                            == fsim::support::SvaMarkerKind::call_region;
                 }),
         "a first_match subroutine-call match item is run from the monitor process");
 

@@ -4290,8 +4290,10 @@ void Simulation::Impl::publish_assertion_attempt_start(
 }
 
 void Simulation::Impl::publish_assertion_disabled(
-    const runtime::simir::ProcessId design_process, const std::string_view kind,
-    const std::string_view name, const std::int64_t start)
+    const runtime::simir::ProcessId design_process,
+    const ConcurrentAssertionCoverageKind kind, const std::string_view name,
+    const std::int64_t start, const SimulationTick time,
+    const std::uint64_t delta)
 {
     if (!vpi_assertions || !vpi_callbacks
         || !vpi_callbacks->has_registrations()) {
@@ -4305,16 +4307,10 @@ void Simulation::Impl::publish_assertion_disabled(
     ConcurrentAssertionEvent event;
     event.name = std::string { name };
     event.process = occurrence->name;
-    event.kind = kind == "assumption"
-        ? ConcurrentAssertionCoverageKind::assumption
-        : kind == "cover"
-        ? ConcurrentAssertionCoverageKind::cover
-        : kind == "restriction"
-        ? ConcurrentAssertionCoverageKind::restriction
-        : ConcurrentAssertionCoverageKind::assertion;
+    event.kind = kind;
     event.outcome = ConcurrentAssertionOutcome::disabled;
-    event.time = interpreter->scheduler().now();
-    event.delta = interpreter->scheduler().delta();
+    event.time = time;
+    event.delta = delta;
     event.attempt_start = static_cast<runtime::SimulationTick>(start);
     // The callback may read values of the design.
     interpreter->prepare_output_callback_observation();

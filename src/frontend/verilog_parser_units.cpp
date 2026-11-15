@@ -1432,6 +1432,7 @@ void VerilogParser::parse_generate_declaration(
       Process process;
       process.kind = ProcessKind::Initial;
       process.name = "$declaration_initializer_" + name.text;
+      process.declaration_initializer = true;
       process.statements.push_back(std::move(assignment));
       process.span = process.statements.front().span;
       body.processes.push_back(std::move(process));

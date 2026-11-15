@@ -5,6 +5,7 @@
 #include "fsim/semantic/systemverilog_class_specialization.hpp"
 #include "fsim/semantic/systemverilog_hir.hpp"
 #include "fsim/runtime/vpi_abi.h"
+#include "fsim/runtime/vpi_types.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -83,6 +84,18 @@ public:
         std::function<fsim_vpi_handle_v1(
             fsim_vpi_handle_v1, const std::string&, const std::string&)>
             variable_typespec;
+        // The parameter assignment object of `record` (IEEE 1800-2023
+        // 37.28, 37.32 detail 3), held by the class typespec `parent`,
+        // setting the parameter object `lhs`; `typespec` is the type a type
+        // parameter is bound to. One object per parent and parameter.
+        std::function<fsim_vpi_handle_v1(runtime::SystemVerilogVpiParamAssign,
+            fsim_vpi_handle_v1, fsim_vpi_handle_v1, fsim_vpi_handle_v1)>
+            param_assign;
+        // The typespec of a data type written in the source (a type
+        // parameter's actual or default, 37.28 vpiRhs); 0 when it has no
+        // typespec model.
+        std::function<fsim_vpi_handle_v1(const semantic::sv::TypeReference&)>
+            type_typespec;
     };
 
     VpiClassModel(const semantic::sv::Hir& hir,
@@ -191,9 +204,6 @@ private:
         method,
         parameter,
         class_typedef,
-        // The assignment of a specialization's actual to a class parameter
-        // (37.32 vpiParamAssign): `member` is the parameter's index.
-        param_assign,
         // A constraint (37.34), and an item of one: a constraint
         // expression, ordering, distribution or leaf expression (37.34,
         // 37.38) whose `member` is its index in `nodes_`.
@@ -209,8 +219,6 @@ private:
         variable,
     };
     static constexpr std::size_t none = static_cast<std::size_t>(-1);
-    // A lexical param assign packs its use above the parameter's index.
-    static constexpr std::size_t param_assign_stride = 4096U;
     // A lexical class has `specialization` none.
     struct Entry {
         Kind kind { Kind::typespec };
@@ -281,6 +289,11 @@ private:
     // (37.32 detail 3).
     [[nodiscard]] std::optional<semantic::ExpressionId> lexical_actual(
         std::size_t use, std::size_t base, std::size_t index) const;
+    // The parameter assignments of the lexical typespec of `base` for use
+    // `use` (plus one): one per parameter the use or a default gives a
+    // value or a type (37.32 detail 3).
+    [[nodiscard]] std::vector<fsim_vpi_handle_v1> lexical_param_assigns(
+        std::size_t use, std::size_t base);
     // The number of a lexical use, by the actuals it wrote (plus one, so a
     // typespec without a use keeps member 0).
     [[nodiscard]] std::size_t use_of(

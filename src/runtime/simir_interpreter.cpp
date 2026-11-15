@@ -1722,6 +1722,8 @@ ProcessId Interpreter::Impl::add_process_program_impl(
         = package_static_initializer || class_static_initializer;
     if (process.startup_phase() != ProcessStartupPhase::ordinary
         && process.startup_phase() != ProcessStartupPhase::after_procedures
+        && process.startup_phase()
+            != ProcessStartupPhase::declaration_initializer
         && !startup_initializer) {
         throw std::invalid_argument {
             "invalid SimIR process startup phase"
@@ -4169,6 +4171,36 @@ void Interpreter::start()
             };
         }
     }
+    // A static variable's declaration initializer is static initialization
+    // too: it runs before any initial or always procedure starts (IEEE
+    // 1800-2023 6.8, 10.5), after the package variables, in process order.
+    // The kernel runs its own (its members and hosted processes, in its
+    // first activation). A restore runs none: the restored values hold
+    // their results.
+    // Their writes are initialization, no transaction and no event
+    // (settle_declaration_initializer_write; owner 11-15).
+    if (!impl_->start_restoring) {
+        const auto previous = std::exchange(
+            impl_->declaration_initialization_active, true);
+        try {
+            for (ProcessId id = 0; id < impl_->processes.size(); ++id) {
+                if (kernel_member(id) || impl_->static_kernel_hosts(id)) {
+                    continue;
+                }
+                const auto program = impl_->processes.program_view(id);
+                if (program.startup_phase()
+                        != ProcessStartupPhase::declaration_initializer
+                    || !program.initialize() || program.final()) {
+                    continue;
+                }
+                impl_->execute(id);
+            }
+        } catch (...) {
+            impl_->declaration_initialization_active = previous;
+            throw;
+        }
+        impl_->declaration_initialization_active = previous;
+    }
     // Static initialization is complete: the start of simulation is the
     // beginning of the time-zero cycle (IEEE 1800-2023 38.36.3, 6.21, 10.5).
     if (!impl_->start_restoring && impl_->start_of_simulation_hook) {
@@ -5308,9 +5340,25 @@ Interpreter::scalar_signal_snapshots() const
         if (stored.systemverilog_scalar == SystemVerilogScalarKind::None) {
             continue;
         }
+        // A time variable is a 4-state integral (IEEE 1800-2023 6.11.1):
+        // while it holds x or z bits it has no scalar value, and its bits
+        // are read with signal_value.
+        impl_->prepare_signal_observation(signal);
+        const auto decoded = decode_systemverilog_scalar_payload(
+            impl_->get_signal(signal).initial_value,
+            stored.systemverilog_scalar);
+        if (decoded.error == SystemVerilogScalarError::UnknownValue
+            && stored.systemverilog_scalar == SystemVerilogScalarKind::Time) {
+            continue;
+        }
+        if (!decoded) {
+            throw std::logic_error {
+                "SimIR signal is not a valid scalar value"
+            };
+        }
         result.push_back({ signal,
             impl_->get_signal_cold(signal).name,
-            scalar_signal_value(signal) });
+            decoded.value });
     }
     return result;
 }
@@ -5567,17 +5615,21 @@ bool Interpreter::driver_disconnected(const ProcessId process,
 
 ProcessId Interpreter::design_process(const ProcessId process) const
 {
+    return impl_->design_process_of(process);
+}
+
+ProcessId Interpreter::Impl::design_process_of(const ProcessId process)
+{
     // A fork child of a kernel thread (its output names it).
-    if (impl_->static_kernel) {
-        if (const auto design
-            = impl_->static_kernel->child_design_process(process)) {
+    if (static_kernel) {
+        if (const auto design = static_kernel->child_design_process(process)) {
             return *design;
         }
     }
-    if (impl_->processes.is_compact_constant(process)) {
+    if (processes.is_compact_constant(process)) {
         return process;
     }
-    return impl_->get_process(process).cold().design_process;
+    return get_process(process).cold().design_process;
 }
 
 std::optional<SignalId> Interpreter::nettype_resolution_signal(
@@ -5651,27 +5703,30 @@ std::uint64_t Interpreter::process_interpreter_operations(
 
 ProcessId Interpreter::dynamic_process_root(const ProcessId process) const
 {
-    if (impl_->static_kernel) {
-        if (const auto root
-            = impl_->static_kernel->child_dynamic_root(process)) {
+    return impl_->dynamic_root_of(process);
+}
+
+ProcessId Interpreter::Impl::dynamic_root_of(const ProcessId process)
+{
+    if (static_kernel) {
+        if (const auto root = static_kernel->child_dynamic_root(process)) {
             return *root;
         }
     }
     auto root = process;
     while (true) {
-        if (impl_->processes.is_compact_constant(root)) {
+        if (processes.is_compact_constant(root)) {
             return root;
         }
-        const auto parent = impl_->get_process(root).cold().fork_parent;
+        const auto parent = get_process(root).cold().fork_parent;
         if (!parent) {
             return root;
         }
-        if (!impl_->get_process(*parent).cold().fork_parent) {
+        if (!get_process(*parent).cold().fork_parent) {
             return root;
         }
         root = *parent;
     }
-    return root;
 }
 
 void Interpreter::kill_dynamic_processes(
@@ -5793,6 +5848,105 @@ Interpreter::sva_outcome_fail(const ProcessId design_process) const
         return std::nullopt;
     }
     return std::pair { fail.line, fail.column };
+}
+
+void Interpreter::Impl::run_host_request(const ProcessId process,
+    const HostRequest& request,
+    const std::array<std::optional<std::int64_t>,
+        host_request_argument_limit>& arguments,
+    const SimulationTick time, const std::uint64_t delta)
+{
+    if (request.inert && !assertion_starts_bound) {
+        // An unbound attempt-start report (HostRequest::inert).
+        return;
+    }
+    if (const auto* const outcome = std::get_if<SvaOutcomeRequest>(&request.request);
+        outcome != nullptr && outcome->outcome == support::SvaOutcome::registration) {
+        // A monitor's registration is static: the host reads it from the
+        // program before the run (Simulation::Impl::register_concurrent_assertions).
+        return;
+    }
+    if (!host_request_hook) {
+        throw std::runtime_error { "the host request service is unavailable" };
+    }
+    HostRequestEvent event;
+    event.process = process;
+    event.design_process = design_process_of(process);
+    event.dynamic_root = dynamic_root_of(process);
+    event.request = &request;
+    event.arguments = arguments;
+    event.time = time;
+    event.delta = delta;
+    const auto* const outcome = std::get_if<SvaOutcomeRequest>(&request.request);
+    const bool row = (outcome != nullptr
+                         && outcome->outcome != support::SvaOutcome::registration)
+        || std::holds_alternative<SvaPendingRequest>(request.request);
+    if (!row) {
+        drain_host_request_rows();
+        prepare_callback_observation();
+        host_request_hook(event);
+        return;
+    }
+    if (outcome != nullptr) {
+        // The attempt the monitor popped last, read now: a later pop in the
+        // region replaces it (39.4.2 attemptStartTime).
+        if (const auto* const popped
+            = sva_last_popped(sva_monitors, event.design_process)) {
+            event.attempt_start = popped->last_outcome_start();
+            if (outcome->outcome == support::SvaOutcome::failure) {
+                const auto fail = popped->last_outcome_fail();
+                if (fail.line != 0U) {
+                    event.fail = std::pair { fail.line, fail.column };
+                }
+            }
+        }
+    }
+    // The static kernel's rows made before this one come first.
+    take_kernel_host_request_rows();
+    host_request_rows.push_back(event);
+    ensure_host_request_drain();
+}
+
+void Interpreter::Impl::drain_host_request_rows()
+{
+    if (host_request_draining) {
+        return;
+    }
+    take_kernel_host_request_rows();
+    if (host_request_rows.empty()) {
+        return;
+    }
+    prepare_callback_observation();
+    host_request_draining = true;
+    // A row delivered may lead to more (output of the host, a killed
+    // attempt's processes); those follow in order.
+    try {
+        for (std::size_t index = 0; index < host_request_rows.size();
+             ++index) {
+            const auto event = host_request_rows[index];
+            host_request_hook(event);
+            // Rows the static kernel made while the host ran (a killed
+            // attempt's processes) follow.
+            take_kernel_host_request_rows();
+        }
+    } catch (...) {
+        take_kernel_host_request_rows();
+        host_request_rows.clear();
+        host_request_draining = false;
+        throw;
+    }
+    host_request_rows.clear();
+    host_request_draining = false;
+}
+
+void Interpreter::drain_host_requests()
+{
+    impl_->drain_host_request_rows();
+}
+
+void Interpreter::set_host_request_hook(HostRequestHook hook)
+{
+    impl_->host_request_hook = std::move(hook);
 }
 
 void Interpreter::set_sva_attempt_hook(SvaAttemptHook hook)

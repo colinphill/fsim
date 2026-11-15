@@ -39,8 +39,6 @@ namespace fsim::runtime::simir {
 
 namespace {
 
-    constexpr std::string_view multichannel_write_mode = "\x1f"
-                                                         "fsim-multichannel-write";
     constexpr FileHandle file_descriptor_flag = UINT32_C(0x80000000);
 
     [[nodiscard]] bool below_root(
@@ -144,7 +142,7 @@ void Interpreter::Impl::set_file_root(
 FileHandle Interpreter::Impl::open_file(
     const ProcessId process,
     const std::string_view path_text,
-    const std::string_view mode_text,
+    const std::optional<std::string_view> mode_text,
     const bool vhdl)
 {
     if (processes.scheduling_domain(process)
@@ -185,7 +183,7 @@ Interpreter::Impl::FileState* Interpreter::Impl::open_systemverilog_file(
 FileHandle Interpreter::Impl::open_file_unchecked(
     const ProcessId process,
     const std::string_view path_text,
-    const std::string_view mode_text,
+    const std::optional<std::string_view> requested_mode,
     const bool vhdl)
 {
     if (files.size() >= maximum_open_file_handles) {
@@ -198,8 +196,9 @@ FileHandle Interpreter::Impl::open_file_unchecked(
             "SimIR file access has no configured project root"
         };
     }
-    const bool multichannel = mode_text == multichannel_write_mode;
-    const auto mode = file_mode(multichannel ? std::string_view { "w" } : mode_text);
+    const bool multichannel = !requested_mode.has_value();
+    const std::string_view mode_text = requested_mode.value_or("w");
+    const auto mode = file_mode(mode_text);
     if (!mode) {
         throw std::runtime_error {
             "unsupported SimIR text file mode '"
@@ -529,7 +528,7 @@ FileHandle Interpreter::Impl::mcd_open(const std::string_view name)
         }
         // The call has no process; the owner only names the opener.
         return open_file_unchecked(
-            ProcessId { }, name, multichannel_write_mode, false);
+            ProcessId { }, name, std::nullopt, false);
     } catch (const std::exception&) {
         // The routine returns 0 on error (IEEE 1800-2023 38.27).
         return 0;
@@ -1168,7 +1167,10 @@ void Interpreter::Impl::run_file(
         const auto handle = open_file(
             storage.process(),
             storage.text(operation.path),
-            storage.text(operation.mode),
+            operation.multichannel
+                ? std::optional<std::string_view> { }
+                : std::optional<std::string_view> {
+                      storage.text(operation.mode) },
             operation.vhdl);
         storage.packed(operation.destination) = PackedLogic4::from_aval_bval(32, handle, 0);
         if (operation.status) {

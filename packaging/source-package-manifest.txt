@@ -590,6 +590,7 @@ include/fsim/support/rare_vector.hpp
 include/fsim/support/sha256.hpp
 include/fsim/support/sqlite_database.hpp
 include/fsim/support/stack_growth.hpp
+include/fsim/support/sva_marker.hpp
 include/fsim/support/teardown.hpp
 include/fsim/support/uvm_api_methods.hpp
 include/fsim/support/uvm_role.hpp
@@ -1932,6 +1933,8 @@ tests/fixtures/compliance/b57_textio_dynamic_string_read.vhd
 tests/fixtures/compliance/b57_textio_ho_codecs.vhd
 tests/fixtures/compliance/b57_textio_radix_slices.vhd
 tests/fixtures/compliance/b58_nonansi_empty_selected_ports_20261013.sv
+tests/fixtures/compliance/elaboration_errors/run_elaboration_error.cmake
+tests/fixtures/compliance/elaboration_errors/unnamed_scope_hierarchical_reference.sv
 tests/fixtures/compliance/mixed_vhdl_delta_after_sv_write.sv
 tests/fixtures/compliance/mixed_vhdl_delta_after_sv_write_ram.vhd.in
 tests/fixtures/compliance/mixed_vhdl_flop_after_sv_flop.sv
@@ -2806,6 +2809,9 @@ tests/fixtures/foreign/foreign_vpi_nettype_put.sv
 tests/fixtures/foreign/foreign_vpi_package_vars.expected
 tests/fixtures/foreign/foreign_vpi_package_vars.expected.license
 tests/fixtures/foreign/foreign_vpi_package_vars.sv
+tests/fixtures/foreign/foreign_vpi_param_assigns.expected
+tests/fixtures/foreign/foreign_vpi_param_assigns.expected.license
+tests/fixtures/foreign/foreign_vpi_param_assigns.sv
 tests/fixtures/foreign/foreign_vpi_partition_deposit.expected
 tests/fixtures/foreign/foreign_vpi_partition_deposit.expected.license
 tests/fixtures/foreign/foreign_vpi_partition_deposit.sv
@@ -2849,6 +2855,9 @@ tests/fixtures/foreign/foreign_vpi_start_work.sv
 tests/fixtures/foreign/foreign_vpi_statements.expected
 tests/fixtures/foreign/foreign_vpi_statements.expected.license
 tests/fixtures/foreign/foreign_vpi_statements.sv
+tests/fixtures/foreign/foreign_vpi_static_initializers.expected
+tests/fixtures/foreign/foreign_vpi_static_initializers.expected.license
+tests/fixtures/foreign/foreign_vpi_static_initializers.sv
 tests/fixtures/foreign/foreign_vpi_stmt.expected
 tests/fixtures/foreign/foreign_vpi_stmt.expected.license
 tests/fixtures/foreign/foreign_vpi_stmt.sv
@@ -4349,6 +4358,7 @@ tests/runtime/foreign_vpi_modpath_delay_plugin.c
 tests/runtime/foreign_vpi_net_foreign_plugin.c
 tests/runtime/foreign_vpi_nettype_put_plugin.c
 tests/runtime/foreign_vpi_package_vars_plugin.c
+tests/runtime/foreign_vpi_param_assigns_plugin.c
 tests/runtime/foreign_vpi_partition_deposit_plugin.c
 tests/runtime/foreign_vpi_primitive_drivers_plugin.c
 tests/runtime/foreign_vpi_primitives_plugin.c
@@ -4365,6 +4375,7 @@ tests/runtime/foreign_vpi_scheduled_plugin.c
 tests/runtime/foreign_vpi_sdf_delays_plugin.c
 tests/runtime/foreign_vpi_start_work_plugin.c
 tests/runtime/foreign_vpi_statements_plugin.c
+tests/runtime/foreign_vpi_static_initializers_plugin.c
 tests/runtime/foreign_vpi_stmt_instances_plugin.c
 tests/runtime/foreign_vpi_stmt_plugin.c
 tests/runtime/foreign_vpi_string_put_plugin.c

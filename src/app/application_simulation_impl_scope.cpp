@@ -225,21 +225,16 @@ Simulation::Impl::ScopeCatalog Simulation::Impl::scope_catalog()
 
 void Simulation::Impl::run_scope_task(
     const runtime::simir::ProcessId process,
-    const std::string_view payload,
+    const runtime::simir::ScopeTaskRequest& request,
     const SimulationTick time,
     const std::uint64_t delta)
 {
-    const auto separator = payload.find('|');
-    const auto task = payload.substr(0U, separator);
-    const auto second = separator == std::string_view::npos
-        ? std::string_view::npos
-        : payload.find('|', separator + 1U);
-    const auto lexical = second == std::string_view::npos
-        ? std::string_view { }
-        : payload.substr(separator + 1U, second - separator - 1U);
-    const auto argument = second == std::string_view::npos
-        ? std::string_view { }
-        : payload.substr(second + 1U);
+    using runtime::simir::ScopeTaskKind;
+    const std::string_view task = request.task == ScopeTaskKind::scope
+        ? "scope"
+        : request.task == ScopeTaskKind::showscopes ? "showscopes"
+                                                    : "showvars";
+    const std::string_view lexical { request.lexical_scope };
     const auto emit = [&](const std::string& line) {
         if (output_hook) {
             output_hook(process, line, true, time, delta);
@@ -329,10 +324,11 @@ void Simulation::Impl::run_scope_task(
         return children;
     };
 
-    if (task == "scope") {
+    if (request.task == ScopeTaskKind::scope) {
         // $scope(hierarchical_name) (D.11) names a module instance, task,
         // function or named block; the name is resolved here, at run time,
         // because it may reach into other instances.
+        const std::string_view argument { request.name };
         const auto target = resolve(argument, { });
         if (!target) {
             fail("'" + std::string { argument }
@@ -355,11 +351,11 @@ void Simulation::Impl::run_scope_task(
 
     const auto scope_name = current_interactive_scope();
 
-    if (task == "showscopes") {
+    if (request.task == ScopeTaskKind::showscopes) {
         // $showscopes (D.12): the scopes defined at the current level, and
         // with a nonzero argument everything in or below it. Sorted by name
         // so the listing does not depend on declaration order.
-        const bool all = argument == "1";
+        const bool all = request.all_levels;
         const auto current = registry.find(scope_name);
         if (!current) {
             fail("the interactive scope '" + scope_name
@@ -402,22 +398,15 @@ void Simulation::Impl::run_scope_task(
     // and nets of the current scope, or of those listed. A bit-select or
     // part-select names its whole vector (the lowering keeps the name).
     std::vector<ObjectInfo> shown;
-    const bool listed_names = !argument.empty();
+    const bool listed_names = !request.variables.empty();
     if (listed_names) {
-        std::size_t begin = 0U;
-        while (begin <= argument.size()) {
-            auto end = argument.find('\x1e', begin);
-            if (end == std::string_view::npos) {
-                end = argument.size();
-            }
-            const auto name = argument.substr(begin, end - begin);
+        for (const auto& name : request.variables) {
             const auto found = resolve(name, scope_name);
             if (!found) {
-                fail("'" + std::string { name }
+                fail("'" + name
                     + "' does not name a variable or net of the design");
             }
             shown.push_back(*found);
-            begin = end + 1U;
         }
     } else {
         const auto current = registry.find(scope_name);

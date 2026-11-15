@@ -17,6 +17,7 @@
 #include <utility>
 #include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <cstddef>
 #include <vpi_user.h>
@@ -31,6 +32,10 @@ struct VpiHirScope {
     fsim_vpi_handle_v1 handle { };
     std::uint32_t unit { };
     std::vector<std::pair<Step, std::string>> steps;
+    // Per step, the HIR scope of a block step (a named block's, or an
+    // unnamed block's that declares items, IEEE 1800-2023 9.3.5); none for
+    // any other step or when unknown.
+    std::vector<std::optional<semantic::ScopeId>> scopes;
     // Per step, the generate region the elaborator selected for a generate
     // step (it tells the branches of an if that share one scope name apart,
     // IEEE 1800-2023 27.5); invalid for any other step or when unknown.
@@ -72,6 +77,11 @@ public:
         std::function<fsim_vpi_handle_v1(fsim_vpi_handle_v1,
             const std::string&)>
             child_scope;
+        // The begin or fork scope object of the HIR scope of a block, or of
+        // a procedure's begin-end, directly under a scope; 0 when the block
+        // is no scope object (37.12 detail 1).
+        std::function<fsim_vpi_handle_v1(fsim_vpi_handle_v1, semantic::ScopeId)>
+            block_scope;
         // The full name of a scope object.
         std::function<std::string(fsim_vpi_handle_v1)> full_name;
         // The unpacked dimensions of a variable array object; 0 for any
@@ -121,6 +131,10 @@ public:
     /// scope, or the statements of a named block, task or function.
     [[nodiscard]] std::optional<std::vector<fsim_vpi_handle_v1>> iterate_scope(
         const VpiHirScope& scope, PLI_INT32 type);
+    /// The statement of a loop that is a scope (IEEE 1800-2023 37.12
+    /// details 2 and 3), whose scope object is `scope.handle`: the object
+    /// that answers the loop's statement relations and properties.
+    [[nodiscard]] fsim_vpi_handle_v1 loop_statement(const VpiHirScope& scope);
     /// vpi_iterate(vpiAliasStmt, scope): the alias statements of an instance
     /// or generate scope, one per aliased terminal but the last (IEEE
     /// 1800-2023 37.76).
@@ -317,6 +331,10 @@ public:
         semantic::DeclarationId declaration) const;
     [[nodiscard]] std::optional<DeclaredType> declared_type(
         std::uint64_t serial) const;
+    /// The declared type a data type written in the source makes (a type
+    /// parameter's actual, 37.28 vpiRhs), as for a formal (37.41).
+    [[nodiscard]] static std::optional<DeclaredType> source_type(
+        const semantic::sv::TypeReference& type);
 
     /// What `connections` collects (IEEE 1800-2023 37.21, 37.46, 37.58):
     /// the continuous assignments, forces and procedural continuous assigns
@@ -475,6 +493,14 @@ public:
         std::uint64_t serial, PLI_INT32 type);
     [[nodiscard]] std::optional<std::vector<fsim_vpi_handle_v1>> iterate(
         std::uint64_t serial, PLI_INT32 type);
+    [[nodiscard]] std::optional<fsim_vpi_handle_v1> relation_of(
+        std::uint64_t serial, PLI_INT32 type);
+    [[nodiscard]] std::optional<std::vector<fsim_vpi_handle_v1>> iterate_of(
+        std::uint64_t serial, PLI_INT32 type);
+    /// The scope object a loop's statement node stands for (loop_statement),
+    /// else `handle`: a relation never yields the stand-in.
+    [[nodiscard]] fsim_vpi_handle_v1 scope_object_of(
+        fsim_vpi_handle_v1 handle) const;
     /// vpi_iterate(vpiMatchItem, sequence expr) (IEEE 1800-2023 37.54): the
     /// assignment and subroutine call statements of a sequence operand
     /// written `(s, item, ...)`, in order; none for any other handle.
@@ -543,6 +569,10 @@ private:
         // detail 2) or an empty argument of a system task call (37.42
         // detail 8).
         null_operation,
+        // The condition of an if-matches statement `id` (12.6.2): an
+        // operation of vpiOpType vpiMatchOp whose operands are the
+        // expression and the pattern (37.72, Annex M).
+        match_op,
         // A for loop's initialization and increment as assignments.
         loop_init,
         loop_step,
@@ -640,6 +670,8 @@ private:
             assertion_declarations { };
         // The named block a block step reached.
         const semantic::sv::Statement* block { };
+        // The procedure whose begin-end a block step reached.
+        const semantic::sv::Process* body_process { };
         // The net alias statements of the unit or generate block.
         const std::vector<semantic::sv::Alias>* aliases { };
         // The let declarations of the unit or generate block.
@@ -671,6 +703,16 @@ private:
         const std::vector<semantic::StatementId>& statements,
         fsim_vpi_handle_v1 within, fsim_vpi_handle_v1 parent,
         std::string_view file, std::uint32_t line, std::uint32_t column);
+    // vpi_handle(vpiPropertySpec | vpiStmt | vpiElseStmt) of an expect
+    // statement (IEEE 1800-2023 37.73).
+    [[nodiscard]] fsim_vpi_handle_v1 expect_relation(
+        const semantic::sv::Statement& record, PLI_INT32 type,
+        fsim_vpi_handle_v1 scope, fsim_vpi_handle_v1 self);
+    [[nodiscard]] const semantic::sv::Statement* expect_action(
+        const semantic::sv::Statement& record,
+        support::GeneratedStatementRole role) const;
+    [[nodiscard]] std::vector<semantic::StatementId> expect_statements(
+        const semantic::sv::Statement& record) const;
     // The handle of a statement list: none, its one statement, or the
     // implicit block holding several; `owner` is a body code.
     [[nodiscard]] fsim_vpi_handle_v1 sequence(
@@ -681,6 +723,10 @@ private:
         const Node& node) const;
     [[nodiscard]] std::optional<std::string> format_text(
         const semantic::sv::Statement& statement) const;
+    /// The block statement whose scope is `scope` among `statements`.
+    [[nodiscard]] const semantic::sv::Statement* find_block_scope(
+        const std::vector<semantic::StatementId>& statements,
+        semantic::ScopeId scope) const;
     [[nodiscard]] const semantic::sv::Statement* find_block(
         const std::vector<semantic::StatementId>& statements,
         const std::string& label) const;
@@ -805,6 +851,9 @@ private:
     std::map<std::uint32_t, bool> operand_strength_;
     // The node of each handle the model gave out.
     std::unordered_map<fsim_vpi_handle_v1, std::uint64_t> serial_of_;
+    // The statement nodes loop_statement made for loops that are scope
+    // objects, by serial.
+    std::unordered_set<std::uint64_t> loop_statements_;
     // Let declarations (IEEE 1800-2023 11.12, 37.57). A let frame is the
     // context a let body is seen in: a let expression, whose formals stand
     // for its arguments, or the declaration itself, whose formals are ref

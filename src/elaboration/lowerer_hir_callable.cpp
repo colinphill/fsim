@@ -24785,13 +24785,27 @@ std::optional<RegisterId> Lowerer::lower_hir_user_system_call(
             continue;
         }
         const auto& source = *expression->systemverilog;
+        // A name the elaborator resolved names its declaration, whose
+        // object the service reaches by identity in this instance (38.3.3).
+        const auto declared = [&](const semantic::sv::Expression& name) {
+            return name.referenced_name && name.referenced_name->selected
+                ? std::to_string(name.referenced_name->selected->value())
+                : std::string { };
+        };
         if (source.kind == semantic::sv::ExpressionKind::name) {
             actuals.push_back(placeholder());
-            actual_names.push_back("n:" + source.text);
+            // `d:<declaration>|<instance>|<name>` for a resolved name;
+            // `n:<name>` for one the service looks up in the call's scope.
+            const auto declaration = declared(source);
+            actual_names.push_back(declaration.empty()
+                    ? "n:" + source.text
+                    : "d:" + declaration + "|" + hierarchy_ + "|"
+                        + source.text);
             continue;
         }
         // A constant bit- or part-select of a named vector is an object
-        // the service reaches (`x:<name>|<left>|<right>|<b or p>`).
+        // the service reaches (`x:<declaration>|<instance>|<name>|<left>|
+        // <right>|<b or p>`, the declaration empty when unresolved).
         if ((source.kind == semantic::sv::ExpressionKind::index
                 && source.operands.size() == 2U)
             || (source.kind == semantic::sv::ExpressionKind::slice
@@ -24807,7 +24821,8 @@ std::optional<RegisterId> Lowerer::lower_hir_user_system_call(
                     == semantic::sv::ExpressionKind::name
                 && left && right) {
                 actuals.push_back(placeholder());
-                actual_names.push_back("x:" + base->systemverilog->text + "|"
+                actual_names.push_back("x:" + declared(*base->systemverilog)
+                    + "|" + hierarchy_ + "|" + base->systemverilog->text + "|"
                     + std::to_string(*left) + "|" + std::to_string(*right)
                     + (source.kind == semantic::sv::ExpressionKind::index
                             ? "|b"

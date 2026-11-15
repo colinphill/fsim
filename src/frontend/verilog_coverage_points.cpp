@@ -56,6 +56,8 @@ bool is_executable_verilog_statement_kind(
     switch (kind) {
     case frontend::StatementKind::Block:
     case frontend::StatementKind::Null:
+    // A point of a concurrent assertion's generated monitor.
+    case frontend::StatementKind::SvaMarker:
         return false;
     case frontend::StatementKind::Assignment:
     case frontend::StatementKind::Force:

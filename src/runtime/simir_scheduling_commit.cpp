@@ -108,6 +108,35 @@ void insert_force_value(
 
 } // namespace
 
+bool Interpreter::Impl::settle_declaration_initializer_write(
+    const SignalId signal_id, const PackedLogic4& value,
+    const std::optional<std::size_t> offset)
+{
+    if (signal_id >= signals.size() || signal_id >= driven_values.size()) {
+        return false;
+    }
+    const auto& signal = signals[signal_id];
+    if (signal.resolution != ResolutionKind::none || signal.event_variable
+        || signal.has_implicit_driver || signal.has_charge_strength
+        || (signal_id < signal_container_aggregate_aliases.size()
+            && signal_container_aggregate_aliases[signal_id])
+        || (signal_id < forced_values.size() && forced_values[signal_id])
+        || (signal_id < forced_masks.size() && forced_masks[signal_id])) {
+        return false;
+    }
+    auto& driven = driven_values[signal_id];
+    if (offset
+        && (*offset > driven.width()
+            || value.width() > driven.width() - *offset)) {
+        return false;
+    }
+    auto whole = normalize_signal_value(signal_id,
+        offset ? insert_value(driven, value, *offset) : value);
+    driven = whole;
+    publish_settled(signal_id, std::move(whole));
+    return true;
+}
+
 void Interpreter::Impl::initialize_package_static_signal(
     const SignalId signal_id,
     PackedLogic4 value)
@@ -3788,6 +3817,11 @@ void Interpreter::Impl::commit_driver(
         initialize_package_static_signal(signal_id, std::move(value));
         return;
     }
+    if (declaration_initialization_active
+        && settle_declaration_initializer_write(
+            signal_id, value, std::nullopt)) {
+        return;
+    }
     require_writable_aggregate_signal(signal_id);
     // A value reconnects a disconnected guarded driver.
     if (!vhdl_disconnected_drivers.empty()) {
@@ -4001,6 +4035,10 @@ void Interpreter::Impl::commit_driver_slice(
         auto updated = insert_value(
             driven_values[signal_id], value, offset);
         initialize_package_static_signal(signal_id, std::move(updated));
+        return;
+    }
+    if (declaration_initialization_active
+        && settle_declaration_initializer_write(signal_id, value, offset)) {
         return;
     }
     if (!vhdl_disconnected_drivers.empty()) {

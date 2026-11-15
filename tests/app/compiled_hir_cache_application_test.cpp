@@ -1751,9 +1751,16 @@ void run_systemverilog_child_hierarchy_handoff_test(
                 *checked, config.base_directory, diagnostics);
         assert(source_mappings);
 
-        const auto pending_marker = std::string_view {
-            "\x1f"
-            "fsim.concurrent-assertion-pending|"
+        // A pending-attempt marker whose replayed action prints `__FILE__`
+        // (16.12.2): its text is relocated with the source names.
+        const auto pending_file_marker = [](const auto& value) {
+            return value.sva_marker
+                && value.sva_marker->kind == fsim::support::SvaMarkerKind::pending
+                && std::ranges::any_of(value.sva_marker->actions,
+                    [](const fsim::semantic::sv::SvaReplayedAction& action) {
+                        return action.generated_text
+                            != fsim::semantic::sv::GeneratedTextKind::none;
+                    });
         };
         assert(std::ranges::any_of(
             checked->systemverilog_hir.expressions(), [](const auto& value) {
@@ -1762,9 +1769,7 @@ void run_systemverilog_child_hierarchy_handoff_test(
                         systemverilog_file_macro;
             }));
         assert(std::ranges::any_of(
-            checked->systemverilog_hir.statements(), [&](const auto& value) {
-                return value.output_text.starts_with(pending_marker);
-            }));
+            checked->systemverilog_hir.statements(), pending_file_marker));
 
         fsim::diagnostic::Engine projected_bundle_diagnostics;
         const auto projected_bundle
@@ -1904,24 +1909,22 @@ void run_systemverilog_child_hierarchy_handoff_test(
         assert(still_malformed->text == "\"unterminated");
         assert(!still_malformed->decoded_string);
 
+        // A replayed action whose source span is missing has no source
+        // name to relocate its `__FILE__` text with.
         auto malformed_marker = *checked;
         auto pending_statement = std::ranges::find_if(
             malformed_marker.systemverilog_hir.mutable_statements(),
-            [&](const auto& value) {
-                return value.output_text.starts_with(pending_marker);
-            });
+            pending_file_marker);
         assert(pending_statement
             != malformed_marker.systemverilog_hir.mutable_statements().end());
-        pending_statement->output_text
-            = std::string { pending_marker } + "malformed";
+        for (auto& action : pending_statement->sva_marker->actions) {
+            if (action.generated_text
+                != fsim::semantic::sv::GeneratedTextKind::none) {
+                action.source = fsim::semantic::SourceSpanId { };
+            }
+        }
         assert_projection_error_parity(malformed_marker,
-            "compiled HIR contains a malformed pending assertion action");
-        assert(std::ranges::any_of(
-            malformed_marker.systemverilog_hir.statements(),
-            [&](const auto& value) {
-                return value.output_text
-                    == std::string { pending_marker } + "malformed";
-            }));
+            "compiled-HIR generated source-name text has invalid provenance");
 
         assert(fsim::app::application_detail::relocate_compiled_design_sources(
             *checked, *source_mappings, diagnostics));

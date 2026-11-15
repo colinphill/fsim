@@ -188,6 +188,10 @@ inline void operation_registers_of(const T& op, std::vector<RegisterId>& reads,
             reads.push_back(op.condition);
         } else if constexpr (std::is_same_v<T, FormatDisplay>) {
             reads.push_back(op.source);
+        } else if constexpr (std::is_same_v<T, HostRequest>) {
+            for (const auto& argument : op.arguments) {
+                reads.push_back(argument.source);
+            }
         } else if constexpr (std::is_same_v<T, SvaOperation>) {
             // A concurrent assertion's monitor (IEEE 1800-2023 16.14): a tick
             // reads the packed guards, the start and disable flags and (at
@@ -555,6 +559,7 @@ inline void kinst_flow(const KInst& inst, const std::uint32_t at,
     case KOp::mark:
     case KOp::mem_bind:
     case KOp::suspend:
+    case KOp::sva_report:
         fall();
         break;
     case KOp::constant:

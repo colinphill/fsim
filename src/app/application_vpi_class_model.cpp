@@ -525,20 +525,59 @@ std::optional<semantic::ExpressionId> VpiClassModel::lexical_actual(
     const std::size_t use, const std::size_t base, const std::size_t index) const
 {
     const auto& parameters = class_at(base).parameters;
-    if (use < uses_.size()) {
-        const auto& actuals = *uses_[use];
-        for (std::size_t at = 0U; at < actuals.size(); ++at) {
-            const auto& actual = actuals[at];
-            const bool match = actual.formal
-                ? *actual.formal == parameters.at(index).name
-                : at == index;
-            if (match && actual.kind == sv::ActualKind::expression
-                && actual.expression) {
-                return actual.expression;
-            }
-        }
+    const auto* const actual = use < uses_.size()
+        ? sv::parameter_actual(*uses_[use], index, parameters.at(index).name)
+        : nullptr;
+    if (actual != nullptr && actual->kind == sv::ActualKind::expression
+        && actual->expression) {
+        return actual->expression;
     }
     return parameters.at(index).default_value;
+}
+
+std::vector<fsim_vpi_handle_v1> VpiClassModel::lexical_param_assigns(
+    const std::size_t use, const std::size_t base)
+{
+    std::vector<fsim_vpi_handle_v1> assignments;
+    if (!hooks_.param_assign || use == 0U) {
+        return assignments;
+    }
+    const auto parent = make(Kind::typespec, base, no_index, use);
+    const auto& parameters = class_at(base).parameters;
+    for (std::size_t index = 0U; index < parameters.size(); ++index) {
+        const auto& parameter = parameters[index];
+        const auto* const actual = use - 1U < uses_.size()
+            ? sv::parameter_actual(*uses_[use - 1U], index, parameter.name)
+            : nullptr;
+        runtime::SystemVerilogVpiParamAssign record;
+        record.name = parameter.name;
+        record.connection_by_name
+            = actual != nullptr && actual->formal && !actual->formal->empty();
+        record.type_parameter = parameter.type_parameter;
+        fsim_vpi_handle_v1 typespec { };
+        if (parameter.type_parameter) {
+            // The type the use writes, else the default type (37.32
+            // detail 3; 37.28 vpiRhs typespec).
+            const auto* const type = actual != nullptr
+                    && actual->kind == sv::ActualKind::type && actual->type
+                ? &*actual->type
+                : parameter.default_type ? &*parameter.default_type
+                                         : nullptr;
+            typespec = type != nullptr && hooks_.type_typespec
+                ? hooks_.type_typespec(*type)
+                : 0U;
+            if (typespec == 0U) {
+                continue;
+            }
+        } else if (const auto expression = lexical_actual(use - 1U, base, index)) {
+            record.expression = expression->value();
+        } else {
+            continue;
+        }
+        assignments.push_back(hooks_.param_assign(std::move(record), parent,
+            make(Kind::parameter, base, no_index, index), typespec));
+    }
+    return assignments;
 }
 
 std::size_t VpiClassModel::use_of(
@@ -736,8 +775,6 @@ PLI_INT32 VpiClassModel::type(const std::uint64_t serial) const
             ? hooks_.variable_type(entry.member, identity(entry.declaration),
                   specializations_[entry.specialization].specialization_identity)
             : vpiUndefined;
-    case Kind::param_assign:
-        return vpiParamAssign;
     case Kind::class_typedef:
         return typedef_type(entry);
     case Kind::constraint:
@@ -983,7 +1020,6 @@ std::optional<std::int64_t> VpiClassModel::property(
         return item_property(nodes_.at(entry.member), property);
     case Kind::extends:
     case Kind::class_typedef:
-    case Kind::param_assign:
         return std::nullopt;
     }
     return std::nullopt;
@@ -1089,7 +1125,6 @@ std::optional<std::string> VpiClassModel::string_property(
         }
         return std::nullopt;
     case Kind::extends:
-    case Kind::param_assign:
         return std::nullopt;
     }
     return std::nullopt;
@@ -1199,53 +1234,6 @@ fsim_vpi_handle_v1 VpiClassModel::relation(
         }
         return type == vpiParent || type == vpiScope ? defn_of(entry.declaration)
                                                      : 0U;
-    // The parameter an assignment sets and the actual it sets it to (37.32
-    // vpiParamAssign; 37.28 vpiLhs, vpiRhs); a parameter left at its default
-    // has no assignment.
-    case Kind::param_assign: {
-        // A lexical assignment's member holds the use (the deriving class,
-        // plus one) above the parameter's index.
-        const auto parameter = entry.member % param_assign_stride;
-        const auto use = entry.member / param_assign_stride;
-        if (type == vpiLhs) {
-            return make(Kind::parameter, entry.declaration,
-                entry.specialization, parameter);
-        }
-        // The Rhs of a type parameter's assignment is the typespec of the
-        // type it is bound to (37.28).
-        if (type == vpiRhs && entry.specialization != no_index
-            && specializations_[entry.specialization]
-                   .parameters.at(parameter)
-                   .type_parameter) {
-            const auto key = parameter_key_of(
-                entry.declaration, entry.specialization, parameter);
-            return hooks_.parameter_typespec
-                ? hooks_.parameter_typespec(
-                      key.declaration, key.specialization, key.name)
-                : 0U;
-        }
-        if (type == vpiRhs && hooks_.expression) {
-            if (entry.specialization != no_index) {
-                const auto& actual = specializations_[entry.specialization]
-                                         .parameters.at(parameter);
-                return actual.expression
-                    ? hooks_.expression(*actual.expression, hooks_.handle(serial))
-                    : 0U;
-            }
-            const auto expression
-                = use != 0U ? lexical_actual(use - 1U, entry.declaration, parameter)
-                            : std::nullopt;
-            return expression
-                ? hooks_.expression(*expression, hooks_.handle(serial))
-                : 0U;
-        }
-        if (type == vpiParent) {
-            return entry.specialization == no_index && use != 0U
-                ? make(Kind::typespec, entry.declaration, no_index, use)
-                : typespec_of(entry.declaration, entry.specialization);
-        }
-        return 0U;
-    }
     case Kind::constraint:
     case Kind::constraint_item:
         return constraint_relation(entry, type);
@@ -1276,15 +1264,34 @@ std::vector<fsim_vpi_handle_v1> VpiClassModel::members_of(
     // bound to, and a type parameter's the typespec of its type; none for a
     // lexical typespec, whose Rhs is the use's explicit actual.
     case vpiParamAssign:
-        if (specialization != no_index) {
+        if (specialization != no_index && hooks_.param_assign) {
             const auto& actuals = specializations_[specialization].parameters;
-            for (std::size_t index = 0U; index < actuals.size(); ++index) {
-                if ((actuals[index].type_parameter ? actuals[index].type.has_value()
-                                                   : actuals[index].expression.has_value())
-                    && index < source.parameters.size()) {
-                    objects.push_back(make(
-                        Kind::param_assign, declaration, specialization, index));
+            const auto parent = typespec_of(declaration, specialization);
+            for (std::size_t index = 0U;
+                 index < actuals.size() && index < source.parameters.size();
+                 ++index) {
+                runtime::SystemVerilogVpiParamAssign record;
+                record.name = source.parameters[index].name;
+                record.type_parameter = actuals[index].type_parameter;
+                fsim_vpi_handle_v1 typespec { };
+                if (record.type_parameter) {
+                    if (!actuals[index].type.has_value()) {
+                        continue;
+                    }
+                    const auto key
+                        = parameter_key_of(declaration, specialization, index);
+                    typespec = hooks_.parameter_typespec
+                        ? hooks_.parameter_typespec(
+                              key.declaration, key.specialization, key.name)
+                        : 0U;
+                } else if (actuals[index].expression) {
+                    record.expression = actuals[index].expression->value();
+                } else {
+                    continue;
                 }
+                objects.push_back(hooks_.param_assign(std::move(record), parent,
+                    make(Kind::parameter, declaration, specialization, index),
+                    typespec));
             }
         }
         break;
@@ -1398,15 +1405,8 @@ std::optional<std::vector<fsim_vpi_handle_v1>> VpiClassModel::iterate(
             ? std::nullopt
             : find_declaration(reference->class_identity);
         if (type == vpiParamAssign && base) {
-            const auto use = use_of(reference->interface_parameter_actuals);
-            const auto& parameters = class_at(*base).parameters;
-            for (std::size_t index = 0U; index < parameters.size(); ++index) {
-                if (!parameters[index].type_parameter
-                    && lexical_actual(use - 1U, *base, index)) {
-                    assignments.push_back(make(Kind::param_assign, *base,
-                        no_index, use * param_assign_stride + index));
-                }
-            }
+            assignments = lexical_param_assigns(
+                use_of(reference->interface_parameter_actuals), *base);
         }
         return assignments;
     }
@@ -1493,15 +1493,7 @@ std::optional<std::vector<fsim_vpi_handle_v1>> VpiClassModel::iterate(
     if (entry.specialization == no_index) {
         std::vector<fsim_vpi_handle_v1> assignments;
         if (type == vpiParamAssign && entry.member != 0U) {
-            const auto& parameters = class_at(entry.declaration).parameters;
-            for (std::size_t index = 0U; index < parameters.size(); ++index) {
-                if (!parameters[index].type_parameter
-                    && lexical_actual(entry.member - 1U, entry.declaration, index)) {
-                    assignments.push_back(make(Kind::param_assign,
-                        entry.declaration, no_index,
-                        entry.member * param_assign_stride + index));
-                }
-            }
+            assignments = lexical_param_assigns(entry.member, entry.declaration);
         }
         return assignments;
     }

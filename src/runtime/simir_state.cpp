@@ -3255,6 +3255,23 @@ void Interpreter::Impl::publish_settled(
     } else if (signal_change_hook) {
         signal_change_hook(signal_id, signal.initial_value, scheduler.now());
     }
+    // The scalar observers see the value too (an observer, not an event).
+    if (scalar_signal_change_hook
+        && signal.systemverilog_scalar != SystemVerilogScalarKind::None) {
+        if (alias_observer) {
+            alias_observer->scalar_changed = true;
+        } else {
+            const auto scalar = decode_systemverilog_scalar_payload(
+                signal.initial_value, signal.systemverilog_scalar);
+            if (!scalar) {
+                throw std::logic_error {
+                    "SimIR scalar signal published an invalid payload"
+                };
+            }
+            scalar_signal_change_hook(
+                signal_id, scalar.value, scheduler.now());
+        }
+    }
     if (monitor_watches(signal_id)) {
         schedule_monitor_publication();
     }

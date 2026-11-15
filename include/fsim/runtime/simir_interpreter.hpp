@@ -50,6 +50,7 @@ public:
     using ExecutionPointHook = simir::ExecutionPointHook;
     using OutputHook = simir::OutputHook;
     using ReportHook = simir::ReportHook;
+    using HostRequestHook = simir::HostRequestHook;
     /// A covergroup sample (IEEE 1800-2023 19.8) at the time and delta of
     /// the sampling process: a closed static kernel running its own time
     /// steps passes its own time, ahead of the scheduler's.
@@ -975,6 +976,11 @@ public:
     /// sink.
     void prepare_output_callback_observation();
     void set_report_hook(ReportHook hook);
+    /// The embedding layer's service for host requests (HostRequest).
+    void set_host_request_hook(HostRequestHook hook);
+    /// Deliver the queued concurrent-assertion rows now (the end of a run
+    /// that stopped inside a region).
+    void drain_host_requests();
     void set_coverage_sample_hook(CoverageSampleHook hook);
     void set_coverage_query_hook(CoverageQueryHook hook);
     void set_vhdl_psl_api_hook(VhdlPslApiHook hook);

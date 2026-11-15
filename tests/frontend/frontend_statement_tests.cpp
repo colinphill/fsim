@@ -355,13 +355,17 @@ endmodule
             && result.design.units.front().processes[4].statements.front().span.begin.column == 11,
         "case qualifier kind and source span remain distinct from matching mode");
     const auto& matches = result.design.units.front().processes[7].statements.front();
+    // Patterns are typed nodes (IEEE 1800-2023 12.6).
+    const auto is_pattern = [](const Expression& expression,
+                                const SystemVerilogPatternKind kind) {
+        return expression.kind == ExpressionKind::Pattern
+            && expression.systemverilog_pattern == kind;
+    };
     require(
         matches.case_alternatives.size() == 6
             && matches.case_alternatives[0].choices.size() == 1
-            && matches.case_alternatives[0].choices.front().kind
-                == ExpressionKind::Call
-            && matches.case_alternatives[0].choices.front().text
-                == "@match-guard"
+            && is_pattern(matches.case_alternatives[0].choices.front(),
+                SystemVerilogPatternKind::guard)
             && matches.case_alternatives[0].choices.front().operands.size()
                 == 2
             && matches.case_alternatives[0].choices.front().operands[0].text
@@ -369,28 +373,33 @@ endmodule
             && matches.case_alternatives[0].choices.front().operands[1].text
                 == "=="
             && matches.case_alternatives[1].choices.size() == 1
-            && matches.case_alternatives[1].choices.front().kind
-                == ExpressionKind::Call
-            && matches.case_alternatives[1].choices.front().text
-                == "@match-guard"
+            && is_pattern(matches.case_alternatives[1].choices.front(),
+                SystemVerilogPatternKind::guard)
+            && is_pattern(
+                matches.case_alternatives[1].choices.front().operands[0],
+                SystemVerilogPatternKind::bind)
             && matches.case_alternatives[1].choices.front().operands[0].text
-                == "@match-bind:captured"
-            && matches.case_alternatives[2].choices.front().text
-                == "@match-guard"
+                == "captured"
+            && is_pattern(matches.case_alternatives[2].choices.front(),
+                SystemVerilogPatternKind::guard)
+            && is_pattern(
+                matches.case_alternatives[2].choices.front().operands[0],
+                SystemVerilogPatternKind::tagged)
             && matches.case_alternatives[2].choices.front().operands[0].text
-                == "@match-tagged:Some"
+                == "Some"
+            && is_pattern(matches.case_alternatives[2].choices.front()
+                              .operands[0].operands.front(),
+                SystemVerilogPatternKind::bind)
             && matches.case_alternatives[2].choices.front().operands[0].operands.front().text
-                == "@match-bind:payload"
+                == "payload"
             && matches.case_alternatives[3].choices.front().kind
                 == ExpressionKind::Aggregate
-            && matches.case_alternatives[3].choices.front().text
-                == "@match-structure"
+            && matches.case_alternatives[3].choices.front().systemverilog_pattern
+                == SystemVerilogPatternKind::structure
             && matches.case_alternatives[3].choices.front().operands.size()
                 == 2
-            && matches.case_alternatives[4].choices.front().kind
-                == ExpressionKind::Call
-            && matches.case_alternatives[4].choices.front().text
-                == "@match-wildcard"
+            && is_pattern(matches.case_alternatives[4].choices.front(),
+                SystemVerilogPatternKind::wildcard)
             && matches.case_alternatives[5].is_default
             && !matches.span.empty(),
         "case matches retains guarded constant and wildcard patterns");

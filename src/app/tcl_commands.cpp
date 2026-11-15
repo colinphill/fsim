@@ -716,6 +716,11 @@ namespace fsim::app::tcl_detail {
                 || object.kind == semantic::design::ObjectKind::systemc_event
                 || object.kind == semantic::design::ObjectKind::systemc_signal
                 || object.kind == semantic::design::ObjectKind::systemc_export;
+            // A variable of an unnamed block has no hierarchical name
+            // (IEEE 1800-2023 6.21).
+            if (object.no_hierarchical_name) {
+                continue;
+            }
             if (object.kind == semantic::design::ObjectKind::signal
                 || (signal_bearing_systemc_object && object.width != 0)) {
                 paths.push_back(design_ir->path(object.path));

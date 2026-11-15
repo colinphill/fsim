@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
 #include "../elaboration/elaborated_design_process_access.hpp"
+#include "fsim/support/sva_marker.hpp"
 
 #include <cstdlib>
 #include <set>
@@ -143,7 +144,8 @@ class DesignIrBuilder final {
         model_(checked.semantics),
         elaborated_(elaborated),
         runtime_paths_(runtime_paths),
-        paths_(elaborated.hierarchy_paths()) {}
+        paths_(elaborated.hierarchy_paths()),
+        unnamed_scopes_(checked.systemverilog_hir, checked.semantics) {}
 
   [[nodiscard]] di::DesignIr build() {
     result_.mutable_top() = paths_.intern(elaborated_.top());
@@ -659,7 +661,8 @@ class DesignIrBuilder final {
         native_handle,
         width,
         signed_value,
-        {}});
+        {},
+        false});
     if (specialization.valid()) {
       result_.mutable_specializations()[specialization.value()]
           .objects.push_back(id);
@@ -708,6 +711,8 @@ class DesignIrBuilder final {
         input.is_signed,
         object_source,
         value);
+    result_.mutable_objects()[object.value()].no_hierarchical_name
+        = unnamed_scopes_.contains(input.hir_declaration);
     signal_object_by_runtime_.try_emplace(input.id, object);
     object_by_path_.try_emplace(paths_.intern(input.name), object);
     if (input.is_port) {
@@ -768,6 +773,11 @@ class DesignIrBuilder final {
           alias_source,
           alias_value ? alias_value : base_object.declaration_value,
           base->second);
+      // Another path to the storage of an unnamed-scope variable, and a
+      // storage key, are no names (6.21).
+      result_.mutable_objects()[object.value()].no_hierarchical_name
+          = result_.objects()[base->second.value()].no_hierarchical_name
+          || elaborated_.storage_alias_path(path);
       object_by_path_[paths_.intern(path)] = object;
       if (declaration_id
           && model_.declarations()[declaration_id->value()].kind
@@ -838,6 +848,9 @@ class DesignIrBuilder final {
           base->second);
       result_.mutable_objects()[object.value()].external_type =
           external_type;
+      result_.mutable_objects()[object.value()].no_hierarchical_name
+          = result_.objects()[base->second.value()].no_hierarchical_name
+          || elaborated_.storage_alias_path(path);
       object_by_path_[paths_.intern(path)] = object;
       if (declaration_id
           && model_.declarations()[declaration_id->value()].kind
@@ -874,6 +887,8 @@ class DesignIrBuilder final {
           false,
           object_source,
           value);
+      result_.mutable_objects()[object.value()].no_hierarchical_name
+          = unnamed_scopes_.contains(input.hir_declaration);
       object_by_path_[paths_.intern(input.name)] = object;
       string_object_by_runtime_[input.id] = object;
       if (input.is_port) {
@@ -911,6 +926,8 @@ class DesignIrBuilder final {
           object_source,
           value,
           parent);
+      result_.mutable_objects()[object.value()].no_hierarchical_name
+          = unnamed_scopes_.contains(input.hir_declaration);
       container_object_by_runtime_[input.id] = object;
       object_by_path_[paths_.intern(input.name)] = object;
       if (input.is_port) {
@@ -1333,7 +1350,14 @@ class DesignIrBuilder final {
         if (const auto* const hir_process = semantic::find_by_id(
                 checked_.systemverilog_hir.processes(), *source_id)) {
           output.assertion = hir_process->assertion;
+          output.synthesized = hir_process->synthesized;
         }
+      }
+      // A static variable's declaration initializer runs no procedure of
+      // the source (IEEE 1800-2023 6.8): no VPI process either (37.63).
+      if (input.startup_phase()
+          == runtime::simir::ProcessStartupPhase::declaration_initializer) {
+        output.synthesized = true;
       }
       output.name = input.name();
       output.runtime_index = runtime_id;
@@ -1525,6 +1549,7 @@ class DesignIrBuilder final {
   const elaboration::ElaboratedDesign& elaborated_;
   const RuntimePathViews& runtime_paths_;
   semantic::HierarchyPathTable::Builder paths_;
+  UnnamedScopeDeclarations unnamed_scopes_;
   di::DesignIr result_;
   std::size_t hdl_specialization_count_{};
   std::set<std::string, std::less<>> instance_path_texts_;
@@ -1579,6 +1604,52 @@ semantic::design::DesignIr build_design_ir(
     const elaboration::ElaboratedDesign& elaborated,
     const RuntimePathViews& runtime_paths) {
   return DesignIrBuilder{checked, elaborated, runtime_paths}.build();
+}
+
+UnnamedScopeDeclarations::UnnamedScopeDeclarations(
+    const semantic::sv::Hir& hir, const semantic::Model& model)
+    : hir_ { &hir }, model_ { &model }
+{
+    for (const auto& statement : hir.statements()) {
+        if ((statement.kind == semantic::sv::StatementKind::block
+                || statement.kind == semantic::sv::StatementKind::fork)
+            && statement.label.empty() && statement.nested_scope
+            && !statement.declarations.empty()
+            && !statement.foreach_collection
+            && statement.generated_role
+                == support::GeneratedStatementRole::none) {
+            scopes_.insert(statement.nested_scope->value());
+        }
+    }
+    for (const auto& process : hir.processes()) {
+        if (process.body_block && !process.declarations.empty()) {
+            scopes_.insert(process.scope.value());
+        }
+    }
+}
+
+bool UnnamedScopeDeclarations::contains(
+    const std::optional<semantic::DeclarationId> declared) const
+{
+    if (scopes_.empty() || !declared) {
+        return false;
+    }
+    const auto* const declaration
+        = hir_->find_declaration(*declared);
+    if (declaration == nullptr) {
+        return false;
+    }
+    const auto& scopes = model_->scopes();
+    std::optional<semantic::ScopeId> scope { declaration->scope };
+    for (std::size_t depth = 0U; scope && scope->valid()
+         && scope->value() < scopes.size() && depth < scopes.size();
+         ++depth) {
+        if (scopes_.contains(scope->value())) {
+            return true;
+        }
+        scope = scopes[scope->value()].parent;
+    }
+    return false;
 }
 
 bool design_object_is_signal_bearing(

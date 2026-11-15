@@ -20,7 +20,7 @@
 #c       lhs: vpiReg line=6 top.q
 #c       rhs: vpiReg line=7 top.d
 #c vpiAlways line=15 always_type=2
-#c   vpiBegin line=16
+#c   vpiBegin line=15
 #c     vpiIfElse line=16
 #c       cond: vpiBitSelect line=16
 #c         index: vpiConstant line=16 0 const=7 size=32 bin=00000000000000000000000000000000
@@ -50,15 +50,15 @@
 #c       rhs: vpiConstant line=31 4'hc const=5 size=4 bin=1100
 #c     vpiFor line=32
 #c       init: vpiAssignment line=32 blocking=1
-#c         lhs: vpiIntVar line=32 top.run.k
+#c         lhs: vpiIntVar line=32 
 #c         rhs: vpiConstant line=32 0 const=7 size=32 bin=00000000000000000000000000000000
 #c       cond: vpiOperation line=32 op=20
-#c         vpiIntVar line=32 top.run.k
+#c         vpiIntVar line=32 
 #c         vpiConstant line=32 2 const=7 size=32 bin=00000000000000000000000000000010
 #c       inc: vpiAssignment line=32 blocking=1
-#c         lhs: vpiIntVar line=32 top.run.k
+#c         lhs: vpiIntVar line=32 
 #c         rhs: vpiOperation line=32 op=24
-#c           vpiIntVar line=32 top.run.k
+#c           vpiIntVar line=32 
 #c           vpiConstant line=32 1 const=7 size=32 bin=00000000000000000000000000000001
 #c       vpiAssignment line=33 blocking=1
 #c         lhs: vpiReg line=7 top.d
@@ -73,7 +73,7 @@
 #c         arg: vpiConstant line=35 "done %0d" const=6 size=64 bin=0110010001101111011011100110010100100000001001010011000001100100
 #c         arg: vpiReg line=6 top.q
 #c vpiInitial line=39
-#c   vpiBegin line=40
+#c   vpiBegin line=39
 #c     vpiDelayControl line=40
 #c       delay: vpiConstant line=40 10 const=1 size=64 bin=0000000000000000000000000000000000000000000000000000000000001010
 #c       vpiForce line=40
@@ -93,7 +93,7 @@
 #c       vpiDeassign line=43
 #c         lhs: vpiReg line=38 top.r
 #c vpiInitial line=50
-#c   vpiBegin line=51
+#c   vpiBegin line=50
 #c     vpiAssignment line=51 blocking=1
 #c       lhs: vpiIntegerVar line=49 top.n
 #c       rhs: vpiConstant line=51 0 const=7 size=32 bin=00000000000000000000000000000000
@@ -111,6 +111,29 @@
 #c       arg: vpiIntegerVar line=49 top.n
 #c     vpiSysTaskCall line=56 $write
 #c       arg: vpiConstant line=56 "plain" const=6 size=40 bin=0111000001101100011000010110100101101110
+#c vpiAlways line=182 always_type=1
+#c   vpiEventControl line=182
+#c     cond: vpiOperation line=182 op=39
+#c       vpiReg line=5 top.clk
+#c     vpiBegin line=182
+#c       vpiAssignment line=183 blocking=0
+#c         lhs: vpiReg line=152 top.ea
+#c         rhs: vpiBitSelect line=183
+#c           index: vpiConstant line=183 0 const=7 size=32 bin=00000000000000000000000000000000
+#c vpiInitial line=189
+#c   vpiBegin line=189
+#c     vpiAssignment line=191 blocking=1
+#c       lhs: vpiIntVar line=190 
+#c       rhs: vpiConstant line=191 1 const=7 size=32 bin=00000000000000000000000000000001
+#c     vpiFork line=192
+#c       vpiAssignment line=194 blocking=1
+#c         lhs: vpiIntVar line=193 
+#c         rhs: vpiConstant line=194 2 const=7 size=32 bin=00000000000000000000000000000010
+#c     vpiBegin line=196
+#c       vpiNamedBegin line=197 blk
+#c         vpiAssignment line=199 blocking=1
+#c           lhs: vpiReg line=198 
+#c           rhs: vpiConstant line=199 1'b1 const=3 size=1 bin=1
 #c task top.pulse
 #c   vpiRepeat line=27
 #c     cond: vpiRefObj line=27 top.pulse.n
@@ -150,7 +173,146 @@
 #c display line=135 $fdisplay: top.n "v=%0d" top.n "w"
 #c display line=136 $fwrite: top.n <empty> top.n
 #c for vpiFor line=143 localvardecls=1
-#c for variable vpiByteVar name=j full=top.counted.j line=143 size=8 signed=0 automatic=1 scope=loop init_lhs=variable
+#c for variable vpiByteVar name=j full= line=143 size=8 signed=0 automatic=1 scope=loop init_lhs=variable
+#c task top.matching
+#c   vpiBegin line=169
+#c     vpiCase line=169
+#c       cond: vpiBitVar line=167 top.ov
+#c       vpiCaseItem line=170
+#c         choice: vpiTaggedPattern line=170 None
+#c         vpiAssignment line=170 blocking=1
+#c           lhs: vpiIntegerVar line=49 top.n
+#c           rhs: vpiConstant line=170 0 const=7 size=32 bin=00000000000000000000000000000000
+#c       vpiCaseItem line=171
+#c         choice: vpiTaggedPattern line=171 Some
+#c           pattern: vpiAnyPattern line=171 v
+#c         vpiAssignment line=171 blocking=1
+#c           lhs: vpiIntegerVar line=49 top.n
+#c           rhs: vpiRefObj line=171 
+#c       vpiCaseItem line=172
+#c         vpiAssignment line=172 blocking=1
+#c           lhs: vpiIntegerVar line=49 top.n
+#c           rhs: vpiConstant line=172 -1 const=7 size=32 bin=11111111111111111111111111111111
+#c     vpiIfElse line=174
+#c       cond: vpiOperation line=174 op=66
+#c         vpiBitVar line=167 top.ov
+#c         vpiTaggedPattern line=174 Some
+#c           pattern: vpiAnyPattern line=174 w
+#c       vpiAssignment line=175 blocking=1
+#c         lhs: vpiIntegerVar line=49 top.n
+#c         rhs: vpiRefObj line=175 
+#c       else: vpiAssignment line=177 blocking=1
+#c         lhs: vpiIntegerVar line=49 top.n
+#c         rhs: vpiConstant line=177 5 const=7 size=32 bin=00000000000000000000000000000101
+#c task top.expecting
+#c   vpiBegin line=154
+#c     vpiExpectStmt line=154 e1
+#c       prop: vpiPropertySpec line=154
+#c         clock: vpiOperation line=154 op=39
+#c           vpiReg line=5 top.clk
+#c         disable: vpiReg line=152 top.eb
+#c         expr: vpiOperation line=154 op=54
+#c           vpiReg line=152 top.ea
+#c           vpiRefObj line=154 top.expecting.v
+#c           vpiConstant line=154 1 const=7 size=32 bin=00000000000000000000000000000001
+#c       vpiSysTaskCall line=155 $display
+#c         arg: vpiConstant line=155 "expect passed" const=6 size=104 bin=01100101011110000111000001100101011000110111010000100000011100000110000101110011011100110110010101100100
+#c       else: vpiSysTaskCall line=157 $display
+#c         arg: vpiConstant line=157 "expect failed" const=6 size=104 bin=01100101011110000111000001100101011000110111010000100000011001100110000101101001011011000110010101100100
+#c     vpiExpectStmt line=158 
+#c       prop: vpiPropertySpec line=158
+#c         clock: vpiOperation line=158 op=39
+#c           vpiReg line=5 top.clk
+#c         expr: vpiRefObj line=158 top.expecting.v
+#c object: vpiReg line=5 top.clk
+#c object: vpiReg line=7 top.d
+#c object: vpiReg line=152 top.ea
+#c object: vpiReg line=152 top.eb
+#c object: vpiIntegerVar line=9 top.i
+#c object: vpiIntegerVar line=49 top.n
+#c object: vpiBitVar line=167 top.ov
+#c object: vpiReg line=6 top.q
+#c object: vpiReg line=38 top.r
+#c object: vpiRegArray line=78 top.arr
+#c object: vpiNet line=66 top.nw
+#c object: vpiNet line=8 top.w
+#c scope: vpiTask line=26 top.pulse
+#c scope: vpiFunction line=60 top.wide
+#c scope: vpiTask line=70 top.chk
+#c scope: vpiTask line=79 top.each
+#c scope: vpiTask line=86 top.each_str
+#c scope: vpiTask line=108 top.ops
+#c scope: vpiTask line=126 top.shown
+#c scope: vpiTask line=134 top.shown_file
+#c scope: vpiTask line=142 top.counted
+#c scope: vpiTask line=153 top.expecting
+#c scope: vpiTask line=168 top.matching
+#c scope: vpiNamedBegin line=30 run
+#c   vpiAssignment line=31 blocking=1
+#c     lhs: vpiReg line=7 top.d
+#c     rhs: vpiConstant line=31 4'hc const=5 size=4 bin=1100
+#c   vpiFor line=32
+#c     init: vpiAssignment line=32 blocking=1
+#c       lhs: vpiIntVar line=32 
+#c       rhs: vpiConstant line=32 0 const=7 size=32 bin=00000000000000000000000000000000
+#c     cond: vpiOperation line=32 op=20
+#c       vpiIntVar line=32 
+#c       vpiConstant line=32 2 const=7 size=32 bin=00000000000000000000000000000010
+#c     inc: vpiAssignment line=32 blocking=1
+#c       lhs: vpiIntVar line=32 
+#c       rhs: vpiOperation line=32 op=24
+#c         vpiIntVar line=32 
+#c         vpiConstant line=32 1 const=7 size=32 bin=00000000000000000000000000000001
+#c     vpiAssignment line=33 blocking=1
+#c       lhs: vpiReg line=7 top.d
+#c       rhs: vpiOperation line=33 op=24
+#c         vpiReg line=7 top.d
+#c         vpiConstant line=33 1 const=7 size=32 bin=00000000000000000000000000000001
+#c   vpiTaskCall line=34 pulse
+#c     arg: vpiConstant line=34 2 const=7 size=32 bin=00000000000000000000000000000010
+#c   vpiDelayControl line=35
+#c     delay: vpiConstant line=35 5 const=1 size=64 bin=0000000000000000000000000000000000000000000000000000000000000101
+#c     vpiSysTaskCall line=35 $display
+#c       arg: vpiConstant line=35 "done %0d" const=6 size=64 bin=0110010001101111011011100110010100100000001001010011000001100100
+#c       arg: vpiReg line=6 top.q
+#c scope: vpiBegin line=189
+#c   vpiAssignment line=191 blocking=1
+#c     lhs: vpiIntVar line=190 
+#c     rhs: vpiConstant line=191 1 const=7 size=32 bin=00000000000000000000000000000001
+#c   vpiFork line=192
+#c     vpiAssignment line=194 blocking=1
+#c       lhs: vpiIntVar line=193 
+#c       rhs: vpiConstant line=194 2 const=7 size=32 bin=00000000000000000000000000000010
+#c   vpiBegin line=196
+#c     vpiNamedBegin line=197 blk
+#c       vpiAssignment line=199 blocking=1
+#c         lhs: vpiReg line=198 
+#c         rhs: vpiConstant line=199 1'b1 const=3 size=1 bin=1
+#c inner: vpiTask line=26 name=pulse full=top.pulse
+#c inner: vpiFunction line=60 name=wide full=top.wide
+#c inner: vpiTask line=70 name=chk full=top.chk
+#c inner: vpiTask line=79 name=each full=top.each
+#c   inner: vpiForeachStmt line=80 name=(null) full=(null)
+#c     var: vpiIntVar name=i full=(null)
+#c inner: vpiTask line=86 name=each_str full=top.each_str
+#c   inner: vpiForeachStmt line=88 name=(null) full=(null)
+#c inner: vpiTask line=108 name=ops full=top.ops
+#c inner: vpiTask line=126 name=shown full=top.shown
+#c inner: vpiTask line=134 name=shown_file full=top.shown_file
+#c inner: vpiTask line=142 name=counted full=top.counted
+#c   inner: vpiFor line=143 name=(null) full=(null)
+#c     var: vpiByteVar name=j full=(null)
+#c inner: vpiTask line=153 name=expecting full=top.expecting
+#c inner: vpiTask line=168 name=matching full=top.matching
+#c inner: vpiNamedBegin line=30 name=run full=top.run
+#c   inner: vpiFor line=32 name=(null) full=(null)
+#c     var: vpiIntVar name=k full=(null)
+#c inner: vpiBegin line=189 name=(null) full=(null)
+#c   var: vpiIntVar name=ux full=(null)
+#c   inner: vpiFork line=192 name=(null) full=(null)
+#c     var: vpiIntVar name=uz full=(null)
+#c   inner: vpiNamedBegin line=197 name=blk full=(null)
+#c     var: vpiReg name=bv full=(null)
 #c 10 force vpiForce line=40 top.q=0101
 #c 12 release vpiRelease line=41 top.q=0101
 #c 13 assign vpiAssignStmt line=42 top.r=1110

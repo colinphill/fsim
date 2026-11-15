@@ -1132,6 +1132,10 @@ struct SystemVerilogAssertionDeclaration {
     // instance re-parses them with its actuals and renamed variables.
     std::vector<std::vector<Token>> checker_items;
     std::vector<std::string> checker_variables;
+    // The property spec of an expect statement (IEEE 1800-2023 16.17,
+    // 37.73): the names the statement's procedure or task declares, which
+    // its references read as objects of the design unit.
+    std::vector<std::string> procedure_names;
     SourceSpan span;
 };
 

@@ -9,6 +9,7 @@
 #include "fsim/runtime/scheduler.hpp"
 #include "fsim/runtime/simir_ids.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -16,12 +17,14 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace fsim::runtime::simir {
 
 struct ExecutionPoint;
 struct SourceLocation;
+struct HostRequest;
 struct VcdControlEvent;
 struct DpiSitePlan;
 class DpiFrame;
@@ -76,6 +79,24 @@ using ReportHook = std::function<void(
     const SourceLocation&,
     SimulationTick,
     std::uint64_t)>;
+/// A host request as it runs (HostRequest): the process, its design
+/// process and its dynamic root then, the request, and its integer
+/// arguments by position (an unknown value is empty). An outcome or pending
+/// request of a concurrent assertion is a row delivered at the end of the
+/// region it ran in, with the popped attempt's start and the place of the
+/// expression that failed it.
+struct HostRequestEvent {
+    ProcessId process { };
+    ProcessId design_process { };
+    ProcessId dynamic_root { };
+    const HostRequest* request { };
+    std::array<std::optional<std::int64_t>, 4> arguments { };
+    SimulationTick time { };
+    std::uint64_t delta { };
+    std::optional<std::int64_t> attempt_start;
+    std::optional<std::pair<std::uint32_t, std::uint32_t>> fail;
+};
+using HostRequestHook = std::function<void(const HostRequestEvent&)>;
 using SystemCommandHook = std::function<std::int32_t(
     std::optional<std::string_view>)>;
 using VcdControlHook = std::function<void(const VcdControlEvent&)>;

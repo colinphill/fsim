@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "hierarchy_sv_constant_evaluator.hpp"
 #include "lowerer_internal.hpp"
 #include "fsim/semantic/systemverilog_structure_image.hpp"
 
@@ -1831,7 +1832,7 @@ Lowerer::hir_systemverilog_enumeration_method(
 std::optional<Lowerer::HirEnumerationMethod>
 Lowerer::hir_systemverilog_enumeration_profile(
     HirEnumerationMethod result,
-    const semantic::DeclarationId declaration_id) const
+    const semantic::DeclarationId declaration_id, const bool wide) const
 {
     const auto declaration = specialized_hir_unit_->find_declaration(
         declaration_id);
@@ -1842,14 +1843,15 @@ Lowerer::hir_systemverilog_enumeration_profile(
     }
     result.receiver_declaration = declaration_id;
     return hir_systemverilog_enumeration_type_profile(std::move(result),
-        *declaration->systemverilog->type, declaration->systemverilog->scope);
+        *declaration->systemverilog->type, declaration->systemverilog->scope,
+        wide);
 }
 
 std::optional<Lowerer::HirEnumerationMethod>
 Lowerer::hir_systemverilog_enumeration_type_profile(
     HirEnumerationMethod result,
     semantic::sv::TypeReference type,
-    const semantic::ScopeId scope) const
+    const semantic::ScopeId scope, const bool wide) const
 {
     // A type parameter names the type its specialization binds (8.25).
     type = hir_resolver().effective_systemverilog_type(type, scope)
@@ -1875,12 +1877,80 @@ Lowerer::hir_systemverilog_enumeration_type_profile(
         return std::nullopt;
     }
     const auto width = hir_systemverilog_type_width(type);
-    if (!width || *width == 0U || *width > 64U) {
+    if (!width || *width == 0U || (*width > 64U && !wide)) {
         return std::nullopt;
     }
     result.width = *width;
     result.four_state = hir_systemverilog_type_four_state(type);
     result.signed_value = type.signed_value;
+    if (*width > 64U) {
+        // A literal without a value is the previous literal's value plus
+        // one (IEEE 1800-2023 6.19); values wider than 64 bits are kept
+        // as packed words.
+        const auto words = (*width + 63U) / 64U;
+        const auto top_mask = *width % 64U == 0U
+            ? ~std::uint64_t { 0 }
+            : (std::uint64_t { 1 } << (*width % 64U)) - 1U;
+        std::optional<std::vector<std::uint64_t>> previous_words;
+        for (const auto& literal :
+            definition->systemverilog->enumeration_literals) {
+            std::vector<std::uint64_t> aval(words);
+            std::vector<std::uint64_t> bval(words);
+            if (literal.value) {
+                std::string error;
+                const auto constant = evaluate_hir_systemverilog_constant(
+                    *specialized_hir_unit_, *literal.value, error);
+                if (!constant) {
+                    return std::nullopt;
+                }
+                const auto source_aval = constant->packed.aval_words();
+                const auto source_bval = constant->packed.bval_words();
+                const auto width_bits = constant->packed.width();
+                const bool negative = constant->signed_value
+                    && width_bits != 0U
+                    && ((source_aval[(width_bits - 1U) / 64U]
+                            >> ((width_bits - 1U) % 64U))
+                        & 1U) != 0U;
+                for (std::size_t word { }; word < words; ++word) {
+                    if (word < source_aval.size()) {
+                        aval[word] = source_aval[word];
+                        bval[word] = source_bval[word];
+                        const auto low_bits = width_bits - word * 64U;
+                        if (low_bits < 64U) {
+                            const auto kept
+                                = (std::uint64_t { 1 } << low_bits) - 1U;
+                            aval[word] = (aval[word] & kept)
+                                | (negative ? ~kept : std::uint64_t { });
+                            bval[word] &= kept;
+                        }
+                    } else {
+                        aval[word] = negative ? ~std::uint64_t { 0 }
+                                              : std::uint64_t { };
+                    }
+                }
+            } else if (previous_words) {
+                aval = *previous_words;
+                for (auto& word : aval) {
+                    if (++word != 0U) {
+                        break;
+                    }
+                }
+            }
+            aval.back() &= top_mask;
+            bval.back() &= top_mask;
+            if (std::ranges::any_of(bval,
+                    [](const std::uint64_t word) { return word != 0U; })) {
+                // An x or z literal value is not a known value, as the
+                // 64-bit profile also refuses.
+                return std::nullopt;
+            }
+            previous_words = aval;
+            result.wide_values.push_back(
+                PackedLogic4::from_word_planes(*width, aval, bval));
+            result.names.push_back(literal.name);
+        }
+        return result;
+    }
     std::optional<std::int64_t> previous;
     for (const auto& literal :
         definition->systemverilog->enumeration_literals) {
@@ -1901,6 +1971,10 @@ Lowerer::hir_systemverilog_enumeration_type_profile(
             : (std::uint64_t { 1 } << result.width) - 1U;
         result.values.push_back(static_cast<std::uint64_t>(*value) & mask);
         result.names.push_back(literal.name);
+        if (wide) {
+            result.wide_values.push_back(PackedLogic4::from_aval_bval(
+                result.width, result.values.back(), 0U));
+        }
     }
     return result;
 }

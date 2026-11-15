@@ -219,6 +219,9 @@ std::optional<std::int64_t> VhdlHirBuilder::static_integer(
         return vh::ExpressionKind::default_choice;
     case frontend::ExpressionKind::Conditional:
         return vh::ExpressionKind::conditional;
+    // A SystemVerilog case pattern (12.6) is no VHDL expression.
+    case frontend::ExpressionKind::Pattern:
+        return vh::ExpressionKind::invalid;
     }
     return vh::ExpressionKind::invalid;
 }

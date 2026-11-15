@@ -77,6 +77,9 @@ struct ProcessInstanceProgram {
     std::vector<std::uint32_t> startup_writable_package_owner_ids;
     std::vector<StringObjectId> startup_writable_string_object_ids;
     std::vector<ContainerObjectId> startup_writable_container_object_ids;
+    /// The static variables of the process's blocks, which are this
+    /// instance's signals (IEEE 1800-2023 6.21).
+    std::vector<DebugStaticLocal> debug_static_locals;
 
     ProcessInstanceProgram() = default;
     explicit ProcessInstanceProgram(Process process);
@@ -193,6 +196,8 @@ public:
         debug_string_locals() const noexcept;
     [[nodiscard]] const std::vector<DebugContainerLocal>&
         debug_container_locals() const noexcept;
+    [[nodiscard]] const std::vector<DebugStaticLocal>&
+        debug_static_locals() const noexcept;
     [[nodiscard]] const CopyOnWriteVector<ContainerType>&
         container_register_types() const noexcept;
     [[nodiscard]] const std::vector<Sensitivity>&

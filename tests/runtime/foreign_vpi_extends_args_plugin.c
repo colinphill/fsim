@@ -25,6 +25,7 @@ static void arguments(const char* name, const char* label)
 }
 
 static PLI_INT32 late(p_cb_data data);
+static void base_assignments(char* name);
 
 static PLI_INT32 start(p_cb_data data)
 {
@@ -70,27 +71,44 @@ static PLI_INT32 start(p_cb_data data)
                 vpi_get_str(vpiType, assign), (int)value.value.integer);
         }
     }
-    {
-        vpiHandle derived = vpi_handle_by_name("top.PD", NULL);
-        vpiHandle base = derived != NULL ? vpi_handle(vpiExtends, derived) : NULL;
-        vpiHandle spec = base != NULL ? vpi_handle(vpiClassTypespec, base) : NULL;
-        vpiHandle assigns = spec != NULL ? vpi_iterate(vpiParamAssign, spec) : NULL;
-        vpiHandle assign;
-        vpi_printf("#c PD base assignments:\n");
-        while (assigns != NULL && (assign = vpi_scan(assigns)) != NULL) {
-            vpiHandle lhs = vpi_handle(vpiLhs, assign);
-            s_vpi_value value;
-            value.format = vpiIntVal;
-            value.value.integer = -1;
-            if (vpi_handle(vpiRhs, assign) != NULL) {
-                vpi_get_value(vpi_handle(vpiRhs, assign), &value);
-            }
-            vpi_printf("#c base assign lhs=%s rhs=%d\n",
-                lhs != NULL ? vpi_get_str(vpiName, lhs) : "-",
-                (int)value.value.integer);
-        }
-    }
+    base_assignments("top.PD");
+    base_assignments("top.PN");
+    base_assignments("top.TD");
+    base_assignments("top.TF");
     return 0;
+}
+
+// The parameter assignments of the base typespec a class's `extends` names
+// (37.32 detail 3), with whether a named association gave each (37.28).
+static void base_assignments(char* name)
+{
+    vpiHandle derived = vpi_handle_by_name(name, NULL);
+    vpiHandle base = derived != NULL ? vpi_handle(vpiExtends, derived) : NULL;
+    vpiHandle spec = base != NULL ? vpi_handle(vpiClassTypespec, base) : NULL;
+    vpiHandle assigns = spec != NULL ? vpi_iterate(vpiParamAssign, spec) : NULL;
+    vpiHandle assign;
+    vpi_printf("#c %s base assignments:\n", name);
+    while (assigns != NULL && (assign = vpi_scan(assigns)) != NULL) {
+        vpiHandle lhs = vpi_handle(vpiLhs, assign);
+        vpiHandle rhs = vpi_handle(vpiRhs, assign);
+        s_vpi_value value;
+        value.format = vpiIntVal;
+        value.value.integer = -1;
+        // A type parameter's right side is a typespec (37.28).
+        if (lhs != NULL && vpi_get(vpiType, lhs) == vpiTypeParameter) {
+            vpi_printf("#c base assign lhs=%s rhs=%s named=%d\n",
+                vpi_get_str(vpiName, lhs),
+                rhs != NULL ? vpi_get_str(vpiType, rhs) : "-",
+                (int)vpi_get(vpiConnByName, assign));
+            continue;
+        }
+        if (rhs != NULL) {
+            vpi_get_value(rhs, &value);
+        }
+        vpi_printf("#c base assign lhs=%s rhs=%d named=%d\n",
+            lhs != NULL ? vpi_get_str(vpiName, lhs) : "-",
+            (int)value.value.integer, (int)vpi_get(vpiConnByName, assign));
+    }
 }
 
 // A non-static data member of the object a class variable refers to is found

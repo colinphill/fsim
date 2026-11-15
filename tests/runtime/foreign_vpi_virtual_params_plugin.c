@@ -36,9 +36,11 @@ static void assigns(const char* label, vpiHandle typespec)
         if (right != NULL) {
             vpi_get_value(right, &value);
         }
-        snprintf(one, sizeof one, "%s%s=%d", count > 0 ? "," : "",
+        // A value a named association gave is marked (37.28 vpiConnByName).
+        snprintf(one, sizeof one, "%s%s=%d%s", count > 0 ? "," : "",
             left != NULL ? text(vpi_get_str(vpiName, left)) : "none",
-            (int)value.value.integer);
+            (int)value.value.integer,
+            vpi_get(vpiConnByName, assign) == 1 ? "(named)" : "");
         strncat(values, one, sizeof values - strlen(values) - 1U);
         ++count;
     }

@@ -608,6 +608,7 @@ namespace systemverilog_hir_detail {
             input.systemverilog_scalar_kind);
         output.generated_text
             = static_cast<sv::GeneratedTextKind>(input.generated_text);
+        output.pattern = static_cast<sv::PatternKind>(input.systemverilog_pattern);
         if (input.kind == frontend::ExpressionKind::Identifier
             || (input.kind == frontend::ExpressionKind::Call
                 && !input.text.starts_with("@sv-"))) {
@@ -778,6 +779,8 @@ namespace systemverilog_hir_detail {
             return sv::ExpressionKind::default_choice;
         case Input::Conditional:
             return sv::ExpressionKind::invalid;
+        case Input::Pattern:
+            return sv::ExpressionKind::pattern;
         }
         return sv::ExpressionKind::invalid;
     }

@@ -4,6 +4,7 @@
 #include "fsim/app/application.hpp"
 #include "fsim/app/built_project.hpp"
 #include "fsim/runtime/fst_compression.hpp"
+#include "fsim/runtime/fst_reader.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -196,7 +197,8 @@ void test_vcd_defaults_and_replacement(
 
 void check_fst(
     const std::filesystem::path& path,
-    const std::uint64_t expected_final_time = 2U)
+    const std::uint64_t expected_final_time = 2U,
+    const std::uint64_t expected_handles = 4U)
 {
     const auto bytes = read_bytes(path);
     assert(bytes.size() > 330U);
@@ -213,9 +215,9 @@ void check_fst(
     const auto stored_bits = read_varint(bytes, frame);
     assert(stored_bits != 0U && (stored_bits == bits || bits >= 128U));
     const auto handles = read_varint(bytes, frame);
-    assert(handles >= 4U && frame + stored_bits < bytes.size());
+    assert(handles == expected_handles && frame + stored_bits < bytes.size());
     frame += static_cast<std::size_t>(stored_bits);
-    assert(read_varint(bytes, frame) >= 4U);
+    assert(read_varint(bytes, frame) >= expected_handles);
 }
 
 void test_fst_inference_and_selection(
@@ -281,10 +283,13 @@ void test_extended_typed_values(const std::filesystem::path& directory)
         "fst",
         "typed_trace.sv"));
     assert(typed_result.status == 0 && typed_result.error.empty());
-    check_fst(typed_target, 1U);
+    // Four packed or real variables and the string (21.7).
+    check_fst(typed_target, 1U, 5U);
 
     const auto bytes = read_bytes(typed_target);
-    assert(read_be64(bytes, 57U) >= 12U);
+    // The five design variables only; no runtime-internal variable is
+    // dumped (IEEE 1800-2023 21.7.2).
+    assert(read_be64(bytes, 57U) == 5U);
     assert(bytes.find("real_value") != std::string::npos);
     assert(bytes.find("short_value") != std::string::npos);
     assert(bytes.find("realtime_value") != std::string::npos);
@@ -292,8 +297,21 @@ void test_extended_typed_values(const std::filesystem::path& directory)
     assert(bytes.find("string_value") != std::string::npos);
     assert(bytes.find("typed-string") != std::string::npos);
     // The enumeration starts at its initializer, BUSY, with no X before it
-    // (IEEE 1800-2017 6.8).
-    assert(bytes.find("xxx") == std::string::npos);
+    // (IEEE 1800-2017 6.8): every recorded value of state_value is BUSY.
+    const auto typed = fsim::runtime::read_fst(bytes);
+    assert(typed.ok());
+    const auto state = std::ranges::find(typed.trace->declarations,
+        std::string_view { "trace_format.state_value" },
+        &fsim::runtime::FstReaderDeclaration::path);
+    assert(state != typed.trace->declarations.end());
+    std::size_t state_values = 0;
+    for (const auto& value : typed.trace->values) {
+        if (value.handle == state->handle) {
+            assert(value.payload == "010");
+            ++state_values;
+        }
+    }
+    assert(state_values >= 1U);
 }
 
 void test_logic9_value(const std::filesystem::path& directory)
@@ -301,7 +319,7 @@ void test_logic9_value(const std::filesystem::path& directory)
     const auto result = run_trace(vhdl_trace_run(directory));
     assert(result.status == 0 && result.error.empty());
     const auto path = directory / "logic9.fst";
-    check_fst(path, 1U);
+    check_fst(path, 1U, 1U);
     const auto bytes = read_bytes(path);
     assert(bytes.find(std::string_view { "logic9_value\0\x24", 14U })
         != std::string::npos);

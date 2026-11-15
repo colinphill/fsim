@@ -2293,6 +2293,13 @@ struct Interpreter::Impl : SchedulerBatchTask {
     CodeCoverageOverflowHook code_coverage_overflow_hook;
     SystemCommandHook system_command_hook;
     VcdControlHook vcd_control_hook;
+    HostRequestHook host_request_hook;
+    // The outcome and pending requests of concurrent assertions run in a
+    // region, delivered in order when the region ends
+    // (drain_host_request_rows, a scheduler safe point).
+    std::vector<HostRequestEvent> host_request_rows;
+    Scheduler::SafePointHookToken host_request_drain_token { };
+    bool host_request_draining { };
     CoverageDatabaseControlHook coverage_database_control_hook;
     std::shared_ptr<const ForkSpawnFilter> fork_spawn_filter;
     /// The filter may read signals: prepare_callback_observation runs first.
@@ -2424,6 +2431,12 @@ struct Interpreter::Impl : SchedulerBatchTask {
     /// (Interpreter::set_initialized_hook).
     std::function<void()> initialized_hook;
     bool package_static_initialization_active { };
+    /// The kernel is running the static variables' declaration initializers
+    /// (its members and hosted processes, in its first activation): their
+    /// writes of plain variables are initialization, no transaction and no
+    /// event (IEEE 1800-2023 6.8, 6.21; owner 11-15), as the host's own
+    /// initializers before `started` leave them.
+    bool declaration_initialization_active { };
     ProcessId package_static_initialization_process {
         std::numeric_limits<ProcessId>::max()
     };
@@ -2962,15 +2975,17 @@ struct Interpreter::Impl : SchedulerBatchTask {
     [[nodiscard]] std::optional<std::string> mcd_name(FileHandle descriptor) const;
     [[nodiscard]] bool mcd_write(FileHandle descriptor, std::string_view text);
     [[nodiscard]] bool mcd_flush(FileHandle descriptor);
+    // An absent mode opens a multichannel descriptor for writing (IEEE
+    // 1800-2023 21.3.1).
     [[nodiscard]] FileHandle open_file(
         ProcessId process,
         std::string_view path,
-        std::string_view mode,
+        std::optional<std::string_view> mode,
         bool vhdl = false);
     [[nodiscard]] FileHandle open_file_unchecked(
         ProcessId process,
         std::string_view path,
-        std::string_view mode,
+        std::optional<std::string_view> mode,
         bool vhdl);
     // An open file for a SystemVerilog descriptor, or nullptr when the
     // descriptor names no open file.
@@ -3059,6 +3074,27 @@ struct Interpreter::Impl : SchedulerBatchTask {
     /// $dumpports begin the dump in the Postponed region.
     void control_vcd(ProcessId process, const VcdControl& operation,
         VcdControlEvent event);
+    /// Run a host request (HostRequest): deliver it, or queue an outcome or
+    /// pending row of a concurrent assertion for the end of the region.
+    void run_host_request(ProcessId process, const HostRequest& request,
+        const std::array<std::optional<std::int64_t>,
+            host_request_argument_limit>& arguments,
+        SimulationTick time, std::uint64_t delta);
+    /// Deliver the queued rows in order: at the end of the region, and
+    /// before any later output, report or host request, so the host sees
+    /// them in the order the design made them.
+    void drain_host_request_rows();
+    /// Whether rows wait: the host's, or the static kernel's
+    /// (KOp::sva_report).
+    [[nodiscard]] bool host_request_rows_pending() const noexcept;
+    /// Moves the static kernel's rows behind the host's, in order.
+    void take_kernel_host_request_rows();
+    /// Registers the safe point that drains the rows, once.
+    void ensure_host_request_drain();
+    /// The design process a process runs for (a fork child of a kernel
+    /// thread names its thread's), and its dynamic root.
+    [[nodiscard]] ProcessId design_process_of(ProcessId process);
+    [[nodiscard]] ProcessId dynamic_root_of(ProcessId process);
     template <typename Operation>
     void run_process_file(ProcessState&, const Operation&);
     void execute_file(ProcessState&, const FileOpen&);
@@ -4022,6 +4058,12 @@ struct Interpreter::Impl : SchedulerBatchTask {
         PackedLogic4 value,
         SignalChangeOrigin origin = { });
 
+    /// declaration_initialization_active: a whole or slice write of an
+    /// unresolved, unforced, non-aggregate signal becomes its settled
+    /// current and driven value (publish_settled); false for any other write,
+    /// which commits as usual.
+    [[nodiscard]] bool settle_declaration_initializer_write(SignalId signal_id,
+        const PackedLogic4& value, std::optional<std::size_t> offset);
     void initialize_package_static_signal(
         SignalId signal_id,
         PackedLogic4 value);

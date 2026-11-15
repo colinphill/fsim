@@ -95,6 +95,10 @@ void Kernel::audit_run_state(std::vector<std::string>& messages) const
     // tick.
     FSIM_RS_IDLE("kernel.impl", sva_check_refs_);
     busy(!sva_check_refs_.empty(), "assertion check reference");
+    // Assertion report rows (KOp::sva_report) are delivered at the end of
+    // the region they were made in.
+    FSIM_RS_IDLE("kernel.impl", sva_reports_);
+    busy(sva_reports_.count != 0U, "assertion report rows");
     FSIM_RS_IDLE("kernel.impl", pending_dissolves_);
     busy(!pending_dissolves_.empty(), "pending dissolve list");
     FSIM_RS_IDLE("kernel.impl", yield_wakes_);

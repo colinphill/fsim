@@ -10215,8 +10215,13 @@ Lowerer::hir_container_object_binding(
     // (IEEE 1800-2023 12.6).
     if (const auto pattern = hir_case_pattern_binding(expression_id);
         pattern && pattern->container && pattern->container_type) {
-        return HirContainerObjectBinding { { }, pattern->name, { },
-            pattern->container, pattern->container_type.get(), true };
+        const auto declaration
+            = specialized_hir_unit_->find_declaration(pattern->declaration);
+        return HirContainerObjectBinding { pattern->declaration,
+            declaration && declaration->systemverilog != nullptr
+                ? declaration->systemverilog->name
+                : std::string { },
+            { }, pattern->container, pattern->container_type.get(), true };
     }
     if (auto binding = hir_class_static_container_binding(expression_id)) {
         return binding;
@@ -29744,16 +29749,18 @@ Lowerer::hir_case_pattern_binding(
         expression_id);
     if (!expression || expression->systemverilog == nullptr
         || expression->systemverilog->kind
-            != semantic::sv::ExpressionKind::name) {
+            != semantic::sv::ExpressionKind::name
+        || !expression->systemverilog->referenced_name
+        || !expression->systemverilog->referenced_name->selected) {
         return std::nullopt;
     }
-    const auto name = std::string_view {
-        expression->systemverilog->text
-    };
+    // A use of a pattern variable resolves to its declaration (12.6).
+    const auto declaration
+        = *expression->systemverilog->referenced_name->selected;
     for (auto frame = hir_case_pattern_binding_frames_.rbegin();
         frame != hir_case_pattern_binding_frames_.rend(); ++frame) {
         const auto binding = std::ranges::find(
-            *frame, name, &HirCasePatternBinding::name);
+            *frame, declaration, &HirCasePatternBinding::declaration);
         if (binding != frame->end()) {
             return *binding;
         }

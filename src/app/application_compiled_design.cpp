@@ -37,11 +37,6 @@ struct SourceMappingIndex {
         equivalent_producers;
 };
 
-constexpr std::string_view kPendingAssertionMarker {
-    "\x1f"
-    "fsim.concurrent-assertion-pending|"
-};
-
 std::string normalized_source_name(const std::string_view name)
 {
     return source_path_key(support::path_from_utf8(name));
@@ -262,7 +257,12 @@ bool contains_relocatable_generated_text(const Value& value)
     } else if constexpr (std::same_as<Type, semantic::sv::Statement>) {
         return value.output_generated_text
                 != semantic::sv::GeneratedTextKind::none
-            || value.output_text.starts_with(kPendingAssertionMarker);
+            || (value.sva_marker
+                && std::ranges::any_of(value.sva_marker->actions,
+                    [](const semantic::sv::SvaReplayedAction& action) {
+                        return action.generated_text
+                            != semantic::sv::GeneratedTextKind::none;
+                    }));
     } else if constexpr (IsVector<Type>::value) {
         return std::ranges::any_of(value, [](const auto& item) {
             return contains_relocatable_generated_text(item);
@@ -339,6 +339,28 @@ void relocate_generated_statement(
     const std::span<const semantic::SourceSpan> relocated_spans,
     bool& valid)
 {
+    if (statement.sva_marker) {
+        // A replayed action's text derived from `__FILE__` (16.12.2
+        // replay of a pending attempt's actions).
+        for (auto& action : statement.sva_marker->actions) {
+            if (action.generated_text
+                == semantic::sv::GeneratedTextKind::none) {
+                continue;
+            }
+            const auto names = generated_text_source_names(
+                action.source, producer_source_names, relocated_spans);
+            if (!names) {
+                valid = false;
+                return;
+            }
+            if (action.generated_text
+                == semantic::sv::GeneratedTextKind::systemverilog_file_macro) {
+                action.text = names->second;
+            } else {
+                replace_all(action.text, names->first, names->second);
+            }
+        }
+    }
     if (statement.output_generated_text
         == semantic::sv::GeneratedTextKind::none) {
         return;
@@ -645,136 +667,6 @@ bool relocate_expansion_description(
     return false;
 }
 
-std::vector<std::string> split_fields(
-    const std::string_view value, const char separator)
-{
-    std::vector<std::string> fields;
-    std::size_t begin = 0;
-    while (begin <= value.size()) {
-        const auto end = value.find(separator, begin);
-        fields.emplace_back(value.substr(begin,
-            end == std::string_view::npos
-                ? value.size() - begin
-                : end - begin));
-        if (end == std::string_view::npos) {
-            break;
-        }
-        begin = end + 1U;
-    }
-    return fields;
-}
-
-std::optional<std::string> decode_hex(const std::string_view encoded)
-{
-    const auto nibble = [](const char character) -> std::optional<unsigned> {
-        if (character >= '0' && character <= '9') {
-            return static_cast<unsigned>(character - '0');
-        }
-        if (character >= 'a' && character <= 'f') {
-            return static_cast<unsigned>(character - 'a' + 10);
-        }
-        return std::nullopt;
-    };
-    if (encoded.size() % 2U != 0U) {
-        return std::nullopt;
-    }
-    std::string result;
-    result.reserve(encoded.size() / 2U);
-    for (std::size_t index = 0; index < encoded.size(); index += 2U) {
-        const auto high = nibble(encoded[index]);
-        const auto low = nibble(encoded[index + 1U]);
-        if (!high || !low) {
-            return std::nullopt;
-        }
-        result.push_back(static_cast<char>((*high << 4U) | *low));
-    }
-    return result;
-}
-
-std::string encode_hex(const std::string_view value)
-{
-    constexpr char digits[] = "0123456789abcdef";
-    std::string result;
-    result.reserve(value.size() * 2U);
-    for (const auto character : value) {
-        const auto byte = static_cast<unsigned char>(character);
-        result.push_back(digits[byte >> 4U]);
-        result.push_back(digits[byte & 0x0fU]);
-    }
-    return result;
-}
-
-std::string join_fields(
-    const std::span<const std::string> fields, const char separator)
-{
-    std::string result;
-    for (std::size_t index = 0; index < fields.size(); ++index) {
-        if (index != 0) {
-            result.push_back(separator);
-        }
-        result += fields[index];
-    }
-    return result;
-}
-
-bool relocate_pending_assertion_marker(
-    semantic::sv::Statement& statement,
-    const SourceMappingIndex& mappings,
-    diagnostic::Engine& diagnostics)
-{
-    if (!statement.output_text.starts_with(kPendingAssertionMarker)) {
-        return true;
-    }
-    const auto malformed = [&] {
-        diagnostics.error(
-            "FSIM-ART-HIR-001",
-            "compiled HIR contains a malformed pending assertion action");
-        return false;
-    };
-    auto fields = split_fields(
-        std::string_view { statement.output_text }
-            .substr(kPendingAssertionMarker.size()), '|');
-    if (fields.size() < 4U) {
-        return malformed();
-    }
-    for (std::size_t index = 4; index < fields.size(); ++index) {
-        auto action = split_fields(fields[index], ',');
-        if (action.size() != 8U) {
-            return malformed();
-        }
-        auto message = decode_hex(action[3]);
-        auto path = decode_hex(action[4]);
-        std::uint32_t generated_value { };
-        const auto generated_result = std::from_chars(
-            action[7].data(), action[7].data() + action[7].size(),
-            generated_value);
-        const auto generated = static_cast<semantic::sv::GeneratedTextKind>(
-            generated_value);
-        if (!message || !path || generated_result.ec != std::errc { }
-            || generated_result.ptr != action[7].data() + action[7].size()
-            || !semantic::sv::generated_text_kind_valid(generated)) {
-            return malformed();
-        }
-        const auto producer_path = *path;
-        if (!relocate_name(*path, mappings, diagnostics)) {
-            return false;
-        }
-        if (generated
-            == semantic::sv::GeneratedTextKind::systemverilog_file_macro) {
-            *message = *path;
-        } else if (generated == semantic::sv::GeneratedTextKind::
-                                    systemverilog_file_macro_derived) {
-            replace_all(*message, producer_path, *path);
-        }
-        action[3] = encode_hex(*message);
-        action[4] = encode_hex(*path);
-        fields[index] = join_fields(action, ',');
-    }
-    statement.output_text
-        = std::string { kPendingAssertionMarker } + join_fields(fields, '|');
-    return true;
-}
-
 std::optional<std::filesystem::path> relative_within_base(
     const std::filesystem::path& path,
     const std::filesystem::path& base_directory)
@@ -1024,20 +916,6 @@ serialize_cache_compiled_hir_bundle_with_source_projection(
     }
 
     bool valid = true;
-    for (std::size_t index = 0;
-         index < projected_systemverilog.statements.size(); ++index) {
-        if (projected_systemverilog.statements[index].output_text
-            .starts_with(kPendingAssertionMarker)) {
-            valid = relocate_pending_assertion_marker(
-                        projected_systemverilog.statements.project(index),
-                        *mapping_index, diagnostics)
-                && valid;
-        }
-    }
-    if (!valid) {
-        return std::nullopt;
-    }
-
     const auto relocate_projected_records = [&](auto& records) {
         visit_projected_generated_records(records, [&](auto& record) {
             relocate_generated_text(record, producer_source_names,
@@ -1364,12 +1242,6 @@ bool relocate_compiled_design_sources(
             valid = relocate_name(dependency, *mapping_index, diagnostics)
                 && valid;
         }
-    }
-    for (auto& statement :
-        design.mutable_systemverilog().mutable_statements()) {
-        valid = relocate_pending_assertion_marker(
-                    statement, *mapping_index, diagnostics)
-            && valid;
     }
     if (!valid) {
         return false;

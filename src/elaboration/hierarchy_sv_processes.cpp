@@ -339,6 +339,7 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
     const std::vector<semantic::StatementId>&
         active_concurrent_statements,
     const std::vector<semantic::ProcessId>& active_processes,
+    const std::vector<semantic::DeclarationId>& declaration_initializers,
     const std::vector<hierarchy_sv_generate_detail::Occurrence>&
         generate_occurrences,
     std::vector<SystemVerilogHirMaterialization>&
@@ -386,6 +387,44 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
         append_generated_systemverilog_processes(
             source, unit, specialization, program_owner);
     };
+    // The static block and callable variables whose initializers are not
+    // elaboration constants: each initializer runs once, before any
+    // procedure starts (IEEE 1800-2023 6.8, 6.21, 10.5).
+    const auto lower_declaration_initializers
+        = [&](Lowerer& source,
+              const std::vector<semantic::DeclarationId>& declarations,
+              const semantic::SpecializedHirUnit& owner,
+              const std::string& scope_path) {
+              for (const auto declaration_id : declarations) {
+                  source.reset_hierarchical_reference_state();
+                  source.set_hir_code_coverage_active(false);
+                  auto lowered = source.lower_hir_declaration_initializer(
+                      declaration_id, source_language, scope_path);
+                  if (!lowered) {
+                      const auto declaration
+                          = owner.find_declaration(declaration_id);
+                      report("FSIM-ELAB-HIR-001",
+                          "static variable declaration initializer could "
+                          "not be lowered from HIR"
+                              + hir_lowering_rejection_detail(source),
+                          compiled_source_span(*compiled_,
+                              declaration && declaration->systemverilog
+                                  ? declaration->systemverilog->source
+                                  : unit.source));
+                      return false;
+                  }
+                  lowered->language_standard = unit.standard;
+                  lowered->compatibility_profile
+                      = unit.compatibility_profile;
+                  lowered->reactive = program_owner.has_value();
+                  lowered->program_owner = program_owner;
+                  canonicalize_process_operations(*lowered);
+                  specialization.processes.push_back(lowered->id);
+                  design_.append_process_record(std::move(*lowered));
+                  append_generated_processes(source);
+              }
+              return true;
+          };
 
     record_lowering_census(
         systemverilog_clocking_process_occurrences_,
@@ -437,6 +476,13 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
         publish_systemverilog_concurrent_occurrence(
             *lowered, unit, specialization, program_owner, statement_source);
         append_generated_processes(lowerer);
+    }
+    // The static variables' initializers are lowered before the procedures:
+    // the class specializations they allocate are known to the virtual
+    // calls of every procedure (8.20, 8.25).
+    if (!lower_declaration_initializers(
+            lowerer, declaration_initializers, specialized, path)) {
+        return false;
     }
     // Preserve the established elaboration order: concurrent drivers are
     // initialized before lexical initial/always processes.  Besides
@@ -718,6 +764,11 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
                 *lowered, unit, specialization, program_owner,
                 statement_source);
             append_generated_processes(generated_lowerer);
+        }
+        if (!lower_declaration_initializers(generated_lowerer,
+                materialization.declaration_initializers,
+                *occurrence.specialization, occurrence.path)) {
+            return false;
         }
         for (const auto process_id : occurrence.region->processes) {
             const auto process
@@ -1159,7 +1210,8 @@ bool HierarchyBuilder::lower_deferred_unit_lowerings()
         if (!lower_compiled_systemverilog_processes(*entry.unit,
                 *materialization.specialization, entry.path,
                 entry.source_language, payload.concurrent_statements,
-                payload.processes, *payload.occurrences, *payload.generated,
+                payload.processes, materialization.declaration_initializers,
+                *payload.occurrences, *payload.generated,
                 lowerer, payload.clocking_processes, specialization,
                 entry.program_owner, payload.concurrent_order)) {
             return false;
@@ -1325,8 +1377,10 @@ void HierarchyBuilder::initialize_constant_driven_nets()
     // writes the value the variable already holds.
     for (std::size_t index = 0U; index < design_.process_count(); ++index) {
         const auto view = design_.process_view(index);
-        if (startup_initializer_phase(view.startup_phase())
-            || view.name().find("$declaration_initializer_") == std::string::npos
+        // Under IEEE 1364-2005 6.2.1 the initializer is a blocking
+        // assignment of an initial construct, whose time-0 event stays.
+        if (view.startup_phase()
+                != ProcessStartupPhase::declaration_initializer
             || !(view.language_standard() == "2009"
                 || view.language_standard() == "2012"
                 || view.language_standard() == "2017"

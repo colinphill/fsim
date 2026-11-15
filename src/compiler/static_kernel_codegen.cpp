@@ -275,6 +275,13 @@ static_assert(offsetof(runtime::simir::StaticKernelSvaTable, now) == 40U);
 static_assert(offsetof(runtime::simir::StaticKernelSvaTable, control_base) == 48U);
 static_assert(offsetof(runtime::simir::StaticKernelSvaTable, controls) == 56U);
 static_assert(offsetof(runtime::simir::StaticKernelSvaTable, history) == 64U);
+static_assert(offsetof(runtime::simir::StaticKernelSvaTable, delta) == 72U);
+static_assert(offsetof(runtime::simir::StaticKernelSvaTable, thread_process) == 80U);
+static_assert(offsetof(runtime::simir::StaticKernelSvaTable, reports) == 88U);
+static_assert(offsetof(runtime::simir::StaticKernelSvaReports, words) == 0U);
+static_assert(offsetof(runtime::simir::StaticKernelSvaReports, count) == 8U);
+static_assert(offsetof(runtime::simir::StaticKernelSvaReports, capacity) == 16U);
+static_assert(runtime::simir::sva_report_stride == 8U);
 static_assert(offsetof(runtime::simir::StaticKernelContainerInfo, slot) == 4U);
 static_assert(offsetof(runtime::simir::StaticKernelContainerInfo, count) == 8U);
 static_assert(offsetof(runtime::simir::StaticKernelContainerInfo, left) == 16U);
@@ -5333,6 +5340,7 @@ private:
             case KOp::mem_bind:
             case KOp::mark:
             case KOp::jump:
+            case KOp::sva_report:
                 return true;
             case KOp::constant:
             case KOp::load_slot:
@@ -14337,6 +14345,133 @@ private:
             }
             break;
         }
+        case KOp::sva_report: {
+            // An assertion outcome or pending report (HostRequest x): one
+            // row of the kernel's report buffer (StaticKernelSvaReports,
+            // sva_report_* words) with the time step, its delta, the running
+            // thread's process, and the start and fail position of the
+            // attempt the member popped last: the largest h_pop_serial among
+            // its aux directive blocks (IEEE 1800-2023 39.4.2). Only a full
+            // buffer calls the helper.
+            using namespace runtime::sva::layout;
+            auto* table = builder_.CreateLoad(ptr_, frame_field(120U));
+            auto* null = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(ptr_));
+            auto* member = builder_.CreateLoad(i32_, frame_field(32U));
+            llvm::Value* popped = null;
+            if (inst.aux != 0U) {
+                auto* blocks = builder_.CreateLoad(ptr_, table);
+                auto* member_base = builder_.CreateLoad(ptr_,
+                    builder_.CreateConstInBoundsGEP1_64(i8_, table, 8U));
+                auto* has_blocks = builder_.CreateICmpNE(blocks, null);
+                auto* scan = llvm::BasicBlock::Create(context_, "sva_report_scan", &function_);
+                auto* scanned = llvm::BasicBlock::Create(context_, "sva_report_scanned", &function_);
+                auto* from_entry = builder_.GetInsertBlock();
+                builder_.CreateCondBr(has_blocks, scan, scanned);
+                builder_.SetInsertPoint(scan);
+                auto* base = builder_.CreateLoad(i32_,
+                    builder_.CreateInBoundsGEP(i32_, member_base, member));
+                llvm::Value* best = null;
+                llvm::Value* best_serial = constant(0U);
+                for (std::uint32_t site = 0U; site < inst.aux; ++site) {
+                    auto* index = builder_.CreateAdd(base, llvm::ConstantInt::get(i32_, site));
+                    auto* block = builder_.CreateLoad(ptr_,
+                        builder_.CreateInBoundsGEP(ptr_, blocks, index));
+                    auto* read = llvm::BasicBlock::Create(context_, "sva_report_read", &function_);
+                    auto* join = llvm::BasicBlock::Create(context_, "sva_report_join", &function_);
+                    auto* from_test = builder_.GetInsertBlock();
+                    builder_.CreateCondBr(builder_.CreateICmpNE(block, null), read, join);
+                    builder_.SetInsertPoint(read);
+                    auto* loaded = builder_.CreateLoad(i64_,
+                        builder_.CreateConstInBoundsGEP1_64(i64_, block, h_pop_serial));
+                    auto* from_read = builder_.GetInsertBlock();
+                    builder_.CreateBr(join);
+                    builder_.SetInsertPoint(join);
+                    auto* serial = builder_.CreatePHI(i64_, 2U);
+                    serial->addIncoming(constant(0U), from_test);
+                    serial->addIncoming(loaded, from_read);
+                    // A block that never popped has serial 0 and is skipped.
+                    auto* later = builder_.CreateICmpSGT(serial, best_serial);
+                    best = builder_.CreateSelect(later, block, best);
+                    best_serial = builder_.CreateSelect(later, serial, best_serial);
+                }
+                auto* from_scan = builder_.GetInsertBlock();
+                builder_.CreateBr(scanned);
+                builder_.SetInsertPoint(scanned);
+                auto* chosen = builder_.CreatePHI(ptr_, 2U);
+                chosen->addIncoming(null, from_entry);
+                chosen->addIncoming(best, from_scan);
+                popped = chosen;
+            }
+            auto* has_popped = builder_.CreateICmpNE(popped, null);
+            auto* words_read = llvm::BasicBlock::Create(context_, "sva_report_words", &function_);
+            auto* words_done = llvm::BasicBlock::Create(context_, "sva_report_words_done", &function_);
+            auto* from_popped = builder_.GetInsertBlock();
+            builder_.CreateCondBr(has_popped, words_read, words_done);
+            builder_.SetInsertPoint(words_read);
+            const auto block_word = [&](const std::uint64_t at_word) {
+                return builder_.CreateLoad(i64_,
+                    builder_.CreateConstInBoundsGEP1_64(i64_, popped, at_word));
+            };
+            auto* start_loaded = block_word(h_last_start);
+            auto* line_loaded = block_word(h_last_fail_line);
+            auto* column_loaded = block_word(h_last_fail_column);
+            auto* from_words = builder_.GetInsertBlock();
+            builder_.CreateBr(words_done);
+            builder_.SetInsertPoint(words_done);
+            const auto merged = [&](llvm::Value* value) {
+                auto* phi = builder_.CreatePHI(i64_, 2U);
+                phi->addIncoming(constant(0U), from_popped);
+                phi->addIncoming(value, from_words);
+                return phi;
+            };
+            auto* start = merged(start_loaded);
+            auto* line = merged(line_loaded);
+            auto* column = merged(column_loaded);
+            auto* reports = builder_.CreateLoad(ptr_,
+                builder_.CreateConstInBoundsGEP1_64(i8_, table, 88U));
+            auto* count_address = builder_.CreateConstInBoundsGEP1_64(i8_, reports, 8U);
+            auto* count = builder_.CreateLoad(i64_, count_address);
+            auto* capacity = builder_.CreateLoad(i64_,
+                builder_.CreateConstInBoundsGEP1_64(i8_, reports, 16U));
+            auto* grow_block = llvm::BasicBlock::Create(context_, "sva_report_grow", &function_);
+            auto* append = llvm::BasicBlock::Create(context_, "sva_report_append", &function_);
+            builder_.CreateCondBr(builder_.CreateICmpEQ(count, capacity), grow_block, append);
+            builder_.SetInsertPoint(grow_block);
+            auto* grow_type = llvm::FunctionType::get(llvm::Type::getVoidTy(context_),
+                { ptr_ }, false);
+            builder_.CreateCall(grow_type,
+                helper_symbol("fsim_sk_sva_report_grow", grow_type), { frame_ });
+            check_status();
+            builder_.CreateBr(append);
+            builder_.SetInsertPoint(append);
+            auto* words = builder_.CreateLoad(ptr_, reports);
+            auto* row = builder_.CreateMul(count,
+                constant(runtime::simir::sva_report_stride));
+            const auto store_word = [&](const std::uint64_t field, llvm::Value* value) {
+                builder_.CreateStore(value, builder_.CreateInBoundsGEP(i64_, words,
+                    builder_.CreateAdd(row, constant(field))));
+            };
+            store_word(runtime::simir::sva_report_member,
+                builder_.CreateZExt(member, i64_));
+            store_word(runtime::simir::sva_report_site,
+                builder_.CreateOr(constant(inst.x),
+                    builder_.CreateSelect(has_popped,
+                        constant(runtime::simir::sva_report_popped), constant(0U))));
+            store_word(runtime::simir::sva_report_time,
+                builder_.CreateLoad(i64_, builder_.CreateLoad(ptr_,
+                    builder_.CreateConstInBoundsGEP1_64(i8_, table, 40U))));
+            store_word(runtime::simir::sva_report_delta,
+                builder_.CreateLoad(i64_, builder_.CreateLoad(ptr_,
+                    builder_.CreateConstInBoundsGEP1_64(i8_, table, 72U))));
+            store_word(runtime::simir::sva_report_thread,
+                builder_.CreateLoad(i64_, builder_.CreateLoad(ptr_,
+                    builder_.CreateConstInBoundsGEP1_64(i8_, table, 80U))));
+            store_word(runtime::simir::sva_report_start, start);
+            store_word(runtime::simir::sva_report_fail_line, line);
+            store_word(runtime::simir::sva_report_fail_column, column);
+            builder_.CreateStore(builder_.CreateAdd(count, constant(1U)), count_address);
+            break;
+        }
         case KOp::sva_sampled_load: {
             if ((inst.aux & 2U) != 0U) {
                 emit_sampled_general(inst);
@@ -17249,6 +17384,7 @@ private:
         add("fsim_sk_sva_verify", helpers.sva_verify);
         add("fsim_sk_sva_bind", helpers.sva_bind);
         add("fsim_sk_sva_verify_outcome", helpers.sva_verify_outcome);
+        add("fsim_sk_sva_report_grow", helpers.sva_report_grow);
 #if defined(__MINGW32__)
         add("___chkstk_ms", &___chkstk_ms);
 #endif

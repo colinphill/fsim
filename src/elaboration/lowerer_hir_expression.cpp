@@ -16036,7 +16036,10 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             report(
                 "FSIM-ELAB-ROOT-001",
                 "cross-root hierarchical reference '" + name
-                    + "' is not a direct signal on a selected root",
+                    + "' is not a direct signal on a selected root; an item"
+                      " declared in or under an unnamed block that declares"
+                      " items cannot be referenced hierarchically (IEEE"
+                      " 1800-2023 6.21, 9.3.5)",
                 hir_source_span(expression->systemverilog->source));
             return std::nullopt;
         }
@@ -20770,6 +20773,23 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         std::vector<std::pair<semantic::ExpressionId, RegisterId>> copy_out;
         std::vector<std::pair<semantic::ExpressionId, std::string>>
             arguments;
+        // The values a variable of an enumeration type may take (IEEE
+        // 1800-2023 18.12, 6.19): its named values, not their positions.
+        const auto enumeration_domain
+            = [&](const std::optional<semantic::DeclarationId> declaration,
+                  const std::size_t width)
+            -> std::optional<std::vector<PackedLogic4>> {
+            if (!declaration) {
+                return std::nullopt;
+            }
+            auto profile = hir_systemverilog_enumeration_profile(
+                HirEnumerationMethod { }, *declaration, true);
+            if (!profile || profile->wide_values.empty()
+                || profile->width != width) {
+                return std::nullopt;
+            }
+            return std::move(profile->wide_values);
+        };
         const auto general_target = [&](const semantic::ExpressionId operand)
             -> bool {
             const auto width = hir_expression_width(
@@ -20801,6 +20821,11 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             target.domain_kind = *domain == frontend::ValueDomain::Integer
                 ? ScopeRandomizeDomainKind::integer
                 : ScopeRandomizeDomainKind::bit_vector;
+            if (auto values = enumeration_domain(
+                    hir_referenced_declaration(operand), *width)) {
+                target.domain_kind = ScopeRandomizeDomainKind::enumeration;
+                target.domain = std::move(*values);
+            }
             arguments.emplace_back(operand, target.canonical_identity);
             copy_out.emplace_back(operand, temporary);
             operation.targets.push_back(std::move(target));
@@ -20814,10 +20839,11 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             container.canonical_identity = std::move(identity);
             container.element_width = held.type.element_width;
             container.signed_value = held.type.signed_elements;
-            container.domain_kind = held.type.element_nominal_type == "int"
-                    || held.type.element_nominal_type == "integer"
-                ? ScopeRandomizeDomainKind::integer
-                : ScopeRandomizeDomainKind::bit_vector;
+            // A packed element is a bit vector of its declared width and
+            // signing (IEEE 1800-2023 6.11, 18.12), the same domain a scalar
+            // local of that type gets; the solver gives the integer label no
+            // other meaning.
+            container.domain_kind = ScopeRandomizeDomainKind::bit_vector;
             container.nominal_type = held.type.element_nominal_type.empty()
                 ? std::string { "$std-randomize-element" }
                 : held.type.element_nominal_type;
@@ -20922,12 +20948,20 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 ? ScopeRandomizeDomainKind::integer
                 : ScopeRandomizeDomainKind::bit_vector;
             if (enumeration != nullptr) {
-                for (std::size_t ordinal { };
-                    ordinal < enumeration->enumeration_literals.size();
-                    ++ordinal) {
-                    target.domain.push_back(
-                        PackedLogic4::from_aval_bval(
-                            binding->width, ordinal, 0U));
+                if (auto values = enumeration_domain(
+                        *declaration_id, binding->width)) {
+                    target.domain = std::move(*values);
+                } else {
+                    // Every literal value is a constant expression (IEEE
+                    // 1800-2023 6.19); a value that is not known, or a
+                    // width that differs from the variable's, leaves no
+                    // domain to solve over.
+                    report("FSIM-ELAB-SVRAND-010",
+                        "std::randomize enumeration variable '"
+                            + declaration->systemverilog->name
+                            + "' has a literal without a known value",
+                        hir_source_span(call.source));
+                    return invalid_integral_result();
                 }
             }
             arguments.emplace_back(operand, target.canonical_identity);

@@ -3713,12 +3713,15 @@ void VerilogParser::extract_procedural_assertions(
                         Type { ValueDomain::Bit2, "bit",
                             PackedRange { 0, 0, true }, false },
                         std::nullopt, statement.span });
+                    variables.back().synthesized = true;
                     // Reaching the statement enables an attempt at the next
                     // clock tick of the assertion (16.14.6.2).
                     auto enable = parse_generated_statement(
                         synthetic_tokens(name + " = 1'b1;", statement.span),
                         statement.span);
                     statement = enable ? std::move(*enable) : Statement { };
+                    statement.generated_role
+                        = support::GeneratedStatementRole::procedural_assertion;
                     directives.push_back(std::move(directive));
                     continue;
                 }
@@ -5343,12 +5346,14 @@ std::vector<Token> VerilogParser::sva_request_loop(const SvaPrepared& prepared,
     return result;
 }
 
-void VerilogParser::resolve_expect_statements(const DesignUnit& scope,
+bool VerilogParser::resolve_expect_statements(const DesignUnit& scope,
     std::vector<Process>& processes,
     std::vector<TaskDeclaration>& tasks,
     std::vector<SignalDeclaration>& signals,
-    std::vector<Statement>& concurrent_statements)
+    std::vector<Statement>& concurrent_statements,
+    std::vector<SystemVerilogAssertionDeclaration>& assertion_declarations)
 {
+    bool declared { };
     using namespace assertion_resolution_detail;
     // The names the process or task that holds the statement declares
     // anywhere in it (its arguments, variables, block declarations and loop
@@ -5586,12 +5591,34 @@ void VerilogParser::resolve_expect_statements(const DesignUnit& scope,
         if (!generated) {
             return;
         }
+        // The expansion's own variables are no declarations of the source;
+        // the pass and else statements, substituted below, keep theirs.
+        const auto mark_synthesized = [](const auto& self, Statement& item) -> void {
+            for (auto& declaration : item.declarations) {
+                declaration.synthesized = true;
+            }
+            for (auto& child : item.statements) {
+                self(self, child);
+            }
+            for (auto& child : item.else_statements) {
+                self(self, child);
+            }
+            for (auto& alternative : item.case_alternatives) {
+                for (auto& child : alternative.statements) {
+                    self(self, child);
+                }
+            }
+        };
+        mark_synthesized(mark_synthesized, *generated);
         const auto pass_actions = directive.pass_action_statements.empty()
             ? action_statements(directive.pass_action_tokens)
             : directive.pass_action_statements;
         auto failure_actions = directive.failure_action_statements.empty()
             ? action_statements(directive.failure_action_tokens)
             : directive.failure_action_statements;
+        // The else statement the source gives (37.73 vpiElseStmt); the
+        // default report below is none.
+        const bool source_else = !failure_actions.empty();
         if (failure_actions.empty() && !directive.has_failure_action) {
             Statement report;
             report.kind = StatementKind::Report;
@@ -5606,25 +5633,27 @@ void VerilogParser::resolve_expect_statements(const DesignUnit& scope,
                 Statement replacement;
                 replacement.kind = StatementKind::Block;
                 replacement.span = directive.span;
-                const auto marker = [&](const std::string_view text) {
-                    Statement region;
-                    region.kind = StatementKind::Display;
-                    region.output_newline = false;
-                    region.output_text = std::string { "\x1f" } + std::string { text };
-                    region.span = directive.span;
-                    replacement.statements = { std::move(region) };
+                const auto marker = [&](const support::SvaMarkerKind kind) {
+                    replacement.statements = { sva_marker_statement(kind,
+                        support::SvaOutcome::pass,
+                        support::SvaDirective::assertion, 0U, prefix,
+                        directive.span) };
                 };
                 if (item.task_name == "__fsim_act_callregion") {
-                    marker("fsim.concurrent-assertion-call-region|" + prefix);
+                    marker(support::SvaMarkerKind::call_region);
                 } else if (item.task_name == "__fsim_act_sampledon") {
-                    marker("fsim.concurrent-assertion-sampled-reads|on");
+                    marker(support::SvaMarkerKind::sampled_reads_on);
                 } else if (item.task_name == "__fsim_act_sampledoff") {
-                    marker("fsim.concurrent-assertion-sampled-reads|off");
+                    marker(support::SvaMarkerKind::sampled_reads_off);
                 } else {
-                    const auto& actions = item.task_name == "__fsim_act_success"
-                        ? pass_actions
-                        : failure_actions;
+                    const bool pass = item.task_name == "__fsim_act_success";
+                    const auto& actions = pass ? pass_actions : failure_actions;
                     replacement.statements.assign(actions.begin(), actions.end());
+                    if (pass ? !actions.empty() : source_else) {
+                        replacement.generated_role = pass
+                            ? support::GeneratedStatementRole::expect_pass
+                            : support::GeneratedStatementRole::expect_else;
+                    }
                 }
                 item = std::move(replacement);
                 return;
@@ -5638,6 +5667,24 @@ void VerilogParser::resolve_expect_statements(const DesignUnit& scope,
         };
         substitute(substitute, *generated);
         statement = std::move(*generated);
+        // VPI presents the expansion as the expect statement (37.73): its
+        // label (9.3.5, 37.60 vpiName) and its property spec, an inline
+        // property declaration of the scope that reads the procedure's or
+        // task's names as its own objects.
+        statement.generated_role = support::GeneratedStatementRole::expect;
+        statement.immediate_label = directive.label;
+        {
+            auto spec = directive;
+            const auto before = assertion_declarations.size();
+            declare_inline_property(spec, assertion_declarations, true);
+            if (assertion_declarations.size() > before) {
+                assertion_declarations.back().procedure_names.assign(
+                    local_names.begin(), local_names.end());
+                statement.expect_property
+                    = static_cast<std::uint32_t>(before);
+                declared = true;
+            }
+        }
         const auto hidden_bit = [&](const std::string& name, const std::size_t width) {
             Type net_type;
             net_type.domain = ValueDomain::Bit2;
@@ -5654,12 +5701,14 @@ void VerilogParser::resolve_expect_statements(const DesignUnit& scope,
             }
             signals.push_back(SignalDeclaration { name, std::move(net_type),
                 PortDirection::Unknown, false, directive.span });
+            signals.back().synthesized = true;
         };
         if (wakes) {
             hidden_bit(tick_bit, 1U);
             hidden_bit(wake_bit, 1U);
             Process clock_process;
             clock_process.kind = ProcessKind::VerilogAlways;
+            clock_process.synthesized = true;
             clock_process.name = prefix + "_clock0";
             clock_process.span = directive.span;
             clock_process.statements.push_back(std::move(*clock_statement));
@@ -5667,6 +5716,8 @@ void VerilogParser::resolve_expect_statements(const DesignUnit& scope,
         }
         if (abort_assignment) {
             hidden_bit(abort_net, prepared->async_aborts.size());
+            abort_assignment->generated_role
+                = support::GeneratedStatementRole::synthesized;
             concurrent_statements.push_back(std::move(*abort_assignment));
         }
         if (disable_assignment) {
@@ -5676,6 +5727,9 @@ void VerilogParser::resolve_expect_statements(const DesignUnit& scope,
             signals.push_back(SignalDeclaration { disable_net,
                 std::move(net_type), PortDirection::Unknown, false,
                 directive.span });
+            signals.back().synthesized = true;
+            disable_assignment->generated_role
+                = support::GeneratedStatementRole::synthesized;
             concurrent_statements.push_back(std::move(*disable_assignment));
         }
     };
@@ -5715,6 +5769,7 @@ void VerilogParser::resolve_expect_statements(const DesignUnit& scope,
     for (auto& clock_process : clock_processes) {
         processes.push_back(std::move(clock_process));
     }
+    return declared;
 }
 
 bool VerilogParser::resolve_sva_directive(
@@ -5778,37 +5833,16 @@ bool VerilogParser::resolve_sva_monitor(DesignUnit& unit,
         process.name = endpoint->name;
     }
     process.span = directive.span;
-    const auto kind_name
-        = directive.kind == SystemVerilogConcurrentAssertionKind::Assume
-        ? "assumption"
-        : directive.kind == SystemVerilogConcurrentAssertionKind::Cover
-        ? "cover"
-        : directive.kind == SystemVerilogConcurrentAssertionKind::Restrict
-        ? "restriction"
-        : "assertion";
-    const auto marker = [&](const std::string_view prefix,
-                            const std::string_view outcome) {
-        Statement statement;
-        statement.kind = StatementKind::Display;
-        statement.output_newline = false;
-        statement.output_text = std::string { "\x1f" } + std::string { prefix }
-            + std::to_string(index) + "|" + kind_name + "|"
-            + std::string { outcome } + "|" + process.name;
-        statement.span = directive.span;
-        return statement;
-    };
-    const auto coverage_marker = [&](const std::string_view outcome) {
-        return marker("fsim.concurrent-assertion|", outcome);
+    const auto sva_kind = sva_directive(directive.kind);
+    const auto marker_slot = static_cast<std::uint32_t>(index);
+    const auto coverage_marker = [&](const support::SvaOutcome outcome) {
+        return sva_marker_statement(support::SvaMarkerKind::outcome, outcome,
+            sva_kind, marker_slot, process.name, directive.span);
     };
     const auto action_region_marker = [&] {
-        Statement statement;
-        statement.kind = StatementKind::Display;
-        statement.output_newline = false;
-        statement.output_text = std::string { "\x1f"
-                                              "fsim.concurrent-assertion-action-region|" }
-            + process.name;
-        statement.span = directive.span;
-        return statement;
+        return sva_marker_statement(support::SvaMarkerKind::action_region,
+            support::SvaOutcome::pass, sva_kind, marker_slot, process.name,
+            directive.span);
     };
     const auto append_actions = [&](std::vector<Statement>& destination,
                                     const std::span<const Statement> actions) {
@@ -5830,10 +5864,10 @@ bool VerilogParser::resolve_sva_monitor(DesignUnit& unit,
     assertion.assertion_message
         = "concurrent assertion '" + process.name + "' failed";
     assertion.assertion_has_pass_action = true;
-    assertion.statements.push_back(coverage_marker("pass"));
+    assertion.statements.push_back(coverage_marker(support::SvaOutcome::pass));
     append_actions(assertion.statements, pass_actions);
     assertion.assertion_has_failure_action = true;
-    assertion.else_statements.push_back(coverage_marker("failure"));
+    assertion.else_statements.push_back(coverage_marker(support::SvaOutcome::failure));
     append_actions(assertion.else_statements, failure_actions);
     const bool checks = directive.kind == SystemVerilogConcurrentAssertionKind::Assert
         || directive.kind == SystemVerilogConcurrentAssertionKind::Assume;
@@ -5852,66 +5886,39 @@ bool VerilogParser::resolve_sva_monitor(DesignUnit& unit,
     auto failure = assertion;
     failure.condition = Expression {
         ExpressionKind::IntegerLiteral, "0", { }, directive.span };
-    std::vector<Statement> vacuous { coverage_marker("vacuous") };
+    std::vector<Statement> vacuous { coverage_marker(support::SvaOutcome::vacuous) };
     append_actions(vacuous, pass_actions);
-    const std::vector<Statement> disabled { coverage_marker("abort") };
+    const std::vector<Statement> disabled { coverage_marker(support::SvaOutcome::abort) };
 
     // The obligation marker registers the actions replayed for each attempt
     // the monitor fails at the end of simulation (16.12.2 strong
     // obligations); it shares the pending-attempt marker format.
-    const auto obligation_marker = [&](const std::string_view outcome,
+    const auto obligation_marker = [&](const support::SvaOutcome outcome,
                                        const std::span<const Statement> actions) {
-        Statement obligation = marker(
-            "fsim.concurrent-assertion-pending|", std::string { outcome });
-        constexpr char digits[] = "0123456789abcdef";
-        const auto encode = [&](const std::string_view text) {
-            std::string result;
-            for (const auto character : text) {
-                const auto byte = static_cast<unsigned char>(character);
-                result.push_back(digits[byte >> 4U]);
-                result.push_back(digits[byte & 0x0fU]);
-            }
-            return result;
-        };
-        std::vector<const Statement*> replayed;
+        auto obligation = sva_marker_statement(support::SvaMarkerKind::pending,
+            outcome, sva_kind, marker_slot, process.name, directive.span);
         const auto collect = [&](const auto& self,
                                  const std::span<const Statement> items) -> void {
             for (const auto& item : items) {
                 if (item.kind == StatementKind::Block && item.label.empty()) {
                     self(self, std::span<const Statement> { item.statements });
                 } else if (item.kind == StatementKind::Display
-                    && item.output_text.starts_with("\x1f")) {
-                    continue;
-                } else if (item.kind == StatementKind::Display
                     || item.kind == StatementKind::Report) {
-                    replayed.push_back(&item);
+                    obligation.sva_marker->actions.push_back(
+                        sva_replayed_action(item));
                 }
             }
         };
         collect(collect, actions);
-        for (const auto* action : replayed) {
-            obligation.output_text += "|";
-            obligation.output_text += action->kind == StatementKind::Report ? "R" : "D";
-            obligation.output_text += ","
-                + std::to_string(static_cast<std::underlying_type_t<AssertionSeverity>>(
-                    action->assertion_severity));
-            obligation.output_text += action->output_newline ? ",1," : ",0,";
-            obligation.output_text += encode(action->output_text) + ",";
-            obligation.output_text += encode(action->span.source_name) + ",";
-            obligation.output_text += std::to_string(action->span.begin.line) + ",";
-            obligation.output_text += std::to_string(action->span.begin.column) + ",";
-            obligation.output_text += std::to_string(
-                static_cast<std::underlying_type_t<GeneratedTextKind>>(
-                    action->output_generated_text));
-        }
         return obligation;
     };
     // Attempts still running at the end of simulation that hold on the
     // truncated trace report a vacuous success with the pass actions.
-    auto obligation = obligation_marker(
-        "obligation", std::span<const Statement> { assertion.else_statements });
+    auto obligation = obligation_marker(support::SvaOutcome::obligation,
+        std::span<const Statement> { assertion.else_statements });
     auto vacuous_obligation = obligation_marker(
-        "obligation-vacuous", std::span<const Statement> { vacuous });
+        support::SvaOutcome::obligation_vacuous,
+        std::span<const Statement> { vacuous });
 
     // The process body: wait for the clocking event, sample the guards,
     // advance the monitor, and run each outcome's action.
@@ -5976,6 +5983,7 @@ bool VerilogParser::resolve_sva_monitor(DesignUnit& unit,
         }
         Process clock_process;
         clock_process.kind = ProcessKind::VerilogAlways;
+        clock_process.synthesized = true;
         clock_process.name = prefix + "_clock" + std::to_string(clock);
         clock_process.span = directive.span;
         clock_process.statements.push_back(std::move(*statement));
@@ -6093,6 +6101,7 @@ bool VerilogParser::resolve_sva_monitor(DesignUnit& unit,
             }
             Process consume_process;
             consume_process.kind = ProcessKind::VerilogAlways;
+            consume_process.synthesized = true;
             consume_process.name = prefix + "_enable";
             consume_process.span = directive.span;
             consume_process.statements.push_back(std::move(*consume));
@@ -6112,15 +6121,9 @@ bool VerilogParser::resolve_sva_monitor(DesignUnit& unit,
     // Observed region (16.13.6).
     std::vector<Statement> endpoint_match;
     if (endpoint != nullptr) {
-        const auto sampled_reads = [&](const std::string_view state) {
-            Statement statement;
-            statement.kind = StatementKind::Display;
-            statement.output_newline = false;
-            statement.output_text = std::string { "\x1f"
-                                                  "fsim.concurrent-assertion-sampled-reads|" }
-                + std::string { state };
-            statement.span = directive.span;
-            return statement;
+        const auto sampled_reads = [&](const support::SvaMarkerKind kind) {
+            return sva_marker_statement(kind, support::SvaOutcome::pass,
+                sva_kind, marker_slot, process.name, directive.span);
         };
         auto update = parse_generated_statement(
             synthetic_tokens("if (" + prefix + "_t != $realtime + 1.0) begin "
@@ -6131,9 +6134,11 @@ bool VerilogParser::resolve_sva_monitor(DesignUnit& unit,
         if (!update) {
             return reject("the generated end-point update does not parse");
         }
-        endpoint_match.push_back(sampled_reads("off"));
+        endpoint_match.push_back(
+            sampled_reads(support::SvaMarkerKind::sampled_reads_off));
         endpoint_match.push_back(std::move(*update));
-        endpoint_match.push_back(sampled_reads("on"));
+        endpoint_match.push_back(
+            sampled_reads(support::SvaMarkerKind::sampled_reads_on));
     }
     // Replace the action placeholders.
     const auto substitute = [&](const auto& self, Statement& item) -> void {
@@ -6148,14 +6153,10 @@ bool VerilogParser::resolve_sva_monitor(DesignUnit& unit,
                     replacement.statements = endpoint_match;
                 }
             } else if (which == "callregion") {
-                Statement region;
-                region.kind = StatementKind::Display;
-                region.output_newline = false;
-                region.output_text = std::string { "\x1f"
-                                                   "fsim.concurrent-assertion-call-region|" }
-                    + process.name;
-                region.span = directive.span;
-                replacement.statements = { std::move(region) };
+                replacement.statements = { sva_marker_statement(
+                    support::SvaMarkerKind::call_region,
+                    support::SvaOutcome::pass, sva_kind, marker_slot,
+                    process.name, directive.span) };
             } else if (which == "success") {
                 replacement.statements = { success };
             } else if (which == "failure") {
@@ -6163,11 +6164,11 @@ bool VerilogParser::resolve_sva_monitor(DesignUnit& unit,
             } else if (which == "vacuous") {
                 replacement.statements = vacuous;
             } else if (which == "success_off") {
-                replacement.statements = { coverage_marker("pass") };
+                replacement.statements = { coverage_marker(support::SvaOutcome::pass) };
             } else if (which == "failure_off") {
-                replacement.statements = { coverage_marker("failure") };
+                replacement.statements = { coverage_marker(support::SvaOutcome::failure) };
             } else if (which == "vacuous_off") {
-                replacement.statements = { coverage_marker("vacuous") };
+                replacement.statements = { coverage_marker(support::SvaOutcome::vacuous) };
             } else {
                 replacement.statements = disabled;
             }
@@ -6222,9 +6223,11 @@ bool VerilogParser::resolve_sva_monitor(DesignUnit& unit,
             return reject("the generated abort conditions do not parse");
         }
         abort_assignment->assignment_kind = AssignmentKind::Continuous;
+        abort_assignment->generated_role
+            = support::GeneratedStatementRole::synthesized;
     }
     if (endpoint == nullptr) {
-        process.statements.push_back(coverage_marker("register"));
+        process.statements.push_back(coverage_marker(support::SvaOutcome::registration));
     }
     if (checks && endpoint == nullptr) {
         process.statements.push_back(std::move(obligation));
@@ -6242,6 +6245,9 @@ bool VerilogParser::resolve_sva_monitor(DesignUnit& unit,
         unit.signals.push_back(SignalDeclaration { disable_net,
             std::move(net_type), PortDirection::Unknown, false,
             directive.span });
+        unit.signals.back().synthesized = true;
+        disable_assignment->generated_role
+            = support::GeneratedStatementRole::synthesized;
         unit.concurrent_statements.push_back(std::move(*disable_assignment));
     }
     const auto hidden_bits = [&](const std::string& name,
@@ -6261,6 +6267,7 @@ bool VerilogParser::resolve_sva_monitor(DesignUnit& unit,
         }
         unit.signals.push_back(SignalDeclaration { name, std::move(net_type),
             PortDirection::Unknown, false, directive.span });
+        unit.signals.back().synthesized = true;
     };
     if (prepared->wakes) {
         hidden_bits(wake_bit, 1U);

@@ -340,9 +340,9 @@ void Interpreter::Impl::StaticKernel::run_behavioral_initializers()
             continue;
         }
         // A member's host process is dormant, its initialize flag cleared
-        // (ElaboratedDesign): the name says what it is.
-        if (member_program(index).name().find(".$declaration_initializer_")
-            != std::string::npos) {
+        // (ElaboratedDesign): its startup phase says what it is.
+        if (member_program(index).startup_phase()
+            == ProcessStartupPhase::declaration_initializer) {
             initializers.push_back(index);
         }
     }
@@ -2057,6 +2057,11 @@ void Interpreter::Impl::StaticKernel::emit_lane_output(const LaneOutput& output)
             operation_get<WriteNetDelay>(member.operations()[output.pc]),
             output.value);
         break;
+    case LaneOutput::Kind::host_request:
+        impl_.run_host_request(running_process(output.member),
+            operation_get<HostRequest>(member.operations()[output.pc]), { },
+            kernel_now(), kernel_delta());
+        break;
     }
 }
 
@@ -3376,6 +3381,27 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             if (!op.inert || impl_.assertion_starts_bound) {
                 behavioral_output(member_index, op.text, op.newline);
             }
+        } else if constexpr (std::is_same_v<T, HostRequest>) {
+            if (auto* const lane = worker_lane_; lane != nullptr) {
+                // A worker's request waits for the leader's replay, at the
+                // member's place in the serial order; a request with
+                // arguments keeps its member serial (parallel planning).
+                LaneOutput output;
+                output.kind = LaneOutput::Kind::host_request;
+                output.member = member_index;
+                output.pc = pc;
+                lane->outputs.push_back(std::move(output));
+                return;
+            }
+            std::array<std::optional<std::int64_t>,
+                host_request_argument_limit>
+                arguments { };
+            for (const auto& argument : op.arguments) {
+                arguments.at(argument.position)
+                    = packed_register(argument.source).known_signed_value();
+            }
+            impl_.run_host_request(running_process(member_index), op,
+                arguments, kernel_now(), kernel_delta());
         } else if constexpr (std::is_same_v<T, FormatDisplay>) {
             if (auto* const lane = worker_lane_;
                 lane != nullptr && op.format == OutputFormat::time) {
@@ -5601,6 +5627,23 @@ void Interpreter::Impl::StaticKernel::run_thread(const std::uint32_t index)
         RunningThread(const RunningThread&) = delete;
         RunningThread& operator=(const RunningThread&) = delete;
     } running { running_thread_, index };
+    // KOp::sva_report rows name the running thread's process.
+    struct ThreadProcess {
+        std::int64_t& word;
+        std::int64_t saved;
+        ThreadProcess(std::int64_t& value, const std::int64_t process) noexcept
+            : word(value)
+            , saved(value)
+        {
+            word = process;
+        }
+        ~ThreadProcess() { word = saved; }
+        ThreadProcess(const ThreadProcess&) = delete;
+        ThreadProcess& operator=(const ThreadProcess&) = delete;
+    } thread_process { sva_thread_process_,
+        static_cast<std::int64_t>(
+            ((static_cast<std::uint64_t>(threads_[index].member) + 1U) << 32U)
+            | static_cast<std::uint64_t>(threads_[index].order)) };
     // The member's call stack and automatic frames belong to the running
     // thread; registers and strings are shared by all of its threads.
     std::swap(member.call_stack, threads_[index].call_stack);
@@ -6327,6 +6370,8 @@ void Interpreter::Impl::StaticKernel::verify_thread_activation(
             role[inst.x] = 4U;
         } else if (inst.op == KOp::sva_outcome && inst.x < size) {
             role[inst.x] = 5U;
+        } else if (inst.op == KOp::sva_report && inst.x < size) {
+            role[inst.x] = 6U;
         }
     }
     // The call stack and frames are the replay's own; the private arrays
@@ -6366,6 +6411,12 @@ void Interpreter::Impl::StaticKernel::verify_thread_activation(
             while (mismatch.empty() && role[pc] != 1U) {
                 if (++steps > run_step_limit) {
                     fail(member_index, pc, "static kernel thread did not terminate");
+                }
+                if (role[pc] == 6U) {
+                    // An assertion report's row (KOp::sva_report) is the
+                    // compiled run's; the reference does not make it again.
+                    ++pc;
+                    continue;
                 }
                 if (role[pc] >= 4U) {
                     // A concurrent assertion's monitor (IEEE 1800-2023

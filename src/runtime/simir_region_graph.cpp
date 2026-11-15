@@ -858,6 +858,7 @@ bool visit_known_region_accesses(
             return true;
         } else if constexpr (std::is_same_v<T, Assert>
             || std::is_same_v<T, Display>
+            || std::is_same_v<T, HostRequest>
             || std::is_same_v<T, FormatDisplay>
             || std::is_same_v<T, StringDisplay>
             || std::is_same_v<T, TimeDisplay>

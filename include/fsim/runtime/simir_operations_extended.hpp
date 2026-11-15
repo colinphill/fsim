@@ -515,6 +515,8 @@ struct Assert {
 
 inline auto archive_fields(const Assert& assertion)
 {
+    // Every member is listed: one added and not listed fails the build.
+    [[maybe_unused]] auto& [m0, m1, m2, m3] = assertion;
     return std::tie(
         assertion.condition, assertion.message,
         assertion.severity, assertion.source);
@@ -522,6 +524,8 @@ inline auto archive_fields(const Assert& assertion)
 
 inline auto archive_fields(Assert& assertion)
 {
+    // Every member is listed: one added and not listed fails the build.
+    [[maybe_unused]] auto& [m0, m1, m2, m3] = assertion;
     return std::tie(
         assertion.condition, assertion.message,
         assertion.severity, assertion.source);
@@ -540,15 +544,132 @@ struct Display {
     bool inert { };
 };
 
-/// The text a Display or FormatDisplay begins with when it carries a
-/// simulation-control request to the host: $save, $incsave, $restart and
-/// $reset (IEEE 1800-2023 D.7-D.9). The rest is `task|payload`, or
-/// `arg|index|` before a FormatDisplay value. Only a design that uses one of
-/// these tasks holds such an operation.
-inline constexpr std::string_view simulation_control_marker {
-    "\x1f"
-    "fsim.simulation-control|"
+/// A display or report action a concurrent assertion replays when the end
+/// of simulation resolves one of its attempts (IEEE 1800-2023 16.12.2).
+struct SvaReplayedActionRecord {
+    bool report { };
+    AssertionSeverity severity { AssertionSeverity::error };
+    bool newline { true };
+    std::string text;
+    SourceLocation source;
 };
+
+/// One outcome of a concurrent assertion monitor's attempt
+/// (support::SvaMarkerKind::outcome; 16.14, 39.4.2).
+struct SvaOutcomeRequest {
+    support::SvaOutcome outcome { support::SvaOutcome::pass };
+    support::SvaDirective directive { support::SvaDirective::assertion };
+    std::uint32_t slot { };
+    std::string name;
+};
+
+/// The actions replayed for an attempt the end of simulation resolves
+/// (support::SvaMarkerKind::pending).
+struct SvaPendingRequest {
+    support::SvaOutcome outcome { support::SvaOutcome::failure };
+    support::SvaDirective directive { support::SvaDirective::assertion };
+    std::uint32_t slot { };
+    std::string name;
+    std::vector<SvaReplayedActionRecord> actions;
+};
+
+/// $printtimescale with a hierarchical name written as an argument (IEEE
+/// 1800-2023 20.4.1), resolved by the host from the calling instance.
+struct PrintTimescaleRequest {
+    std::string target;
+};
+
+enum class ScopeTaskKind : std::uint8_t {
+    scope,
+    showscopes,
+    showvars,
+};
+
+/// $scope, $showscopes and $showvars (IEEE 1800-2023 D.11-D.13).
+struct ScopeTaskRequest {
+    ScopeTaskKind task { ScopeTaskKind::scope };
+    // The enclosing task and named blocks of the call, outermost first,
+    // dot-separated (23.8).
+    std::string lexical_scope;
+    // $scope: the name written.
+    std::string name;
+    // $showscopes: a nonzero argument.
+    bool all_levels { };
+    // $showvars: the names written, a select naming its whole vector.
+    std::vector<std::string> variables;
+};
+
+enum class SimulationControlKind : std::uint8_t {
+    save,
+    incsave,
+    restart,
+    reset,
+};
+
+/// $save, $incsave, $restart and $reset (IEEE 1800-2023 D.8, D.9); $reset's
+/// stop_value, reset_value and diagnostics_value are the request's
+/// arguments 0 to 2.
+struct SimulationControlRequest {
+    SimulationControlKind kind { SimulationControlKind::save };
+    std::string file;
+};
+
+enum class AssertionControlTask : std::uint8_t {
+    assertcontrol,
+    asserton,
+    assertoff,
+    assertkill,
+    assertpasson,
+    assertpassoff,
+    assertfailon,
+    assertfailoff,
+    assertnonvacuouson,
+    assertvacuousoff,
+};
+
+/// $assertcontrol and the convenience tasks (IEEE 1800-2023 20.11). The
+/// integer arguments are the request's arguments: control_type 0,
+/// assertion_type 1, directive_type 2 and levels 3.
+struct AssertionControlRequest {
+    AssertionControlTask task { AssertionControlTask::assertcontrol };
+    // The calling instance, where the list items resolve (21.7.1.2).
+    std::string calling_scope;
+    std::vector<std::string> items;
+    // Where the host reports a control_type outside Table 20-5 or a
+    // negative levels argument.
+    SourceLocation call;
+};
+
+/// A covergroup instance's start() or stop() (IEEE 1800-2023 19.8).
+struct CoverageControlRequest {
+    bool start { };
+    std::string identity;
+};
+
+using HostRequestRecord = std::variant<SvaOutcomeRequest, SvaPendingRequest,
+    PrintTimescaleRequest, ScopeTaskRequest, SimulationControlRequest,
+    AssertionControlRequest, CoverageControlRequest>;
+
+/// One integer argument of a host request: a 32-bit register read as a
+/// signed value when the request runs.
+struct HostRequestArgument {
+    std::uint8_t position { };
+    RegisterId source { };
+};
+
+/// A request a process makes of the embedding layer, which owns the state
+/// it acts on: the assertion and coverage reports, the assertion API,
+/// interactive scope, save and restart.
+struct HostRequest {
+    HostRequestRecord request;
+    std::vector<HostRequestArgument> arguments;
+    /// An attempt-start report of an evaluator (as Display::inert): it does
+    /// nothing until a library registers an attempt callback.
+    bool inert { };
+};
+
+/// The most arguments a host request carries.
+inline constexpr std::size_t host_request_argument_limit = 4U;
 
 enum class OutputFormat : std::uint8_t {
     binary,
@@ -929,11 +1050,15 @@ struct VhdlPslApi {
 
 inline auto archive_fields(const VhdlPslApi& operation)
 {
+    // Every member is listed: one added and not listed fails the build.
+    [[maybe_unused]] auto& [m0, m1, m2] = operation;
     return std::tie(operation.kind, operation.destination, operation.enable);
 }
 
 inline auto archive_fields(VhdlPslApi& operation)
 {
+    // Every member is listed: one added and not listed fails the build.
+    [[maybe_unused]] auto& [m0, m1, m2] = operation;
     return std::tie(operation.kind, operation.destination, operation.enable);
 }
 
@@ -966,6 +1091,8 @@ struct VhdlAssertApi {
 
 inline auto archive_fields(const VhdlAssertApi& operation)
 {
+    // Every member is listed: one added and not listed fails the build.
+    [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5, m6, m7] = operation;
     return std::tie(operation.kind, operation.destination,
         operation.string_destination, operation.level, operation.enable,
         operation.format, operation.valid, operation.source);
@@ -973,6 +1100,8 @@ inline auto archive_fields(const VhdlAssertApi& operation)
 
 inline auto archive_fields(VhdlAssertApi& operation)
 {
+    // Every member is listed: one added and not listed fails the build.
+    [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5, m6, m7] = operation;
     return std::tie(operation.kind, operation.destination,
         operation.string_destination, operation.level, operation.enable,
         operation.format, operation.valid, operation.source);
@@ -1004,11 +1133,15 @@ struct VhdlReflectionRange {
 
 inline auto archive_fields(const VhdlReflectionRange& range)
 {
+    // Every member is listed: one added and not listed fails the build.
+    [[maybe_unused]] auto& [m0, m1, m2] = range;
     return std::tie(range.left, range.right, range.ascending);
 }
 
 inline auto archive_fields(VhdlReflectionRange& range)
 {
+    // Every member is listed: one added and not listed fails the build.
+    [[maybe_unused]] auto& [m0, m1, m2] = range;
     return std::tie(range.left, range.right, range.ascending);
 }
 
@@ -1029,6 +1162,8 @@ struct VhdlReflectionType {
 
 inline auto archive_fields(const VhdlReflectionType& type)
 {
+    // Every member is listed: one added and not listed fails the build.
+    [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5, m6, m7, m8] = type;
     return std::tie(type.type_class, type.simple_name, type.packed_width,
         type.signed_value, type.lsb_offset, type.ranges, type.names,
         type.scales, type.children);
@@ -1036,6 +1171,8 @@ inline auto archive_fields(const VhdlReflectionType& type)
 
 inline auto archive_fields(VhdlReflectionType& type)
 {
+    // Every member is listed: one added and not listed fails the build.
+    [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5, m6, m7, m8] = type;
     return std::tie(type.type_class, type.simple_name, type.packed_width,
         type.signed_value, type.lsb_offset, type.ranges, type.names,
         type.scales, type.children);
@@ -1100,6 +1237,8 @@ struct VhdlReflectionApi {
 
 inline auto archive_fields(const VhdlReflectionApi& operation)
 {
+    // Every member is listed: one added and not listed fails the build.
+    [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10] = operation;
     return std::tie(operation.kind, operation.destination,
         operation.string_destination, operation.receiver, operation.source,
         operation.access_heap, operation.arguments, operation.string_argument,
@@ -1110,6 +1249,8 @@ inline auto archive_fields(const VhdlReflectionApi& operation)
 
 inline auto archive_fields(VhdlReflectionApi& operation)
 {
+    // Every member is listed: one added and not listed fails the build.
+    [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10] = operation;
     return std::tie(operation.kind, operation.destination,
         operation.string_destination, operation.receiver, operation.source,
         operation.access_heap, operation.arguments, operation.string_argument,
@@ -1298,12 +1439,16 @@ struct VhdlEnvironmentTime {
 
 inline auto archive_fields(const VhdlEnvironmentTime& operation)
 {
+    // Every member is listed: one added and not listed fails the build.
+    [[maybe_unused]] auto& [m0, m1, m2, m3] = operation;
     return std::tie(operation.kind, operation.destination,
         operation.first, operation.second);
 }
 
 inline auto archive_fields(VhdlEnvironmentTime& operation)
 {
+    // Every member is listed: one added and not listed fails the build.
+    [[maybe_unused]] auto& [m0, m1, m2, m3] = operation;
     return std::tie(operation.kind, operation.destination,
         operation.first, operation.second);
 }
@@ -1319,12 +1464,16 @@ struct VhdlEnvironmentTimeToString {
 
 inline auto archive_fields(const VhdlEnvironmentTimeToString& operation)
 {
+    // Every member is listed: one added and not listed fails the build.
+    [[maybe_unused]] auto& [m0, m1, m2] = operation;
     return std::tie(operation.destination, operation.record,
         operation.fractional_digits);
 }
 
 inline auto archive_fields(VhdlEnvironmentTimeToString& operation)
 {
+    // Every member is listed: one added and not listed fails the build.
+    [[maybe_unused]] auto& [m0, m1, m2] = operation;
     return std::tie(operation.destination, operation.record,
         operation.fractional_digits);
 }
@@ -1362,6 +1511,8 @@ struct VhdlEnvironmentDirectory {
 
 inline auto archive_fields(const VhdlEnvironmentDirectory& operation)
 {
+    // Every member is listed: one added and not listed fails the build.
+    [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5] = operation;
     return std::tie(operation.kind, operation.result,
         operation.string_result, operation.directory,
         operation.path, operation.option);
@@ -1369,6 +1520,8 @@ inline auto archive_fields(const VhdlEnvironmentDirectory& operation)
 
 inline auto archive_fields(VhdlEnvironmentDirectory& operation)
 {
+    // Every member is listed: one added and not listed fails the build.
+    [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5] = operation;
     return std::tie(operation.kind, operation.result,
         operation.string_result, operation.directory,
         operation.path, operation.option);
@@ -1386,11 +1539,15 @@ struct VhdlEnvironmentGetenv {
 
 inline auto archive_fields(const VhdlEnvironmentGetenv& operation)
 {
+    // Every member is listed: one added and not listed fails the build.
+    [[maybe_unused]] auto& [m0, m1] = operation;
     return std::tie(operation.destination, operation.name);
 }
 
 inline auto archive_fields(VhdlEnvironmentGetenv& operation)
 {
+    // Every member is listed: one added and not listed fails the build.
+    [[maybe_unused]] auto& [m0, m1] = operation;
     return std::tie(operation.destination, operation.name);
 }
 
@@ -1411,12 +1568,16 @@ struct RuntimeFormatArgument {
 
 inline auto archive_fields(const RuntimeFormatArgument& argument)
 {
+    // Every member is listed: one added and not listed fails the build.
+    [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5] = argument;
     return std::tie(argument.value, argument.string, argument.width,
         argument.is_signed, argument.scalar_kind, argument.current_time);
 }
 
 inline auto archive_fields(RuntimeFormatArgument& argument)
 {
+    // Every member is listed: one added and not listed fails the build.
+    [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5] = argument;
     return std::tie(argument.value, argument.string, argument.width,
         argument.is_signed, argument.scalar_kind, argument.current_time);
 }
@@ -1439,6 +1600,8 @@ struct RuntimeStringFormat {
 
 inline auto archive_fields(const RuntimeStringFormat& operation)
 {
+    // Every member is listed: one added and not listed fails the build.
+    [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5] = operation;
     return std::tie(operation.destination, operation.format,
         operation.arguments, operation.time_unit_femtoseconds,
         operation.hierarchy, operation.library_cell);
@@ -1446,6 +1609,8 @@ inline auto archive_fields(const RuntimeStringFormat& operation)
 
 inline auto archive_fields(RuntimeStringFormat& operation)
 {
+    // Every member is listed: one added and not listed fails the build.
+    [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5] = operation;
     return std::tie(operation.destination, operation.format,
         operation.arguments, operation.time_unit_femtoseconds,
         operation.hierarchy, operation.library_cell);
@@ -1467,12 +1632,16 @@ struct SignalStrengthText {
 
 inline auto archive_fields(const SignalStrengthText& operation)
 {
+    // Every member is listed: one added and not listed fails the build.
+    [[maybe_unused]] auto& [m0, m1, m2, m3] = operation;
     return std::tie(operation.destination, operation.signal,
         operation.offset, operation.width);
 }
 
 inline auto archive_fields(SignalStrengthText& operation)
 {
+    // Every member is listed: one added and not listed fails the build.
+    [[maybe_unused]] auto& [m0, m1, m2, m3] = operation;
     return std::tie(operation.destination, operation.signal,
         operation.offset, operation.width);
 }
@@ -1490,11 +1659,15 @@ struct VhdlEnvironmentGetCallPath {
 
 inline auto archive_fields(const VhdlEnvironmentGetCallPath& operation)
 {
+    // Every member is listed: one added and not listed fails the build.
+    [[maybe_unused]] auto& [m0, m1, m2] = operation;
     return std::tie(operation.destination, operation.source, operation.scope);
 }
 
 inline auto archive_fields(VhdlEnvironmentGetCallPath& operation)
 {
+    // Every member is listed: one added and not listed fails the build.
+    [[maybe_unused]] auto& [m0, m1, m2] = operation;
     return std::tie(operation.destination, operation.source, operation.scope);
 }
 
@@ -1514,6 +1687,8 @@ struct VhdlEnvironmentCallPath {
 
 inline auto archive_fields(const VhdlEnvironmentCallPath& operation)
 {
+    // Every member is listed: one added and not listed fails the build.
+    [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5] = operation;
     return std::tie(operation.destination, operation.separator,
         operation.source_value, operation.source_index,
         operation.source, operation.scope);
@@ -1521,6 +1696,8 @@ inline auto archive_fields(const VhdlEnvironmentCallPath& operation)
 
 inline auto archive_fields(VhdlEnvironmentCallPath& operation)
 {
+    // Every member is listed: one added and not listed fails the build.
+    [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5] = operation;
     return std::tie(operation.destination, operation.separator,
         operation.source_value, operation.source_index,
         operation.source, operation.scope);

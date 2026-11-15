@@ -363,7 +363,7 @@ namespace codec_detail {
                     >= runtime::simir::ProcessStartupPhase::ordinary
                 && value
                     <= runtime::simir::ProcessStartupPhase::
-                        class_static_initializer;
+                        declaration_initializer;
         } else if constexpr (std::same_as<T, semantic::CompiledReferenceKind>) {
             return value >= semantic::CompiledReferenceKind::package
                 && value <= semantic::CompiledReferenceKind::context;
@@ -568,6 +568,22 @@ namespace codec_detail {
             std::same_as<T, runtime::simir::InputScanFormat>) {
             return value >= runtime::simir::InputScanFormat::binary
                 && value <= runtime::simir::InputScanFormat::vhdl_logic9_hexadecimal;
+        } else if constexpr (
+            std::same_as<T, runtime::simir::VhdlTextioRead>) {
+            return value >= runtime::simir::VhdlTextioRead::none
+                && value <= runtime::simir::VhdlTextioRead::logic9;
+        } else if constexpr (
+            std::same_as<T, runtime::simir::ScopeTaskKind>) {
+            return value >= runtime::simir::ScopeTaskKind::scope
+                && value <= runtime::simir::ScopeTaskKind::showvars;
+        } else if constexpr (
+            std::same_as<T, runtime::simir::SimulationControlKind>) {
+            return value >= runtime::simir::SimulationControlKind::save
+                && value <= runtime::simir::SimulationControlKind::reset;
+        } else if constexpr (
+            std::same_as<T, runtime::simir::AssertionControlTask>) {
+            return value >= runtime::simir::AssertionControlTask::assertcontrol
+                && value <= runtime::simir::AssertionControlTask::assertvacuousoff;
         } else if constexpr (std::same_as<T, runtime::simir::OutputFormat>) {
             return value >= runtime::simir::OutputFormat::binary
                 && value <= runtime::simir::OutputFormat::unformatted4;
@@ -747,8 +763,432 @@ namespace codec_detail {
             return value >= semantic::vhdl::BuiltinOperatorIdentity::none
                 && value <= semantic::vhdl::BuiltinOperatorIdentity::
                     ieee_std_logic_1164_xnor;
+        } else if constexpr (std::same_as<T, support::SvaMarkerKind>) {
+            return support::sva_marker_kind_valid(value);
+        } else if constexpr (std::same_as<T, support::SvaDirective>) {
+            return support::sva_directive_valid(value);
+        } else if constexpr (std::same_as<T, support::SvaOutcome>) {
+            return value >= support::SvaOutcome::pass
+                && value <= support::SvaOutcome::obligation_vacuous;
+        } else if constexpr (
+            std::same_as<T, support::GeneratedStatementRole>) {
+            return support::generated_statement_role_valid(value);
+        } else if constexpr (std::same_as<T, fsim::elaboration::BoundaryConversionKind>) {
+            return value >= fsim::elaboration::BoundaryConversionKind::ordinal_alias
+                && value <= fsim::elaboration::BoundaryConversionKind::state_domain_alias;
+        } else if constexpr (std::same_as<T, fsim::elaboration::SdfNetDelayKind>) {
+            return value >= fsim::elaboration::SdfNetDelayKind::interconnect
+                && value <= fsim::elaboration::SdfNetDelayKind::port;
+        } else if constexpr (std::same_as<T, fsim::elaboration::SystemCNamedObjectKind>) {
+            return value >= fsim::elaboration::SystemCNamedObjectKind::module
+                && value <= fsim::elaboration::SystemCNamedObjectKind::export_object;
+        } else if constexpr (std::same_as<T, fsim::elaboration::VerilogPrimitiveKind>) {
+            return value >= fsim::elaboration::VerilogPrimitiveKind::gate
+                && value <= fsim::elaboration::VerilogPrimitiveKind::udp;
+        } else if constexpr (std::same_as<T, fsim::frontend::Language>) {
+            return value >= fsim::frontend::Language::Vhdl2008
+                && value <= fsim::frontend::Language::SystemVerilog2017;
+        } else if constexpr (std::same_as<T, fsim::frontend::PortDirection>) {
+            return value >= fsim::frontend::PortDirection::Unknown
+                && value <= fsim::frontend::PortDirection::Buffer;
+        } else if constexpr (std::same_as<T, fsim::frontend::SystemVerilogCoverageBinKind>) {
+            return value >= fsim::frontend::SystemVerilogCoverageBinKind::Regular
+                && value <= fsim::frontend::SystemVerilogCoverageBinKind::Illegal;
+        } else if constexpr (std::same_as<T, fsim::frontend::SystemVerilogCoverageCallbackKind>) {
+            return value >= fsim::frontend::SystemVerilogCoverageCallbackKind::PreSample
+                && value <= fsim::frontend::SystemVerilogCoverageCallbackKind::PostSample;
+        } else if constexpr (std::same_as<T, fsim::frontend::SystemVerilogCoverageDeclarationKind>) {
+            return value >= fsim::frontend::SystemVerilogCoverageDeclarationKind::Coverpoint
+                && value <= fsim::frontend::SystemVerilogCoverageDeclarationKind::Cross;
+        } else if constexpr (std::same_as<T, fsim::frontend::SystemVerilogCoverageExecutionMode>) {
+            return value >= fsim::frontend::SystemVerilogCoverageExecutionMode::Interpreter
+                && value <= fsim::frontend::SystemVerilogCoverageExecutionMode::LlvmO2;
+        } else if constexpr (std::same_as<T, fsim::frontend::SystemVerilogCoverageSampleTrigger>) {
+            return value >= fsim::frontend::SystemVerilogCoverageSampleTrigger::Explicit
+                && value <= fsim::frontend::SystemVerilogCoverageSampleTrigger::Procedural;
+        } else if constexpr (std::same_as<T, fsim::frontend::ValueDomain>) {
+            return value >= fsim::frontend::ValueDomain::Unknown
+                && value <= fsim::frontend::ValueDomain::String;
+        } else if constexpr (std::same_as<T, fsim::frontend::VerilogModulePathKind>) {
+            return value >= fsim::frontend::VerilogModulePathKind::Parallel
+                && value <= fsim::frontend::VerilogModulePathKind::Full;
+        } else if constexpr (std::same_as<T, fsim::frontend::VerilogPathPolarity>) {
+            return value >= fsim::frontend::VerilogPathPolarity::None
+                && value <= fsim::frontend::VerilogPathPolarity::Negative;
+        } else if constexpr (std::same_as<T, fsim::frontend::VerilogPrimitiveTerminalDirection>) {
+            return value >= fsim::frontend::VerilogPrimitiveTerminalDirection::Output
+                && value <= fsim::frontend::VerilogPrimitiveTerminalDirection::Input;
+        } else if constexpr (std::same_as<T, fsim::frontend::VerilogPulseStyle>) {
+            return value >= fsim::frontend::VerilogPulseStyle::Onevent
+                && value <= fsim::frontend::VerilogPulseStyle::Ondetect;
+        } else if constexpr (std::same_as<T, fsim::frontend::VerilogSpecifyEdge>) {
+            return value >= fsim::frontend::VerilogSpecifyEdge::None
+                && value <= fsim::frontend::VerilogSpecifyEdge::Edge;
+        } else if constexpr (std::same_as<T, fsim::frontend::VerilogUdpEdgeSymbol>) {
+            return value >= fsim::frontend::VerilogUdpEdgeSymbol::None
+                && value <= fsim::frontend::VerilogUdpEdgeSymbol::Explicit;
+        } else if constexpr (std::same_as<T, fsim::frontend::VerilogUdpLevelSymbol>) {
+            return value >= fsim::frontend::VerilogUdpLevelSymbol::Zero
+                && value <= fsim::frontend::VerilogUdpLevelSymbol::Binary;
+        } else if constexpr (std::same_as<T, fsim::frontend::VerilogUdpOutputSymbol>) {
+            return value >= fsim::frontend::VerilogUdpOutputSymbol::Zero
+                && value <= fsim::frontend::VerilogUdpOutputSymbol::NoChange;
+        } else if constexpr (std::same_as<T, fsim::runtime::Logic4>) {
+            return value == fsim::runtime::Logic4::zero
+                || value == fsim::runtime::Logic4::one
+                || value == fsim::runtime::Logic4::x
+                || value == fsim::runtime::Logic4::z;
+        } else if constexpr (std::same_as<T, fsim::runtime::SchedulerPhase>) {
+            return value == fsim::runtime::SchedulerPhase::active
+                || value == fsim::runtime::SchedulerPhase::inactive
+                || value == fsim::runtime::SchedulerPhase::update
+                || value == fsim::runtime::SchedulerPhase::observed
+                || value == fsim::runtime::SchedulerPhase::reactive
+                || value == fsim::runtime::SchedulerPhase::re_inactive
+                || value == fsim::runtime::SchedulerPhase::re_update
+                || value == fsim::runtime::SchedulerPhase::postponed;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::AssertionSeverity>) {
+            return value >= fsim::runtime::simir::AssertionSeverity::note
+                && value <= fsim::runtime::simir::AssertionSeverity::failure;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::BinaryOperator>) {
+            return value >= fsim::runtime::simir::BinaryOperator::bit_and
+                && value <= fsim::runtime::simir::BinaryOperator::vhdl_match_equal;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::ContainerBitstreamOperation>) {
+            return value >= fsim::runtime::simir::ContainerBitstreamOperation::clear
+                && value <= fsim::runtime::simir::ContainerBitstreamOperation::take_container;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::ContainerElementKind>) {
+            return value >= fsim::runtime::simir::ContainerElementKind::Packed
+                && value <= fsim::runtime::simir::ContainerElementKind::Aggregate;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::ContainerElementSourceKind>) {
+            return value >= fsim::runtime::simir::ContainerElementSourceKind::text
+                && value <= fsim::runtime::simir::ContainerElementSourceKind::container;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::ContainerLocatorOperator>) {
+            return value >= fsim::runtime::simir::ContainerLocatorOperator::minimum
+                && value <= fsim::runtime::simir::ContainerLocatorOperator::find_last_index;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::ContainerPredicateOperator>) {
+            return value >= fsim::runtime::simir::ContainerPredicateOperator::item
+                && value <= fsim::runtime::simir::ContainerPredicateOperator::conditional;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::ContainerPredicateValueKind>) {
+            return value >= fsim::runtime::simir::ContainerPredicateValueKind::element
+                && value <= fsim::runtime::simir::ContainerPredicateValueKind::logical;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::ContainerReductionOperator>) {
+            return value >= fsim::runtime::simir::ContainerReductionOperator::sum
+                && value <= fsim::runtime::simir::ContainerReductionOperator::bit_xor;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::ContainerTraversal>) {
+            return value >= fsim::runtime::simir::ContainerTraversal::first
+                && value <= fsim::runtime::simir::ContainerTraversal::previous;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::CoverageQueryKind>) {
+            return value >= fsim::runtime::simir::CoverageQueryKind::overall_type
+                && value <= fsim::runtime::simir::CoverageQueryKind::covergroup_instance;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::DebugLocalStorage>) {
+            return value >= fsim::runtime::simir::DebugLocalStorage::packed
+                && value <= fsim::runtime::simir::DebugLocalStorage::container;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::DebugPointKind>) {
+            return value >= fsim::runtime::simir::DebugPointKind::statement
+                && value <= fsim::runtime::simir::DebugPointKind::call_value;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::ExpressionSizingKind>) {
+            return value >= fsim::runtime::simir::ExpressionSizingKind::self_determined
+                && value <= fsim::runtime::simir::ExpressionSizingKind::context_determined;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::ExpressionValueDomain>) {
+            return value >= fsim::runtime::simir::ExpressionValueDomain::two_state
+                && value <= fsim::runtime::simir::ExpressionValueDomain::boolean;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::FileBinaryTargetKind>) {
+            return value >= fsim::runtime::simir::FileBinaryTargetKind::packed_register
+                && value <= fsim::runtime::simir::FileBinaryTargetKind::container_object;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::FilePositionKind>) {
+            return value >= fsim::runtime::simir::FilePositionKind::seek
+                && value <= fsim::runtime::simir::FilePositionKind::canseek;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::FileReadKind>) {
+            return value >= fsim::runtime::simir::FileReadKind::line
+                && value <= fsim::runtime::simir::FileReadKind::unget;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::ForkJoinKind>) {
+            return value >= fsim::runtime::simir::ForkJoinKind::all
+                && value <= fsim::runtime::simir::ForkJoinKind::none;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::FrameLocalStorage>) {
+            return value >= fsim::runtime::simir::FrameLocalStorage::packed
+                && value <= fsim::runtime::simir::FrameLocalStorage::container;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::InputScanTargetKind>) {
+            return value >= fsim::runtime::simir::InputScanTargetKind::packed_register
+                && value <= fsim::runtime::simir::InputScanTargetKind::string_object;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::IntegerBinaryOperator>) {
+            return value >= fsim::runtime::simir::IntegerBinaryOperator::add
+                && value <= fsim::runtime::simir::IntegerBinaryOperator::modulo;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::IntegerUnaryOperator>) {
+            return value >= fsim::runtime::simir::IntegerUnaryOperator::negate
+                && value <= fsim::runtime::simir::IntegerUnaryOperator::absolute;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::LogicalBinaryOperator>) {
+            return value >= fsim::runtime::simir::LogicalBinaryOperator::logical_and
+                && value <= fsim::runtime::simir::LogicalBinaryOperator::logical_or;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::ModulePathEdge>) {
+            return value >= fsim::runtime::simir::ModulePathEdge::none
+                && value <= fsim::runtime::simir::ModulePathEdge::edge;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::ModulePathExpressionOperator>) {
+            return value >= fsim::runtime::simir::ModulePathExpressionOperator::constant
+                && value <= fsim::runtime::simir::ModulePathExpressionOperator::concatenate;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::ModuleTimingCheckKind>) {
+            return value >= fsim::runtime::simir::ModuleTimingCheckKind::setup
+                && value <= fsim::runtime::simir::ModuleTimingCheckKind::nochange;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::MonitorValueKind>) {
+            return value >= fsim::runtime::simir::MonitorValueKind::signal
+                && value <= fsim::runtime::simir::MonitorValueKind::simulation_time;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::PlaLogicKind>) {
+            return value >= fsim::runtime::simir::PlaLogicKind::and_logic
+                && value <= fsim::runtime::simir::PlaLogicKind::nor_logic;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::ProjectedDelayMode>) {
+            return value >= fsim::runtime::simir::ProjectedDelayMode::transport
+                && value <= fsim::runtime::simir::ProjectedDelayMode::inertial;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::RandomDistributionKind>) {
+            return value >= fsim::runtime::simir::RandomDistributionKind::uniform
+                && value <= fsim::runtime::simir::RandomDistributionKind::erlang;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::RandomKind>) {
+            return value >= fsim::runtime::simir::RandomKind::urandom
+                && value <= fsim::runtime::simir::RandomKind::urandom_range;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::ReductionOperator>) {
+            return value >= fsim::runtime::simir::ReductionOperator::bit_and
+                && value <= fsim::runtime::simir::ReductionOperator::one_hot_or_zero;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::ResolutionKind>) {
+            return value >= fsim::runtime::simir::ResolutionKind::none
+                && value <= fsim::runtime::simir::ResolutionKind::user_function;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::SampledClockEdge>) {
+            return value >= fsim::runtime::simir::SampledClockEdge::any
+                && value <= fsim::runtime::simir::SampledClockEdge::negative;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::ScopeRandomizeDomainKind>) {
+            return value >= fsim::runtime::simir::ScopeRandomizeDomainKind::bit_vector
+                && value <= fsim::runtime::simir::ScopeRandomizeDomainKind::enumeration;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::ShiftOperator>) {
+            return value >= fsim::runtime::simir::ShiftOperator::logical_left
+                && value <= fsim::runtime::simir::ShiftOperator::rotate_right;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::SignalDriverInventoryDriverClass>) {
+            return value >= fsim::runtime::simir::SignalDriverInventoryDriverClass::undriven
+                && value <= fsim::runtime::simir::SignalDriverInventoryDriverClass::unknown;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::SignalDriverInventoryEdge>) {
+            return value >= fsim::runtime::simir::SignalDriverInventoryEdge::any
+                && value <= fsim::runtime::simir::SignalDriverInventoryEdge::falling;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::SignalDriverInventoryResolution>) {
+            return value >= fsim::runtime::simir::SignalDriverInventoryResolution::none
+                && value <= fsim::runtime::simir::SignalDriverInventoryResolution::user_function;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::SignalDriverInventoryValueKind>) {
+            return value >= fsim::runtime::simir::SignalDriverInventoryValueKind::logic4
+                && value <= fsim::runtime::simir::SignalDriverInventoryValueKind::logic9;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::SignalDriverStorageClass>) {
+            return value >= fsim::runtime::simir::SignalDriverStorageClass::resolved_table
+                && value <= fsim::runtime::simir::SignalDriverStorageClass::disjoint_owner;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::SignalReadKind>) {
+            return value >= fsim::runtime::simir::SignalReadKind::current
+                && value <= fsim::runtime::simir::SignalReadKind::changing;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::StochasticQueueKind>) {
+            return value >= fsim::runtime::simir::StochasticQueueKind::initialize
+                && value <= fsim::runtime::simir::StochasticQueueKind::examine;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::StrengthRank>) {
+            return value >= fsim::runtime::simir::StrengthRank::highz
+                && value <= fsim::runtime::simir::StrengthRank::supply;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::UnknownBranchPolicy>) {
+            return value >= fsim::runtime::simir::UnknownBranchPolicy::error
+                && value <= fsim::runtime::simir::UnknownBranchPolicy::when_false;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::ValueKind>) {
+            return value >= fsim::runtime::simir::ValueKind::logic4
+                && value <= fsim::runtime::simir::ValueKind::logic9;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::VcdControlKind>) {
+            return value >= fsim::runtime::simir::VcdControlKind::file
+                && value <= fsim::runtime::simir::VcdControlKind::ports_flush;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::VhdlAssertApiKind>) {
+            return value >= fsim::runtime::simir::VhdlAssertApiKind::is_failed
+                && value <= fsim::runtime::simir::VhdlAssertApiKind::record_read_failure;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::VhdlEnvironmentDirectoryKind>) {
+            return value >= fsim::runtime::simir::VhdlEnvironmentDirectoryKind::open
+                && value <= fsim::runtime::simir::VhdlEnvironmentDirectoryKind::delete_file;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::VhdlEnvironmentTimeKind>) {
+            return value >= fsim::runtime::simir::VhdlEnvironmentTimeKind::current_local
+                && value <= fsim::runtime::simir::VhdlEnvironmentTimeKind::seconds_to_time;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::VhdlPslApiKind>) {
+            return value >= fsim::runtime::simir::VhdlPslApiKind::assert_failed
+                && value <= fsim::runtime::simir::VhdlPslApiKind::clear_state;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::VitalDelayKind>) {
+            return value >= fsim::runtime::simir::VitalDelayKind::signal
+                && value <= fsim::runtime::simir::VitalDelayKind::path;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::VitalDelayShape>) {
+            return value >= fsim::runtime::simir::VitalDelayShape::single
+                && value <= fsim::runtime::simir::VitalDelayShape::delay01z;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::VitalGlitchMode>) {
+            return value >= fsim::runtime::simir::VitalGlitchMode::on_event
+                && value <= fsim::runtime::simir::VitalGlitchMode::transport;
+        } else if constexpr (std::same_as<T, fsim::runtime::simir::VitalTimingCheckKind>) {
+            return value >= fsim::runtime::simir::VitalTimingCheckKind::setup_hold
+                && value <= fsim::runtime::simir::VitalTimingCheckKind::out_phase_skew;
+        } else if constexpr (std::same_as<T, fsim::runtime::SystemVerilogMathFunction>) {
+            return value >= fsim::runtime::SystemVerilogMathFunction::Rtoi
+                && value <= fsim::runtime::SystemVerilogMathFunction::Realtime;
+        } else if constexpr (std::same_as<T, fsim::runtime::SystemVerilogScalarBinaryOperator>) {
+            return value >= fsim::runtime::SystemVerilogScalarBinaryOperator::Add
+                && value <= fsim::runtime::SystemVerilogScalarBinaryOperator::Convert;
+        } else if constexpr (std::same_as<T, fsim::runtime::SystemVerilogTimeFunction>) {
+            return value >= fsim::runtime::SystemVerilogTimeFunction::Time
+                && value <= fsim::runtime::SystemVerilogTimeFunction::Realtime;
+        } else if constexpr (std::same_as<T, fsim::runtime::SystemVerilogVpiArrayKind>) {
+            return value >= fsim::runtime::SystemVerilogVpiArrayKind::Static
+                && value <= fsim::runtime::SystemVerilogVpiArrayKind::Queue;
+        } else if constexpr (std::same_as<T, fsim::runtime::SystemVerilogVpiDescriptorKind>) {
+            return value >= fsim::runtime::SystemVerilogVpiDescriptorKind::Scalar
+                && value <= fsim::runtime::SystemVerilogVpiDescriptorKind::ClassHandle;
+        } else if constexpr (std::same_as<T, fsim::runtime::SystemVerilogVpiTypespecKind>) {
+            return value >= fsim::runtime::SystemVerilogVpiTypespecKind::Logic
+                && value <= fsim::runtime::SystemVerilogVpiTypespecKind::Interface;
+        } else if constexpr (std::same_as<T, fsim::runtime::SystemVerilogVpiValueCategory>) {
+            return value >= fsim::runtime::SystemVerilogVpiValueCategory::None
+                && value <= fsim::runtime::SystemVerilogVpiValueCategory::Event;
+        } else if constexpr (std::same_as<T, fsim::semantic::DeclarationKind>) {
+            return value >= fsim::semantic::DeclarationKind::type
+                && value <= fsim::semantic::DeclarationKind::mode_view;
+        } else if constexpr (std::same_as<T, fsim::semantic::design::BoundaryKind>) {
+            return value >= fsim::semantic::design::BoundaryKind::language_conversion
+                && value <= fsim::semantic::design::BoundaryKind::systemc_process;
+        } else if constexpr (std::same_as<T, fsim::semantic::design::ConversionKind>) {
+            return value >= fsim::semantic::design::ConversionKind::ordinal_alias
+                && value <= fsim::semantic::design::ConversionKind::state_domain_alias;
+        } else if constexpr (std::same_as<T, fsim::semantic::design::Direction>) {
+            return value >= fsim::semantic::design::Direction::unknown
+                && value <= fsim::semantic::design::Direction::buffer;
+        } else if constexpr (std::same_as<T, fsim::semantic::design::EdgeKind>) {
+            return value >= fsim::semantic::design::EdgeKind::any
+                && value <= fsim::semantic::design::EdgeKind::transaction;
+        } else if constexpr (std::same_as<T, fsim::semantic::design::ObjectKind>) {
+            return value >= fsim::semantic::design::ObjectKind::signal
+                && value <= fsim::semantic::design::ObjectKind::systemc_export;
+        } else if constexpr (std::same_as<T, fsim::semantic::design::TransactionKind>) {
+            return value >= fsim::semantic::design::TransactionKind::procedural
+                && value <= fsim::semantic::design::TransactionKind::systemc_update;
+        } else if constexpr (std::same_as<T, fsim::semantic::Language>) {
+            return value >= fsim::semantic::Language::vhdl
+                && value <= fsim::semantic::Language::systemc;
+        } else if constexpr (std::same_as<T, fsim::semantic::OriginKind>) {
+            return value >= fsim::semantic::OriginKind::parsed
+                && value <= fsim::semantic::OriginKind::systemc;
+        } else if constexpr (std::same_as<T, fsim::semantic::sv::AssertionOperator>) {
+            return value >= fsim::semantic::sv::AssertionOperator::not_operator
+                && value <= fsim::semantic::sv::AssertionOperator::within;
+        } else if constexpr (std::same_as<T, fsim::semantic::sv::AssertionRegion>) {
+            return value >= fsim::semantic::sv::AssertionRegion::preponed
+                && value <= fsim::semantic::sv::AssertionRegion::reactive;
+        } else if constexpr (std::same_as<T, fsim::semantic::sv::AssertionSeverity>) {
+            return value >= fsim::semantic::sv::AssertionSeverity::note
+                && value <= fsim::semantic::sv::AssertionSeverity::failure;
+        } else if constexpr (std::same_as<T, fsim::semantic::sv::AssertionTreeNode::Kind>) {
+            return value >= fsim::semantic::sv::AssertionTreeNode::Kind::operation
+                && value <= fsim::semantic::sv::AssertionTreeNode::Kind::case_item;
+        } else if constexpr (std::same_as<T, fsim::semantic::sv::AssignmentControl>) {
+            return value >= fsim::semantic::sv::AssignmentControl::none
+                && value <= fsim::semantic::sv::AssignmentControl::event;
+        } else if constexpr (std::same_as<T, fsim::semantic::sv::AssignmentKind>) {
+            return value >= fsim::semantic::sv::AssignmentKind::blocking
+                && value <= fsim::semantic::sv::AssignmentKind::continuous;
+        } else if constexpr (std::same_as<T, fsim::semantic::sv::CaseMatchKind>) {
+            return value >= fsim::semantic::sv::CaseMatchKind::exact
+                && value <= fsim::semantic::sv::CaseMatchKind::matches;
+        } else if constexpr (std::same_as<T, fsim::semantic::sv::CaseQualifier>) {
+            return value >= fsim::semantic::sv::CaseQualifier::none
+                && value <= fsim::semantic::sv::CaseQualifier::priority;
+        } else if constexpr (std::same_as<T, fsim::semantic::sv::ClassRandomKind>) {
+            return value >= fsim::semantic::sv::ClassRandomKind::none
+                && value <= fsim::semantic::sv::ClassRandomKind::randc;
+        } else if constexpr (std::same_as<T, fsim::semantic::sv::ClassVisibility>) {
+            return value >= fsim::semantic::sv::ClassVisibility::public_access
+                && value <= fsim::semantic::sv::ClassVisibility::local_access;
+        } else if constexpr (std::same_as<T, fsim::semantic::sv::ConcurrentAssertionForm>) {
+            return value >= fsim::semantic::sv::ConcurrentAssertionForm::property
+                && value <= fsim::semantic::sv::ConcurrentAssertionForm::sequence;
+        } else if constexpr (std::same_as<T, fsim::semantic::sv::ConcurrentAssertionKind>) {
+            return value >= fsim::semantic::sv::ConcurrentAssertionKind::assertion
+                && value <= fsim::semantic::sv::ConcurrentAssertionKind::restriction;
+        } else if constexpr (std::same_as<T, fsim::semantic::sv::ConstraintExpressionKind>) {
+            return value >= fsim::semantic::sv::ConstraintExpressionKind::invalid
+                && value <= fsim::semantic::sv::ConstraintExpressionKind::unique_constraint;
+        } else if constexpr (std::same_as<T, fsim::semantic::sv::ConstraintReferenceKind>) {
+            return value >= fsim::semantic::sv::ConstraintReferenceKind::property
+                && value <= fsim::semantic::sv::ConstraintReferenceKind::state;
+        } else if constexpr (std::same_as<T, fsim::semantic::sv::DecimalLiteralKind>) {
+            return value >= fsim::semantic::sv::DecimalLiteralKind::real
+                && value <= fsim::semantic::sv::DecimalLiteralKind::time;
+        } else if constexpr (std::same_as<T, fsim::semantic::sv::DesignProcessRegion>) {
+            return value >= fsim::semantic::sv::DesignProcessRegion::active
+                && value <= fsim::semantic::sv::DesignProcessRegion::reactive;
+        } else if constexpr (std::same_as<T, fsim::semantic::sv::Direction>) {
+            return value >= fsim::semantic::sv::Direction::unknown
+                && value <= fsim::semantic::sv::Direction::ref;
+        } else if constexpr (std::same_as<T, fsim::semantic::sv::EdgeKind>) {
+            return value >= fsim::semantic::sv::EdgeKind::any
+                && value <= fsim::semantic::sv::EdgeKind::negative;
+        } else if constexpr (std::same_as<T, fsim::semantic::sv::PatternKind>) {
+            return value >= fsim::semantic::sv::PatternKind::none
+                && value <= fsim::semantic::sv::PatternKind::unsupported;
+        } else if constexpr (std::same_as<T, fsim::semantic::sv::ExpressionKind>) {
+            return value >= fsim::semantic::sv::ExpressionKind::invalid
+                && value <= fsim::semantic::sv::ExpressionKind::pattern;
+        } else if constexpr (std::same_as<T, fsim::semantic::sv::ForkJoinKind>) {
+            return value >= fsim::semantic::sv::ForkJoinKind::all
+                && value <= fsim::semantic::sv::ForkJoinKind::none;
+        } else if constexpr (std::same_as<T, fsim::semantic::sv::GeneratedTextKind>) {
+            return value >= fsim::semantic::sv::GeneratedTextKind::none
+                && value <= fsim::semantic::sv::GeneratedTextKind::systemverilog_file_macro_derived;
+        } else if constexpr (std::same_as<T, fsim::semantic::sv::GenerateKind>) {
+            return value >= fsim::semantic::sv::GenerateKind::block
+                && value <= fsim::semantic::sv::GenerateKind::selection;
+        } else if constexpr (std::same_as<T, fsim::semantic::sv::Lifetime>) {
+            return value >= fsim::semantic::sv::Lifetime::implicit
+                && value <= fsim::semantic::sv::Lifetime::automatic;
+        } else if constexpr (std::same_as<T, fsim::semantic::sv::ModulePathKind>) {
+            return value >= fsim::semantic::sv::ModulePathKind::parallel
+                && value <= fsim::semantic::sv::ModulePathKind::full;
+        } else if constexpr (std::same_as<T, fsim::semantic::sv::PathPolarity>) {
+            return value >= fsim::semantic::sv::PathPolarity::none
+                && value <= fsim::semantic::sv::PathPolarity::negative;
+        } else if constexpr (std::same_as<T, fsim::semantic::sv::PrimitiveKind>) {
+            return value >= fsim::semantic::sv::PrimitiveKind::gate
+                && value <= fsim::semantic::sv::PrimitiveKind::udp;
+        } else if constexpr (std::same_as<T, fsim::semantic::sv::PrimitiveTerminalDirection>) {
+            return value >= fsim::semantic::sv::PrimitiveTerminalDirection::output
+                && value <= fsim::semantic::sv::PrimitiveTerminalDirection::input;
+        } else if constexpr (std::same_as<T, fsim::semantic::sv::ProcessKind>) {
+            return value >= fsim::semantic::sv::ProcessKind::always
+                && value <= fsim::semantic::sv::ProcessKind::final;
+        } else if constexpr (std::same_as<T, fsim::semantic::sv::PulseStyle>) {
+            return value >= fsim::semantic::sv::PulseStyle::onevent
+                && value <= fsim::semantic::sv::PulseStyle::ondetect;
+        } else if constexpr (std::same_as<T, fsim::semantic::sv::ScalarKind>) {
+            return value >= fsim::semantic::sv::ScalarKind::none
+                && value <= fsim::semantic::sv::ScalarKind::chandle;
+        } else if constexpr (std::same_as<T, fsim::semantic::sv::SpecifyEdge>) {
+            return value >= fsim::semantic::sv::SpecifyEdge::none
+                && value <= fsim::semantic::sv::SpecifyEdge::any;
+        } else if constexpr (std::same_as<T, fsim::semantic::sv::Statement::ImmediateDirective>) {
+            return value >= fsim::semantic::sv::Statement::ImmediateDirective::none
+                && value <= fsim::semantic::sv::Statement::ImmediateDirective::cover;
+        } else if constexpr (std::same_as<T, fsim::semantic::sv::StatementKind>) {
+            return value >= fsim::semantic::sv::StatementKind::assignment
+                && value <= fsim::semantic::sv::StatementKind::sva_marker;
+        } else if constexpr (std::same_as<T, fsim::semantic::sv::TimingCheckKind>) {
+            return value >= fsim::semantic::sv::TimingCheckKind::setup
+                && value <= fsim::semantic::sv::TimingCheckKind::no_change;
+        } else if constexpr (std::same_as<T, fsim::semantic::sv::UpdateKind>) {
+            return value >= fsim::semantic::sv::UpdateKind::none
+                && value <= fsim::semantic::sv::UpdateKind::postfix;
+        } else if constexpr (std::same_as<T, fsim::semantic::TypeKind>) {
+            return value >= fsim::semantic::TypeKind::declaration
+                && value <= fsim::semantic::TypeKind::implicit;
+        } else if constexpr (std::same_as<T, fsim::semantic::UnitKind>) {
+            return value >= fsim::semantic::UnitKind::vhdl_entity
+                && value <= fsim::semantic::UnitKind::systemverilog_compilation_unit;
+        } else if constexpr (std::same_as<T, fsim::semantic::ValueKind>) {
+            return value >= fsim::semantic::ValueKind::parameter
+                && value <= fsim::semantic::ValueKind::constant;
+        } else if constexpr (std::same_as<T, fsim::semantic::vhdl::ValueDomain>) {
+            return value >= fsim::semantic::vhdl::ValueDomain::unknown
+                && value <= fsim::semantic::vhdl::ValueDomain::string;
         } else {
-            return true;
+            // Every enumeration a saved record holds has its range checked
+            // when it is read back: one without a branch fails the build.
+            static_assert(sizeof(T) == 0U,
+                "enumeration saved in a design artifact has no range check");
+            return false;
         }
     }
 
@@ -759,6 +1199,9 @@ namespace codec_detail {
             std::remove_cv_t<T>, semantic::vhdl::BlockConfiguration>
     auto archive_fields(T& value)
     {
+        // Every member is listed: one added to the record and not here
+        // fails the build (the binding names each member).
+        [[maybe_unused]] auto& [m0, m1, m2, m3, m4] = value;
         return std::tie(
             value.block, value.generate_index, value.components,
             value.blocks, value.source);
@@ -769,6 +1212,9 @@ namespace codec_detail {
             std::remove_cv_t<T>, semantic::vhdl::ComponentConfiguration>
     auto archive_fields(T& value)
     {
+        // Every member is listed: one added to the record and not here
+        // fails the build (the binding names each member).
+        [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5] = value;
         return std::tie(
             value.selection, value.labels, value.component, value.binding,
             value.block_configuration, value.source);
@@ -779,6 +1225,9 @@ namespace codec_detail {
             std::remove_cv_t<T>, elaboration::PackedMemberMetadata>
     auto archive_fields(T& value)
     {
+        // Every member is listed: one added to the record and not here
+        // fails the build (the binding names each member).
+        [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5, m6, m7] = value;
         return std::tie(
             value.name, value.domain, value.spelling, value.packed_range,
             value.is_signed, value.lsb_offset, value.span,
@@ -790,6 +1239,9 @@ namespace codec_detail {
             std::remove_cv_t<T>, elaboration::VhdlArrayDimensionMetadata>
     auto archive_fields(T& value)
     {
+        // Every member is listed: one added to the record and not here
+        // fails the build (the binding names each member).
+        [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5, m6] = value;
         return std::tie(
             value.index_subtype, value.index_span, value.index_base_range,
             value.range, value.null, value.stride, value.unconstrained);
@@ -800,6 +1252,9 @@ namespace codec_detail {
             std::remove_cv_t<T>, elaboration::VhdlArrayMetadata>
     auto archive_fields(T& value)
     {
+        // Every member is listed: one added to the record and not here
+        // fails the build (the binding names each member).
+        [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10] = value;
         return std::tie(
             value.index_subtype, value.index_span, value.index_base_range,
             value.element_spelling, value.element_named_type,
@@ -812,6 +1267,9 @@ namespace codec_detail {
             std::remove_cv_t<T>, elaboration::VhdlAccessMetadata>
     auto archive_fields(T& value)
     {
+        // Every member is listed: one added to the record and not here
+        // fails the build (the binding names each member).
+        [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5, m6, m7, m8] = value;
         return std::tie(
             value.designated_types, value.designated_span,
             value.handle_width, value.maximum_objects, value.nullable,
@@ -825,6 +1283,9 @@ namespace codec_detail {
             std::remove_cv_t<T>, elaboration::VhdlPhysicalUnitMetadata>
     auto archive_fields(T& value)
     {
+        // Every member is listed: one added to the record and not here
+        // fails the build (the binding names each member).
+        [[maybe_unused]] auto& [m0, m1, m2] = value;
         return std::tie(value.name, value.scale_factor, value.span);
     }
 
@@ -833,6 +1294,9 @@ namespace codec_detail {
             std::remove_cv_t<T>, elaboration::VhdlPhysicalMetadata>
     auto archive_fields(T& value)
     {
+        // Every member is listed: one added to the record and not here
+        // fails the build (the binding names each member).
+        [[maybe_unused]] auto& [m0, m1] = value;
         return std::tie(value.units, value.resolved_range);
     }
 
@@ -841,6 +1305,9 @@ namespace codec_detail {
             std::remove_cv_t<T>, elaboration::PackedTypeMetadata>
     auto archive_fields(T& value)
     {
+        // Every member is listed: one added to the record and not here
+        // fails the build (the binding names each member).
+        [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11, m12, m13, m14, m15, m16, m17, m18, m19, m20, m21, m22] = value;
         return std::tie(
             value.domain, value.spelling, value.systemverilog_scalar,
             value.systemverilog_net_type,
@@ -860,6 +1327,9 @@ namespace codec_detail {
             std::remove_cv_t<T>, runtime::simir::ContainerValue>
     auto archive_fields(T& value)
     {
+        // Every member is listed: one added to the record and not here
+        // fails the build (the binding names each member).
+        [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5, m6, m7, m8] = value;
         return std::tie(
             value.type,
             value.elements,
@@ -877,6 +1347,9 @@ namespace codec_detail {
             std::remove_cv_t<T>, runtime::simir::Signal>
     auto archive_fields(T& value)
     {
+        // Every member is listed: one added to the record and not here
+        // fails the build (the binding names each member).
+        [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11, m12] = value;
         return std::tie(
             value.name, value.initial_value, value.resolution, value.value_kind,
             value.implicit_driver, value.implicit_drive_strength,
@@ -891,6 +1364,9 @@ namespace codec_detail {
             std::remove_cv_t<T>, runtime::simir::VhdlConversionDriver>
     auto archive_fields(T& value)
     {
+        // Every member is listed: one added to the record and not here
+        // fails the build (the binding names each member).
+        [[maybe_unused]] auto& [m0, m1, m2, m3, m4] = value;
         return std::tie(
             value.stub, value.program, value.output, value.sources,
             value.offset);
@@ -901,6 +1377,9 @@ namespace codec_detail {
             std::remove_cv_t<T>, runtime::simir::VhdlSignalResolver>
     auto archive_fields(T& value)
     {
+        // Every member is listed: one added to the record and not here
+        // fails the build (the binding names each member).
+        [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11] = value;
         return std::tie(
             value.process, value.input, value.output, value.drivers,
             value.guarded_kind, value.variants, value.sources,
@@ -913,6 +1392,9 @@ namespace codec_detail {
             std::remove_cv_t<T>, runtime::simir::VhdlResolverVariant>
     auto archive_fields(T& value)
     {
+        // Every member is listed: one added to the record and not here
+        // fails the build (the binding names each member).
+        [[maybe_unused]] auto& [m0, m1, m2] = value;
         return std::tie(value.process, value.input, value.output);
     }
 
@@ -921,6 +1403,9 @@ namespace codec_detail {
             runtime::simir::ProcessProgramTemplate>
     auto archive_fields(T& value)
     {
+        // Every member is listed: one added to the record and not here
+        // fails the build (the binding names each member).
+        [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11, m12, m13, m14, m15] = value;
         return std::tie(
             value.language_standard, value.compatibility_profile,
             value.register_count, value.string_register_count,
@@ -938,6 +1423,9 @@ namespace codec_detail {
             runtime::simir::ProcessInstanceProgram>
     auto archive_fields(T& value)
     {
+        // Every member is listed: one added to the record and not here
+        // fails the build (the binding names each member).
+        [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11, m12, m13, m14, m15, m16, m17, m18, m19, m20, m21, m22, m23, m24, m25, m26, m27] = value;
         return std::tie(
             value.id, value.name, value.static_sensitivity,
             value.operations, value.driver_regions, value.drive_strength,
@@ -951,7 +1439,8 @@ namespace codec_detail {
             value.startup_package_owner_id,
             value.startup_writable_package_owner_ids,
             value.startup_writable_string_object_ids,
-            value.startup_writable_container_object_ids);
+            value.startup_writable_container_object_ids,
+            value.debug_static_locals);
     }
 
     template <typename T>
@@ -959,6 +1448,9 @@ namespace codec_detail {
             elaboration::detail::RuntimeProcessProgramRow>
     auto archive_fields(T& value)
     {
+        // Every member is listed: one added to the record and not here
+        // fails the build (the binding names each member).
+        [[maybe_unused]] auto& [m0, m1] = value;
         return std::tie(value.template_id, value.instance);
     }
 
@@ -967,6 +1459,10 @@ namespace codec_detail {
             elaboration::detail::RuntimeProcessProgramTable>
     auto archive_fields(T& value)
     {
+        // The templates and rows; the last two members are caches derived
+        // from them (the region graph and its key). A member added to the
+        // record fails the build here until it is listed or excluded.
+        [[maybe_unused]] auto& [m0, m1, m2, m3] = value;
         return std::tie(value.templates, value.rows);
     }
 
@@ -974,14 +1470,20 @@ namespace codec_detail {
         requires std::same_as<std::remove_cv_t<T>, runtime::simir::FileOpen>
     auto archive_fields(T& value)
     {
-        return std::tie(
-            value.destination, value.path, value.mode, value.status, value.vhdl);
+        // Every member is listed: one added to the record and not here
+        // fails the build (the binding names each member).
+        [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5] = value;
+        return std::tie(value.destination, value.path, value.mode,
+            value.status, value.vhdl, value.multichannel);
     }
 
     template <typename T>
         requires std::same_as<std::remove_cv_t<T>, runtime::simir::FileClose>
     auto archive_fields(T& value)
     {
+        // Every member is listed: one added to the record and not here
+        // fails the build (the binding names each member).
+        [[maybe_unused]] auto& [m0, m1, m2] = value;
         return std::tie(value.handle, value.clear_handle, value.ignore_zero);
     }
 
@@ -989,6 +1491,9 @@ namespace codec_detail {
         requires std::same_as<std::remove_cv_t<T>, runtime::simir::FileEndOfFile>
     auto archive_fields(T& value)
     {
+        // Every member is listed: one added to the record and not here
+        // fails the build (the binding names each member).
+        [[maybe_unused]] auto& [m0, m1, m2] = value;
         return std::tie(value.destination, value.handle, value.lookahead);
     }
 
@@ -996,6 +1501,9 @@ namespace codec_detail {
         requires std::same_as<std::remove_cv_t<T>, runtime::simir::FileScan>
     auto archive_fields(T& value)
     {
+        // Every member is listed: one added to the record and not here
+        // fails the build (the binding names each member).
+        [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11, m12, m13] = value;
         return std::tie(
             value.destination, value.handle, value.source, value.string_source,
             value.conversions, value.trailing_text, value.require_assignments,
@@ -1008,6 +1516,9 @@ namespace codec_detail {
         requires std::same_as<std::remove_cv_t<T>, runtime::simir::WaitFor>
     auto archive_fields(T& value)
     {
+        // Every member is listed: one added to the record and not here
+        // fails the build (the binding names each member).
+        [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5] = value;
         return std::tie(
             value.delay, value.source, value.source_width, value.source_kind,
             value.source_signed, value.rounding_quantum);
@@ -1017,6 +1528,9 @@ namespace codec_detail {
         requires std::same_as<std::remove_cv_t<T>, runtime::simir::WaitRegion>
     auto archive_fields(T& value)
     {
+        // Every member is listed: one added to the record and not here
+        // fails the build (the binding names each member).
+        [[maybe_unused]] auto& [m0] = value;
         return std::tie(value.phase);
     }
 
@@ -1024,6 +1538,9 @@ namespace codec_detail {
         requires std::same_as<std::remove_cv_t<T>, runtime::simir::WaitOn>
     auto archive_fields(T& value)
     {
+        // Every member is listed: one added to the record and not here
+        // fails the build (the binding names each member).
+        [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5, m6] = value;
         return std::tie(
             value.signals, value.edges, value.timeout, value.timeout_result,
             value.timeout_origin, value.timeout_source,
@@ -1034,6 +1551,9 @@ namespace codec_detail {
         requires std::same_as<std::remove_cv_t<T>, runtime::simir::WaitOrder>
     auto archive_fields(T& value)
     {
+        // Every member is listed: one added to the record and not here
+        // fails the build (the binding names each member).
+        [[maybe_unused]] auto& [m0, m1] = value;
         return std::tie(value.events, value.result);
     }
 
@@ -1041,6 +1561,9 @@ namespace codec_detail {
         requires std::same_as<std::remove_cv_t<T>, runtime::simir::EventTriggered>
     auto archive_fields(T& value)
     {
+        // Every member is listed: one added to the record and not here
+        // fails the build (the binding names each member).
+        [[maybe_unused]] auto& [m0, m1] = value;
         return std::tie(value.destination, value.event);
     }
 
@@ -1048,6 +1571,9 @@ namespace codec_detail {
         requires std::same_as<std::remove_cv_t<T>, runtime::simir::EventAlias>
     auto archive_fields(T& value)
     {
+        // Every member is listed: one added to the record and not here
+        // fails the build (the binding names each member).
+        [[maybe_unused]] auto& [m0, m1, m2] = value;
         return std::tie(value.target, value.source, value.has_source);
     }
 
@@ -1056,6 +1582,9 @@ namespace codec_detail {
             runtime::simir::EventArrayElement>
     auto archive_fields(T& value)
     {
+        // Every member is listed: one added to the record and not here
+        // fails the build (the binding names each member).
+        [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5, m6, m7, m8] = value;
         return std::tie(value.operation, value.index, value.index_width,
             value.index_signed, value.descending, value.left, value.elements,
             value.destination, value.delay);
@@ -1065,6 +1594,9 @@ namespace codec_detail {
         requires std::same_as<std::remove_cv_t<T>, runtime::simir::DebugPoint>
     auto archive_fields(T& value)
     {
+        // Every member is listed: one added to the record and not here
+        // fails the build (the binding names each member).
+        [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5] = value;
         return std::tie(value.kind, value.source, value.scope, value.callee,
             value.callee_declaration, value.callee_receiver);
     }

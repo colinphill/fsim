@@ -109,33 +109,41 @@ Statement VerilogParser::parse_case_statement(
         if (match(TokenKind::Dot)) {
             const auto pattern_start = previous();
             if (match(TokenKind::Star)) {
-                return Expression {
-                    ExpressionKind::Call,
-                    "@match-wildcard",
+                Expression wildcard {
+                    ExpressionKind::Pattern,
+                    { },
                     { },
                     cover(pattern_start.span, previous().span)
                 };
+                wildcard.systemverilog_pattern
+                    = SystemVerilogPatternKind::wildcard;
+                return wildcard;
             }
             if (at(TokenKind::Identifier)) {
                 const auto variable = advance();
                 // The pattern variable is visible in the matched item's
                 // statement (IEEE 1800-2017 12.6).
                 current_procedural_names_.insert(variable.text);
-                return Expression {
-                    ExpressionKind::Call,
-                    "@match-bind:" + variable.text,
+                Expression bind {
+                    ExpressionKind::Pattern,
+                    variable.text,
                     { },
                     cover(pattern_start.span, variable.span)
                 };
+                bind.systemverilog_pattern = SystemVerilogPatternKind::bind;
+                return bind;
             }
             error(pattern_start, "FSIM-SV-PARSE-190",
                 "expected '*' or a pattern variable after '.'");
-            return Expression {
-                ExpressionKind::Call,
-                "@match-unsupported",
+            Expression unsupported {
+                ExpressionKind::Pattern,
+                { },
                 { },
                 pattern_start.span
             };
+            unsupported.systemverilog_pattern
+                = SystemVerilogPatternKind::unsupported;
+            return unsupported;
         }
         if (match_keyword("tagged")) {
             const auto tagged = previous();
@@ -146,12 +154,15 @@ Statement VerilogParser::parse_case_statement(
                 && !at(TokenKind::AndAndAnd)) {
                 nested.push_back(parse_match_pattern());
             }
-            return Expression {
-                ExpressionKind::Call,
-                "@match-tagged:" + member.text,
+            Expression tagged_pattern {
+                ExpressionKind::Pattern,
+                member.text,
                 std::move(nested),
                 cover(tagged.span, previous().span)
             };
+            tagged_pattern.systemverilog_pattern
+                = SystemVerilogPatternKind::tagged;
+            return tagged_pattern;
         }
         if (match(TokenKind::Apostrophe)) {
             const auto apostrophe = previous();
@@ -160,10 +171,11 @@ Statement VerilogParser::parse_case_statement(
                 "FSIM-SV-PARSE-191");
             Expression result {
                 ExpressionKind::Aggregate,
-                "@match-structure",
+                { },
                 { },
                 apostrophe.span
             };
+            result.systemverilog_pattern = SystemVerilogPatternKind::structure;
             if (!at(TokenKind::RightBrace)) {
                 for (;;) {
                     std::string choice;
@@ -244,11 +256,13 @@ Statement VerilogParser::parse_case_statement(
                 if (alternative.choices.size() == 1U) {
                     auto pattern = std::move(alternative.choices.front());
                     alternative.choices.front() = Expression {
-                        ExpressionKind::Call,
-                        "@match-guard",
+                        ExpressionKind::Pattern,
+                        { },
                         { std::move(pattern), std::move(guard) },
                         cover(item_start.span, previous().span)
                     };
+                    alternative.choices.front().systemverilog_pattern
+                        = SystemVerilogPatternKind::guard;
                 } else {
                     error(guard_start, "FSIM-SV-PARSE-189",
                         "a guarded case matches item requires exactly one "

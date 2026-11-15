@@ -52,6 +52,23 @@ constexpr std::uint32_t body_case = 4U;
             || record.update_kind == sv::UpdateKind::postfix);
 }
 
+// The assertion declarations of the generate block among `regions` (or one
+// nested in them) that is `scope`.
+[[nodiscard]] const std::vector<sv::AssertionDeclaration>* region_declarations(
+    const std::vector<sv::GenerateRegion>& regions,
+    const semantic::ScopeId scope)
+{
+    for (const auto& region : regions) {
+        if (region.scope == scope) {
+            return &region.assertion_declarations;
+        }
+        if (const auto* const nested = region_declarations(region.nested, scope)) {
+            return nested;
+        }
+    }
+    return nullptr;
+}
+
 // A for-loop increment written `k++` or `--k` (37.78).
 [[nodiscard]] bool step_update(const sv::Statement& record)
 {
@@ -1009,14 +1026,40 @@ fsim_vpi_handle_v1 VpiStatementModel::statement_handle(
     const fsim_vpi_handle_v1 parent)
 {
     const auto* const record = statement(id.value());
-    if (record == nullptr) {
+    // A procedural concurrent assertion is no statement (37.60); its scope
+    // holds it (37.12). A point of an assertion's generated monitor (16.14)
+    // has no source statement.
+    if (record == nullptr || record->kind == sv::StatementKind::sva_marker
+        || record->generated_role
+            == support::GeneratedStatementRole::procedural_assertion) {
         return 0U;
     }
     if ((record->kind == sv::StatementKind::block
             || record->kind == sv::StatementKind::fork)
-        && !record->label.empty()) {
-        if (const auto named = hooks_.child_scope(scope, record->label)) {
-            return named;
+        && record->generated_role == support::GeneratedStatementRole::none
+        && !record->foreach_collection) {
+        // A named block, or an unnamed one that declares items, is its
+        // scope object, found by the block's HIR scope (37.12 detail 1).
+        if (record->nested_scope && hooks_.block_scope) {
+            if (const auto scoped
+                = hooks_.block_scope(scope, *record->nested_scope)) {
+                return scoped;
+            }
+        } else if (!record->label.empty()) {
+            if (const auto named = hooks_.child_scope(scope, record->label)) {
+                return named;
+            }
+        }
+    }
+    // A for statement that declares its loop variables and a foreach
+    // statement are their scope objects (37.12 details 2 and 3).
+    const auto loop_type = statement_type(*record);
+    if (record->nested_scope && hooks_.block_scope
+        && record->generated_role == support::GeneratedStatementRole::none
+        && ((loop_type == vpiFor && record->loop_variable_declared)
+            || loop_type == vpiForeachStmt)) {
+        if (const auto scoped = hooks_.block_scope(scope, *record->nested_scope)) {
+            return scoped;
         }
     }
     return node(Kind::statement, id.value(), 0U, scope, parent);
@@ -1124,6 +1167,15 @@ fsim_vpi_handle_v1 VpiStatementModel::expression_handle(
                 }
                 return node(Kind::local_variable, selected.value(),
                     method->value(), scope, scope);
+            }
+        }
+        // A pattern variable (12.6) is no object of the design: the name is
+        // a reference to it, never an outer object of the same name.
+        if (record->referenced_name && record->referenced_name->selected) {
+            const auto* const declared
+                = hir_.find_declaration(*record->referenced_name->selected);
+            if (declared != nullptr && declared->pattern_variable) {
+                return node(Kind::reference, id.value(), frame_, scope, parent);
             }
         }
         if (const auto object = hooks_.resolve(scope, name)) {
@@ -1506,6 +1558,39 @@ fsim_vpi_handle_v1 VpiStatementModel::let_value_expression(
     return handle;
 }
 
+const sv::Statement* VpiStatementModel::find_block_scope(
+    const std::vector<semantic::StatementId>& statements,
+    const semantic::ScopeId scope) const
+{
+    for (const auto id : statements) {
+        const auto* const record = statement(id.value());
+        if (record == nullptr) {
+            continue;
+        }
+        // A block, or a loop that is a scope (37.12 details 2 and 3).
+        if ((record->kind == sv::StatementKind::block
+                || record->kind == sv::StatementKind::fork
+                || record->kind == sv::StatementKind::loop)
+            && record->nested_scope == scope) {
+            return record;
+        }
+        if (const auto* found = find_block_scope(record->statements, scope)) {
+            return found;
+        }
+        if (const auto* found
+            = find_block_scope(record->else_statements, scope)) {
+            return found;
+        }
+        for (const auto& alternative : record->case_alternatives) {
+            if (const auto* found
+                = find_block_scope(alternative.statements, scope)) {
+                return found;
+            }
+        }
+    }
+    return nullptr;
+}
+
 const sv::Statement* VpiStatementModel::find_block(
     const std::vector<semantic::StatementId>& statements,
     const std::string& label) const
@@ -1657,13 +1742,36 @@ std::optional<VpiStatementModel::Container> VpiStatementModel::locate(
             break;
         }
         case VpiHirScope::Step::block: {
-            const sv::Statement* block = find_block(container.statements, name);
+            // The block by its HIR scope when the scope object has one.
+            const auto hir_scope
+                = at < scope.scopes.size() ? scope.scopes[at] : std::nullopt;
+            if (hir_scope) {
+                for (const auto id : container.processes) {
+                    const auto* const record = process(id.value());
+                    if (record != nullptr && record->body_block
+                        && record->scope == *hir_scope) {
+                        container = Container { };
+                        container.statements = record->statements;
+                        container.body_process = record;
+                        break;
+                    }
+                }
+                if (container.body_process != nullptr
+                    && container.body_process->scope == *hir_scope) {
+                    break;
+                }
+            }
+            const sv::Statement* block = hir_scope
+                ? find_block_scope(container.statements, *hir_scope)
+                : find_block(container.statements, name);
             for (const auto id : container.processes) {
                 if (block != nullptr) {
                     break;
                 }
                 if (const auto* const record = process(id.value())) {
-                    block = find_block(record->statements, name);
+                    block = hir_scope
+                        ? find_block_scope(record->statements, *hir_scope)
+                        : find_block(record->statements, name);
                 }
             }
             if (block == nullptr) {
@@ -1677,6 +1785,24 @@ std::optional<VpiStatementModel::Container> VpiStatementModel::locate(
         }
     }
     return container;
+}
+
+fsim_vpi_handle_v1 VpiStatementModel::loop_statement(const VpiHirScope& scope)
+{
+    if (scope.steps.empty()
+        || scope.steps.back().first != VpiHirScope::Step::block) {
+        return 0U;
+    }
+    const auto container = locate(scope);
+    if (!container || container->block == nullptr) {
+        return 0U;
+    }
+    const auto handle = node(Kind::statement, container->block->id.value(), 0U,
+        scope.handle, scope.handle);
+    if (const auto found = serial_of_.find(handle); found != serial_of_.end()) {
+        loop_statements_.insert(found->second);
+    }
+    return handle;
 }
 
 std::optional<std::vector<fsim_vpi_handle_v1>> VpiStatementModel::iterate_scope(
@@ -1696,7 +1822,7 @@ std::optional<std::vector<fsim_vpi_handle_v1>> VpiStatementModel::iterate_scope(
             // Declaration initializers run as frontend-made processes
             // named with a '$'; they are not processes of the design.
             if (record != nullptr && !record->concurrent_assertion
-                && !record->name.starts_with('$')) {
+                && !record->synthesized && !record->name.starts_with('$')) {
                 found.push_back(node(Kind::process, id.value(), 0U,
                     scope.handle, scope.handle));
             }
@@ -1705,12 +1831,16 @@ std::optional<std::vector<fsim_vpi_handle_v1>> VpiStatementModel::iterate_scope(
         for (const auto id : container->concurrent) {
             const auto* const record = statement(id.value());
             // A gate is lowered to continuous assignments but is a
-            // primitive, not a continuous assignment (IEEE 1800-2023 37.35).
+            // primitive, not a continuous assignment (IEEE 1800-2023 37.35);
+            // one of a net the frontend generated for an assertion is none
+            // of the source (37.47).
             if (record != nullptr
                 && record->kind == sv::StatementKind::assignment
                 && record->assignment_kind
                     == sv::AssignmentKind::continuous
-                && record->gate_primitive.empty()) {
+                && record->gate_primitive.empty()
+                && record->generated_role
+                    != support::GeneratedStatementRole::synthesized) {
                 found.push_back(node(Kind::cont_assign, id.value(), 0U,
                     scope.handle, scope.handle));
             }
@@ -1988,6 +2118,9 @@ bool VpiStatementModel::declares(
             && ((callable->callable && named(callable->callable->formals))
                 || named(callable->children));
     }
+    if (container->body_process != nullptr) {
+        return named(container->body_process->declarations);
+    }
     return container->block != nullptr
         && named(container->block->declarations);
 }
@@ -2060,14 +2193,19 @@ std::optional<VpiStatementModel::BlockSource> VpiStatementModel::block_source(
         return std::nullopt;
     }
     const auto container = locate(scope);
-    if (!container || container->block == nullptr
-        || !container->block->source.valid()
-        || container->block->source.value()
-            >= semantics_.source_spans().size()) {
+    if (!container) {
         return std::nullopt;
     }
-    const auto& location
-        = semantics_.source_spans().at(container->block->source.value());
+    // A procedure's begin-end is where its begin is.
+    const auto block_span = container->body_process != nullptr
+        ? container->body_process->body_block.value_or(semantic::SourceSpanId { })
+        : container->block != nullptr ? container->block->source
+                                      : semantic::SourceSpanId { };
+    if (!block_span.valid()
+        || block_span.value() >= semantics_.source_spans().size()) {
+        return std::nullopt;
+    }
+    const auto& location = semantics_.source_spans().at(block_span.value());
     BlockSource found;
     found.line = location.begin.line;
     if (!location.logical_name.empty()) {
@@ -2092,6 +2230,10 @@ std::optional<VpiStatementModel::ScopeSpan> VpiStatementModel::scope_span(
     }
     semantic::SourceSpanId source;
     if (scope.steps.back().first == VpiHirScope::Step::block
+        && container->body_process != nullptr) {
+        source = container->body_process->body_block.value_or(
+            semantic::SourceSpanId { });
+    } else if (scope.steps.back().first == VpiHirScope::Step::block
         && container->block != nullptr) {
         source = container->block->source;
     } else if (scope.steps.back().first == VpiHirScope::Step::callable
@@ -2316,6 +2458,12 @@ VpiStatementModel::scope_return_type(const VpiHirScope& scope)
         return std::nullopt;
     }
     return declared_type_of(callable->callable->return_type);
+}
+
+std::optional<VpiStatementModel::DeclaredType> VpiStatementModel::source_type(
+    const sv::TypeReference& type)
+{
+    return declared_type_of(type);
 }
 
 std::optional<VpiStatementModel::DeclaredType> VpiStatementModel::declared_type(
@@ -2935,6 +3083,11 @@ std::vector<fsim_vpi_handle_v1> VpiStatementModel::connections(
                         inner = named;
                     }
                 }
+                if (record->generated_role
+                    == support::GeneratedStatementRole::expect) {
+                    walk(expect_statements(*record), inner, self);
+                    continue;
+                }
                 walk(record->statements, inner, self);
                 walk(record->else_statements, inner, self);
                 walk(record->loop_updates, inner, self);
@@ -2949,7 +3102,9 @@ std::vector<fsim_vpi_handle_v1> VpiStatementModel::connections(
         const auto* const record = statement(id.value());
         if (record == nullptr || record->kind != sv::StatementKind::assignment
             || record->assignment_kind != sv::AssignmentKind::continuous
-            || !record->gate_primitive.empty()) {
+            || !record->gate_primitive.empty()
+            || record->generated_role
+                == support::GeneratedStatementRole::synthesized) {
             continue;
         }
         const auto writes = targets_object(record->target, scope.handle, object);
@@ -2967,7 +3122,10 @@ std::vector<fsim_vpi_handle_v1> VpiStatementModel::connections(
     walk(container->statements, scope.handle, scope.handle);
     for (const auto id : container->processes) {
         const auto* const record = process(id.value());
-        if (record == nullptr || record->name.starts_with('$')) {
+        // The statements of an assertion's monitor or of a process the
+        // frontend generated for one are not the design's (37.21).
+        if (record == nullptr || record->name.starts_with('$')
+            || record->concurrent_assertion || record->synthesized) {
             continue;
         }
         current_owner.kind = ConnectionOwner::Kind::process;
@@ -3056,6 +3214,11 @@ std::vector<VpiStatementModel::ForceSite> VpiStatementModel::force_sites(
                     }
                 }
                 const auto self = statement_handle(id, within, parent);
+                if (record->generated_role
+                    == support::GeneratedStatementRole::expect) {
+                    walk(expect_statements(*record), inner, self);
+                    continue;
+                }
                 walk(record->statements, inner, self);
                 walk(record->else_statements, inner, self);
                 for (const auto& alternative : record->case_alternatives) {
@@ -3122,6 +3285,11 @@ std::vector<fsim_vpi_handle_v1> VpiStatementModel::immediate_assertions(
                         inner = named;
                     }
                 }
+                if (record->generated_role
+                    == support::GeneratedStatementRole::expect) {
+                    walk(expect_statements(*record), inner, self);
+                    continue;
+                }
                 walk(record->statements, inner, self);
                 walk(record->else_statements, inner, self);
                 for (const auto& alternative : record->case_alternatives) {
@@ -3133,7 +3301,8 @@ std::vector<fsim_vpi_handle_v1> VpiStatementModel::immediate_assertions(
         const auto* const record = process(id.value());
         // The processes that evaluate concurrent assertions are not the
         // design's statements.
-        if (record == nullptr || record->concurrent_assertion) {
+        if (record == nullptr || record->concurrent_assertion
+            || record->synthesized) {
             continue;
         }
         walk(record->statements, scope.handle,
@@ -3195,9 +3364,16 @@ VpiStatementModel::StatementPoint VpiStatementModel::find_statement(
                     continue;
                 }
                 using Statement = sv::StatementKind;
-                const auto block = record->kind == Statement::block
-                    || record->kind == Statement::fork;
+                // An expect statement is one statement where its expansion
+                // begins (37.73); its pass and else statements are inside.
+                const auto block = (record->kind == Statement::block
+                                       || record->kind == Statement::fork)
+                    && record->generated_role
+                        != support::GeneratedStatementRole::expect;
                 const auto self = statement_handle(id, scope, owner);
+                if (self == 0U) {
+                    continue;
+                }
                 if (!block && begins_here(*record)) {
                     found = self;
                     return true;
@@ -3476,8 +3652,108 @@ std::optional<std::string> VpiStatementModel::format_text(
     return text;
 }
 
+// vpi_handle(vpiPropertySpec | vpiStmt | vpiElseStmt, expect statement)
+// (IEEE 1800-2023 37.73): the property spec is the statement's inline
+// property declaration, and the pass and else statements are those of the
+// blocks of its expansion that hold them; a statement the source does not
+// give is NULL.
+fsim_vpi_handle_v1 VpiStatementModel::expect_relation(
+    const sv::Statement& record, const PLI_INT32 type,
+    const fsim_vpi_handle_v1 scope, const fsim_vpi_handle_v1 self)
+{
+    if (type == vpiPropertySpec) {
+        if (!record.expect_property) {
+            return 0U;
+        }
+        const auto& reference = *record.expect_property;
+        for (const auto& unit : hir_.units()) {
+            const auto* const declarations = unit.scope == reference.container
+                ? &unit.assertion_declarations
+                : region_declarations(unit.generates, reference.container);
+            if (declarations == nullptr) {
+                continue;
+            }
+            if (reference.declaration >= declarations->size()) {
+                return 0U;
+            }
+            const auto& declaration = (*declarations)[reference.declaration];
+            return node(Kind::assertion_spec,
+                assertion_entry(declaration,
+                    declaration.tree ? &*declaration.tree : nullptr, unit),
+                0U, scope, self);
+        }
+        return 0U;
+    }
+    if (type != vpiStmt && type != vpiElseStmt) {
+        return 0U;
+    }
+    const auto* const block = expect_action(record,
+        type == vpiStmt ? support::GeneratedStatementRole::expect_pass
+                        : support::GeneratedStatementRole::expect_else);
+    return block == nullptr
+        ? 0U
+        : sequence(block->statements, block->id.value(), body_then, scope, self);
+}
+
+// The block of an expect statement's expansion that holds its pass
+// (expect_pass) or else (expect_else) statement; none when the source
+// gives none.
+const sv::Statement* VpiStatementModel::expect_action(
+    const sv::Statement& record,
+    const support::GeneratedStatementRole role) const
+{
+    const auto find = [&](const auto& find_in,
+                          const std::vector<semantic::StatementId>& items)
+        -> const sv::Statement* {
+        for (const auto id : items) {
+            const auto* const item = statement(id.value());
+            if (item == nullptr) {
+                continue;
+            }
+            if (item->generated_role == role) {
+                return item;
+            }
+            if (const auto* const found = find_in(find_in, item->statements)) {
+                return found;
+            }
+            if (const auto* const found
+                = find_in(find_in, item->else_statements)) {
+                return found;
+            }
+        }
+        return nullptr;
+    };
+    return find(find, record.statements);
+}
+
+// The statements of an expect statement that are statements of the VPI
+// model: its pass statement, then its else statement (37.73).
+std::vector<semantic::StatementId> VpiStatementModel::expect_statements(
+    const sv::Statement& record) const
+{
+    std::vector<semantic::StatementId> found;
+    for (const auto role : { support::GeneratedStatementRole::expect_pass,
+             support::GeneratedStatementRole::expect_else }) {
+        if (const auto* const block = expect_action(record, role)) {
+            found.insert(
+                found.end(), block->statements.begin(), block->statements.end());
+        }
+    }
+    return found;
+}
+
 PLI_INT32 VpiStatementModel::statement_type(const sv::Statement& record) const
 {
+    // The statements an expect statement expands into are the one expect
+    // statement (IEEE 1800-2023 16.17, 37.73).
+    if (record.generated_role == support::GeneratedStatementRole::expect) {
+        return vpiExpectStmt;
+    }
+    // An if-matches statement (12.6.2) is the if statement it was written
+    // as, its else statement the selection's default item.
+    if (record.generated_role == support::GeneratedStatementRole::if_matches) {
+        return record.case_alternatives.size() > 1U ? vpiIfElse : vpiIf;
+    }
     using enum sv::StatementKind;
     switch (record.kind) {
     case assignment:
@@ -3574,6 +3850,9 @@ PLI_INT32 VpiStatementModel::statement_type(const sv::Statement& record) const
     case wait_order:
         return vpiOrderedWait;
     case null_statement:
+    // A point of a concurrent assertion's generated monitor (16.14) has no
+    // source statement.
+    case sva_marker:
         return vpiNullStmt;
     }
     return vpiNullStmt;
@@ -3667,6 +3946,14 @@ PLI_INT32 VpiStatementModel::expression_type(
     case class_method_call:
     case class_static_method_call:
         return vpiMethodFuncCall;
+    // A case pattern (12.6, 37.72): `.*` and `.v` are any patterns, `tagged
+    // m p` a tagged pattern; a guarded item shows its pattern.
+    case pattern:
+        return record.pattern == sv::PatternKind::tagged ? vpiTaggedPattern
+                                                         : vpiAnyPattern;
+    case assignment_pattern:
+        return record.pattern == sv::PatternKind::structure ? vpiStructPattern
+                                                            : vpiOperation;
     case index:
         return vpiBitSelect;
     case slice:
@@ -3835,6 +4122,7 @@ PLI_INT32 VpiStatementModel::type(const std::uint64_t serial) const
     case Kind::body:
         return vpiBegin;
     case Kind::null_operation:
+    case Kind::match_op:
         return vpiOperation;
     case Kind::loop_init:
         return vpiAssignment;
@@ -3931,6 +4219,13 @@ std::optional<semantic::SourceSpanId> VpiStatementModel::source(
         }
         return std::nullopt;
     case Kind::body: {
+        // A procedure's begin-end is where its begin is.
+        if (entry.aux == body_process) {
+            if (const auto* const record = process(entry.id);
+                record != nullptr && record->body_block) {
+                return *record->body_block;
+            }
+        }
         const auto* const list = body_statements(entry);
         if (list == nullptr || list->empty()) {
             return std::nullopt;
@@ -3954,6 +4249,7 @@ std::optional<semantic::SourceSpanId> VpiStatementModel::source(
     case Kind::loop_init:
     case Kind::loop_step:
     case Kind::null_operation:
+    case Kind::match_op:
     case Kind::format:
         if (const auto* const record = statement(entry.id)) {
             return record->source;
@@ -4616,6 +4912,9 @@ std::optional<std::int64_t> VpiStatementModel::property(
     case Kind::null_operation:
         return property == vpiOpType ? std::optional<std::int64_t> { vpiNullOp }
                                      : std::nullopt;
+    case Kind::match_op:
+        return property == vpiOpType ? std::optional<std::int64_t> { vpiMatchOp }
+                                     : std::nullopt;
     case Kind::loop_init:
     case Kind::loop_step:
         if (entry.kind == Kind::loop_step) {
@@ -4661,6 +4960,16 @@ std::optional<std::string> VpiStatementModel::string_property(
     const std::uint64_t serial, const PLI_INT32 property) const
 {
     const auto& entry = nodes_.at(serial);
+    // The full name of an object declared in a scope; none in a scope with
+    // no full name (an unnamed scope or one inside it, 9.3.5).
+    const auto scoped_full_name
+        = [&](const std::string& suffix) -> std::optional<std::string> {
+        auto prefix = hooks_.full_name(entry.scope);
+        if (prefix.empty()) {
+            return std::nullopt;
+        }
+        return prefix + "." + suffix;
+    };
     if (property == vpiFile) {
         const auto span = source(entry);
         if (!span || !span->valid()
@@ -4694,10 +5003,13 @@ std::optional<std::string> VpiStatementModel::string_property(
             if (const auto name = system_task_name(*record)) {
                 return name;
             }
-            // A labelled immediate assertion is named by its label (IEEE
-            // 1800-2023 16.3, 37.49 vpiName).
-            if (record->immediate_directive
-                    != sv::Statement::ImmediateDirective::none
+            // A labelled immediate assertion or expect statement is named
+            // by its label (IEEE 1800-2023 16.3, 37.49 vpiName, 9.3.5,
+            // 37.60).
+            if ((record->immediate_directive
+                        != sv::Statement::ImmediateDirective::none
+                    || record->generated_role
+                        == support::GeneratedStatementRole::expect)
                 && !record->immediate_label.empty()) {
                 return record->immediate_label;
             }
@@ -4711,6 +5023,17 @@ std::optional<std::string> VpiStatementModel::string_property(
             return std::nullopt;
         }
         const auto type = select_aware_type(entry, *record);
+        // A pattern's name (37.72): the variable a `.v` pattern binds, the
+        // member a tagged pattern selects.
+        if (property == vpiName
+            && (type == vpiAnyPattern || type == vpiTaggedPattern
+                || type == vpiStructPattern)) {
+            if (record->pattern == sv::PatternKind::bind
+                || record->pattern == sv::PatternKind::tagged) {
+                return record->text;
+            }
+            return std::nullopt;
+        }
         if (property == vpiName
             && (type == vpiSysFuncCall || type == vpiFuncCall
                 || type == vpiMethodFuncCall)) {
@@ -4745,8 +5068,8 @@ std::optional<std::string> VpiStatementModel::string_property(
             return name;
         }
         if (property == vpiFullName) {
-            return hooks_.full_name(entry.scope) + "." + let.name
-                + (formal ? "." + name : std::string { });
+            return scoped_full_name(
+                let.name + (formal ? "." + name : std::string { }));
         }
         return std::nullopt;
     }
@@ -4769,10 +5092,10 @@ std::optional<std::string> VpiStatementModel::string_property(
             return entry.kind == Kind::assertion_decl ? declared : name;
         }
         if (property == vpiFullName) {
-            return hooks_.full_name(entry.scope) + "."
-                + (expanded ? instance + "." : std::string { }) + declared
+            return scoped_full_name(
+                (expanded ? instance + "." : std::string { }) + declared
                 + (entry.kind == Kind::assertion_formal ? "." + name
-                                                         : std::string { });
+                                                         : std::string { }));
         }
         return std::nullopt;
     }
@@ -4786,8 +5109,7 @@ std::optional<std::string> VpiStatementModel::string_property(
             return name;
         }
         if (property == vpiFullName) {
-            return hooks_.full_name(entry.scope) + "." + declaration.name + "."
-                + name;
+            return scoped_full_name(declaration.name + "." + name);
         }
         return std::nullopt;
     }
@@ -4812,8 +5134,19 @@ std::optional<std::string> VpiStatementModel::string_property(
         if (property == vpiName) {
             return name;
         }
+        // A pattern identifier is declared in the implicit scope of its
+        // case item or if statement (12.6), which no hierarchical name
+        // reaches: it has no full name (6.21).
+        if (property == vpiFullName && record->referenced_name
+            && record->referenced_name->selected) {
+            const auto* const declaration
+                = hir_.find_declaration(*record->referenced_name->selected);
+            if (declaration != nullptr && declaration->pattern_variable) {
+                return std::nullopt;
+            }
+        }
         if (property == vpiFullName) {
-            return hooks_.full_name(entry.scope) + "." + name;
+            return scoped_full_name(name);
         }
         return std::nullopt;
     }
@@ -4833,7 +5166,7 @@ std::optional<std::string> VpiStatementModel::string_property(
             return declaration->name;
         }
         if (property == vpiFullName) {
-            return hooks_.full_name(entry.scope) + "." + declaration->name;
+            return scoped_full_name(declaration->name);
         }
         return std::nullopt;
     }
@@ -4853,9 +5186,10 @@ std::optional<std::string> VpiStatementModel::string_property(
             }
             name = dpi->formals[formal].name;
         }
-        return property == vpiName
-            ? name
-            : hooks_.full_name(entry.scope) + "." + name;
+        if (property == vpiName) {
+            return name;
+        }
+        return scoped_full_name(name);
     }
     case Kind::format:
         if (property == vpiDecompile) {
@@ -4897,6 +5231,40 @@ std::optional<std::string> VpiStatementModel::string_property(
 }
 
 std::optional<fsim_vpi_handle_v1> VpiStatementModel::relation(
+    const std::uint64_t serial, const PLI_INT32 type)
+{
+    auto found = relation_of(serial, type);
+    if (found) {
+        *found = scope_object_of(*found);
+    }
+    return found;
+}
+
+std::optional<std::vector<fsim_vpi_handle_v1>> VpiStatementModel::iterate(
+    const std::uint64_t serial, const PLI_INT32 type)
+{
+    auto found = iterate_of(serial, type);
+    if (found) {
+        for (auto& handle : *found) {
+            handle = scope_object_of(handle);
+        }
+    }
+    return found;
+}
+
+fsim_vpi_handle_v1 VpiStatementModel::scope_object_of(
+    const fsim_vpi_handle_v1 handle) const
+{
+    if (loop_statements_.empty()) {
+        return handle;
+    }
+    const auto found = serial_of_.find(handle);
+    return found != serial_of_.end() && loop_statements_.contains(found->second)
+        ? nodes_[found->second].scope
+        : handle;
+}
+
+std::optional<fsim_vpi_handle_v1> VpiStatementModel::relation_of(
     const std::uint64_t serial, const PLI_INT32 type)
 {
     const auto entry = nodes_.at(serial);
@@ -5222,6 +5590,18 @@ std::optional<fsim_vpi_handle_v1> VpiStatementModel::relation(
             return node(Kind::process_control, entry.id, 0U, entry.scope, self,
                 true);
         }
+        // The begin-end the source gave is the statement, whatever it holds;
+        // a scope object when it declares items (37.12 detail 1).
+        if (record->body_block) {
+            if (!record->declarations.empty() && hooks_.block_scope) {
+                if (const auto scoped
+                    = hooks_.block_scope(entry.scope, record->scope)) {
+                    return scoped;
+                }
+            }
+            return node(Kind::body, entry.id, body_process, entry.scope, self,
+                true);
+        }
         return sequence(record->statements, entry.id, body_process,
             entry.scope, self, true);
     }
@@ -5231,6 +5611,16 @@ std::optional<fsim_vpi_handle_v1> VpiStatementModel::relation(
             return fsim_vpi_handle_v1 { };
         }
         if (type == vpiStmt) {
+            if (record->body_block) {
+                if (!record->declarations.empty() && hooks_.block_scope) {
+                    if (const auto scoped
+                        = hooks_.block_scope(entry.scope, record->scope)) {
+                        return scoped;
+                    }
+                }
+                return node(Kind::body, entry.id, body_process, entry.scope,
+                    self, true);
+            }
             return sequence(record->statements, entry.id, body_process,
                 entry.scope, self, true);
         }
@@ -5258,6 +5648,25 @@ std::optional<fsim_vpi_handle_v1> VpiStatementModel::relation(
         const auto* const record = statement(entry.id);
         if (record == nullptr) {
             return fsim_vpi_handle_v1 { };
+        }
+        if (record->generated_role == support::GeneratedStatementRole::expect) {
+            return expect_relation(*record, type, entry.scope, self);
+        }
+        // An if-matches statement (12.6.2): the matched item's statement,
+        // the default item's as the else statement.
+        if (record->generated_role
+            == support::GeneratedStatementRole::if_matches) {
+            if (type == vpiCondition) {
+                return node(Kind::match_op, entry.id, 0U, entry.scope, self);
+            }
+            const auto item = type == vpiStmt ? 0U
+                : type == vpiElseStmt         ? 1U
+                                              : record->case_alternatives.size();
+            return item < record->case_alternatives.size()
+                ? sequence(record->case_alternatives[item].statements,
+                      entry.id, body_case + static_cast<std::uint32_t>(item),
+                      entry.scope, self)
+                : fsim_vpi_handle_v1 { };
         }
         using enum sv::StatementKind;
         // Only assignments have sides (IEEE 1800-2023 37.45-37.47); a
@@ -5433,6 +5842,12 @@ std::optional<fsim_vpi_handle_v1> VpiStatementModel::relation(
                 ? expression_handle(record->operands[index], entry.scope, self)
                 : 0U;
         };
+        // The pattern a tagged pattern's member matches (37.72).
+        if (kind == vpiAnyPattern || kind == vpiTaggedPattern
+            || kind == vpiStructPattern) {
+            return type == vpiPattern && kind == vpiTaggedPattern ? operand(0U)
+                                                                  : 0U;
+        }
         // The first index of a var select; the others by iteration.
         if (kind == vpiVarSelect) {
             const auto select = var_select(entry, *record);
@@ -5505,7 +5920,7 @@ std::optional<fsim_vpi_handle_v1> VpiStatementModel::relation(
     }
 }
 
-std::optional<std::vector<fsim_vpi_handle_v1>> VpiStatementModel::iterate(
+std::optional<std::vector<fsim_vpi_handle_v1>> VpiStatementModel::iterate_of(
     const std::uint64_t serial, const PLI_INT32 type)
 {
     const auto entry = nodes_.at(serial);
@@ -5620,6 +6035,36 @@ std::optional<std::vector<fsim_vpi_handle_v1>> VpiStatementModel::iterate(
                         entry.id, entry.scope, self));
                 }
             }
+        } else if (type == vpiVariables && record->foreach_collection) {
+            // The loop variables of a foreach statement, of which it is the
+            // scope (12.7.3, 37.12 detail 3): the frontend declares them in
+            // the loops it writes the statement as, above the body.
+            const auto body = foreach_body(*record);
+            const auto collect = [&](const auto& recurse,
+                                     const std::vector<semantic::StatementId>& ids)
+                -> void {
+                for (const auto id : ids) {
+                    if (body && id == *body) {
+                        continue;
+                    }
+                    const auto* const child = statement(id.value());
+                    if (child == nullptr) {
+                        continue;
+                    }
+                    for (const auto declared : child->declarations) {
+                        const auto* const declaration
+                            = hir_.find_declaration(declared);
+                        if (declaration != nullptr
+                            && declaration->form == sv::DeclarationForm::variable) {
+                            found.push_back(node(Kind::local_variable,
+                                declared.value(), entry.id, entry.scope, self));
+                        }
+                    }
+                    recurse(recurse, child->statements);
+                    recurse(recurse, child->else_statements);
+                }
+            };
+            collect(collect, record->statements);
         } else if (type == vpiLoopVars && record->foreach_collection) {
             for (std::size_t index = 0U; index < record->foreach_variables.size();
                  ++index) {
@@ -5638,13 +6083,17 @@ std::optional<std::vector<fsim_vpi_handle_v1>> VpiStatementModel::iterate(
                 }
             }
         } else if (type == vpiStmt
-            && (record->kind == block || record->kind == fork)) {
+            && (record->kind == block || record->kind == fork)
+            && record->generated_role
+                != support::GeneratedStatementRole::expect) {
             for (const auto id : record->statements) {
                 if (const auto handle = statement_handle(id, entry.scope, self)) {
                     found.push_back(handle);
                 }
             }
-        } else if (type == vpiCaseItem && record->kind == selection) {
+        } else if (type == vpiCaseItem && record->kind == selection
+            && record->generated_role
+                != support::GeneratedStatementRole::if_matches) {
             for (std::size_t index = 0U;
                  index < record->case_alternatives.size(); ++index) {
                 found.push_back(node(Kind::case_item, entry.id,
@@ -5746,13 +6195,42 @@ std::optional<std::vector<fsim_vpi_handle_v1>> VpiStatementModel::iterate(
         }
         return found;
     }
+    case Kind::match_op: {
+        // The operands of an if-matches condition: the expression, then
+        // the pattern (12.6.2, Annex M); a guard is no object of 37.72.
+        const auto* const record = statement(entry.id);
+        if (record == nullptr || type != vpiOperand || !record->condition
+            || record->case_alternatives.empty()
+            || record->case_alternatives.front().choices.empty()) {
+            return found;
+        }
+        found.push_back(
+            expression_handle(*record->condition, entry.scope, self));
+        const auto choice = record->case_alternatives.front().choices.front();
+        const auto* const shown = expression(choice.value());
+        found.push_back(shown != nullptr
+                && shown->kind == sv::ExpressionKind::pattern
+                && shown->pattern == sv::PatternKind::guard
+                && !shown->operands.empty()
+            ? expression_handle(shown->operands.front(), entry.scope, self)
+            : expression_handle(choice, entry.scope, self));
+        return found;
+    }
     case Kind::case_item: {
         const auto* const record = statement(entry.id);
         if (record != nullptr && entry.aux < record->case_alternatives.size()
             && type == vpiExpr) {
             for (const auto choice :
                 record->case_alternatives[entry.aux].choices) {
-                found.push_back(expression_handle(choice, entry.scope, self));
+                // A guarded matches item (`p &&& g`, 12.6) shows its
+                // pattern; the guard is no object of 37.72.
+                const auto* const shown = expression(choice.value());
+                found.push_back(shown != nullptr
+                        && shown->kind == sv::ExpressionKind::pattern
+                        && shown->pattern == sv::PatternKind::guard
+                        && !shown->operands.empty()
+                    ? expression_handle(shown->operands.front(), entry.scope, self)
+                    : expression_handle(choice, entry.scope, self));
             }
         }
         return found;
@@ -5763,6 +6241,16 @@ std::optional<std::vector<fsim_vpi_handle_v1>> VpiStatementModel::iterate(
             return found;
         }
         const auto kind = select_aware_type(entry, *record);
+        // The member patterns of a structure pattern (37.72).
+        if (kind == vpiStructPattern || kind == vpiAnyPattern
+            || kind == vpiTaggedPattern) {
+            if (type == vpiPattern && kind == vpiStructPattern) {
+                for (const auto member : record->operands) {
+                    found.push_back(expression_handle(member, entry.scope, self));
+                }
+            }
+            return found;
+        }
         // A var select's indexes, outermost dimension first (IEEE 1800-2023
         // 37.19).
         if (type == vpiIndex && kind == vpiVarSelect) {

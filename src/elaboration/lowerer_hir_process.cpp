@@ -1593,7 +1593,27 @@ bool Lowerer::initialize_hir_declarations(
                 && scopes[scope.value()].name == "<loop>";
         }();
         if (declaration->systemverilog != nullptr) {
-            if (hir_static_storage(declaration_id)) {
+            if (const auto storage = hir_static_storage(declaration_id)) {
+                // A static variable of a block of the process: the debugger
+                // shows it with the process's locals (IEEE 1800-2023 6.21).
+                if (!active_hir_callable_
+                    && std::ranges::none_of(process_.debug_static_locals,
+                        [&](const runtime::simir::DebugStaticLocal& local) {
+                            return local.signal == storage->signal
+                                && local.string == storage->string
+                                && local.container == storage->container;
+                        })) {
+                    process_.debug_static_locals.push_back(
+                        runtime::simir::DebugStaticLocal {
+                            debug_name(declaration_id,
+                                declaration->systemverilog->name),
+                            storage->signal,
+                            storage->string,
+                            storage->container,
+                            runtime_source_location(hir_source_span(
+                                declaration->systemverilog->source)),
+                        });
+                }
                 continue;
             }
             using Form = semantic::sv::DeclarationForm;
@@ -2872,6 +2892,7 @@ std::optional<Process> Lowerer::lower_hir_process(
         description.excludes_written_dependencies
             = description.always_comb_or_latch;
         description.concurrent_assertion = input.concurrent_assertion;
+        description.declaration_initializer = input.declaration_initializer;
         // An upward or downward hierarchical name (`t.clk`, IEEE 1800-2017
         // 23.6, 23.8), resolved against each enclosing instance in turn.
         const auto hierarchical_sensitivity
@@ -4152,6 +4173,71 @@ std::optional<Process> Lowerer::lower_hir_package_initializer(
     return process;
 }
 
+std::optional<Process> Lowerer::lower_hir_declaration_initializer(
+    const semantic::DeclarationId declaration_id,
+    const frontend::Language language,
+    const std::string_view hierarchy)
+{
+    [[maybe_unused]] const HirEffectiveVhdlSubtypeCacheScope cache_scope {
+        *this
+    };
+    if (specialized_hir_unit_ == nullptr
+        || language != frontend::Language::SystemVerilog2017) {
+        return std::nullopt;
+    }
+    const auto declaration
+        = specialized_hir_unit_->find_declaration(declaration_id);
+    if (!declaration || declaration->systemverilog == nullptr
+        || declaration->systemverilog->form
+            != semantic::sv::DeclarationForm::variable
+        || !declaration->systemverilog->initializer
+        || !declaration->systemverilog->type
+        || !declaration->systemverilog->scope.valid()) {
+        return std::nullopt;
+    }
+    const auto initializer = *declaration->systemverilog->initializer;
+    const auto expression
+        = specialized_hir_unit_->find_expression(initializer);
+    const auto storage = hir_static_storage(declaration_id);
+    if (!expression || expression->systemverilog == nullptr || !storage) {
+        return std::nullopt;
+    }
+    HirProcessDescription description;
+    description.source = expression->systemverilog->source;
+    description.scope = declaration->systemverilog->scope;
+    description.name = "$declaration_initializer_"
+        + std::to_string(declaration_id.value());
+    description.input_actual = initializer;
+    if (storage->signal) {
+        description.input_actual_destination = *storage->signal;
+        description.input_actual_declaration = declaration_id;
+        description.input_actual_assignment_context = true;
+        auto assignment_type = declaration->systemverilog->type;
+        if (assignment_type && !assignment_type->target.target.valid()) {
+            const auto resolved = hir_resolver().effective_systemverilog_type(
+                *assignment_type, declaration->systemverilog->scope);
+            if (resolved && resolved->target.target.valid()) {
+                assignment_type = *resolved;
+            }
+        }
+        description.input_actual_assignment_type = std::move(assignment_type);
+    } else {
+        description.input_actual_string_object = storage->string;
+        description.input_actual_container_object = storage->container;
+        description.input_actual_declaration = declaration_id;
+    }
+    description.kind = frontend::ProcessKind::Initial;
+    description.initial = true;
+    description.require_wildcard_dependency = false;
+    description.declaration_initializer = true;
+    // `C h = new` allocates the declaration's class specialization (8.25).
+    const auto saved_target = std::exchange(
+        hir_allocation_target_, std::optional { declaration_id });
+    auto process = lower_hir_process_body(description, language, hierarchy);
+    hir_allocation_target_ = saved_target;
+    return process;
+}
+
 std::optional<Process> Lowerer::lower_hir_package_object_initializer(
     const semantic::DeclarationId declaration_id,
     const std::optional<StringObjectId> string_object,
@@ -5373,6 +5459,10 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
         process_.startup_phase
             = runtime::simir::ProcessStartupPhase::after_procedures;
     }
+    if (description.declaration_initializer) {
+        process_.startup_phase
+            = runtime::simir::ProcessStartupPhase::declaration_initializer;
+    }
     const auto resume_entry = static_cast<InstructionIndex>(
         process_.operations.size());
     std::optional<InstructionIndex> event_filter_branch;
@@ -5729,6 +5819,26 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
         }
         process_.operations.emplace_back(WriteStringObject {
             *description.input_actual_string_object, *text });
+    } else if (description.input_actual_container_object
+        && [&] {
+               // A locator method initializes the queue the declaration
+               // declares (`int found[$] = q.find_index(x) with (...)`,
+               // IEEE 1800-2023 7.12.1).
+               const auto object = *description.input_actual_container_object;
+               const HirContainerObjectBinding declared {
+                   description.input_actual_declaration.value_or(
+                       semantic::DeclarationId { }),
+                   design_.container_objects_[object].name,
+                   object,
+                   std::nullopt,
+                   &design_.container_objects_[object].initial_value.type,
+                   false,
+               };
+               return lower_hir_container_locator_assignment(
+                   semantic::ExpressionId { }, *description.input_actual,
+                   &declared);
+           }()) {
+        // The locator wrote the object (lower_hir_container_locator_assignment).
     } else if (description.input_actual_container_object) {
         // A container-valued initializer: the object takes the value the
         // expression forms, typed by the object (IEEE 1800-2023 6.8, 7.9.11,
@@ -6064,6 +6174,27 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
             if (natural && *natural != 0U && *natural < signal.width) {
                 value = lower_hir_expression(actual, *natural);
                 extend_signed = hir_expression_signed(actual);
+            }
+        }
+        // A static variable's mailbox or semaphore initializer constructs
+        // an object of the declared type (IEEE 1800-2023 15.3.1, 15.4.1),
+        // as at the entry of the variable's block.
+        if (!value && description.input_actual_declaration
+            && specialized_hir_unit_ != nullptr) {
+            const auto declaration = specialized_hir_unit_->find_declaration(
+                *description.input_actual_declaration);
+            if (declaration && declaration->systemverilog != nullptr
+                && declaration->systemverilog->type) {
+                const auto synchronization
+                    = lower_hir_synchronization_expression(actual,
+                        signal.width, &*declaration->systemverilog->type);
+                if (synchronization.handled) {
+                    if (!synchronization.value) {
+                        process_ = { };
+                        return std::nullopt;
+                    }
+                    value = synchronization.value;
+                }
             }
         }
         if (!value) {

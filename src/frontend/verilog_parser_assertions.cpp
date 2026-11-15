@@ -1652,11 +1652,12 @@ std::optional<Expression> VerilogParser::assertion_expression(
 
 void VerilogParser::declare_inline_property(
     SystemVerilogConcurrentAssertion& assertion,
-    std::vector<SystemVerilogAssertionDeclaration>& declarations)
+    std::vector<SystemVerilogAssertionDeclaration>& declarations,
+    const bool any_form)
 {
     if (assertion.form != SystemVerilogConcurrentAssertionForm::Property
         || assertion.property_tokens.empty()
-        || (assertion.property_tokens.front().kind != TokenKind::At
+        || (!any_form && assertion.property_tokens.front().kind != TokenKind::At
             && !(assertion.property_tokens.front().kind
                     == TokenKind::Identifier
                 && assertion.property_tokens.front().text == "disable"))) {

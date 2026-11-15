@@ -173,6 +173,9 @@ struct SpecializedHirAssociationBinding {
     std::optional<vhdl::SubtypeIndication> vhdl_type { };
     std::string identity;
     SourceSpanId source;
+    // Whether a named association gave the actual (IEEE 1800-2023 23.10.2.2,
+    // 37.28 vpiConnByName).
+    bool named { };
 
     friend bool operator==(const SpecializedHirAssociationBinding&,
         const SpecializedHirAssociationBinding&) = default;

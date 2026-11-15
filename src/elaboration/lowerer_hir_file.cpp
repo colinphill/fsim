@@ -15,11 +15,7 @@
 namespace fsim::elaboration {
 namespace {
 
-    using runtime::simir::vhdl_textio_logic9_marker;
-    using runtime::simir::vhdl_textio_radix_read_2008_marker;
-    using runtime::simir::vhdl_textio_read_2008_marker;
-    using runtime::simir::vhdl_textio_read_marker;
-    using runtime::simir::vhdl_textio_sread_marker;
+    using runtime::simir::VhdlTextioRead;
 
 [[nodiscard]] bool hir_file_call_name(const std::string_view name) noexcept
 {
@@ -2919,21 +2915,18 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_file_call(
                 "$fopen requires a byte-string filename and optional mode");
         }
         const auto path = lower_hir_filename(call.operands.front());
-        auto mode = call.operands.size() == 2U
-            ? lower_hir_string_expression(call.operands.back())
-            : std::optional<StringRegisterId> { };
-        if (!mode) {
-            mode = allocate_string_register();
-            process_.operations.emplace_back(LoadStringConstant {
-                *mode, "\x1f" "fsim-multichannel-write" });
-        }
-        if (!path) {
+        const bool multichannel = call.operands.size() != 2U;
+        const auto mode = multichannel
+            ? std::optional<StringRegisterId> { }
+            : lower_hir_string_expression(call.operands.back());
+        if (!path || (!multichannel && !mode)) {
             return std::nullopt;
         }
         const auto destination = allocate_register(
             32U, frontend::ValueDomain::Bit2);
-        process_.operations.emplace_back(FileOpen {
-            destination, *path, *mode });
+        process_.operations.emplace_back(FileOpen { destination, *path,
+            mode.value_or(StringRegisterId { }), std::nullopt, false,
+            multichannel });
         return finish(destination);
     }
     if (call.text == "$fgets") {
@@ -3916,7 +3909,7 @@ bool Lowerer::lower_hir_vhdl_file_statement(
                     "a writable NATURAL-compatible integer count");
             }
             InputScanConversion conversion;
-            conversion.prefix = vhdl_textio_sread_marker;
+            conversion.vhdl_textio = VhdlTextioRead::sread;
             conversion.format = InputScanFormat::string;
             conversion.maximum_characters
                 = static_cast<std::uint32_t>(*width / 8U);
@@ -3944,11 +3937,11 @@ bool Lowerer::lower_hir_vhdl_file_statement(
                     "actuals");
             }
             InputScanConversion conversion;
-            conversion.prefix = radix_read
-                ? vhdl_textio_radix_read_2008_marker
+            conversion.vhdl_textio = radix_read
+                ? VhdlTextioRead::radix_read_2008
                 : vhdl_standard_ >= frontend::VhdlStandard::Vhdl2008
-                    ? vhdl_textio_read_2008_marker
-                    : vhdl_textio_read_marker;
+                ? VhdlTextioRead::read_2008
+                : VhdlTextioRead::read;
             const auto value_class = textio_scalar_class(*value);
             // READ, OREAD and HREAD of STD_ULOGIC(_VECTOR) are the
             // subprograms of STD_LOGIC_1164 (IEEE 1076-2019 16.7); the
@@ -3957,7 +3950,7 @@ bool Lowerer::lower_hir_vhdl_file_statement(
                 = value_class == TextioScalarClass::logic9_scalar
                 || value_class == TextioScalarClass::logic9_vector;
             if (logic9_read) {
-                conversion.prefix = std::string { vhdl_textio_logic9_marker };
+                conversion.vhdl_textio = VhdlTextioRead::logic9;
             }
             std::optional<RegisterId> selection_target;
             std::optional<RegisterId> selection_scan_target;

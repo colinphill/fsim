@@ -436,6 +436,8 @@ sv::ConstraintExpressionKind SystemVerilogHirBuilder::constraint_kind(
     using HirKind = sv::ConstraintExpressionKind;
     switch (input.kind) {
     case FrontendKind::Invalid:
+    // A pattern (12.6) is no constraint expression (18.5).
+    case FrontendKind::Pattern:
         return HirKind::invalid;
     case FrontendKind::Identifier:
         return HirKind::name;

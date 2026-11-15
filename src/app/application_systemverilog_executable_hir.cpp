@@ -437,6 +437,8 @@ namespace {
                 return sv::ExpressionKind::default_choice;
             case frontend::ExpressionKind::Conditional:
                 return sv::ExpressionKind::invalid;
+            case frontend::ExpressionKind::Pattern:
+                return sv::ExpressionKind::pattern;
             }
             return sv::ExpressionKind::invalid;
         }
@@ -864,7 +866,10 @@ namespace {
                             input.systemverilog_scalar_kind)
                     || candidate.generated_text
                         != static_cast<sv::GeneratedTextKind>(
-                            input.generated_text)) {
+                            input.generated_text)
+                    || candidate.pattern
+                        != static_cast<sv::PatternKind>(
+                            input.systemverilog_pattern)) {
                     return false;
                 }
                 const auto& candidate_origin
@@ -934,7 +939,12 @@ namespace {
                 input.systemverilog_scalar_kind);
             output.generated_text
                 = static_cast<sv::GeneratedTextKind>(input.generated_text);
+            output.pattern = static_cast<sv::PatternKind>(
+                input.systemverilog_pattern);
             if (input.kind == frontend::ExpressionKind::Identifier
+                || (input.kind == frontend::ExpressionKind::Pattern
+                    && input.systemverilog_pattern
+                        == frontend::SystemVerilogPatternKind::bind)
                 || (input.kind == frontend::ExpressionKind::Call
                     && !input.text.starts_with("@sv-"))) {
                 output.referenced_name = name(
@@ -1251,6 +1261,8 @@ namespace {
                 return sv::StatementKind::deassign;
             case frontend::StatementKind::WaitOrder:
                 return sv::StatementKind::wait_order;
+            case frontend::StatementKind::SvaMarker:
+                return sv::StatementKind::sva_marker;
             }
             return sv::StatementKind::null_statement;
         }
@@ -1666,6 +1678,52 @@ namespace {
             return nullptr;
         }
 
+        // The variables the pattern identifiers of `choice` declare (IEEE
+        // 1800-2023 12.6), declared once each in `scope`.
+        // Whether a case item's pattern declares an identifier (`.v`,
+        // IEEE 1800-2023 12.6), at any depth.
+        [[nodiscard]] static bool binds_pattern_variable(
+            const frontend::Expression& choice)
+        {
+            return (choice.kind == frontend::ExpressionKind::Pattern
+                       && choice.systemverilog_pattern
+                           == frontend::SystemVerilogPatternKind::bind)
+                || std::ranges::any_of(choice.operands, [](const auto& operand) {
+                       return binds_pattern_variable(operand);
+                   });
+        }
+
+        void pattern_variables(const frontend::Expression& choice,
+            const semantic::ScopeId scope, const semantic::OriginId parent)
+        {
+            if (choice.kind == frontend::ExpressionKind::Pattern
+                && choice.systemverilog_pattern
+                    == frontend::SystemVerilogPatternKind::bind
+                && !choice.text.empty()
+                && declarations_named(scope, choice.text).empty()) {
+                const auto variable_source = source(choice.span);
+                const auto variable_origin
+                    = origin(variable_source, parent, choice.text);
+                sv::Declaration output;
+                output.id = model_.add_declaration(scope,
+                    semantic::DeclarationKind::variable, choice.text,
+                    variable_source, variable_origin);
+                output.scope = scope;
+                output.form = sv::DeclarationForm::variable;
+                output.name = choice.text;
+                output.lifetime = sv::Lifetime::automatic;
+                output.source = variable_source;
+                output.origin = variable_origin;
+                output.pattern_variable = true;
+                hir_.mutable_declarations().push_back(std::move(output));
+            }
+            // A bind may stand anywhere in the pattern: a tagged member's
+            // pattern, a structure pattern's member (12.6).
+            for (const auto& operand : choice.operands) {
+                pattern_variables(operand, scope, parent);
+            }
+        }
+
         [[nodiscard]] semantic::DeclarationId block_variable(
             const frontend::VariableDeclaration& input,
             const semantic::ScopeId scope,
@@ -1694,6 +1752,7 @@ namespace {
                 : sv::Lifetime::implicit;
             output.source = variable_source;
             output.origin = variable_origin;
+            output.synthesized = input.synthesized;
             output.type = type_reference(
                 input.type, input.span, scope, variable_origin);
             output.declared_value = model_.add_value(
@@ -1995,9 +2054,35 @@ namespace {
             }
             output.immediate_final = input.immediate_final;
             output.immediate_label = input.immediate_label;
+            output.generated_role = input.generated_role;
+            if (input.expect_property && expect_declarations_ != nullptr
+                && *input.expect_property < expect_declarations_->size()) {
+                output.expect_property = sv::ExpectPropertyReference {
+                    expect_container_, *input.expect_property };
+                expect_property_scopes_.insert_or_assign(
+                    &(*expect_declarations_)[*input.expect_property],
+                    enclosing_scope);
+            }
             output.output_text = input.output_text;
             output.output_generated_text = static_cast<sv::GeneratedTextKind>(
                 input.output_generated_text);
+            if (input.sva_marker) {
+                const auto& marker = *input.sva_marker;
+                sv::SvaMarker projected;
+                projected.kind = marker.kind;
+                projected.outcome = marker.outcome;
+                projected.directive = marker.directive;
+                projected.slot = marker.slot;
+                projected.name = marker.name;
+                for (const auto& action : marker.actions) {
+                    projected.actions.push_back({ action.report,
+                        elaboration::hir_assertion_severity(action.severity),
+                        action.newline, action.text, source(action.span),
+                        static_cast<sv::GeneratedTextKind>(
+                            action.generated_text) });
+                }
+                output.sva_marker = std::move(projected);
+            }
             output.output_newline = input.output_newline;
             output.output_postponed = input.output_postponed;
             if (input.output_format) {
@@ -2071,15 +2156,30 @@ namespace {
                 sv::CaseAlternative converted;
                 converted.is_default = alternative.is_default;
                 converted.source = source(alternative.span);
+                // A matches item's pattern identifiers are variables of a
+                // scope over its pattern, guard and statement (12.6).
+                auto item_scope = child_scope;
+                if (input.case_match_kind == frontend::CaseMatchKind::Matches
+                    && std::ranges::any_of(alternative.choices,
+                        [&](const frontend::Expression& choice) {
+                            return binds_pattern_variable(choice);
+                        })) {
+                    item_scope = model_.add_scope(scope_unit(child_scope),
+                        child_scope, "<match>", converted.source,
+                        statement_origin);
+                    for (const auto& choice : alternative.choices) {
+                        pattern_variables(choice, item_scope, statement_origin);
+                    }
+                }
                 for (const auto& choice : alternative.choices) {
                     if (const auto choice_id = expression(
-                            choice, child_scope, statement_origin)) {
+                            choice, item_scope, statement_origin)) {
                         converted.choices.push_back(*choice_id);
                     }
                 }
                 for (const auto& child : alternative.statements) {
                     converted.statements.push_back(statement(
-                        child, child_scope, statement_origin));
+                        child, item_scope, statement_origin));
                 }
                 output.case_alternatives.push_back(std::move(converted));
             }
@@ -2145,6 +2245,11 @@ namespace {
             output.origin = identity.origin;
             output.concurrent_assertion
                 = input.systemverilog_concurrent_assertion;
+            output.synthesized = input.synthesized;
+            output.declaration_initializer = input.declaration_initializer;
+            if (input.body_block) {
+                output.body_block = source(*input.body_block);
+            }
             if (const auto directive = input.systemverilog_assertion_directive) {
                 if (*directive >= assertions.size()) {
                     throw std::logic_error {
@@ -2597,6 +2702,8 @@ namespace {
             const frontend::GenerateBody& input,
             sv::GenerateRegion& output)
         {
+            const ExpectDeclarationsScope expect_declarations { *this,
+                input.systemverilog_assertion_declarations, output.scope };
             for (const auto& parameter : input.constants) {
                 fill_parameter(parameter, output.scope);
             }
@@ -2639,9 +2746,15 @@ namespace {
                 index < input.systemverilog_assertion_declarations.size()
                 && index < output.assertion_declarations.size();
                 ++index) {
-                fill_assertion_declaration(
-                    input.systemverilog_assertion_declarations[index],
-                    output.assertion_declarations[index], output.scope);
+                const auto& declared
+                    = input.systemverilog_assertion_declarations[index];
+                const auto expect_scope
+                    = expect_property_scopes_.find(&declared);
+                fill_assertion_declaration(declared,
+                    output.assertion_declarations[index],
+                    expect_scope != expect_property_scopes_.end()
+                        ? expect_scope->second
+                        : output.scope);
             }
             for (std::size_t index = 0;
                 index < input.published_concurrent_assertions.size()
@@ -2742,6 +2855,8 @@ namespace {
             const frontend::DesignUnit& input,
             sv::Unit& output)
         {
+            const ExpectDeclarationsScope expect_declarations { *this,
+                input.systemverilog_assertion_declarations, output.scope };
             for (std::size_t index = 0;
                 index < input.systemverilog_aliases.size()
                 && index < output.aliases.size();
@@ -2841,9 +2956,15 @@ namespace {
                 index < input.systemverilog_assertion_declarations.size()
                 && index < output.assertion_declarations.size();
                 ++index) {
-                fill_assertion_declaration(
-                    input.systemverilog_assertion_declarations[index],
-                    output.assertion_declarations[index], output.scope);
+                const auto& declared
+                    = input.systemverilog_assertion_declarations[index];
+                const auto expect_scope
+                    = expect_property_scopes_.find(&declared);
+                fill_assertion_declaration(declared,
+                    output.assertion_declarations[index],
+                    expect_scope != expect_property_scopes_.end()
+                        ? expect_scope->second
+                        : output.scope);
             }
             for (std::size_t index = 0;
                 index < input.systemverilog_concurrent_assertions.size()
@@ -2976,6 +3097,44 @@ namespace {
         std::unordered_map<std::uint32_t, std::size_t> declaration_positions_;
         std::size_t indexed_declarations_ { };
         std::map<semantic::ScopeId, std::vector<sv::Import>> block_imports_;
+        // The assertion declarations of the unit or generate block whose
+        // procedures and tasks are being converted, and the scope each
+        // expect statement's property spec reads its names in: the scope
+        // that holds the statement (IEEE 1800-2023 16.17, 37.73).
+        const std::vector<frontend::SystemVerilogAssertionDeclaration>*
+            expect_declarations_ { };
+        semantic::ScopeId expect_container_;
+        class ExpectDeclarationsScope {
+        public:
+            ExpectDeclarationsScope(SystemVerilogExecutableBuilder& builder,
+                const std::vector<frontend::SystemVerilogAssertionDeclaration>&
+                    declarations,
+                const semantic::ScopeId container) noexcept
+                : builder_(builder)
+                , saved_(std::exchange(
+                      builder.expect_declarations_, &declarations))
+                , saved_container_(
+                      std::exchange(builder.expect_container_, container))
+            {
+            }
+            ExpectDeclarationsScope(const ExpectDeclarationsScope&) = delete;
+            ExpectDeclarationsScope& operator=(
+                const ExpectDeclarationsScope&) = delete;
+            ~ExpectDeclarationsScope()
+            {
+                builder_.expect_declarations_ = saved_;
+                builder_.expect_container_ = saved_container_;
+            }
+
+        private:
+            SystemVerilogExecutableBuilder& builder_;
+            const std::vector<frontend::SystemVerilogAssertionDeclaration>*
+                saved_;
+            semantic::ScopeId saved_container_;
+        };
+        std::unordered_map<const frontend::SystemVerilogAssertionDeclaration*,
+            semantic::ScopeId>
+            expect_property_scopes_;
         std::unordered_map<std::string, semantic::TypeId>
             anonymous_aggregate_types_;
         std::optional<std::map<semantic::ScopeId, std::string>> genvar_scopes_;

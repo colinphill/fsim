@@ -12,6 +12,7 @@
 #include "fsim/runtime/sva_storage.hpp"
 #include "fsim/runtime/systemverilog_scalar.hpp"
 #include "fsim/support/rare_vector.hpp"
+#include "fsim/support/sva_marker.hpp"
 #include <algorithm>
 #include <array>
 #include <compare>
@@ -476,6 +477,8 @@ struct DynamicPartIndex {
 
 inline auto archive_fields(const DynamicPartIndex& selection)
 {
+    // Every member is listed: one added and not listed fails the build.
+    [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5, m6] = selection;
     return std::tie(
         selection.base, selection.left, selection.right,
         selection.base_offset, selection.width,
@@ -484,6 +487,8 @@ inline auto archive_fields(const DynamicPartIndex& selection)
 
 inline auto archive_fields(DynamicPartIndex& selection)
 {
+    // Every member is listed: one added and not listed fails the build.
+    [[maybe_unused]] auto& [m0, m1, m2, m3, m4, m5, m6] = selection;
     return std::tie(
         selection.base, selection.left, selection.right,
         selection.base_offset, selection.width,
@@ -1948,6 +1953,10 @@ enum class ProcessStartupPhase : std::uint8_t {
     // any procedure (IEEE 1800-2017 8.9, 6.21). It writes only class static
     // properties, so it drives no signal.
     class_static_initializer,
+    // Runs a static variable's declaration initializer (IEEE 1800-2023 6.8,
+    // 10.5): it starts before every initial or always procedure, ahead of
+    // the time-zero processes, and is otherwise an ordinary process.
+    declaration_initializer,
 };
 
 /// Whether a process of `phase` runs once in the startup order, before the
@@ -2016,6 +2025,7 @@ struct Process {
     CallFrameMap call_frames;
     std::vector<DebugStringLocal> debug_string_locals;
     std::vector<DebugContainerLocal> debug_container_locals;
+    std::vector<DebugStaticLocal> debug_static_locals;
     CopyOnWriteVector<ContainerType> container_register_types;
     std::vector<Sensitivity> static_sensitivity;
     /// Callback-free statement ranges which may be skipped by a compiled

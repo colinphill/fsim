@@ -155,11 +155,12 @@ enum class Tag : std::uint64_t {
     // A clocking block named through a virtual interface, `vif.cb` (IEEE
     // 1800-2023 37.48 details 2 and 3): the serial indexes `vif_clockings_`.
     vif_clocking = 56,
-    // A parameter value an interface typespec assigns (IEEE 1800-2023
-    // 37.28, 37.30): the serial indexes `param_assigns_`.
-    typespec_param_assign = 57,
-    // The parameter such an assignment sets (37.28 vpiLhs): the same serial.
-    typespec_param = 58,
+    // A parameter assignment or def param of any form (IEEE 1800-2023
+    // 37.28): the serial indexes `param_assigns_`.
+    param_assign = 57,
+    // The parameter an assignment sets when it is known by its name only
+    // (an interface typespec's, 37.30; vpiLhs): the same serial.
+    param_name = 58,
     // A mailbox or semaphore object, and a message of a mailbox (IEEE
     // 1800-2023 37.33 details 3 and 4).
     sync_object = 59,
@@ -4017,6 +4018,9 @@ private:
         std::size_t depth { };
         std::string name;
         std::string full_name;
+        // The selections from the memory to this subarray (`[1]`): its words
+        // are the memory's children named by the selections that follow.
+        std::string suffix;
     };
     // A constant the object model reaches through a relation, such as a
     // range bound or an index.
@@ -4050,6 +4054,18 @@ private:
         const runtime::SystemVerilogVpiTypespec* owner { };
         std::size_t index { };
         fsim_vpi_handle_v1 parent { };
+    };
+
+    // A parameter assignment or def param object (IEEE 1800-2023 37.28):
+    // its record, the object that holds it, the parameter it sets (0 when
+    // that is known by its name only), the scope its expression is seen
+    // from, and the typespec a class type parameter is bound to.
+    struct ParamAssignObject {
+        const runtime::SystemVerilogVpiParamAssign* record { };
+        fsim_vpi_handle_v1 parent { };
+        fsim_vpi_handle_v1 lhs { };
+        fsim_vpi_handle_v1 scope { };
+        fsim_vpi_handle_v1 typespec { };
     };
 
     // --- module paths (IEEE 1800-2023 37.39, 38.10, 38.32) ---------------
@@ -4480,13 +4496,104 @@ private:
         return &typespecs_[serial_of(handle)];
     }
 
+    [[nodiscard]] const ParamAssignObject* param_assign_of(
+        const fsim_vpi_handle_v1 handle, const Tag tag) const
+    {
+        if (!owned(handle) || tag_of(handle) != tag
+            || serial_of(handle) >= param_assigns_.size()) {
+            return nullptr;
+        }
+        return &param_assigns_[serial_of(handle)];
+    }
+
+    // The handle of a parameter assignment or def param object, one per
+    // record and parent (IEEE 1800-2023 37.28).
+    [[nodiscard]] fsim_vpi_handle_v1 param_assign_object(
+        const ParamAssignObject& object)
+    {
+        const auto [found, added] = param_assign_index_.try_emplace(
+            std::pair { object.record, object.parent }, param_assigns_.size());
+        if (added) {
+            param_assigns_.push_back(object);
+        }
+        return tagged(Tag::param_assign, found->second);
+    }
+
+    // The right side of an assignment (37.28 vpiRhs): its constant, its
+    // expression seen from the scope that wrote it, or the typespec of the
+    // type a type parameter is bound to (the class model's, else the one
+    // the parameter object has, 37.28 detail 2).
+    [[nodiscard]] fsim_vpi_handle_v1 param_assign_rhs(
+        const ParamAssignObject& object, const fsim_vpi_handle_v1 self)
+    {
+        const auto& record = *object.record;
+        if (record.constant) {
+            return make_constant(record.value);
+        }
+        if (record.expression) {
+            return statement_model().expression_in_scope(
+                semantic::ExpressionId::from_index(*record.expression),
+                object.scope != 0U ? object.scope : self, self);
+        }
+        if (object.typespec != 0U || object.lhs == 0U) {
+            return object.typespec;
+        }
+        fsim_vpi_service_request_v1 inner { };
+        inner.handle = object.lhs;
+        inner.argument = static_cast<std::uint64_t>(vpiTypespec);
+        fsim_vpi_service_result_v1 typespec { };
+        return handle(inner, typespec) == FSIM_VPI_STATUS_OK
+            ? typespec.handle
+            : fsim_vpi_handle_v1 { };
+    }
+
+    // The parameter assignments elaboration recorded (an instance's
+    // overrides and the defparams that set its parameters, 37.28), by the
+    // handle of the scope that holds each: the instance for an override,
+    // the scope of the defparam statement for a def param.
+    [[nodiscard]] const std::vector<fsim_vpi_handle_v1>& instance_param_assigns(
+        const fsim_vpi_handle_v1 holder)
+    {
+        if (!instance_param_assigns_) {
+            instance_param_assigns_.emplace();
+            const auto object = [&](const std::string& path) {
+                const auto found = registry_.find(path);
+                return found ? found.value->handle : fsim_vpi_handle_v1 { };
+            };
+            for (const auto& specialization :
+                simulation_.design().specializations()) {
+                for (const auto& record : specialization.vpi_param_assigns) {
+                    const auto scope = object(record.parameter_scope);
+                    const auto parameter = scope == 0U
+                        ? runtime::SystemVerilogVpiObjectLookupResult { }
+                        : registry_.find_child(
+                              scope, systemverilog_vpi_identifier(record.name));
+                    ParamAssignObject assign;
+                    assign.record = &record;
+                    assign.parent = record.defparam
+                        ? object(record.scope_path)
+                        : object(specialization.instance);
+                    assign.lhs = parameter ? parameter.value->handle
+                                           : fsim_vpi_handle_v1 { };
+                    assign.scope = object(record.scope_path);
+                    if (assign.parent == 0U || assign.lhs == 0U) {
+                        continue;
+                    }
+                    (*instance_param_assigns_)[assign.parent].push_back(
+                        param_assign_object(assign));
+                }
+            }
+        }
+        static const std::vector<fsim_vpi_handle_v1> none;
+        const auto found = instance_param_assigns_->find(holder);
+        return found == instance_param_assigns_->end() ? none : found->second;
+    }
+
     [[nodiscard]] const TypespecPart* typespec_part_of(
         const fsim_vpi_handle_v1 handle, const Tag tag) const
     {
-        const auto& parts = tag == Tag::typespec_member ? typespec_members_
-            : tag == Tag::typespec_param_assign || tag == Tag::typespec_param
-            ? param_assigns_
-            : enum_constants_;
+        const auto& parts
+            = tag == Tag::typespec_member ? typespec_members_ : enum_constants_;
         if (!owned(handle) || tag_of(handle) != tag
             || serial_of(handle) >= parts.size()) {
             return nullptr;
@@ -4673,6 +4780,7 @@ private:
                 && object->kind != SystemVerilogVpiObjectKind::StructureMember
                 && object->kind != SystemVerilogVpiObjectKind::NamedEvent
                 && object->kind != SystemVerilogVpiObjectKind::ClassProperty
+                && object->kind != SystemVerilogVpiObjectKind::TypeParameter
                 && object->kind
                     != SystemVerilogVpiObjectKind::TypeSpecification)) {
             return std::nullopt;
@@ -4688,8 +4796,10 @@ private:
         if (object->type->typespec) {
             return TypespecLevel { object->type->typespec.get(), 0U };
         }
-        // A nettype whose data type has no typespec model has none.
-        if (object->kind == SystemVerilogVpiObjectKind::TypeSpecification) {
+        // A nettype whose data type has no typespec model has none, nor
+        // does such a type parameter.
+        if (object->kind == SystemVerilogVpiObjectKind::TypeSpecification
+            || object->kind == SystemVerilogVpiObjectKind::TypeParameter) {
             return std::nullopt;
         }
         // An array word's typespec is its array's element's (37.17).
@@ -5192,11 +5302,8 @@ private:
             }
         } else if (type == vpiParamAssign) {
             // The values an interface typespec's actuals assign (37.30).
-            for (std::size_t index = 0U; index < node.param_assigns.size();
-                 ++index) {
-                param_assigns_.push_back({ &node, index, self });
-                objects.push_back(tagged(
-                    Tag::typespec_param_assign, param_assigns_.size() - 1U));
+            for (const auto& assign : node.param_assigns) {
+                objects.push_back(param_assign_object({ &assign, self }));
             }
         }
         return objects;
@@ -9170,10 +9277,19 @@ private:
     // Indexes the array `memory` after `depth` indexes named `name` and
     // `full_name`: a word once every unpacked dimension has an index,
     // else a subarray.
+    // A word is its memory's child named by its selections (37.17), found
+    // through the memory, which in an unnamed scope has no full name.
+    [[nodiscard]] fsim_vpi_handle_v1 memory_word(
+        const fsim_vpi_handle_v1 memory, const std::string& selections) const
+    {
+        const auto found = registry_.find_child(memory, selections);
+        return found && found.value ? found.value->handle : 0U;
+    }
+
     [[nodiscard]] fsim_vpi_handle_v1 index_array(
         const fsim_vpi_handle_v1 memory, const std::size_t depth,
         const std::string& name, const std::string& full_name,
-        const std::int64_t index)
+        const std::string& suffix, const std::int64_t index)
     {
         const auto dimensions = dimension_ranges(memory);
         if (depth >= dimensions.size()
@@ -9182,16 +9298,17 @@ private:
         }
         const auto selected = "[" + std::to_string(index) + "]";
         if (depth + 1U == dimensions.size()) {
-            const auto found = registry_.find(full_name + selected);
-            return found && found.value ? found.value->handle : 0U;
+            return memory_word(memory, suffix + selected);
         }
         for (std::size_t known = 0U; known < subarrays_.size(); ++known) {
-            if (subarrays_[known].full_name == full_name + selected) {
+            if (subarrays_[known].memory == memory
+                && subarrays_[known].suffix == suffix + selected) {
                 return tagged(Tag::subarray, known);
             }
         }
-        subarrays_.push_back(
-            { memory, depth + 1U, name + selected, full_name + selected });
+        subarrays_.push_back({ memory, depth + 1U, name + selected,
+            full_name.empty() ? std::string { } : full_name + selected,
+            suffix + selected });
         return tagged(Tag::subarray, subarrays_.size() - 1U);
     }
 
@@ -9718,10 +9835,37 @@ private:
                 if (argument.object == 0U) {
                     argument.value.bits = PackedLogic4 { 1U, Logic4::x };
                 }
-            } else if (name.starts_with("x:")) {
-                // `x:<name>|<left>|<right>|<b or p>`: a constant bit- or
-                // part-select of a named vector.
+            } else if (name.starts_with("d:")) {
+                // `d:<declaration>|<instance>|<name>`: a name the elaborator
+                // resolved; the declaration's object in the instance, by
+                // identity (IEEE 1800-2023 38.3.3).
                 const auto fields = std::string_view { name }.substr(2U);
+                const auto first = fields.find('|');
+                const auto second = first == std::string_view::npos
+                    ? std::string_view::npos
+                    : fields.find('|', first + 1U);
+                if (second != std::string_view::npos) {
+                    argument.text = std::string { fields.substr(second + 1U) };
+                    argument.object = declared_object(fields.substr(0U, first),
+                        fields.substr(first + 1U, second - first - 1U),
+                        site.scope, argument.text);
+                }
+                if (argument.object == 0U) {
+                    argument.value.bits = PackedLogic4 { 1U, Logic4::x };
+                }
+            } else if (name.starts_with("x:")) {
+                // `x:<declaration>|<instance>|<name>|<left>|<right>|<b or p>`:
+                // a constant bit- or part-select of a named vector, the
+                // declaration empty when the elaborator left it unresolved.
+                const auto selected = std::string_view { name }.substr(2U);
+                const auto declaration_end = selected.find('|');
+                const auto instance_end
+                    = declaration_end == std::string_view::npos
+                    ? std::string_view::npos
+                    : selected.find('|', declaration_end + 1U);
+                const auto fields = instance_end == std::string_view::npos
+                    ? std::string_view { }
+                    : selected.substr(instance_end + 1U);
                 const auto first = fields.find('|');
                 const auto second = fields.find('|', first + 1U);
                 const auto third = fields.find('|', second + 1U);
@@ -9738,7 +9882,11 @@ private:
                                 ? "[" + std::to_string(left) + "]"
                                 : "[" + std::to_string(left) + ":"
                                     + std::to_string(right) + "]");
-                    if (const auto parent = find_in_scope(site.scope, base)) {
+                    if (const auto parent = declared_object(
+                            selected.substr(0U, declaration_end),
+                            selected.substr(declaration_end + 1U,
+                                instance_end - declaration_end - 1U),
+                            site.scope, base)) {
                         const bool bit = fields.substr(third + 1U) == "b";
                         // An index of an array names its element, a memory
                         // word (IEEE 1800-2023 37.17; 1364-2001 25.35).
@@ -9779,6 +9927,27 @@ private:
         calls_.push_back(std::move(site));
         call_by_identity_.emplace(std::string { identity }, calls_.size() - 1U);
         return calls_.size() - 1U;
+    }
+
+    // The object of a declaration the elaborator resolved a name to, in the
+    // instance the call is in; a name that is no object of the instance (a
+    // parameter, or a declaration of another scope a hierarchical name
+    // reaches) resolves as a name in the call's scope (23.6).
+    [[nodiscard]] fsim_vpi_handle_v1 declared_object(
+        const std::string_view declaration, const std::string_view instance,
+        const std::string& scope, const std::string& name) const
+    {
+        std::uint32_t id { };
+        const auto parsed = std::from_chars(declaration.data(),
+            declaration.data() + declaration.size(), id);
+        if (!declaration.empty() && parsed.ec == std::errc { }
+            && parsed.ptr == declaration.data() + declaration.size()) {
+            if (const auto object = simulation_.vpi_declared_object(
+                    instance, id)) {
+                return object;
+            }
+        }
+        return find_in_scope(scope, name);
     }
 
     // A simple name resolves in the call's scope and then each enclosing
@@ -9923,6 +10092,24 @@ private:
                 return found && found.value && scope_kind(found.value->kind)
                     ? found.value->handle
                     : fsim_vpi_handle_v1 { };
+            };
+            hooks.block_scope = [this](const fsim_vpi_handle_v1 scope,
+                                    const semantic::ScopeId block) {
+                for (const auto child :
+                    drain(registry_.iterate_children(scope))) {
+                    const auto object = info(child);
+                    if (object
+                        && (object->kind == SystemVerilogVpiObjectKind::Begin
+                            || object->kind == SystemVerilogVpiObjectKind::Fork
+                            || object->kind == SystemVerilogVpiObjectKind::For
+                            || object->kind
+                                == SystemVerilogVpiObjectKind::Foreach)
+                        && object->type && object->type->hir_scope
+                        && *object->type->hir_scope == block.value()) {
+                        return child;
+                    }
+                }
+                return fsim_vpi_handle_v1 { };
             };
             hooks.full_name = [this](const fsim_vpi_handle_v1 scope) {
                 // A class method is the scope of its formals and its body
@@ -10137,6 +10324,33 @@ private:
                 const auto object = info(handle);
                 return object ? object->name : std::string { };
             };
+            hooks.param_assign
+                = [this](runtime::SystemVerilogVpiParamAssign record,
+                      const fsim_vpi_handle_v1 parent,
+                      const fsim_vpi_handle_v1 lhs,
+                      const fsim_vpi_handle_v1 typespec) {
+                      const auto [found, added]
+                          = class_param_assign_index_.try_emplace(
+                              std::pair { parent, lhs }, nullptr);
+                      if (added) {
+                          class_param_assign_records_.push_back(
+                              std::move(record));
+                          found->second = &class_param_assign_records_.back();
+                      }
+                      ParamAssignObject object;
+                      object.record = found->second;
+                      object.parent = parent;
+                      object.lhs = lhs;
+                      object.typespec = typespec;
+                      return param_assign_object(object);
+                  };
+            hooks.type_typespec
+                = [this](const semantic::sv::TypeReference& type) {
+                      const auto declared = VpiStatementModel::source_type(type);
+                      return declared
+                          ? declared_type_relation(*declared, vpiTypespec)
+                          : fsim_vpi_handle_v1 { };
+                  };
             hooks.specialization_member
                 = [this](const fsim_vpi_handle_v1 declared,
                       const std::string& owner,
@@ -14412,8 +14626,12 @@ private:
             if (!object) {
                 break;
             }
-            const auto found = registry_.find(object->full_name
-                + (object->full_name.ends_with("::") ? "" : ".") + name);
+            // A scope with no full name (an unnamed one, or one inside it,
+            // 9.3.5) holds its objects as children only.
+            const auto found = object->full_name.empty()
+                ? registry_.find_child(current, name)
+                : registry_.find(object->full_name
+                      + (object->full_name.ends_with("::") ? "" : ".") + name);
             if (found && found.value) {
                 return found.value->handle;
             }
@@ -14628,20 +14846,33 @@ private:
                 scope.unit = *object->type->semantic_unit_id;
                 std::ranges::reverse(scope.steps);
                 std::ranges::reverse(scope.regions);
+                std::ranges::reverse(scope.scopes);
                 return scope;
             case SystemVerilogVpiObjectKind::GenerateScope:
                 scope.steps.emplace_back(VpiHirScope::Step::generate, object->name);
                 scope.regions.push_back(selected_generate_region(*object));
+                scope.scopes.emplace_back();
                 break;
             case SystemVerilogVpiObjectKind::Task:
             case SystemVerilogVpiObjectKind::Function:
                 scope.steps.emplace_back(VpiHirScope::Step::callable, object->name);
                 scope.regions.emplace_back();
+                scope.scopes.emplace_back();
                 break;
             case SystemVerilogVpiObjectKind::Begin:
             case SystemVerilogVpiObjectKind::Fork:
+            case SystemVerilogVpiObjectKind::For:
+            case SystemVerilogVpiObjectKind::Foreach:
                 scope.steps.emplace_back(VpiHirScope::Step::block, object->name);
                 scope.regions.emplace_back();
+                // The block by its HIR scope: an unnamed block has no name
+                // to find it by (37.12 detail 1).
+                if (object->type && object->type->hir_scope) {
+                    scope.scopes.emplace_back(
+                        semantic::ScopeId::from_index(*object->type->hir_scope));
+                } else {
+                    scope.scopes.emplace_back();
+                }
                 break;
             case SystemVerilogVpiObjectKind::GenerateScopeArray:
                 break;
@@ -14995,8 +15226,11 @@ private:
             }
             const auto node = node_of(object);
             const auto type = handle_type(object);
+            // A block that is a scope object (a named one, or an unnamed
+            // one that declares items) is a statement too (37.12, 37.60).
             if (node ? !statement_model_->is_statement(*node)
-                     : type != vpiNamedBegin && type != vpiNamedFork) {
+                     : type != vpiNamedBegin && type != vpiNamedFork
+                         && type != vpiBegin && type != vpiFork) {
                 return FSIM_VPI_STATUS_NOT_FOUND;
             }
             statement_callbacks_.push_back(StatementCallback {
@@ -15514,6 +15748,8 @@ private:
         case SystemVerilogVpiObjectKind::GenerateScope:
         case SystemVerilogVpiObjectKind::Begin:
         case SystemVerilogVpiObjectKind::Fork:
+        case SystemVerilogVpiObjectKind::For:
+        case SystemVerilogVpiObjectKind::Foreach:
         case SystemVerilogVpiObjectKind::Task:
         case SystemVerilogVpiObjectKind::Function:
             return true;
@@ -15588,6 +15824,8 @@ private:
         // (IEEE 1800-2023 37.23).
         case SystemVerilogVpiObjectKind::TypeSpecification:
             return vpiNettypeDecl;
+        case SystemVerilogVpiObjectKind::TypeParameter:
+            return vpiTypeParameter;
         case SystemVerilogVpiObjectKind::ClockingBlock:
             return vpiClockingBlock;
         case SystemVerilogVpiObjectKind::ClockingIo:
@@ -15598,10 +15836,16 @@ private:
             return vpiInterfaceArray;
         case SystemVerilogVpiObjectKind::ProgramArray:
             return vpiProgramArray;
+        // An unnamed scope is an unnamed begin or fork (37.12 detail 1).
         case SystemVerilogVpiObjectKind::Begin:
-            return vpiNamedBegin;
+            return object.name.empty() ? vpiBegin : vpiNamedBegin;
         case SystemVerilogVpiObjectKind::Fork:
-            return vpiNamedFork;
+            return object.name.empty() ? vpiFork : vpiNamedFork;
+        // A loop that is a scope (37.12 details 2 and 3).
+        case SystemVerilogVpiObjectKind::For:
+            return vpiFor;
+        case SystemVerilogVpiObjectKind::Foreach:
+            return vpiForeachStmt;
         case SystemVerilogVpiObjectKind::Task:
             return vpiTask;
         case SystemVerilogVpiObjectKind::Function:
@@ -15946,10 +16190,10 @@ private:
         if (typespec_part_of(handle, Tag::enum_const) != nullptr) {
             return vpiEnumConst;
         }
-        if (typespec_part_of(handle, Tag::typespec_param_assign) != nullptr) {
-            return vpiParamAssign;
+        if (const auto* assign = param_assign_of(handle, Tag::param_assign)) {
+            return assign->record->defparam ? vpiDefParam : vpiParamAssign;
         }
-        if (typespec_part_of(handle, Tag::typespec_param) != nullptr) {
+        if (param_assign_of(handle, Tag::param_name) != nullptr) {
             return vpiParameter;
         }
         if (pathterm_of(handle)) {
@@ -16138,6 +16382,10 @@ private:
         // (IEEE 1800-2023 37.14).
         case vpiPort:
             return false;
+        // The parameters of a module or scope are its value and type
+        // parameters (IEEE 1800-2023 37.28).
+        case vpiParameter:
+            return actual == vpiParameter || actual == vpiTypeParameter;
         default:
             return actual == type;
         }
@@ -16188,11 +16436,38 @@ private:
         return status;
     }
 
+    // A loop that is a scope (IEEE 1800-2023 37.12 details 2 and 3) is a
+    // scope object for its scopes and its place in the hierarchy, and its
+    // loop statement (37.74, 37.75) for everything else: the statement node
+    // standing for it, or 0 for any other object.
+    [[nodiscard]] fsim_vpi_handle_v1 loop_statement_of(
+        const fsim_vpi_handle_v1 reference)
+    {
+        if (reference == 0U || owned(reference)) {
+            return 0U;
+        }
+        const auto object = info(reference);
+        if (!object
+            || (object->kind != SystemVerilogVpiObjectKind::For
+                && object->kind != SystemVerilogVpiObjectKind::Foreach)) {
+            return 0U;
+        }
+        const auto scope = hir_scope(reference);
+        return scope ? statement_model().loop_statement(*scope) : 0U;
+    }
+
     fsim_vpi_status_v1 iterate_objects(
         const fsim_vpi_service_request_v1& request,
         fsim_vpi_service_result_v1& result)
     {
         const auto type = static_cast<PLI_INT32>(request.argument);
+        if (type != vpiInternalScope) {
+            if (const auto loop = loop_statement_of(request.handle)) {
+                auto forwarded = request;
+                forwarded.handle = loop;
+                return iterate_objects(forwarded, result);
+            }
+        }
         // The items under an item of a live object's constraint are bound to
         // that object too.
         if (const auto* const bound = bound_item_of(request.handle)) {
@@ -16338,6 +16613,19 @@ private:
                     }
                 }
             }
+        }
+        // The parameter assignments of an instance and the def params of a
+        // scope (IEEE 1800-2023 37.28).
+        if ((type == vpiParamAssign || type == vpiDefParam) && reference != 0U
+            && !owned(reference)) {
+            std::vector<fsim_vpi_handle_v1> assigns;
+            for (const auto assign : instance_param_assigns(reference)) {
+                if ((param_assign_of(assign, Tag::param_assign)->record->defparam)
+                    == (type == vpiDefParam)) {
+                    assigns.push_back(assign);
+                }
+            }
+            return succeed(result, make_iterator(std::move(assigns)));
         }
         // The typedefs an instance, a generate scope, a package or `$unit`
         // declares (IEEE 1800-2023 37.5, 37.12, 37.25, 37.85 detail 5,
@@ -16502,13 +16790,22 @@ private:
                 for (const auto& [left, right] : subarray_dimensions(copy)) {
                     objects.push_back(make_range(reference, left, right));
                 }
-            } else if (subarray_dimensions(copy).size() == 1U) {
-                for (const auto handle :
-                    drain(registry_.iterate_children(copy.memory))) {
-                    const auto object = info(handle);
-                    if (object && object->full_name.starts_with(copy.full_name + "[")
-                        && matches(type, *object)) {
+            } else if (const auto dimensions = subarray_dimensions(copy);
+                dimensions.size() == 1U) {
+                // The words under the subarray's one dimension, by index.
+                const auto [left, right] = dimensions.front();
+                const std::int64_t step = left <= right ? 1 : -1;
+                for (std::int64_t index = left;; index += step) {
+                    const auto handle = memory_word(copy.memory,
+                        copy.suffix + "[" + std::to_string(index) + "]");
+                    const auto object = handle != 0U
+                        ? info(handle)
+                        : std::nullopt;
+                    if (object && matches(type, *object)) {
                         objects.push_back(handle);
+                    }
+                    if (index == right) {
+                        break;
                     }
                 }
             }
@@ -16872,6 +17169,14 @@ private:
         fsim_vpi_service_result_v1& result)
     {
         const auto type = static_cast<PLI_INT32>(request.argument);
+        if (type != vpiParent && type != vpiScope && type != vpiModule
+            && type != vpiInstance) {
+            if (const auto loop = loop_statement_of(request.handle)) {
+                auto forwarded = request;
+                forwarded.handle = loop;
+                return handle(forwarded, result);
+            }
+        }
         // The reference object of an iterator (IEEE 1800-2023 38.23).
         if (type == vpiUse && owned(request.handle)
             && tag_of(request.handle) == Tag::iterator) {
@@ -17130,22 +17435,26 @@ private:
             = typespec_part_of(reference, Tag::enum_const)) {
             return succeed(result, type == vpiParent ? constant->parent : 0U);
         }
-        // The value an interface typespec assigns to a parameter: the
-        // constant on the right and, on the left, the parameter, which
-        // outside an instance of the interface is known by its name only
-        // (37.28, 37.30).
-        if (const auto* assign
-            = typespec_part_of(reference, Tag::typespec_param_assign)) {
-            const auto part = *assign;
-            return succeed(result, type == vpiParent ? part.parent
-                    : type == vpiRhs
-                    ? make_constant(part.owner->param_assigns[part.index].value)
-                    : type == vpiLhs ? tagged(Tag::typespec_param,
-                                           serial_of(reference))
-                                     : 0U);
+        // A parameter assignment or def param (37.28): the parameter it
+        // sets, which outside an instance of an interface is known by its
+        // name only (37.30), and the actual, a constant, an expression seen
+        // from the scope that wrote it, or a type parameter's typespec.
+        if (const auto* assign = param_assign_of(reference, Tag::param_assign)) {
+            const auto object = *assign;
+            switch (type) {
+            case vpiParent:
+                return succeed(result, object.parent);
+            case vpiLhs:
+                return succeed(result, object.lhs != 0U
+                        ? object.lhs
+                        : tagged(Tag::param_name, serial_of(reference)));
+            case vpiRhs:
+                return succeed(result, param_assign_rhs(object, reference));
+            default:
+                return succeed(result);
+            }
         }
-        if (const auto* parameter
-            = typespec_part_of(reference, Tag::typespec_param)) {
+        if (const auto* parameter = param_assign_of(reference, Tag::param_name)) {
             return succeed(result,
                 type == vpiParent || type == vpiScope ? parameter->parent : 0U);
         }
@@ -18126,7 +18435,7 @@ private:
         if (const auto* subarray = subarray_of(reference)) {
             const auto copy = *subarray;
             return index_array(copy.memory, copy.depth, copy.name,
-                copy.full_name, index);
+                copy.full_name, copy.suffix, index);
         }
         if (const auto* select = select_of(reference)) {
             if (select->declared) {
@@ -18143,10 +18452,18 @@ private:
         if (!object) {
             return 0U;
         }
-        const auto found = registry_.find(
-            object->full_name + "[" + std::to_string(index) + "]");
-        if (found && found.value) {
-            return found.value->handle;
+        if (object->kind == SystemVerilogVpiObjectKind::Memory) {
+            if (const auto word = memory_word(
+                    reference, "[" + std::to_string(index) + "]")) {
+                return word;
+            }
+        } else if (!object->full_name.empty()) {
+            // An element of a generate scope, instance or interface array.
+            const auto found = registry_.find(
+                object->full_name + "[" + std::to_string(index) + "]");
+            if (found && found.value) {
+                return found.value->handle;
+            }
         }
         if (object->type && object->type->declared
             && (object->type->declared->kind
@@ -18157,7 +18474,7 @@ private:
         }
         if (object->kind == SystemVerilogVpiObjectKind::Memory) {
             return index_array(reference, 0U, object->name,
-                object->full_name, index);
+                object->full_name, std::string { }, index);
         }
         // An index of a vector with several packed dimensions selects an
         // element of the leftmost one (IEEE 1800-2023 7.4.5).
@@ -18372,6 +18689,11 @@ private:
         fsim_vpi_service_result_v1& result)
     {
         const auto property = static_cast<PLI_INT32>(request.argument);
+        if (const auto loop = loop_statement_of(request.handle)) {
+            auto forwarded = request;
+            forwarded.handle = loop;
+            return this->property(forwarded, result);
+        }
         const auto undefined = static_cast<std::uint64_t>(
             static_cast<std::int64_t>(vpiUndefined));
         const auto integer = [&](const std::int64_t value) {
@@ -18566,9 +18888,17 @@ private:
             return property == vpiRandType ? integer(vpiNotRand)
                                            : succeed(result, 0U, undefined);
         }
+        // Whether a named association gave the value (37.28 vpiConnByName);
+        // a def param has no such property.
+        if (const auto* assign
+            = param_assign_of(request.handle, Tag::param_assign)) {
+            return property == vpiConnByName && !assign->record->defparam
+                ? integer(assign->record->connection_by_name ? 1 : 0)
+                : succeed(result, 0U, undefined);
+        }
         // A parameter an interface typespec sets is a `parameter` of its
         // port list (37.28).
-        if (typespec_part_of(request.handle, Tag::typespec_param) != nullptr) {
+        if (param_assign_of(request.handle, Tag::param_name) != nullptr) {
             return property == vpiLocalParam ? integer(0)
                                              : succeed(result, 0U, undefined);
         }
@@ -19043,6 +19373,10 @@ private:
             }
             return succeed(result, 0U, undefined);
         case vpiLocalParam:
+            if (object->kind == SystemVerilogVpiObjectKind::TypeParameter) {
+                return integer(
+                    object->type && object->type->local_parameter ? 1 : 0);
+            }
             if (object->kind != SystemVerilogVpiObjectKind::Parameter
                 && !(object->kind == SystemVerilogVpiObjectKind::ClassProperty
                     && object->type && object->type->local_parameter)) {
@@ -19715,10 +20049,9 @@ private:
             return FSIM_VPI_STATUS_NOT_FOUND;
         }
         if (const auto* parameter
-            = typespec_part_of(request.handle, Tag::typespec_param)) {
-            return property == vpiName
-                ? text(parameter->owner->param_assigns[parameter->index].name)
-                : FSIM_VPI_STATUS_NOT_FOUND;
+            = param_assign_of(request.handle, Tag::param_name)) {
+            return property == vpiName ? text(parameter->record->name)
+                                       : FSIM_VPI_STATUS_NOT_FOUND;
         }
         // A port is named but has no full name (IEEE 1800-2023 37.14).
         if (const auto* port = port_of(request.handle)) {
@@ -19841,8 +20174,16 @@ private:
             if (object->kind == SystemVerilogVpiObjectKind::Package) {
                 return text(package_name(object->name));
             }
+            // An unnamed scope has no name (37.12 detail 1); it and what it
+            // holds have no full name (9.3.5).
+            if (object->name.empty()) {
+                return FSIM_VPI_STATUS_NOT_FOUND;
+            }
             return text(std::string { unescaped(object->name) });
         case vpiFullName:
+            if (object->full_name.empty()) {
+                return FSIM_VPI_STATUS_NOT_FOUND;
+            }
             return text(presented_full_name(*object));
         case vpiFile:
             if (!object->source && block_kind(object->kind)) {
@@ -22881,7 +23222,21 @@ private:
     std::map<std::pair<const void*, std::size_t>, std::size_t> typespec_index_;
     std::vector<TypespecPart> typespec_members_;
     std::vector<TypespecPart> enum_constants_;
-    std::vector<TypespecPart> param_assigns_;
+    // The parameter assignments and def params handed out (37.28), each
+    // once per record and parent; `class_param_assign_records_` holds the
+    // records the class model builds, `instance_param_assigns_` the
+    // elaborated ones by the handle of the scope that holds them.
+    std::vector<ParamAssignObject> param_assigns_;
+    std::map<std::pair<const runtime::SystemVerilogVpiParamAssign*,
+                 fsim_vpi_handle_v1>,
+        std::size_t>
+        param_assign_index_;
+    std::deque<runtime::SystemVerilogVpiParamAssign> class_param_assign_records_;
+    std::map<std::pair<fsim_vpi_handle_v1, fsim_vpi_handle_v1>,
+        const runtime::SystemVerilogVpiParamAssign*>
+        class_param_assign_index_;
+    std::optional<std::map<fsim_vpi_handle_v1, std::vector<fsim_vpi_handle_v1>>>
+        instance_param_assigns_;
     // Typespecs of a function's return variable and formals, built from
     // the declaration's HIR type (IEEE 1800-2023 37.41).
     std::deque<runtime::SystemVerilogVpiTypespec> declared_typespec_nodes_;

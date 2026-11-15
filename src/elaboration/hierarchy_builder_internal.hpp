@@ -499,6 +499,9 @@ private:
         // parameter context that owns a referenced typedef's member ranges.
         std::vector<const semantic::SpecializedHirUnit*>
             type_owner_contexts;
+        // The overrides and defparams that set the instance's parameters
+        // (SpecializationInfo::vpi_param_assigns).
+        std::vector<runtime::SystemVerilogVpiParamAssign> param_assigns;
     };
 
     struct CompiledSystemVerilogParameterDiagnostic {
@@ -516,6 +519,9 @@ private:
         Status status { Status::ready };
         std::vector<semantic::SpecializedHirActualIdentity> actuals;
         std::vector<CompiledSystemVerilogParameterDiagnostic> diagnostics;
+        // The overrides and defparams that set the child's parameters
+        // (IEEE 1800-2023 37.28), for SpecializationInfo::vpi_param_assigns.
+        std::vector<runtime::SystemVerilogVpiParamAssign> param_assigns;
     };
 
     struct CompiledSystemVerilogInterfaceDiagnostic {
@@ -1909,6 +1915,9 @@ private:
         // materialized; owner identity is checked before using any context.
         std::vector<const semantic::SpecializedHirUnit*>
             type_owner_contexts;
+        // The static block and callable variables of this scope whose
+        // initializers run as declaration-initializer processes (6.8).
+        std::vector<semantic::DeclarationId> declaration_initializers;
     };
 
     // Specialization pointers borrow root/generated owners and are drained
@@ -1984,6 +1993,7 @@ private:
         const std::vector<semantic::StatementId>&
             active_concurrent_statements,
         const std::vector<semantic::ProcessId>& active_processes,
+        const std::vector<semantic::DeclarationId>& declaration_initializers,
         const std::vector<hierarchy_sv_generate_detail::Occurrence>&
             generate_occurrences,
         std::vector<SystemVerilogHirMaterialization>&
@@ -2146,13 +2156,10 @@ private:
     bool report_vhdl_unspecified_inference(
         std::optional<semantic::SourceSpanId> failure);
 
-    // Collects the bare names a process passes to foreign system tasks; an
-    // unnamed block that declares one publishes its storage so the foreign
-    // service can reach it (IEEE 1800-2023 38.3.3).
-    // Returns the scope path of the process body's own storage: empty
-    // unless the body declares such a variable.
-    std::string collect_user_system_task_arguments(
-        const semantic::SpecializedHirUnit& specialization,
+    // The scope path of a process body's own static storage: a body that
+    // declares items is a scope (IEEE 1800-2023 9.3.5, 37.12 detail 1) whose
+    // static variables are design objects (6.21); empty otherwise.
+    [[nodiscard]] static std::string process_static_scope(
         const semantic::sv::Process& process);
 
     bool materialize_compiled_systemverilog_static_storage(
@@ -2411,6 +2418,9 @@ private:
         semantic::SourceSpanId source;
         const semantic::SpecializedHirUnit* owner { };
         bool matched { };
+        // The path of the scope whose body holds the defparam statement:
+        // the scope of its value and of its VPI object (37.28 vpiDefParam).
+        std::string owner_path;
     };
     struct ActiveCompiledSystemVerilogBind {
         const semantic::sv::BindDirective* directive { };
@@ -2537,7 +2547,6 @@ private:
     // Static storage of SystemVerilog task and function locals and formals:
     // every caller writes it procedurally, whatever the calling context.
     std::unordered_set<SignalId> static_callable_signals_;
-    std::set<std::string, std::less<>> user_system_task_arguments_;
     std::unordered_map<std::uint32_t, std::optional<SignalId>>
         vhdl_package_constant_signals_;
     std::unordered_map<std::uint32_t, std::optional<SignalId>>

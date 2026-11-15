@@ -1756,6 +1756,33 @@ private:
     /// KOp::sva_outcome on the bytecode tier: the inline ring pop.
     void execute_sva_outcome(Word* registers,
         const static_kernel_detail::KInst& inst, std::uint32_t member);
+    /// KOp::sva_report on the bytecode tier: the row generated code
+    /// appends.
+    void execute_sva_report(const static_kernel_detail::KInst& inst,
+        std::uint32_t member);
+    /// The KOp::sva_report row words, for both tiers: the largest pop
+    /// serial among the member's `sites` directive blocks gives the start
+    /// and fail words.
+    void append_sva_report(std::uint32_t member, std::uint32_t pc,
+        std::uint32_t sites);
+    /// Room for one more KOp::sva_report row (fsim_sk_sva_report_grow).
+    void grow_sva_reports();
+    static void native_sva_report_grow(StaticKernelNativeFrame* frame);
+public:
+    /// Whether KOp::sva_report rows wait for the host.
+    [[nodiscard]] bool sva_reports_pending() const noexcept
+    {
+        return sva_reports_.count != 0U;
+    }
+    /// Appends the KOp::sva_report rows, in order, as host request events
+    /// and empties the buffer.
+    void take_sva_reports(std::vector<HostRequestEvent>& rows);
+    /// Whether compiled code holds a KOp::sva_report.
+    [[nodiscard]] bool sva_reports_used() const noexcept
+    {
+        return sva_reports_used_;
+    }
+private:
     /// KOp::sva_sampled_load on the bytecode tier.
     void execute_sva_sampled_load(const static_kernel_detail::CompiledBody& body,
         Word* registers, const static_kernel_detail::KInst& inst,
@@ -1810,7 +1837,7 @@ private:
     /// Marks the SVA table used (frame.sva) when member `index`'s compiled
     /// body has an SVA operation: for bodies restored without the lowering
     /// that marks it (restored bodies, a kernel image).
-    void note_sva_code(std::size_t index) noexcept;
+    void note_sva_code(std::size_t index);
     /// A generic instruction's operands into the member's reference
     /// registers, and its result back (true: two-state code got X or 'U').
     void generic_load_operands(CompiledBody& body, const Word* registers,
@@ -2324,6 +2351,7 @@ private:
         sva_table_.controls = impl_.assertion_controls.data();
         sva_table_.history = history_words_.data();
         sva_now_ = static_cast<std::int64_t>(kernel_now());
+        sva_delta_ = kernel_delta();
     }
     /// Gives generated code the write marks where its writes go to writes_
     /// (StaticKernelNativeFrame::write_marks).
@@ -3589,7 +3617,14 @@ private:
     /// severity message (the member's Report at `pc`), or an interconnect
     /// delay's write of `value` (the member's WriteNetDelay at `pc`).
     struct LaneOutput {
-        enum class Kind : std::uint8_t { text, format, time, report, net_delay };
+        enum class Kind : std::uint8_t {
+            text,
+            format,
+            time,
+            report,
+            net_delay,
+            host_request,
+        };
         Kind kind { Kind::text };
         bool newline { };
         std::uint32_t member { };
@@ -4134,6 +4169,16 @@ private:
     bool sva_table_used_ { };
     /// The time step generated code reads for the $past sample test.
     std::int64_t sva_now_ { };
+    /// The delta of sva_now_ (StaticKernelSvaTable::delta).
+    std::uint64_t sva_delta_ { };
+    /// While a behavioral thread runs: (member + 1) << 32 | its process
+    /// (StaticKernelSvaTable::thread_process); 0 otherwise.
+    std::int64_t sva_thread_process_ { };
+    /// KOp::sva_report rows (StaticKernelSvaReports over these words).
+    std::vector<std::int64_t> sva_report_words_;
+    StaticKernelSvaReports sva_reports_;
+    /// Whether compile_members emitted a KOp::sva_report.
+    bool sva_reports_used_ { };
     /// members_[i].process, dense: hot paths record slot writers without
     /// touching the large member records.
     std::vector<ProcessId> member_process_;
@@ -4680,6 +4725,20 @@ private:
     /// work of this delta made (a VPI put, a hosted process's write) wakes it
     /// in the drain's Active region, before the delta's nonblocking updates,
     /// with the SystemVerilog members it wakes (S16).
+    /// Interpreter::Impl::declaration_initialization_active while the
+    /// declaration initializers run (IEEE 1800-2023 6.8, 6.21).
+    class InitializationWriteScope {
+    public:
+        explicit InitializationWriteScope(Interpreter::Impl& impl) noexcept;
+        ~InitializationWriteScope();
+        InitializationWriteScope(const InitializationWriteScope&) = delete;
+        InitializationWriteScope& operator=(
+            const InitializationWriteScope&) = delete;
+
+    private:
+        Interpreter::Impl& impl_;
+        bool previous_ { };
+    };
     class HostWakeScope {
     public:
         HostWakeScope(StaticKernel& kernel, SignalId signal);

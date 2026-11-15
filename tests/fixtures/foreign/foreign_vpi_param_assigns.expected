@@ -1,0 +1,20 @@
+#c top.u_ord param assigns:
+#c vpiParamAssign lhs=top.u_ord.W parent=top.u_ord rhs=vpiConstant:4 named=0
+#c vpiParamAssign lhs=top.u_ord.D parent=top.u_ord rhs=vpiConstant:7 named=0
+#c top.u_named param assigns:
+#c vpiParamAssign lhs=top.u_named.D parent=top.u_named rhs=vpiConstant:9 named=1
+#c vpiParamAssign lhs=top.u_named.T parent=top.u_named rhs=vpiLogicTypespec named=1
+#c top.u_def param assigns:
+#c top def params:
+#c vpiDefParam lhs=top.u_def.W parent=top rhs=vpiConstant:11 named=-1
+#c top.u_def def params:
+#c top.u_named parameters:
+#c vpiParameter top.u_named.W local=0 typespec=vpiIntTypespec
+#c vpiParameter top.u_named.D local=0 typespec=vpiIntTypespec
+#c vpiTypeParameter top.u_named.T local=0 typespec=vpiLogicTypespec
+#c top.u_def parameters:
+#c vpiParameter top.u_def.W local=0 typespec=vpiIntTypespec
+#c vpiParameter top.u_def.D local=0 typespec=vpiIntTypespec
+#c vpiTypeParameter top.u_def.T local=0 typespec=vpiBitTypespec
+#c by name top.u_named.T: found
+#c top.u_def.W value=11

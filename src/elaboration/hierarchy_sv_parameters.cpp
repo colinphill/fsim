@@ -332,6 +332,30 @@ HierarchyBuilder::resolve_compiled_systemverilog_parameters(
             binding.actual_declaration.reset();
         }
     }
+    // The overrides of the instantiation, as bound (IEEE 1800-2023 37.28
+    // vpiParamAssign; a parameter left at its default has none, detail 4).
+    // The caller sets the scope the actuals are seen from.
+    for (const auto& binding : parameter_bindings.bindings) {
+        if (binding.kind == semantic::SpecializedHirAssociationKind::open
+            || binding.kind
+                == semantic::SpecializedHirAssociationKind::default_value) {
+            continue;
+        }
+        const auto formal = compiled_->find_declaration(binding.formal);
+        if (!formal || formal->systemverilog == nullptr) {
+            continue;
+        }
+        runtime::SystemVerilogVpiParamAssign assign;
+        assign.name = formal->systemverilog->name;
+        assign.connection_by_name = binding.named;
+        assign.type_parameter = formal->systemverilog->form
+            == semantic::sv::DeclarationForm::type_parameter;
+        if (!assign.type_parameter && binding.expression) {
+            assign.expression = binding.expression->value();
+        }
+        assign.parameter_scope = std::string { child_path };
+        result.param_assigns.push_back(std::move(assign));
+    }
     for (auto& defparam : active_compiled_systemverilog_defparams_) {
         // A parameter of a named block, task or function in the instance
         // is redefined through its scope's hierarchical name (IEEE
@@ -435,6 +459,16 @@ HierarchyBuilder::resolve_compiled_systemverilog_parameters(
             continue;
         }
         parameter_bindings.bindings.push_back(override_binding);
+        // The defparam's VPI object, held by the scope of the statement
+        // (37.28 vpiDefParam): the parameter it sets, in the instance or a
+        // named block of it, and its value seen from that scope.
+        runtime::SystemVerilogVpiParamAssign assign;
+        assign.name = defparam.parameter;
+        assign.defparam = true;
+        assign.expression = defparam.expression.value();
+        assign.parameter_scope = defparam.target_path;
+        assign.scope_path = defparam.owner_path;
+        result.param_assigns.push_back(std::move(assign));
     }
 
     for (const auto& binding : parameter_bindings.bindings) {

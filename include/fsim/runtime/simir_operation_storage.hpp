@@ -94,7 +94,8 @@ using ControlOperationGroup = OperationGroup<Jump, Call, Return,
 using OutputOperationGroup = OperationGroup<Display, FormatDisplay, StringDisplay, StringReport,
     TimeDisplay, MonitorInstall, MonitorControl, TimeFormatControl,
     CoverageSample, CoverageQuery, CodeCoverageHit, CoverageControl,
-    VhdlPslApi, VhdlAssertApi, VhdlReflectionApi, CodeCoverageToggle>;
+    VhdlPslApi, VhdlAssertApi, VhdlReflectionApi, CodeCoverageToggle,
+    HostRequest>;
 
 using ClassOperationGroup = OperationGroup<
     ClassAllocate, ClassPropertyRead, ClassPropertyWrite,
@@ -332,7 +333,7 @@ static_assert(
         + std::variant_size_v<ControlOperationGroup::Storage>
         + std::variant_size_v<OutputOperationGroup::Storage>
         + std::variant_size_v<ClassOperationGroup::Storage>
-    == 205);
+    == 206);
 
 template <typename Alternative>
 [[nodiscard]] Alternative* operation_get_if(Operation* operation) noexcept

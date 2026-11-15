@@ -47,6 +47,11 @@ static int walked(PLI_INT32 type)
     case vpiOperation:
     case vpiBitSelect:
     case vpiPartSelect:
+    case vpiExpectStmt:
+    case vpiPropertySpec:
+    case vpiAnyPattern:
+    case vpiTaggedPattern:
+    case vpiStructPattern:
         return 1;
     default:
         return 0;
@@ -106,7 +111,9 @@ static void dump(vpiHandle object, int depth, const char* role)
         snprintf(detail, sizeof detail, " always_type=%d",
             (int)vpi_get(vpiAlwaysType, object));
     } else if (type == vpiSysTaskCall || type == vpiTaskCall
-        || type == vpiNamedBegin) {
+        || type == vpiNamedBegin || type == vpiExpectStmt
+        || type == vpiAnyPattern || type == vpiTaggedPattern
+        || type == vpiStructPattern) {
         snprintf(detail, sizeof detail, " %s", text(vpiName, object));
     } else if (!walked(type)) {
         snprintf(detail, sizeof detail, " %s", text(vpiFullName, object));
@@ -117,6 +124,25 @@ static void dump(vpiHandle object, int depth, const char* role)
         return;
     }
     ++depth;
+    // An expect statement's property spec (37.73) and the spec's parts
+    // (37.52).
+    if (type == vpiExpectStmt) {
+        child(object, vpiPropertySpec, depth, "prop: ");
+    }
+    if (type == vpiPropertySpec) {
+        child(object, vpiClockingEvent, depth, "clock: ");
+        child(object, vpiDisableCondition, depth, "disable: ");
+        child(object, vpiPropertyExpr, depth, "expr: ");
+        return;
+    }
+    // A tagged pattern's member pattern, a struct pattern's member
+    // patterns (37.72).
+    if (type == vpiTaggedPattern) {
+        child(object, vpiPattern, depth, "pattern: ");
+    }
+    if (type == vpiStructPattern) {
+        children(object, vpiPattern, depth, "pattern: ");
+    }
     child(object, vpiForInitStmt, depth, "init: ");
     child(object, vpiCondition, depth, "cond: ");
     child(object, vpiForIncStmt, depth, "inc: ");
@@ -384,6 +410,38 @@ static void for_scope(char* name)
     }
 }
 
+// The scopes under a scope, with their variables: an unnamed begin or fork
+// is a scope only when it declares items, and has no name and no full name
+// (37.12 detail 1, 9.3.5).
+static void scopes(vpiHandle scope, int depth)
+{
+    vpiHandle const inner = vpi_iterate(vpiInternalScope, scope);
+    vpiHandle item;
+    if (inner == NULL) {
+        return;
+    }
+    while ((item = vpi_scan(inner)) != NULL) {
+        vpiHandle const variables = vpi_iterate(vpiVariables, item);
+        vpiHandle variable;
+        const char* const name = vpi_get_str(vpiName, item);
+        const char* const full = vpi_get_str(vpiFullName, item);
+        vpi_printf("#c %*sinner: %s line=%d name=%s full=%s\n", depth * 2, "",
+            text(vpiType, item), (int)vpi_get(vpiLineNo, item),
+            name != NULL ? name : "(null)", full != NULL ? full : "(null)");
+        if (variables != NULL) {
+            while ((variable = vpi_scan(variables)) != NULL) {
+                const char* const vname = vpi_get_str(vpiName, variable);
+                const char* const vfull = vpi_get_str(vpiFullName, variable);
+                vpi_printf("#c %*s  var: %s name=%s full=%s\n", depth * 2, "",
+                    text(vpiType, variable),
+                    vname != NULL ? vname : "(null)",
+                    vfull != NULL ? vfull : "(null)");
+            }
+        }
+        scopes(item, depth + 1);
+    }
+}
+
 static PLI_INT32 start(p_cb_data data)
 {
     vpiHandle const top = vpi_handle_by_name("top", NULL);
@@ -409,6 +467,22 @@ static PLI_INT32 start(p_cb_data data)
     display_arguments("top.shown");
     display_arguments("top.shown_file");
     for_scope("top.counted");
+    task = vpi_handle_by_name("top.matching", NULL);
+    if (task != NULL) {
+        vpi_printf("#c task %s\n", text(vpiFullName, task));
+        child(task, vpiStmt, 1, "");
+    }
+    task = vpi_handle_by_name("top.expecting", NULL);
+    if (task != NULL) {
+        vpi_printf("#c task %s\n", text(vpiFullName, task));
+        child(task, vpiStmt, 1, "");
+    }
+    // The module's own objects: none of an assertion construct's generated
+    // nets, variables or scopes (16, 37.12).
+    children(top, vpiVariables, 0, "object: ");
+    children(top, vpiNet, 0, "object: ");
+    children(top, vpiInternalScope, 0, "scope: ");
+    scopes(top, 0);
     return 0;
 }
 
